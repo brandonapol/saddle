@@ -40,7 +40,9 @@ func setup(t *testing.T) *app.App {
 		t.Setenv(k, "t@example.com")
 	}
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"}, {"commit", "-qm", "init"}} {
 		if _, err := gitx.Run(root, args...); err != nil {
 			t.Fatal(err)
@@ -98,13 +100,17 @@ func TestPreToolUseDeniesOtherTasksFiles(t *testing.T) {
 func TestNoticesDeliveredAndStopBlocks(t *testing.T) {
 	a := setup(t)
 	t1, _ := a.Spawn(app.SpawnReq{Title: "one"})
-	a.Store.Notify(t1.ID, store.NoticeInfo, "fyi")
+	if err := a.Store.Notify(t1.ID, store.NoticeInfo, "fyi"); err != nil {
+		t.Fatal(err)
+	}
 	out := run(t, a, t1.ID, map[string]any{"hook_event_name": "PostToolUse", "tool_name": "Read"})
 	hs, _ := out["hookSpecificOutput"].(map[string]any)
 	if !strings.Contains(hs["additionalContext"].(string), "[saddle] fyi") {
 		t.Fatalf("post out = %v", out)
 	}
-	a.Store.Notify(t1.ID, store.NoticeAction, "fix the conflict")
+	if err := a.Store.Notify(t1.ID, store.NoticeAction, "fix the conflict"); err != nil {
+		t.Fatal(err)
+	}
 	out = run(t, a, t1.ID, map[string]any{"hook_event_name": "Stop"})
 	if out["decision"] != "block" || !strings.Contains(out["reason"].(string), "fix the conflict") {
 		t.Fatalf("stop out = %v", out)

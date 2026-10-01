@@ -41,7 +41,7 @@ func Handle(a *app.App, task string, in Input) *Output {
 	st := a.Store
 	switch in.Event {
 	case "SessionStart":
-		st.SetField(task, "session_id", in.SessionID)
+		_ = st.SetField(task, "session_id", in.SessionID) // fail open
 		st.Event(task, "session_start", in.SessionID)
 		return context(in.Event, takeAll(st, task))
 
@@ -126,14 +126,14 @@ func context(event, text string) *Output {
 func markActive(st *store.Store, task string) {
 	t, err := st.Task(task)
 	if err == nil && (t.Status == store.Idle || t.Status == store.NeedsYou) {
-		st.SetStatus(task, store.Running)
+		_ = st.SetStatus(task, store.Running) // fail open
 	}
 }
 
 func setIfLive(st *store.Store, task, status string) {
 	t, err := st.Task(task)
 	if err == nil && (t.Status == store.Running || t.Status == store.Idle || t.Status == store.NeedsYou) {
-		st.SetStatus(task, status)
+		_ = st.SetStatus(task, status) // fail open
 	}
 }
 

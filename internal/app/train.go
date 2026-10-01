@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -34,7 +35,8 @@ func (a *App) Land() ([]LandResult, error) {
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return nil, err
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	// Closing the file also drops the lock, so a failed unlock is harmless.
+	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
 
 	if br, _ := gitx.CurrentBranch(a.Root); br == a.Cfg.Integration {
 		return nil, fmt.Errorf("%s is checked out in %s; switch it to another branch so the train can move it", a.Cfg.Integration, a.Root)
@@ -58,10 +60,14 @@ func (a *App) landOne(id string) LandResult {
 	res := LandResult{Task: id}
 	fail := func(state, note, msg string) LandResult {
 		res.State, res.Note = state, note
-		a.Store.SetTrain(id, state, note, true)
-		a.Store.SetStatus(id, store.Conflict)
 		a.Store.Event(id, "train_"+state, note)
-		a.Notify(id, store.NoticeAction, msg)
+		if err := errors.Join(
+			a.Store.SetTrain(id, state, note, true),
+			a.Store.SetStatus(id, store.Conflict),
+			a.Notify(id, store.NoticeAction, msg),
+		); err != nil {
+			res.Note += " (could not record or notify: " + err.Error() + ")"
+		}
 		return res
 	}
 	t, err := a.Store.Task(id)
@@ -102,30 +108,39 @@ func (a *App) landOne(id string) LandResult {
 		return res
 	}
 	if err := gitx.UpdateRef(a.Root, a.Cfg.Integration, head, old); err != nil {
-		res.State, res.Note = store.TrainError, err.Error()
-		a.Store.SetTrain(id, store.Queued, "integration moved during land; retry", false)
+		// The entry is still queued, so the next land retries it.
+		res.State, res.Note = store.TrainError, "integration moved during land; will retry: "+err.Error()
 		return res
 	}
-	a.Store.SetTrain(id, store.TrainOK, head[:12], false)
-	a.Store.SetStatus(id, store.Landed)
-	a.Store.Event(id, "landed", head)
 	res.State, res.Note = store.TrainOK, head[:12]
+	a.Store.Event(id, "landed", head)
+	if err := errors.Join(
+		a.Store.SetTrain(id, store.TrainOK, head[:12], false),
+		a.Store.SetStatus(id, store.Landed),
+	); err != nil {
+		res.Note += " (landed, but state not saved: " + err.Error() + ")"
+	}
 
-	a.broadcastLanding(t, old, head)
+	if err := a.broadcastLanding(t, old, head); err != nil {
+		res.Note += " (broadcast incomplete: " + err.Error() + ")"
+	}
 
 	if a.Cfg.CloseOnLand {
+		// Best-effort cleanup: the landed branch is what matters.
 		if t.Window != "" && a.Tmux.Alive(t.Window) {
-			a.Tmux.KillWindow(t.Window)
+			_ = a.Tmux.KillWindow(t.Window)
 		}
-		gitx.WorktreeRemove(a.Root, t.Worktree)
+		_ = gitx.WorktreeRemove(a.Root, t.Worktree)
 	}
-	a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf("%s %q landed on %s at %s.", id, t.Title, a.Cfg.Integration, head[:12]))
+	if err := a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf("%s %q landed on %s at %s.", id, t.Title, a.Cfg.Integration, head[:12])); err != nil {
+		res.Note += " (orchestrator not notified: " + err.Error() + ")"
+	}
 	return res
 }
 
 // broadcastLanding records renames, remaps the other tasks' claims through
 // them, and tells every live agent what moved under it.
-func (a *App) broadcastLanding(landed store.Task, old, head string) {
+func (a *App) broadcastLanding(landed store.Task, old, head string) error {
 	grs, _ := gitx.Renames(a.Root, old, head)
 	changed, _ := gitx.ChangedFiles(a.Root, old, head)
 	var srs []store.Rename
@@ -134,10 +149,16 @@ func (a *App) broadcastLanding(landed store.Task, old, head string) {
 		srs = append(srs, store.Rename{Old: r.Old, New: r.New})
 		crs = append(crs, claims.Rename{Old: r.Old, New: r.New})
 	}
-	a.Store.AddRenames(landed.ID, srs)
-
-	all, _ := a.Store.Claims()
-	ts, _ := a.Store.Tasks()
+	var errs []error
+	errs = append(errs, a.Store.AddRenames(landed.ID, srs))
+	all, err := a.Store.Claims()
+	if err != nil {
+		return errors.Join(append(errs, err)...)
+	}
+	ts, err := a.Store.Tasks()
+	if err != nil {
+		return errors.Join(append(errs, err)...)
+	}
 	for _, t := range ts {
 		if t.ID == landed.ID || t.Role != store.RoleWorker || !t.Active() {
 			continue
@@ -157,7 +178,10 @@ func (a *App) broadcastLanding(landed store.Task, old, head string) {
 		var remapped []string
 		for _, c := range all[t.ID] {
 			if nc := claims.Remap(c, crs); nc != c {
-				a.Store.ReplaceClaim(t.ID, c, nc)
+				if err := a.Store.ReplaceClaim(t.ID, c, nc); err != nil {
+					errs = append(errs, err)
+					continue
+				}
 				remapped = append(remapped, c+" → "+nc)
 			}
 		}
@@ -170,8 +194,9 @@ func (a *App) broadcastLanding(landed store.Task, old, head string) {
 			msg.WriteString("\nIt touched files you changed too, so sync now to avoid a conflict later.")
 		}
 		msg.WriteString("\nAt your next clean point (commit first), run `saddle sync` to rebase onto it. Directory moves are followed automatically.")
-		a.Notify(t.ID, kind, msg.String())
+		errs = append(errs, a.Notify(t.ID, kind, msg.String()))
 	}
+	return errors.Join(errs...)
 }
 
 // overlaps reports whether the worktree's branch changed any of files.
@@ -239,7 +264,9 @@ func (a *App) PRs() ([]string, error) {
 				return nil, err
 			}
 			t.PR = lastLine(url)
-			a.Store.SetField(t.ID, "pr", t.PR)
+			if err := a.Store.SetField(t.ID, "pr", t.PR); err != nil {
+				return nil, err
+			}
 		} else if _, err := gh(a.Root, "pr", "edit", t.PR, "--base", base); err != nil {
 			return nil, err
 		}

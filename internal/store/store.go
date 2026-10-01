@@ -305,9 +305,10 @@ func (s *Store) ReplaceClaim(task, old, new string) error {
 	})
 }
 
-func (s *Store) Event(task, kind, data string) error {
-	_, err := s.db.Exec(`INSERT INTO events(ts, task, kind, data) VALUES(?,?,?,?)`, now(), task, kind, data)
-	return err
+// Event appends to the activity log. It is best-effort: a failed log write
+// must never block an agent or the train.
+func (s *Store) Event(task, kind, data string) {
+	_, _ = s.db.Exec(`INSERT INTO events(ts, task, kind, data) VALUES(?,?,?,?)`, now(), task, kind, data)
 }
 
 type Event struct {

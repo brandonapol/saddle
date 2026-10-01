@@ -103,7 +103,9 @@ func Rebase(dir, onto string, abort bool) (RebaseResult, error) {
 	}
 	res := RebaseResult{Conflicts: strings.Split(conf, "\n"), Output: err.Error()}
 	if abort {
-		Run(dir, "rebase", "--abort")
+		if _, err := Run(dir, "rebase", "--abort"); err != nil {
+			return res, err
+		}
 	}
 	return res, nil
 }

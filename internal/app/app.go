@@ -197,23 +197,22 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 			return r.Claims, nil
 		})
 		if err != nil {
-			a.Store.SetStatus(id, store.Killed)
-			return t, err
+			return t, errors.Join(err, a.Store.SetStatus(id, store.Killed))
 		}
 	}
 	if err := gitx.WorktreeAdd(a.Root, t.Worktree, t.Branch, base); err != nil {
-		a.Store.SetStatus(id, store.Killed)
-		return t, err
+		return t, errors.Join(err, a.Store.SetStatus(id, store.Killed))
 	}
 	win, err := a.launch(t, r.Claims)
 	if err != nil {
-		a.Store.SetStatus(id, store.Killed)
-		return t, err
+		return t, errors.Join(err, a.Store.SetStatus(id, store.Killed))
 	}
 	t.Window = win
 	a.Store.Event(id, "spawn", fmt.Sprintf("parent=%s model=%s claims=%s", r.Parent, model, strings.Join(r.Claims, ",")))
 	if r.Parent != "" && r.Parent != OrchestratorID {
-		a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf("%s spawned sub-task %s %q.", r.Parent, id, r.Title))
+		if err := a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf("%s spawned sub-task %s %q.", r.Parent, id, r.Title)); err != nil {
+			return t, err
+		}
 	}
 	return t, nil
 }
@@ -273,7 +272,9 @@ func (a *App) Up(epic string) (store.Task, bool, error) {
 	} else if err != nil {
 		return t, false, err
 	}
-	a.Store.SetStatus(t.ID, store.Running)
+	if err := a.Store.SetStatus(t.ID, store.Running); err != nil {
+		return t, false, err
+	}
 	l := agent.Launch{
 		Root: a.Root, Bin: a.Bin, Task: t.ID, Title: "orchestrator", Dir: a.Root, Model: t.Model,
 		Mode: a.Cfg.Claude.PermissionMode, Cmd: a.Cfg.Claude.Cmd, RunDir: a.stateDir("run", t.ID),
@@ -433,7 +434,9 @@ func (a *App) Done(task, summary string) error {
 		return errors.New("branch has no commits beyond the integration branch; nothing to land")
 	}
 	if summary != "" {
-		a.Store.SetField(task, "summary", summary)
+		if err := a.Store.SetField(task, "summary", summary); err != nil {
+			return err
+		}
 	}
 	if err := a.Store.SetStatus(task, store.Done); err != nil {
 		return err
@@ -453,12 +456,18 @@ func (a *App) Kill(task string, rm bool) error {
 		return err
 	}
 	if t.Window != "" && a.Tmux.Alive(t.Window) {
-		a.Tmux.KillWindow(t.Window)
+		if err := a.Tmux.KillWindow(t.Window); err != nil {
+			return err
+		}
 	}
 	if rm && t.Role == store.RoleWorker {
-		gitx.WorktreeRemove(a.Root, t.Worktree)
+		if err := gitx.WorktreeRemove(a.Root, t.Worktree); err != nil {
+			return err
+		}
 	}
-	a.Store.Release(task)
+	if err := a.Store.Release(task); err != nil {
+		return err
+	}
 	a.Store.Event(task, "kill", "")
 	return a.Store.SetStatus(task, store.Killed)
 }

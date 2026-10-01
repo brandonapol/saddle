@@ -47,6 +47,13 @@ func git(t *testing.T, dir string, args ...string) string {
 	return out
 }
 
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func write(t *testing.T, dir, rel, body string) {
 	t.Helper()
 	p := filepath.Join(dir, rel)
@@ -141,7 +148,7 @@ func TestLandFollowsDirectoryMove(t *testing.T) {
 		t.Fatal(err)
 	}
 	git(t, mover.Worktree, "mv", "billing", "pkg-tmp")
-	os.MkdirAll(filepath.Join(mover.Worktree, "pkg"), 0o755)
+	must(t, os.MkdirAll(filepath.Join(mover.Worktree, "pkg"), 0o755))
 	git(t, mover.Worktree, "mv", "pkg-tmp", "pkg/billing")
 	commitAll(t, mover.Worktree, "move billing")
 
@@ -188,10 +195,10 @@ func TestLandBroadcastsRenamesAndRemapsClaims(t *testing.T) {
 	a, _ := setup(t)
 	mover, _ := a.Spawn(SpawnReq{Title: "move", Claims: []string{"README.md", "docs/**"}})
 	other, _ := a.Spawn(SpawnReq{Title: "meter work", Claims: []string{"billing/meter.go"}})
-	os.MkdirAll(filepath.Join(mover.Worktree, "docs"), 0o755)
+	must(t, os.MkdirAll(filepath.Join(mover.Worktree, "docs"), 0o755))
 	git(t, mover.Worktree, "mv", "README.md", "docs/README.md")
 	commitAll(t, mover.Worktree, "move readme")
-	a.Done(mover.ID, "moved")
+	must(t, a.Done(mover.ID, "moved"))
 	if _, err := a.Land(); err != nil {
 		t.Fatal(err)
 	}
@@ -209,8 +216,8 @@ func TestConflictReturnsToProducer(t *testing.T) {
 	commitAll(t, t1.Worktree, "one")
 	write(t, t2.Worktree, "README.md", "two\n")
 	commitAll(t, t2.Worktree, "two")
-	a.Done(t1.ID, "one")
-	a.Done(t2.ID, "two")
+	must(t, a.Done(t1.ID, "one"))
+	must(t, a.Done(t2.ID, "two"))
 	rs, err := a.Land()
 	if err != nil {
 		t.Fatal(err)
