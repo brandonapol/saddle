@@ -462,12 +462,15 @@ func hookCmd() *cobra.Command {
 	}
 }
 
-// refguardCmd is the reference-transaction hook's entrypoint. An error exits
-// non-zero, which aborts the transaction. Hook finds the repo itself.
+// refguardCmd is the entrypoint of the reference-transaction hook and, with
+// state "pre-push", of the pre-push hook. An error exits non-zero, which
+// aborts the transaction or push. Hook finds the repo itself. The pre-push
+// hook reuses this command rather than adding its own so that Go test
+// binaries standing in for saddle answer it with the same `refguard <state>`.
 func refguardCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:    "refguard <state>",
-		Short:  "Git reference-transaction hook guarding saddle's branches",
+		Use:    "refguard <state|pre-push>",
+		Short:  "Git reference-transaction and pre-push hook guarding saddle's branches",
 		Args:   cobra.ExactArgs(1),
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
