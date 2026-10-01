@@ -285,7 +285,7 @@ func (a *App) checkNewWork(want []string) error {
 		lines = append(lines, fmt.Sprintf("%s covers %s (changed by %s)", c, hit, changed[hit]))
 	}
 	return fmt.Errorf("%w: every claim covers work landed or queued tasks already did: %s. "+
-		"A task with no new work of its own is usually a stack repair: message the owning task, or call restack if the base moved. "+
+		"A task with no new work of its own is usually a stack repair: message the owning task, or call restack if the base moved or the stack is flagged at risk; never fix it with git. "+
 		"Ask the user before spawning it anyway with confirm",
 		ErrNeedsConfirm, strings.Join(lines, "; "))
 }
