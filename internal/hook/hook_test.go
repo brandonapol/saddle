@@ -16,8 +16,8 @@ import (
 	"github.com/brandonapol/saddle/internal/store"
 )
 
-// TestMain lets the test binary stand in for saddle: Init installs a ref
-// guard hook that runs `<bin> refguard <state>`.
+// TestMain lets the test binary stand in for saddle, so Init installs the ref
+// guard hook, which runs `<bin> refguard <state>`.
 func TestMain(m *testing.M) {
 	if len(os.Args) == 3 && os.Args[1] == "refguard" {
 		if err := refguard.Hook(os.Args[2], os.Stdin, os.Getenv); err != nil {
@@ -26,6 +26,7 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
+	_ = os.Setenv(app.TestRefguardEnv, "1")
 	os.Exit(m.Run())
 }
 
