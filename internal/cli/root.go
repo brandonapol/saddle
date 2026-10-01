@@ -37,7 +37,7 @@ func Root() *cobra.Command {
 			Run:   func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), Version) },
 		},
 		initCmd(), upCmd(), downCmd(), spawnCmd(), statusCmd(), claimCmd(), releaseCmd(), doneCmd(),
-		landCmd(), syncCmd(), prsCmd(), killCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(),
+		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(),
 	)
 	return root
 }
@@ -143,6 +143,13 @@ func downCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "stopped %d agents\n", n)
+			ls, err := a.Leftovers()
+			if err != nil {
+				return err
+			}
+			if len(ls) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "%d leftover worktrees, branches or refs; run `saddle gc --dry-run` to list them, `saddle gc` to remove them\n", len(ls))
+			}
 			return nil
 		}),
 	}
@@ -371,20 +378,6 @@ func prsCmd() *cobra.Command {
 			return err
 		}),
 	}
-}
-
-func killCmd() *cobra.Command {
-	var rm bool
-	cmd := &cobra.Command{
-		Use:   "kill <task>",
-		Short: "Stop a task's agent and release its claims",
-		Args:  cobra.ExactArgs(1),
-		RunE: withApp(func(_ *cobra.Command, a *app.App, args []string) error {
-			return a.Kill(args[0], rm)
-		}),
-	}
-	cmd.Flags().BoolVar(&rm, "rm", false, "also remove the worktree (the branch is kept)")
-	return cmd
 }
 
 func messageCmd() *cobra.Command {

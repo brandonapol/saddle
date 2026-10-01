@@ -507,8 +507,11 @@ func (a *App) Done(task, summary string) error {
 		fmt.Sprintf("%s %q is done and queued in the merge train: %s\nRun the saddle land tool when you're ready.", task, t.Title, summary))
 }
 
-// Kill stops a task's window and releases its claims. With rm, its worktree is removed too.
-func (a *App) Kill(task string, rm bool) error {
+// Kill stops a task's window and releases its claims. Unless keep is set it
+// removes the worktree, and the branch too when it has no commits beyond
+// integration. A branch with commits, or a worktree with uncommitted
+// changes, is always kept.
+func (a *App) Kill(task string, keep bool) error {
 	t, err := a.Store.Task(task)
 	if err != nil {
 		return err
@@ -518,15 +521,16 @@ func (a *App) Kill(task string, rm bool) error {
 			return err
 		}
 	}
-	if rm && t.Role == store.RoleWorker {
-		if err := gitx.WorktreeRemove(a.Root, t.Worktree); err != nil {
+	note := ""
+	if !keep && t.Role == store.RoleWorker {
+		if note, err = a.cleanup(t); err != nil {
 			return err
 		}
 	}
 	if err := a.Store.Release(task); err != nil {
 		return err
 	}
-	a.Store.Event(task, "kill", "")
+	a.Store.Event(task, "kill", note)
 	return a.Store.SetStatus(task, store.Killed)
 }
 
