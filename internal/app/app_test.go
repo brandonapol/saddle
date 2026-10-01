@@ -184,6 +184,27 @@ func TestInitRefusesForeignRefHook(t *testing.T) {
 	}
 }
 
+func TestWarningsReportDrift(t *testing.T) {
+	a := trainSetup(t)
+	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+	landed := git(t, a.Root, "rev-parse", t1.Branch)
+	if ws := a.Warnings(); len(ws) != 0 {
+		t.Fatalf("warnings before drift: %v", ws)
+	}
+
+	// t1 rewrites its own branch after the train recorded it.
+	cmd := exec.Command("git", "-C", a.Root, "update-ref", "refs/heads/"+t1.Branch, landed+"~")
+	cmd.Env = append(os.Environ(), "SADDLE_TASK=t1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	drifted := git(t, a.Root, "rev-parse", t1.Branch)
+	want := "t1: landed " + landed[:12] + ", branch " + drifted[:12]
+	if ws := a.Warnings(); len(ws) != 1 || ws[0] != want {
+		t.Fatalf("warnings = %q, want [%q]", ws, want)
+	}
+}
+
 func TestSpawnClaimsAndWrites(t *testing.T) {
 	a, _ := setup(t)
 	t1, err := a.Spawn(SpawnReq{Title: "meter", Claims: []string{"billing/meter.go"}})
