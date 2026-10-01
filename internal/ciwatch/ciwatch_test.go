@@ -366,3 +366,14 @@ func TestParseJobLink(t *testing.T) {
 		t.Fatal("matched a non-Actions link")
 	}
 }
+
+func TestReportOmitsFixInstruction(t *testing.T) {
+	f := Failed{Origin: Origin{Target: t4}, Check: Check{Name: "test", Workflow: "ci"}, RunURL: runURL, LogTail: "--- FAIL: TestX"}
+	r := f.Report()
+	if !strings.Contains(r, "--- FAIL: TestX") || !strings.Contains(r, runURL) || strings.Contains(r, "done tool") {
+		t.Errorf("report:\n%s", r)
+	}
+	if !strings.HasPrefix(f.Message(), r) || !strings.Contains(f.Message(), "done tool") {
+		t.Errorf("message should be the report plus the fix line:\n%s", f.Message())
+	}
+}
