@@ -81,6 +81,7 @@ type TaskView struct {
 
 type StatusOut struct {
 	Integration string     `json:"integration"`
+	Warnings    []string   `json:"warnings,omitempty"`
 	Tasks       []TaskView `json:"tasks"`
 }
 
@@ -98,7 +99,7 @@ type PRsOut struct {
 
 // Status builds the shared status view used by the MCP tool and the CLI.
 func Status(a *app.App) (StatusOut, error) {
-	out := StatusOut{Integration: a.Cfg.Integration}
+	out := StatusOut{Integration: a.Cfg.Integration, Warnings: a.Warnings()}
 	ts, err := a.Store.Tasks()
 	if err != nil {
 		return out, err

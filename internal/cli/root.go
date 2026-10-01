@@ -113,6 +113,9 @@ needs you. Quitting leaves the agents running; run saddle up again to come back.
 			if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 				return errors.New("saddle up is already running for this repo in another terminal")
 			}
+			if warn := a.LocalBaseBehind(); warn != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+warn)
+			}
 			first := ""
 			if len(args) == 1 {
 				b, err := readArg(args[0])
@@ -211,6 +214,9 @@ func statusCmd() *cobra.Command {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
 				return enc.Encode(st)
+			}
+			for _, warn := range st.Warnings {
+				fmt.Fprintln(cmd.OutOrStdout(), "warning: "+warn)
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(w, "ID\tSTATUS\tMODEL\tWIN\tTITLE\tCLAIMS\tTRAIN")
