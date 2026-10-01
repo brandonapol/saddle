@@ -184,11 +184,12 @@ func (m *model) unaim() {
 // submitTargeted handles enter while the input is aimed at an agent. Only
 // slash commands go to agents; anything else stays in the input.
 func (m *model) submitTargeted(text string) tea.Cmd {
+	id, a := m.target, m.app
 	c, ok := parseSlash(text)
 	if !ok {
-		return func() tea.Msg { return flashMsg("only /commands go to " + m.target + "; esc sends to the orchestrator") }
+		msg := flashMsg("only /commands go to " + id + "; esc sends to the orchestrator")
+		return func() tea.Msg { return msg }
 	}
-	id, a := m.target, m.app
 	m.input.Reset()
 	m.unaim()
 	m.addChat(store.ChatEvent, c.String()+" → "+id)
