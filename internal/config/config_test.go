@@ -61,3 +61,53 @@ func TestTemplateParses(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSweeperDefaults(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Sweeper{Method: "squash", ReviewLabel: "requires review"}
+	if cfg.Sweeper != want {
+		t.Fatalf("sweeper defaults: got %+v, want %+v", cfg.Sweeper, want)
+	}
+}
+
+func TestSweeperConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       Sweeper
+		wantErr    bool
+	}{
+		{"enabled", "[sweeper]\nenabled = true\nmethod = \"rebase\"\nreview_label = \"needs eyes\"\ndry_run = true\n",
+			Sweeper{Enabled: true, Method: "rebase", ReviewLabel: "needs eyes", DryRun: true}, false},
+		{"blanks fall back", "[sweeper]\nenabled = true\nmethod = \"\"\nreview_label = \" \"\n",
+			Sweeper{Enabled: true, Method: "squash", ReviewLabel: "requires review"}, false},
+		{"bad method", "[sweeper]\nmethod = \"octopus\"\n", Sweeper{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			root := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(root, ".saddle"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".saddle", "config.toml"), []byte(tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(root)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("want error, got %+v", cfg.Sweeper)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Sweeper != tc.want {
+				t.Fatalf("got %+v, want %+v", cfg.Sweeper, tc.want)
+			}
+		})
+	}
+}
