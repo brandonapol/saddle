@@ -772,11 +772,11 @@ func renderLine(c chatLine, w int, wrap lipgloss.Style) string {
 	case store.ChatAssistant:
 		switch c.attn {
 		case attnQuiet:
-			return sFaint.Render("saddle ·") + "\n" + sDim.Render(wrap.Render(c.text)) + "\n"
+			return sFaint.Render("saddle ·") + "\n" + renderMarkdown(c.text, w-2, sDim) + "\n"
 		case attnUrgent:
-			return lipgloss.NewStyle().Foreground(cAlert).Bold(true).Render("saddle ▲ needs you") + "\n" + sBright.UnsetBold().Render(wrap.Render(c.text)) + "\n"
+			return lipgloss.NewStyle().Foreground(cAlert).Bold(true).Render("saddle ▲ needs you") + "\n" + renderMarkdown(c.text, w-2, sBright.UnsetBold()) + "\n"
 		}
-		return lipgloss.NewStyle().Foreground(cRun).Bold(true).Render("saddle") + "\n" + sText.Render(wrap.Render(c.text)) + "\n"
+		return lipgloss.NewStyle().Foreground(cRun).Bold(true).Render("saddle") + "\n" + renderMarkdown(c.text, w-2, sText) + "\n"
 	case store.ChatTool:
 		return sFaint.Render("  ⚙ " + truncate(c.text, w-6))
 	default:
