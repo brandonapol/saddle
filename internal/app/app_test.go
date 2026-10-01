@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/refguard"
@@ -24,6 +25,9 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
+	// The hook runs this binary; built with -race it would sleep a second on
+	// every exit, and so on every ref update.
+	_ = os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	_ = os.Setenv(TestRefguardEnv, "1")
 	os.Exit(m.Run())
 }
@@ -416,5 +420,20 @@ func TestSpawnNeedsConfirmWhenClaimsOnlyCoverTrainWork(t *testing.T) {
 	// A claim on new ground makes it a normal spawn.
 	if _, err := a.Spawn(SpawnReq{ID: "t5", Title: "tax", Claims: []string{"README.md", "tax/**"}}); err != nil {
 		t.Fatalf("normal spawn: %v", err)
+	}
+}
+
+// A race-built test binary sleeps a second on exit unless GORACE says
+// otherwise. Every ref update runs it as the ref guard, so that second, paid
+// on each one, pushed the race run of this package past go test's timeout.
+func TestRefguardHookExitsPromptly(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "refguard", "prepared")
+	cmd.Dir = t.TempDir()
+	start := time.Now()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("refguard hook: %v: %s", err, out)
+	}
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Fatalf("refguard hook took %v; GORACE atexit_sleep_ms not passed to it?", d)
 	}
 }
