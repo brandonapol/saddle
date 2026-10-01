@@ -12,9 +12,35 @@ The goal is that you stop paying Opus to rebase.
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Roadmap: GitHub epics, milestone **M0: dogfood**
 
-```
-go build -o saddle ./cmd/saddle
-./saddle --help
+## Quickstart (M0 dogfood)
+
+```sh
+go install ./cmd/saddle            # puts saddle on your PATH
+cd your-repo && saddle init        # .saddle/config.toml: test cmd, serial files, models
+saddle up epics/my-epic.md         # tmux session; window 0 is the orchestrator (Claude)
 ```
 
-Status: scaffold only. Most commands return "not implemented yet".
+The orchestrator plans the epic and calls the saddle MCP tools: `spawn` puts
+each task in its own worktree, branch and tmux window. Agents call `done`.
+`land` merges them one at a time onto `saddle/integration`, following
+directory moves and sending any conflict back to the agent that produced it.
+`prs` opens stacked PRs.
+
+You can also drive it by hand:
+
+```sh
+saddle spawn "meter worker" -c 'pkg/meter/**' -m opus -f prompt.md
+saddle status                      # tasks, claims, train
+saddle message t2 "use the new interface in pkg/meter"
+saddle land && saddle prs
+```
+
+Inside a task worktree, `saddle sync` rebases onto everything that has landed.
+
+How agents are kept apart:
+- Each agent works in its own worktree.
+- A Claude Code PreToolUse hook denies writes to files another task has
+  claimed, and the denial names the owner. Unclaimed files are claimed on
+  first write.
+- Notices arrive through hooks. An idle agent is woken by typing into its
+  tmux window.
