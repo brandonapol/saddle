@@ -27,6 +27,16 @@ type Config struct {
 
 	Test   Test   `toml:"test"`
 	Claude Claude `toml:"claude"`
+	Triage Triage `toml:"triage"`
+}
+
+// Triage gates attention with TypeSafe's Jev when TYPESAFE_API_KEY is set.
+type Triage struct {
+	// Disabled turns Jev triage off even when a key is present.
+	Disabled bool `toml:"disabled"`
+	// NoAutoApprove keeps routine prompts going to the orchestrator instead of
+	// being answered "Yes" automatically.
+	NoAutoApprove bool `toml:"no_auto_approve"`
 }
 
 type Test struct {
@@ -86,6 +96,12 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 
 [test]
 # cmd = "go test ./..."
+
+[triage]
+# Uses TypeSafe Jev (set JEV_TOKEN; make setup asks for it) to decide which agent events reach
+# the orchestrator or you, and to auto-approve routine permission prompts.
+# disabled = false
+# no_auto_approve = false
 
 [claude]
 # model = "opus"                 # workers

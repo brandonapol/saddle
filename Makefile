@@ -43,8 +43,14 @@ GOLANGCI_LINT_VERSION ?= v2.14.0
 ##@ Setup
 
 .PHONY: setup
-setup: setup/golangci-lint ## Install development tools
-	echo "✅ Dev tools installed. Next: make install"
+setup: setup/golangci-lint setup/tokens ## Install dev tools and set up missing credentials
+	echo "✅ Setup done. Next: make install"
+
+.PHONY: setup/tokens
+setup/tokens: ## Prompt for a Jev key and Claude login, only if missing
+	# Writes `export ...` lines to your shell rc (SHELL_RC overrides which file).
+	# Never prints a token; skips prompts without a terminal.
+	./scripts/setup-tokens.bash
 
 .PHONY: setup/golangci-lint
 setup/golangci-lint: ## Install golangci-lint (pinned via GOLANGCI_LINT_VERSION)

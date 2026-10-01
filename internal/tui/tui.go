@@ -4,6 +4,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,6 +22,7 @@ import (
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/orch"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/triage"
 )
 
 // Palette from the design canvas.
@@ -53,9 +55,22 @@ const (
 	focusTasks
 )
 
+// Attention levels for orchestrator messages, set by Jev triage.
+const (
+	attnNormal = iota
+	attnQuiet  // a status update; rendered dim
+	attnUrgent // asks the user to act; highlighted, rings the bell
+)
+
 type chatLine struct {
 	role string
 	text string
+	attn int
+}
+
+// attention is a worker event that may need the orchestrator or the user.
+type attention struct {
+	task, title, text, screen string
 }
 
 type model struct {
@@ -81,10 +96,13 @@ type model struct {
 
 	screens map[string]*screenState // recent screen per live worker, to spot stuck prompts
 
-	pending []string // events waiting for the orchestrator to be idle
-	cost    float64
-	flash   string
-	flashAt time.Time
+	pending   []string // events waiting for the orchestrator to be idle
+	held      []string // info notices that ride along with the next message
+	jev       *triage.Client
+	eventTurn bool // the current orchestrator turn answers saddle events
+	cost      float64
+	flash     string
+	flashAt   time.Time
 }
 
 // screenState tracks how long a worker's screen has been unchanged.
@@ -103,7 +121,16 @@ type (
 		peek    string
 		screens map[string]string
 	}
-	flashMsg string
+	flashMsg   string
+	triagedMsg struct {
+		att attention
+		d   triage.Decision
+		err error
+	}
+	salienceMsg struct {
+		idx   int
+		needs bool
+	}
 )
 
 // Run starts the orchestrator and the TUI. first, if set, is sent as the
@@ -114,6 +141,9 @@ func Run(a *app.App, first string) error {
 		return err
 	}
 	m := &model{app: a, launch: l, prev: map[string]string{}, screens: map[string]*screenState{}, follow: true}
+	if !a.Cfg.Triage.Disabled {
+		m.jev = triage.FromEnv()
+	}
 	if err := m.startProc(resume); err != nil {
 		return err
 	}
@@ -121,11 +151,10 @@ func Run(a *app.App, first string) error {
 
 	hist, _ := a.Store.Chat(300)
 	for _, c := range hist {
-		m.chat = append(m.chat, chatLine{c.Role, c.Text})
+		m.chat = append(m.chat, chatLine{role: c.Role, text: c.Text})
 	}
 	if len(m.chat) == 0 {
-		m.chat = append(m.chat, chatLine{store.ChatEvent,
-			"Tell me what to work on, e.g. \"work #46 and #47 in parallel\", or paste an epic. I'll plan it, run the agents out of sight, and tell you when one needs you."})
+		m.chat = append(m.chat, chatLine{role: store.ChatEvent, text: "Tell me what to work on, e.g. \"work #46 and #47 in parallel\", or paste an epic. I'll plan it, run the agents out of sight, and tell you when one needs you."})
 	}
 
 	m.input = textarea.New()
@@ -248,7 +277,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case refreshMsg:
 		m.watchScreens(msg.tasks, msg.screens)
-		m.noticeTransitions(msg.tasks)
+		cmds = append(cmds, m.noticeTransitions(msg.tasks)...)
 		selID := ""
 		if m.sel < len(m.tasks) {
 			selID = m.tasks[m.sel].ID
@@ -263,8 +292,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.deliver()
 
 	case evMsg:
-		m.handleEvent(msg.e)
-		cmds = append(cmds, m.waitEvent())
+		cmds = append(cmds, m.handleEvent(msg.e), m.waitEvent())
+
+	case triagedMsg:
+		m.applyTriage(msg)
+
+	case salienceMsg:
+		if msg.idx < len(m.chat) {
+			if msg.needs {
+				m.chat[msg.idx].attn = attnUrgent
+				bell()
+			} else {
+				m.chat[msg.idx].attn = attnQuiet
+			}
+		}
 
 	case closedMsg:
 		// The process is gone; ctrl+r restarts it.
@@ -417,6 +458,7 @@ func (m *model) attach() tea.Cmd {
 }
 
 func (m *model) sendUser(text string) {
+	m.eventTurn = false
 	m.addChat(store.ChatUser, text)
 	m.follow = true
 	if err := m.proc.Send(text); err != nil {
@@ -425,11 +467,11 @@ func (m *model) sendUser(text string) {
 }
 
 func (m *model) addChat(role, text string) {
-	m.chat = append(m.chat, chatLine{role, text})
+	m.chat = append(m.chat, chatLine{role: role, text: text})
 	_ = m.app.Store.AddChat(role, text)
 }
 
-func (m *model) handleEvent(e orch.Event) {
+func (m *model) handleEvent(e orch.Event) tea.Cmd {
 	switch e.Kind {
 	case orch.Init:
 		m.gotInit = true
@@ -441,6 +483,16 @@ func (m *model) handleEvent(e orch.Event) {
 	case orch.Text:
 		m.streaming.Reset()
 		m.addChat(store.ChatAssistant, strings.TrimSpace(e.Text))
+		if m.eventTurn && m.jev != nil {
+			// Was this reply to a saddle event worth interrupting the user for?
+			idx, text, c := len(m.chat)-1, e.Text, m.jev
+			return func() tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+				defer cancel()
+				needs, _ := triage.NeedsUser(ctx, c, text)
+				return salienceMsg{idx: idx, needs: needs}
+			}
+		}
 	case orch.Tool:
 		m.streaming.Reset()
 		m.addChat(store.ChatTool, e.Text)
@@ -461,7 +513,7 @@ func (m *model) handleEvent(e orch.Event) {
 			_ = m.app.Store.SetField(app.OrchestratorID, "session_id", "")
 			if err := m.startProc(""); err == nil {
 				m.addChat(store.ChatEvent, "Couldn't resume the last conversation; started a new one.")
-				return
+				return m.waitEvent()
 			}
 		}
 		msg := "The orchestrator stopped."
@@ -470,11 +522,13 @@ func (m *model) handleEvent(e orch.Event) {
 		}
 		m.addChat(store.ChatEvent, msg+" Press ctrl+r to restart it.")
 	}
+	return nil
 }
 
 // noticeTransitions turns worker status changes into events for the
 // orchestrator, with the agent's screen when it is blocked.
-func (m *model) noticeTransitions(ts []mcpserver.TaskView) {
+func (m *model) noticeTransitions(ts []mcpserver.TaskView) []tea.Cmd {
+	var cmds []tea.Cmd
 	first := len(m.prev) == 0 && len(m.tasks) == 0
 	for _, t := range ts {
 		was, seen := m.prev[t.ID]
@@ -494,13 +548,81 @@ func (m *model) noticeTransitions(ts []mcpserver.TaskView) {
 		default:
 			continue
 		}
-		if screen, err := m.app.Peek(t.ID, 30); err == nil && screen != "" {
-			ev += "\nIts screen:\n```\n" + screen + "\n```"
+		screen, _ := m.app.Peek(t.ID, 30)
+		if c := m.raise(attention{task: t.ID, title: t.Title, text: ev, screen: screen}); c != nil {
+			cmds = append(cmds, c)
 		}
-		m.pending = append(m.pending, ev)
-		m.addChat(store.ChatEvent, "▲ "+firstLine(ev))
+	}
+	return cmds
+}
+
+// raise routes a worker event. With Jev, the screen is triaged first so that
+// working agents and routine prompts never wake the orchestrator.
+func (m *model) raise(att attention) tea.Cmd {
+	if m.jev == nil || att.screen == "" {
+		m.escalate(att, false)
+		return nil
+	}
+	c := m.jev
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		d, err := triage.Screen(ctx, c, att.title, att.screen)
+		return triagedMsg{att: att, d: d, err: err}
 	}
 }
+
+func (m *model) applyTriage(msg triagedMsg) {
+	att, d := msg.att, msg.d
+	tag := fmt.Sprintf("jev: %s %.2f", d.Verdict, d.Confidence)
+	if msg.err != nil {
+		tag = "jev unavailable"
+	}
+	switch {
+	case d.Route == triage.Drop:
+		_ = m.app.Store.SetStatus(att.task, store.Running)
+		m.app.Store.Event(att.task, "triage_drop", tag)
+		return
+	case d.Route == triage.AutoApprove && !m.app.Cfg.Triage.NoAutoApprove:
+		if err := m.app.SendKeys(att.task, "", d.Keys); err == nil {
+			_ = m.app.Store.SetStatus(att.task, store.Running)
+			m.addChat(store.ChatEvent, fmt.Sprintf("✓ Approved a routine prompt for %s (%s): %s", att.task, tag, promptLine(att.screen)))
+			return
+		}
+	case d.Route == triage.Human:
+		att.text += " Saddle's triage (" + tag + ") flagged this for the user: tell them now, plainly, with your suggestion."
+		m.escalate(att, true)
+		return
+	}
+	m.escalate(att, false)
+}
+
+// escalate hands an event to the orchestrator; urgent ones also ring the bell.
+func (m *model) escalate(att attention, urgent bool) {
+	ev := att.text
+	if att.screen != "" {
+		ev += "\nIts screen:\n```\n" + att.screen + "\n```"
+	}
+	m.pending = append(m.pending, ev)
+	if urgent {
+		m.addChat(store.ChatEvent, "▲ "+att.task+" needs you: "+firstLine(att.text))
+		bell()
+	} else {
+		m.addChat(store.ChatEvent, "▲ "+firstLine(att.text))
+	}
+}
+
+// promptLine picks the question out of a prompt screen for the chat log.
+func promptLine(screen string) string {
+	for _, l := range strings.Split(screen, "\n") {
+		if l = strings.TrimSpace(l); strings.HasPrefix(l, "Do you want") || strings.HasSuffix(l, "?") {
+			return l
+		}
+	}
+	return "permission prompt"
+}
+
+func bell() { fmt.Fprint(os.Stderr, "\a") }
 
 // watchScreens catches prompts no hook reports (like Claude Code's folder-trust
 // dialog): a prompt that sits unchanged for a few seconds marks the worker as
@@ -537,8 +659,7 @@ func (m *model) watchScreens(ts []mcpserver.TaskView, screens map[string]string)
 		case store.NeedsYou:
 			// Already reported, but the screen changed and it is still a prompt:
 			// an answer didn't take (e.g. a selection moved without Enter).
-			m.pending = append(m.pending, fmt.Sprintf("%s is still waiting on a prompt after the last answer. Its screen:\n```\n%s\n```", id, s))
-			m.addChat(store.ChatEvent, "▲ "+id+" is still waiting on a prompt")
+			m.escalate(attention{task: id, text: id + " is still waiting on a prompt after the last answer.", screen: s}, false)
 		}
 	}
 }
@@ -549,17 +670,22 @@ func (m *model) deliver() {
 		return
 	}
 	ns, _ := m.app.Store.TakeNotices(app.OrchestratorID, false)
-	msgs := m.pending
+	var actions []string
 	for _, n := range ns {
-		msgs = append(msgs, n.Text)
+		m.addChat(store.ChatEvent, firstLine(n.Text))
 		if n.Kind == store.NoticeAction {
-			m.addChat(store.ChatEvent, firstLine(n.Text))
+			actions = append(actions, n.Text)
+		} else {
+			// Landed/spawned updates don't need a turn of their own.
+			m.held = append(m.held, n.Text)
 		}
 	}
-	if len(msgs) == 0 {
+	if len(m.pending) == 0 && len(actions) == 0 {
 		return
 	}
-	m.pending = nil
+	msgs := append(append(append([]string{}, m.held...), actions...), m.pending...)
+	m.pending, m.held = nil, nil
+	m.eventTurn = true
 	var b strings.Builder
 	for i, s := range msgs {
 		if i > 0 {
@@ -628,7 +754,7 @@ func (m *model) renderChat() {
 		b.WriteString("\n")
 	}
 	if m.streaming.Len() > 0 {
-		b.WriteString(renderLine(chatLine{store.ChatAssistant, m.streaming.String()}, w, wrap))
+		b.WriteString(renderLine(chatLine{role: store.ChatAssistant, text: m.streaming.String()}, w, wrap))
 		b.WriteString("\n")
 	} else if m.proc != nil && m.proc.Busy() {
 		b.WriteString(sDim.Render("  thinking…") + "\n")
@@ -644,6 +770,12 @@ func renderLine(c chatLine, w int, wrap lipgloss.Style) string {
 	case store.ChatUser:
 		return lipgloss.NewStyle().Foreground(cAccent).Bold(true).Render("you") + "\n" + sBright.UnsetBold().Render(wrap.Render(c.text)) + "\n"
 	case store.ChatAssistant:
+		switch c.attn {
+		case attnQuiet:
+			return sFaint.Render("saddle ·") + "\n" + sDim.Render(wrap.Render(c.text)) + "\n"
+		case attnUrgent:
+			return lipgloss.NewStyle().Foreground(cAlert).Bold(true).Render("saddle ▲ needs you") + "\n" + sBright.UnsetBold().Render(wrap.Render(c.text)) + "\n"
+		}
 		return lipgloss.NewStyle().Foreground(cRun).Bold(true).Render("saddle") + "\n" + sText.Render(wrap.Render(c.text)) + "\n"
 	case store.ChatTool:
 		return sFaint.Render("  ⚙ " + truncate(c.text, w-6))
@@ -699,7 +831,11 @@ func (m *model) viewHeader() string {
 	if m.proc != nil && m.proc.Busy() {
 		state = "working"
 	}
-	right := sDim.Render(fmt.Sprintf("orchestrator %s · %s · $%.2f ", m.launch.Model, state, m.cost))
+	jev := ""
+	if m.jev != nil {
+		jev = " · jev triage"
+	}
+	right := sDim.Render(fmt.Sprintf("orchestrator %s · %s%s · $%.2f ", m.launch.Model, state, jev, m.cost))
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
