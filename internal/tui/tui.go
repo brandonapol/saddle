@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -93,6 +94,10 @@ type model struct {
 	follow    bool
 	vp        viewport.Model
 	input     textarea.Model
+	target    string   // task whose pane gets the next /command, if not the orchestrator
+	skills    []string // skill names for completion, loaded on first use
+	keys      keyMap
+	prefix    string // the user's tmux prefix, for help text
 
 	screens map[string]*screenState // recent screen per live worker, to spot stuck prompts
 
@@ -140,7 +145,7 @@ func Run(a *app.App, first string) error {
 	if err != nil {
 		return err
 	}
-	m := &model{app: a, launch: l, prev: map[string]string{}, screens: map[string]*screenState{}, follow: true}
+	m := &model{app: a, launch: l, prev: map[string]string{}, screens: map[string]*screenState{}, follow: true, keys: newKeyMap(), prefix: tmuxPrefix()}
 	if !a.Cfg.Triage.Disabled {
 		m.jev = triage.FromEnv()
 	}
@@ -163,7 +168,7 @@ func Run(a *app.App, first string) error {
 	m.input.Prompt = "› "
 	m.input.SetHeight(3)
 	m.input.CharLimit = 0
-	m.input.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j")
+	m.input.KeyMap.InsertNewline = m.keys.Newline
 	m.input.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	m.input.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(cAccent)
 	m.input.Focus()
@@ -334,10 +339,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
-	switch k.String() {
-	case "ctrl+c":
+	keys := m.keys
+	switch {
+	case key.Matches(k, keys.Quit):
 		return tea.Quit, true
-	case "tab", "shift+tab":
+	case key.Matches(k, keys.Focus):
+		if m.focus == focusChat && key.Matches(k, keys.Complete) {
+			if c, ok := m.completeInput(); ok {
+				return c, true
+			}
+		}
 		if m.focus == focusChat {
 			m.focus = focusTasks
 			m.input.Blur()
@@ -346,15 +357,24 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 			m.input.Focus()
 		}
 		return nil, true
-	case "pgup":
+	case key.Matches(k, keys.PageUp):
 		m.vp.HalfPageUp()
 		m.follow = false
 		return nil, true
-	case "pgdown":
+	case key.Matches(k, keys.PageDown):
 		m.vp.HalfPageDown()
 		m.follow = m.vp.AtBottom()
 		return nil, true
-	case "ctrl+r":
+	case key.Matches(k, keys.NextAgent, keys.PrevAgent):
+		dir := 1
+		if key.Matches(k, keys.PrevAgent) {
+			dir = -1
+		}
+		if !m.cycleAgent(dir) {
+			return func() tea.Msg { return flashMsg("no other running agent") }, true
+		}
+		return m.refresh(), true
+	case key.Matches(k, keys.Restart):
 		if m.proc != nil {
 			m.proc.Close()
 		}
@@ -367,10 +387,18 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		return m.waitEvent(), true
 	}
 	if m.focus == focusChat {
-		if k.String() == "enter" {
+		if key.Matches(k, keys.Untarget) && m.target != "" {
+			m.input.Reset()
+			m.unaim()
+			return nil, true
+		}
+		if key.Matches(k, keys.Send) {
 			text := strings.TrimSpace(m.input.Value())
 			if text == "" {
 				return nil, true
+			}
+			if m.target != "" {
+				return m.submitTargeted(text), true
 			}
 			m.input.Reset()
 			m.sendUser(text)
@@ -379,23 +407,25 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		return nil, false
 	}
 	// Task list keys.
-	switch k.String() {
-	case "esc":
+	switch {
+	case key.Matches(k, keys.Back):
 		m.focus = focusChat
 		m.input.Focus()
-	case "j", "down":
+	case key.Matches(k, keys.Down):
 		if m.sel < len(m.tasks)-1 {
 			m.sel++
 		}
 		return m.refresh(), true
-	case "k", "up":
+	case key.Matches(k, keys.Up):
 		if m.sel > 0 {
 			m.sel--
 		}
 		return m.refresh(), true
-	case "enter", "a":
+	case key.Matches(k, keys.Open):
 		return m.attach(), true
-	case "x":
+	case key.Matches(k, keys.Skill):
+		return m.aimAtAgent(), true
+	case key.Matches(k, keys.Kill):
 		if t, ok := m.selected(); ok {
 			id := t.ID
 			a := m.app
@@ -406,7 +436,7 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 				return flashMsg("killed " + id)
 			}, true
 		}
-	case "L":
+	case key.Matches(k, keys.Land):
 		a := m.app
 		return func() tea.Msg {
 			rs, err := a.Land()
@@ -734,11 +764,7 @@ func (m *model) layout() {
 	cw := m.chatWidth()
 	m.input.SetWidth(cw - 4)
 	m.vp.Width = cw - 4
-	// header + footer, the box border, the input and its top rule.
-	m.vp.Height = m.height - 2 - 2 - m.input.Height() - 1
-	if m.vp.Height < 3 {
-		m.vp.Height = 3
-	}
+	m.setChatHeight(m.height - lipgloss.Height(m.viewHeader()) - lipgloss.Height(m.viewFooter()))
 	m.renderChat()
 }
 
@@ -772,11 +798,11 @@ func renderLine(c chatLine, w int, wrap lipgloss.Style) string {
 	case store.ChatAssistant:
 		switch c.attn {
 		case attnQuiet:
-			return sFaint.Render("saddle ·") + "\n" + sDim.Render(wrap.Render(c.text)) + "\n"
+			return sFaint.Render("saddle ·") + "\n" + renderMarkdown(c.text, w-2, sDim) + "\n"
 		case attnUrgent:
-			return lipgloss.NewStyle().Foreground(cAlert).Bold(true).Render("saddle ▲ needs you") + "\n" + sBright.UnsetBold().Render(wrap.Render(c.text)) + "\n"
+			return lipgloss.NewStyle().Foreground(cAlert).Bold(true).Render("saddle ▲ needs you") + "\n" + renderMarkdown(c.text, w-2, sBright.UnsetBold()) + "\n"
 		}
-		return lipgloss.NewStyle().Foreground(cRun).Bold(true).Render("saddle") + "\n" + sText.Render(wrap.Render(c.text)) + "\n"
+		return lipgloss.NewStyle().Foreground(cRun).Bold(true).Render("saddle") + "\n" + renderMarkdown(c.text, w-2, sText) + "\n"
 	case store.ChatTool:
 		return sFaint.Render("  ⚙ " + truncate(c.text, w-6))
 	default:
@@ -843,24 +869,10 @@ func (m *model) viewHeader() string {
 	return lipgloss.NewStyle().Width(m.width).Render(left + strings.Repeat(" ", gap) + right)
 }
 
+// viewFooter is the bottom of the page: shortcuts on the last line. Other
+// status lines (like usage) go above it.
 func (m *model) viewFooter() string {
-	var keys []string
-	k := func(key, what string) { keys = append(keys, sKey.Render(key)+" "+sDim.Render(what)) }
-	if m.focus == focusChat {
-		k("enter", "send")
-		k("alt+enter", "newline")
-		k("tab", "tasks")
-		k("pgup/pgdn", "scroll")
-	} else {
-		k("j/k", "select")
-		k("enter", "open window (ctrl-b d to come back)")
-		k("x", "kill")
-		k("L", "land")
-		k("tab", "chat")
-	}
-	k("ctrl+r", "restart orchestrator")
-	k("ctrl+c", "quit (agents keep running)")
-	line := " " + strings.Join(keys, "   ")
+	line := m.viewKeys(m.width)
 	if m.flash != "" && time.Since(m.flashAt) < 6*time.Second {
 		line = " " + lipgloss.NewStyle().Foreground(cAccent).Render(m.flash)
 	}
@@ -981,8 +993,18 @@ func (m *model) viewLeft(w, h int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, list, box(title, w, peekH, false, body))
 }
 
+// setChatHeight fits the chat viewport into a body of height h: the box
+// border, the input and its top rule take the rest.
+func (m *model) setChatHeight(h int) {
+	m.vp.Height = max(h-2-m.input.Height()-1, 3)
+	if m.follow {
+		m.vp.GotoBottom()
+	}
+}
+
 func (m *model) viewChat(w, h int) string {
 	m.input.SetWidth(w - 4)
+	m.setChatHeight(h)
 	in := lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(cBorder).Width(w - 2).Render(m.input.View())
 	body := lipgloss.JoinVertical(lipgloss.Left, m.vp.View(), in)
 	return box("ORCHESTRATOR · "+m.launch.Model, w, h, m.focus == focusChat, body)
