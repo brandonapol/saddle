@@ -15,7 +15,7 @@ func openTest(t *testing.T) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
 
@@ -51,7 +51,7 @@ func TestUsageMigrationFromV2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	var v int
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestUsageMigrationFromV2(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Reopening is a no-op migration.
-	s.Close()
+	_ = s.Close()
 	if s, err = Open(path); err != nil {
 		t.Fatal(err)
 	}
