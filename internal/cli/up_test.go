@@ -158,3 +158,24 @@ func TestStartWatchersRunsSentinel(t *testing.T) {
 		t.Fatalf("flag = %+v, want t1 with its PR labeled", f)
 	}
 }
+
+func TestStatusShowsFlaggedStack(t *testing.T) {
+	a, _ := landedPR(t)
+	if err := a.SetFlag(app.StackFlag{Task: "t1", Cause: "GitHub reports its PR conflicts with its base",
+		PRs: []string{"https://github.com/o/r/pull/1"}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(a.Root)
+	var out strings.Builder
+	cmd := Root()
+	cmd.SetArgs([]string{"status"})
+	cmd.SetOut(&out)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"stack at risk from t1 up: GitHub reports its PR conflicts", "https://github.com/o/r/pull/1", "run restack"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("status output lacks %q:\n%s", want, out.String())
+		}
+	}
+}

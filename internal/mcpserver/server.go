@@ -85,8 +85,21 @@ type TaskView struct {
 type StatusOut struct {
 	Integration string     `json:"integration"`
 	Warnings    []string   `json:"warnings,omitempty"`
+	StackAtRisk *StackRisk `json:"stack_at_risk,omitempty"`
 	Tasks       []TaskView `json:"tasks"`
 }
+
+// StackRisk is the stack sentinel's flag: the stack is at risk from Task up.
+type StackRisk struct {
+	Task  string   `json:"task"`          // the first broken task
+	Cause string   `json:"cause"`         // why it broke
+	PRs   []string `json:"prs,omitempty"` // PRs labeled needs-human
+	Fix   string   `json:"fix"`
+}
+
+// StackFix is what to do about a flagged stack.
+const StackFix = "run restack to rebuild the stack; don't fix it with git or a worker. " +
+	"prs and land refuse until it checks clean, then the flag and labels clear by themselves"
 
 type OK struct {
 	Message string `json:"message"`
@@ -120,6 +133,13 @@ type PRsOut struct {
 // Status builds the shared status view used by the MCP tool and the CLI.
 func Status(a *app.App) (StatusOut, error) {
 	out := StatusOut{Integration: a.Cfg.Integration, Warnings: a.Warnings()}
+	f, flagged, err := a.Flag()
+	if err != nil {
+		return out, err
+	}
+	if flagged {
+		out.StackAtRisk = &StackRisk{Task: f.Task, Cause: f.Cause, PRs: f.PRs, Fix: StackFix}
+	}
 	ts, err := a.Store.Tasks()
 	if err != nil {
 		return out, err
@@ -199,7 +219,7 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, OK{Message: "released"}, a.Store.Release(task, in.Paths...)
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "List every saddle task with status, claims and merge-train state."},
+	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "List every saddle task with status, claims and merge-train state, plus warnings and stack_at_risk when the stack sentinel has flagged the PR stack."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, StatusOut, error) {
 			out, err := Status(a)
 			return nil, out, err
