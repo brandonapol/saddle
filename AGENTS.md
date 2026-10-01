@@ -8,7 +8,7 @@
 ## Workflow
 - `make check` runs vet, tests and golangci-lint, the same checks CI runs. It
   must pass before you push.
-- `make install` rebuilds `~/go/bin/saddle`, which spawned agents run.
+- `make install` rebuilds `~/go/bin/saddle`, which spawned agents run. Run `make` alone to list every target.
 - Branch off `main`. Don't commit to it directly.
 
 ## Layout
