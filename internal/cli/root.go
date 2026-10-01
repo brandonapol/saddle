@@ -11,10 +11,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/ciwatch"
 	"github.com/brandonapol/saddle/internal/hook"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/refguard"
@@ -139,18 +141,23 @@ needs you. Quitting leaves the agents running; run saddle up again to come back.
 }
 
 // startWatchers starts the background loops that live as long as saddle up:
-// the stack sentinel. Short-lived commands never start them. The returned func
-// stops them and waits until they have.
+// the stack sentinel and, unless ci.disabled, the CI watcher. Short-lived
+// commands never start them. The returned func stops them and waits until
+// they have.
 func startWatchers(ctx context.Context, a *app.App) (stop func()) {
 	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
+	var wg sync.WaitGroup
+	wg.Go(func() {
 		_ = sentinel.New(a).Run(ctx) // Run records failed checks as events
-	}()
+	})
+	if !a.Cfg.CI.Disabled {
+		if ci, err := a.NewCIWatcher(ciwatch.ExecRunner(a.Root)); err == nil {
+			wg.Go(func() { ci.Run(ctx) }) // gh errors are recorded as events
+		}
+	}
 	return func() {
 		cancel()
-		<-done
+		wg.Wait()
 	}
 }
 
