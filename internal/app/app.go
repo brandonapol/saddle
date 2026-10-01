@@ -73,6 +73,9 @@ func (a *App) Init() error {
 			return err
 		}
 	}
+	if err := a.detectTestCmd(); err != nil {
+		return err
+	}
 	exclude := filepath.Join(a.Root, ".git", "info", "exclude")
 	b, _ := os.ReadFile(exclude)
 	if !strings.Contains(string(b), "/.saddle/") {

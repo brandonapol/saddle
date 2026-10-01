@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 
@@ -26,6 +28,9 @@ type LandResult struct {
 func (a *App) Land() ([]LandResult, error) {
 	if err := a.Init(); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(a.Cfg.Test.Cmd) == "" {
+		return nil, errNoTestCmd
 	}
 	lock, err := os.OpenFile(a.stateDir("train.lock"), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
@@ -96,7 +101,7 @@ func (a *App) landOne(id string) LandResult {
 				"2. Resolve them, keeping both sides' intent, then `git add` and `git rebase --continue`.\n"+
 				"3. Run the tests, then call the saddle done tool again.", a.Cfg.Integration, files))
 	}
-	if cmd := a.Cfg.Test.Cmd; cmd != "" {
+	if cmd := a.Cfg.Test.Cmd; cmd != NoTestCmd {
 		if out, err := runShell(t.Worktree, cmd); err != nil {
 			return fail(store.TestFailed, "tests failed", fmt.Sprintf(
 				"Your branch rebased cleanly onto %s, but `%s` failed on the result:\n%s\nFix it, commit, and call the saddle done tool again.", a.Cfg.Integration, cmd, tail(out, 40)))
@@ -325,4 +330,62 @@ func tail(s string, n int) string {
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	return lines[len(lines)-1]
+}
+
+// NoTestCmd is the [test] cmd that lands branches without running tests.
+const NoTestCmd = "none"
+
+var errNoTestCmd = errors.New(`set [test] cmd in .saddle/config.toml, or cmd = "none" to land untested`)
+
+var makeCheckRe = regexp.MustCompile(`(?m)^check[ \t]*:([^=]|$)`)
+
+// DetectTestCmd guesses a repo's test command from its build files: `make
+// check` when the Makefile has that target, else the ecosystem's default.
+func DetectTestCmd(root string) string {
+	if b, err := os.ReadFile(filepath.Join(root, "Makefile")); err == nil && makeCheckRe.Match(b) {
+		return "make check"
+	}
+	for _, c := range []struct{ file, cmd string }{
+		{"go.mod", "go test ./..."},
+		{"package.json", "npm test"},
+		{"Cargo.toml", "cargo test"},
+	} {
+		if _, err := os.Stat(filepath.Join(root, c.file)); err == nil {
+			return c.cmd
+		}
+	}
+	return ""
+}
+
+// detectTestCmd writes a detected test command under [test] in
+// .saddle/config.toml when no config sets one.
+func (a *App) detectTestCmd() error {
+	if a.Cfg.Test.Cmd != "" {
+		return nil
+	}
+	cmd := DetectTestCmd(a.Root)
+	if cmd == "" {
+		return nil
+	}
+	path := a.stateDir("config.toml")
+	b, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	s, line := string(b), fmt.Sprintf("cmd = %q\n", cmd)
+	switch i := strings.Index("\n"+s, "\n[test]\n"); {
+	case i >= 0:
+		at := i + len("[test]\n")
+		s = s[:at] + line + s[at:]
+	default:
+		if s != "" && !strings.HasSuffix(s, "\n") {
+			s += "\n"
+		}
+		s += "\n[test]\n" + line
+	}
+	if err := os.WriteFile(path, []byte(s), 0o644); err != nil {
+		return err
+	}
+	a.Cfg.Test.Cmd = cmd
+	return nil
 }
