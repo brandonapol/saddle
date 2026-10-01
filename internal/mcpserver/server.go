@@ -20,6 +20,8 @@ type SpawnIn struct {
 	Model  string   `json:"model,omitempty" jsonschema:"claude model alias: opus, sonnet or haiku; defaults to config"`
 	ID     string   `json:"id,omitempty" jsonschema:"optional task id; defaults to the next tN"`
 	Issue  int      `json:"issue,omitempty" jsonschema:"GitHub issue number this task implements; its PR will close it"`
+	// Confirm overrides app.ErrNeedsConfirm.
+	Confirm bool `json:"confirm,omitempty" jsonschema:"spawn even though every claim covers work landed or queued tasks already did; only after the user agreed"`
 }
 
 type PeekIn struct {
@@ -151,7 +153,7 @@ func Serve(ctx context.Context, a *app.App, task string) error {
 			if err := self(); err != nil {
 				return nil, SpawnOut{}, err
 			}
-			t, err := a.Spawn(app.SpawnReq{ID: in.ID, Title: in.Title, Prompt: in.Prompt, Claims: in.Claims, Model: in.Model, Parent: task, Issue: in.Issue})
+			t, err := a.Spawn(app.SpawnReq{ID: in.ID, Title: in.Title, Prompt: in.Prompt, Claims: in.Claims, Model: in.Model, Parent: task, Issue: in.Issue, Confirm: in.Confirm})
 			if err != nil {
 				return nil, SpawnOut{}, err
 			}
