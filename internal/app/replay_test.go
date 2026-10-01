@@ -1,0 +1,498 @@
+package app_test
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/refguard"
+	"github.com/brandonapol/saddle/internal/sentinel"
+	"github.com/brandonapol/saddle/internal/store"
+)
+
+// replayTmux is a tmux with every window alive until killed.
+type replayTmux struct {
+	windows map[string]string
+	n       int
+}
+
+func (f *replayTmux) HasSession() bool { return f.n > 0 }
+func (f *replayTmux) NewSession(name, dir, cmd string) (string, error) {
+	return f.NewWindow(name, dir, cmd)
+}
+func (f *replayTmux) NewWindow(name, _, _ string) (string, error) {
+	f.n++
+	id := fmt.Sprintf("@%d", f.n)
+	f.windows[id] = name
+	return id, nil
+}
+func (f *replayTmux) WindowName(id string) (string, error) { return f.windows[id], nil }
+func (f *replayTmux) KillWindow(id string) error           { delete(f.windows, id); return nil }
+func (f *replayTmux) Alive(id string) bool                 { _, ok := f.windows[id]; return ok }
+func (f *replayTmux) SendText(string, string) error        { return nil }
+func (f *replayTmux) SendKeys(string, ...string) error     { return nil }
+func (f *replayTmux) Capture(string, int) (string, error)  { return "", nil }
+func (f *replayTmux) KillSession() error                   { f.windows = map[string]string{}; return nil }
+
+// replay drives git as one actor, the way that actor's process would: the ref
+// guard reads SADDLE_TASK, and SADDLE_TRAIN is never set outside the train.
+type replay struct {
+	t      *testing.T
+	a      *app.App
+	origin string
+	ghDir  string
+}
+
+func (r *replay) run(dir, actor string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "SADDLE_TASK="+actor, "SADDLE_TRAIN=")
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+func (r *replay) git(dir, actor string, args ...string) string {
+	r.t.Helper()
+	out, err := r.run(dir, actor, args...)
+	if err != nil {
+		r.t.Fatalf("%s: git %s: %v: %s", actor, strings.Join(args, " "), err, out)
+	}
+	return out
+}
+
+func (r *replay) write(dir, rel, body string) {
+	r.t.Helper()
+	p := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		r.t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+func (r *replay) commit(dir, actor, msg string, files map[string]string) {
+	r.t.Helper()
+	for rel, body := range files {
+		r.write(dir, rel, body)
+	}
+	r.git(dir, actor, "add", "-A")
+	r.git(dir, actor, "commit", "-qm", msg)
+}
+
+// ghLog is every call the fake gh got, in order.
+func (r *replay) ghLog() []string {
+	r.t.Helper()
+	b, err := os.ReadFile(filepath.Join(r.ghDir, "gh.log"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSpace(string(b)), "\n")
+}
+
+// setPR makes the fake gh report state for the PR at url.
+func (r *replay) setPR(url, state, mergeable string) {
+	r.t.Helper()
+	b, _ := json.Marshal(sentinel.PR{State: state, Mergeable: mergeable})
+	if err := os.WriteFile(filepath.Join(r.ghDir, "view-"+filepath.Base(url)), b, 0o644); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+func (r *replay) remoteRev(branch string) string {
+	out, _ := r.run(r.origin, "", "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+	return out
+}
+
+// landedRange is the train's recorded from..to for task.
+func (r *replay) landedRange(task string) (string, string) {
+	r.t.Helper()
+	es, err := r.a.Store.Train()
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	for _, e := range es {
+		if e.Task == task && e.State == store.TrainOK {
+			from, to, ok := strings.Cut(e.Note, "..")
+			if !ok {
+				r.t.Fatalf("%s: train note %q has no range", task, e.Note)
+			}
+			return from, to
+		}
+	}
+	r.t.Fatalf("%s has not landed", task)
+	return "", ""
+}
+
+func (r *replay) task(id string) store.Task {
+	r.t.Helper()
+	tk, err := r.a.Store.Task(id)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return tk
+}
+
+func (r *replay) land(want ...string) {
+	r.t.Helper()
+	rs, err := r.a.Land()
+	if err != nil {
+		r.t.Fatalf("Land: %v", err)
+	}
+	var got []string
+	for _, res := range rs {
+		if res.State != store.TrainOK {
+			r.t.Fatalf("land %s: %s %s", res.Task, res.State, res.Note)
+		}
+		got = append(got, res.Task)
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		r.t.Fatalf("landed %v, want %v", got, want)
+	}
+}
+
+// TestReplayStackIncident replays the 2026-10-01 dogfood run (#83, #94)
+// against a temp repo, a bare origin, a fake tmux and a fake gh: a stale local
+// base, a squash-merged bottom PR, the orchestrator merging origin/main into
+// integration and a worker force-pushing another task's branch. Saddle must
+// refuse the out-of-train ref writes, flag the stack, restack it, and leave
+// one linear stack whose PRs each show exactly their own task's work.
+func TestReplayStackIncident(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("SADDLE_ROOT", "")
+	t.Setenv("SADDLE_TASK", "")
+	t.Setenv("SADDLE_TRAIN", "")
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	r := &replay{t: t}
+
+	// The fake gh logs its calls, numbers created PRs, and answers `pr view`
+	// from a per-PR file, else as an open, mergeable PR.
+	r.ghDir = t.TempDir()
+	log := filepath.Join(r.ghDir, "gh.log")
+	script := `#!/bin/sh
+echo "$*" >> "` + log + `"
+case "$1 $2" in
+"pr create")
+	n=$(grep -c '^pr create' "` + log + `")
+	echo "https://github.com/o/r/pull/$n" ;;
+"pr view")
+	f="` + r.ghDir + `/view-$(basename "$3")"
+	if [ -f "$f" ]; then cat "$f"; else echo '{"state":"OPEN","mergeable":"MERGEABLE"}'; fi ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(r.ghDir, "gh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", r.ghDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// 1. Local main is one commit behind origin/main.
+	root := t.TempDir()
+	r.git(root, "", "init", "-q", "-b", "main")
+	r.commit(root, "", "scaffold", map[string]string{"README.md": "scaffold\n"})
+	r.origin = t.TempDir()
+	r.git(r.origin, "", "init", "-q", "--bare", "-b", "main")
+	r.git(root, "", "remote", "add", "origin", r.origin)
+	r.git(root, "", "push", "-q", "origin", "main")
+	other := filepath.Join(t.TempDir(), "other")
+	r.git(t.TempDir(), "", "clone", "-q", r.origin, other)
+	r.commit(other, "", "M0 (#55)", map[string]string{"m0.txt": "m0\n"})
+	r.git(other, "", "push", "-q", "origin", "main")
+	m0 := r.git(other, "", "rev-parse", "HEAD")
+
+	a, err := app.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+	r.a = a
+	ft := &replayTmux{windows: map[string]string{}}
+	a.Tmux = ft
+	a.Cfg.Test.Cmd = "true"
+	a.Cfg.CloseOnLand = true
+	integ := a.Cfg.Integration
+
+	// Start saddle: the orchestrator task, the ref guard, integration.
+	if _, _, err := a.Orchestrator(); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.git(root, "", "rev-parse", integ); got != m0 {
+		t.Fatalf("integration cut from %s, want origin/main %s", got, m0)
+	}
+
+	type work struct {
+		id, title, claim, file string
+	}
+	tasks := []work{
+		{"t1", "usage", "usage/**", "usage/usage.go"},
+		{"t2", "planner", "planner/**", "planner/planner.go"},
+		{"t3", "git watcher", "watcher/**", "watcher/watcher.go"},
+	}
+	// Each task branches from origin's base, commits as itself and calls done.
+	spawn := func(w work, base string) {
+		t.Helper()
+		tk, err := a.Spawn(app.SpawnReq{ID: w.id, Title: w.title, Parent: app.OrchestratorID, Claims: []string{w.claim}})
+		if err != nil {
+			t.Fatalf("spawn %s: %v", w.id, err)
+		}
+		if b := r.git(tk.Worktree, w.id, "merge-base", "HEAD", "origin/main"); b != base {
+			t.Fatalf("%s branched from %s, not origin/main %s", w.id, b, base)
+		}
+		r.commit(tk.Worktree, w.id, w.title, map[string]string{w.file: "package x // " + w.title + "\n"})
+		if err := a.Done(w.id, w.title+" summary"); err != nil {
+			t.Fatalf("done %s: %v", w.id, err)
+		}
+	}
+	// 2. t1..t3 commit and call done; land them, then open the PRs.
+	for _, w := range tasks {
+		spawn(w, m0)
+	}
+	r.land("t1", "t2", "t3")
+	if _, err := a.PRs(); err != nil {
+		t.Fatalf("PRs: %v", err)
+	}
+	t1 := r.task("t1")
+	_, t1Landed := r.landedRange("t1")
+	if t1.PR == "" || r.remoteRev(t1.Branch) != t1Landed {
+		t.Fatalf("t1 PR %q, remote %s = %q, landed %s", t1.PR, t1.Branch, r.remoteRev(t1.Branch), t1Landed)
+	}
+
+	// 3. On origin, t1's PR is squash-merged and main moves on.
+	r.git(other, "", "fetch", "-q", "origin")
+	r.git(other, "", "merge", "-q", "--squash", "origin/"+t1.Branch)
+	r.git(other, "", "commit", "-qm", "usage (#61)")
+	r.commit(other, "", "unrelated fix", map[string]string{"fix.txt": "fix\n"})
+	r.git(other, "", "push", "-q", "origin", "main")
+	newMain := r.git(other, "", "rev-parse", "HEAD")
+	r.setPR(t1.PR, "MERGED", "UNKNOWN")
+	ghMerged := len(r.ghLog())
+
+	// 4. The orchestrator merges origin/main into integration by hand, and t2
+	// force-pushes t1's branch the way t5 did. Both must be refused.
+	integBefore := r.git(root, "", "rev-parse", integ)
+	r.git(root, app.OrchestratorID, "fetch", "-q", "origin")
+	r.git(root, app.OrchestratorID, "checkout", "-q", integ)
+	if out, err := r.run(root, app.OrchestratorID, "merge", "--no-edit", "origin/main"); err == nil {
+		t.Errorf("orchestrator merged origin/main into %s: %s", integ, out)
+	}
+	_, _ = r.run(root, app.OrchestratorID, "merge", "--abort")
+	r.git(root, app.OrchestratorID, "checkout", "-q", "-f", "main")
+	if got := r.git(root, "", "rev-parse", integ); got != integBefore {
+		t.Fatalf("orchestrator moved %s to %s", integ, got)
+	}
+	t2Landed := r.git(root, "", "rev-parse", r.task("t2").Branch)
+	if out, err := r.run(root, "t2", "push", "--force", "origin", t2Landed+":refs/heads/"+t1.Branch); err == nil {
+		t.Errorf("t2 force-pushed %s: %s", t1.Branch, out)
+	}
+
+	// The sentinel flags the stack; prs refuses to build on it.
+	s := &sentinel.Sentinel{App: a, GH: &sentinel.GH{Dir: root}}
+	rep, err := s.Check()
+	if err != nil {
+		t.Fatalf("sentinel check: %v", err)
+	}
+	if !rep.AtRisk {
+		t.Fatalf("sentinel did not flag the stack: %+v", rep)
+	}
+	if _, flagged, _ := a.Flag(); !flagged {
+		t.Fatal("stack not flagged")
+	}
+	before := r.git(r.origin, "", "for-each-ref", "refs/heads")
+	if _, err := a.PRs(); err == nil || !strings.Contains(err.Error(), "restack") {
+		t.Fatalf("PRs on a flagged stack: err = %v", err)
+	}
+	if after := r.git(r.origin, "", "for-each-ref", "refs/heads"); after != before {
+		t.Fatalf("PRs pushed while flagged:\n%s\nwas\n%s", after, before)
+	}
+
+	// 5. Restack; the sentinel sees a sound stack and lifts the flag; prs.
+	res, err := a.Restack()
+	if err != nil {
+		t.Fatalf("Restack: %v", err)
+	}
+	if len(res.Merged) != 1 || res.Merged[0] != "t1" {
+		t.Fatalf("restack merged = %v, want [t1]", res.Merged)
+	}
+	if rep, err := s.Check(); err != nil || rep.AtRisk {
+		t.Fatalf("sentinel after restack: %+v, %v", rep, err)
+	}
+	if _, err := a.PRs(); err != nil {
+		t.Fatalf("PRs after restack: %v", err)
+	}
+
+	// 6. t4 lands on top of the restacked stack.
+	t4 := work{"t4", "ci watcher", "ciwatch/**", "ciwatch/ciwatch.go"}
+	spawn(t4, newMain)
+	r.land("t4")
+	if _, err := a.PRs(); err != nil {
+		t.Fatalf("PRs after t4: %v", err)
+	}
+	tasks = append(tasks, t4)
+
+	// Invariants.
+	r.git(root, "", "fetch", "-q", "origin")
+	if got := r.git(root, "", "rev-parse", "origin/main"); got != newMain {
+		t.Fatalf("origin/main = %s, want %s", got, newMain)
+	}
+	if b := r.git(root, "", "merge-base", "origin/main", integ); b != newMain {
+		t.Errorf("integration does not descend from origin/main: merge-base %s", b)
+	}
+	if m := r.git(root, "", "rev-list", "--merges", "origin/main.."+integ); m != "" {
+		t.Errorf("merge commits in origin/main..%s: %s", integ, m)
+	}
+	if n := r.git(root, "", "rev-list", "--count", "origin/main.."+integ); n != "3" {
+		t.Errorf("integration has %s commits over origin/main, want 3 (t2, t3, t4)", n)
+	}
+	for _, w := range tasks {
+		if n := r.git(root, "", "rev-list", "--count", integ, "--", w.file); n != "1" {
+			t.Errorf("%s's change appears in %s commits of integration, want 1", w.id, n)
+		}
+	}
+
+	// Every branch sits on its landed commit, locally and on origin. t1 merged,
+	// so it keeps the commit it landed and pushed before the squash merge.
+	for _, w := range tasks {
+		tk := r.task(w.id)
+		want := t1Landed
+		if w.id != "t1" {
+			_, want = r.landedRange(w.id)
+		}
+		if got := r.git(root, "", "rev-parse", "refs/heads/"+tk.Branch); got != want {
+			t.Errorf("%s: local %s = %s, landed %s", w.id, tk.Branch, got, want)
+		}
+		if got := r.remoteRev(tk.Branch); got != want {
+			t.Errorf("%s: origin %s = %s, landed %s", w.id, tk.Branch, got, want)
+		}
+	}
+
+	// Each open PR's base..head is exactly its task's commit; t1's PR is left alone.
+	bases := map[string]string{}
+	heads := map[string]string{}
+	created := 0
+	for _, c := range r.ghLog() {
+		f := strings.Fields(c)
+		switch {
+		case strings.HasPrefix(c, "pr create "):
+			created++
+			url := fmt.Sprintf("https://github.com/o/r/pull/%d", created)
+			for i := 2; i+1 < len(f); i++ {
+				switch f[i] {
+				case "--base":
+					bases[url] = f[i+1]
+				case "--head":
+					heads[url] = f[i+1]
+				}
+			}
+		case strings.HasPrefix(c, "pr edit ") && len(f) >= 5 && f[3] == "--base":
+			bases[f[2]] = f[4]
+		}
+	}
+	if created != 4 {
+		t.Errorf("gh opened %d PRs, want 4", created)
+	}
+	for _, w := range tasks[1:] {
+		tk := r.task(w.id)
+		if heads[tk.PR] != tk.Branch {
+			t.Errorf("%s: PR %s head = %q, want %s", w.id, tk.PR, heads[tk.PR], tk.Branch)
+			continue
+		}
+		got := r.git(r.origin, "", "log", "--format=%s", bases[tk.PR]+".."+tk.Branch)
+		if got != w.title {
+			t.Errorf("%s: PR %s %s..%s = %q, want only %q", w.id, tk.PR, bases[tk.PR], tk.Branch, got, w.title)
+		}
+	}
+	if b := bases[r.task("t2").PR]; b != a.Cfg.Base {
+		t.Errorf("t2's PR targets %s, want %s", b, a.Cfg.Base)
+	}
+	for _, c := range r.ghLog()[ghMerged:] {
+		if strings.HasPrefix(c, "pr edit "+t1.PR+" ") || strings.Contains(c, "--head "+t1.Branch) {
+			t.Errorf("merged t1 PR touched after its merge: %s", c)
+		}
+	}
+
+	// Step 4's ref writes were refused and recorded; the sentinel flagged the
+	// stack once and cleared it, labels included.
+	evs, err := a.Store.Events(-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied := map[string]bool{}
+	kinds := map[string]int{}
+	for _, e := range evs {
+		kinds[e.Kind]++
+		if e.Kind != refguard.KindDenied {
+			continue
+		}
+		var re refguard.Event
+		if err := json.Unmarshal([]byte(e.Data), &re); err != nil {
+			t.Fatalf("ref event %q: %v", e.Data, err)
+		}
+		denied[e.Task+" "+strings.TrimPrefix(re.Ref, "refs/heads/")] = true
+	}
+	for _, want := range []string{app.OrchestratorID + " " + integ, "t2 " + t1.Branch} {
+		if !denied[want] {
+			t.Errorf("no %s event for %s; denied: %v", refguard.KindDenied, want, denied)
+		}
+	}
+	if kinds[sentinel.EventAtRisk] != 1 || kinds[sentinel.EventClear] != 1 {
+		t.Errorf("sentinel events: %d %s, %d %s; want 1 each",
+			kinds[sentinel.EventAtRisk], sentinel.EventAtRisk, kinds[sentinel.EventClear], sentinel.EventClear)
+	}
+	if _, flagged, _ := a.Flag(); flagged {
+		t.Error("stack still flagged")
+	}
+	added, removed := map[string]bool{}, map[string]bool{}
+	for _, c := range r.ghLog() {
+		f := strings.Fields(c)
+		if len(f) == 5 && f[0]+" "+f[1] == "pr edit" && f[4] == sentinel.Label {
+			switch f[3] {
+			case "--add-label":
+				added[f[2]] = true
+			case "--remove-label":
+				removed[f[2]] = true
+			}
+		}
+	}
+	if len(added) == 0 || fmt.Sprint(added) != fmt.Sprint(removed) {
+		t.Errorf("%s labels added %v, removed %v", sentinel.Label, added, removed)
+	}
+	if added[t1.PR] {
+		t.Errorf("merged t1 PR labeled %s", sentinel.Label)
+	}
+
+	// No phantom tasks, no leftover worktrees.
+	ts, err := a.Store.Tasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, tk := range ts {
+		ids = append(ids, tk.ID+"="+tk.Status)
+	}
+	sort.Strings(ids)
+	if got, want := strings.Join(ids, " "), "t0=running t1=landed t2=landed t3=landed t4=landed"; got != want {
+		t.Errorf("tasks = %s, want %s", got, want)
+	}
+	if wts := r.git(root, "", "worktree", "list", "--porcelain"); strings.Count(wts, "worktree ") != 1 {
+		t.Errorf("leftover worktrees:\n%s", wts)
+	}
+	if es, _ := os.ReadDir(filepath.Join(root, ".saddle", "worktrees")); len(es) != 0 {
+		t.Errorf("leftover worktree dirs: %v", es)
+	}
+	if len(ft.windows) != 0 {
+		t.Errorf("leftover windows: %v", ft.windows)
+	}
+}
