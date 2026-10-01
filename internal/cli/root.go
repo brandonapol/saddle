@@ -18,6 +18,7 @@ import (
 	"github.com/brandonapol/saddle/internal/hook"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/refguard"
+	"github.com/brandonapol/saddle/internal/sentinel"
 	"github.com/brandonapol/saddle/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -125,12 +126,31 @@ needs you. Quitting leaves the agents running; run saddle up again to come back.
 				}
 				first = "Here is an epic. Plan it and show me the plan.\n\n" + string(b)
 			}
-			if err := tui.Run(a, first); err != nil {
+			stop := startWatchers(cmd.Context(), a)
+			err = tui.Run(a, first)
+			stop()
+			if err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "Agents keep running in tmux session "+a.Cfg.Session+". Run `saddle up` to come back, `saddle down` to stop them.")
 			return nil
 		}),
+	}
+}
+
+// startWatchers starts the background loops that live as long as saddle up:
+// the stack sentinel. Short-lived commands never start them. The returned func
+// stops them and waits until they have.
+func startWatchers(ctx context.Context, a *app.App) (stop func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = sentinel.New(a).Run(ctx) // Run records failed checks as events
+	}()
+	return func() {
+		cancel()
+		<-done
 	}
 }
 
