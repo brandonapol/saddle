@@ -17,6 +17,7 @@ import (
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/hook"
 	"github.com/brandonapol/saddle/internal/mcpserver"
+	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -37,7 +38,7 @@ func Root() *cobra.Command {
 			Run:   func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), Version) },
 		},
 		initCmd(), upCmd(), downCmd(), spawnCmd(), statusCmd(), claimCmd(), releaseCmd(), doneCmd(),
-		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(),
+		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(),
 	)
 	return root
 }
@@ -430,6 +431,20 @@ func hookCmd() *cobra.Command {
 				fmt.Fprintln(cmd.ErrOrStderr(), "saddle hook:", err)
 			}
 			return nil
+		},
+	}
+}
+
+// refguardCmd is the reference-transaction hook's entrypoint. An error exits
+// non-zero, which aborts the transaction. Hook finds the repo itself.
+func refguardCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:    "refguard <state>",
+		Short:  "Git reference-transaction hook guarding saddle's branches",
+		Args:   cobra.ExactArgs(1),
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return refguard.Hook(args[0], cmd.InOrStdin(), os.Getenv)
 		},
 	}
 }
