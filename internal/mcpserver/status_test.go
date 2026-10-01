@@ -57,3 +57,34 @@ func TestStatusShowsFlaggedStack(t *testing.T) {
 		t.Fatalf("fix = %q, want it to say run restack", r.Fix)
 	}
 }
+
+// The restack tool tells the orchestrator what the sentinel's notice and its
+// brief do: a flagged stack is fixed with restack, never with git.
+func TestRestackToolIsTheFixForAFlaggedStack(t *testing.T) {
+	ctx := context.Background()
+	st, ct := mcp.NewInMemoryTransports()
+	if _, err := New(nil, app.OrchestratorID).Connect(ctx, st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cs.Close() }()
+	res, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range res.Tools {
+		if tool.Name != "restack" {
+			continue
+		}
+		for _, want := range []string{"stack_at_risk", "never with git"} {
+			if !strings.Contains(tool.Description, want) {
+				t.Fatalf("restack description lacks %q: %s", want, tool.Description)
+			}
+		}
+		return
+	}
+	t.Fatal("no restack tool")
+}

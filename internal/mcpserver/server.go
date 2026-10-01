@@ -258,7 +258,7 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, PRsOut{PRs: urls}, err
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "restack", Description: "Rebuild the landed stack on origin's base after the base moved or a bottom PR merged: rebases in train order, moves the branches, pushes and retargets PRs. A conflict moves nothing and goes back to the task that owns the commit."},
+	mcp.AddTool(s, &mcp.Tool{Name: "restack", Description: "Rebuild the landed stack on origin's base after the base moved, a bottom PR merged, or the stack sentinel flagged the stack (stack_at_risk in status): rebases in train order, moves the branches, pushes and retargets PRs. A conflict moves nothing and goes back to the task that owns the commit. A broken stack is fixed with restack, never with git or a worker."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, RestackOut, error) {
 			res, err := a.Restack()
 			var c *app.RestackConflict

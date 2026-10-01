@@ -157,6 +157,21 @@ func TestStartWatchersRunsSentinel(t *testing.T) {
 	if f.Task != "t1" || len(f.PRs) != 1 {
 		t.Fatalf("flag = %+v, want t1 with its PR labeled", f)
 	}
+	// The orchestrator hears about it in the brief's terms: restack, never git.
+	ns, err := a.Store.TakeNotices(app.OrchestratorID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var risk []string
+	for _, n := range ns {
+		if strings.Contains(n.Text, "Stack at risk") {
+			risk = append(risk, n.Text)
+		}
+	}
+	if len(risk) != 1 || !strings.Contains(risk[0], "Stack at risk from t1 up") ||
+		!strings.Contains(risk[0], "Run restack") || !strings.Contains(risk[0], "don't fix it with git") {
+		t.Fatalf("orchestrator notices = %+v, want one stack-at-risk notice saying run restack, not git", ns)
+	}
 }
 
 func TestStatusShowsFlaggedStack(t *testing.T) {
