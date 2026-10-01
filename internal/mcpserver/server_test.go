@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -193,5 +194,27 @@ func TestRestackToolReportsConflictOwner(t *testing.T) {
 	}
 	if len(out.Moves) != 0 || git(t, a.Root, "rev-parse", a.Cfg.Integration) != integ {
 		t.Fatal("restack moved refs despite the conflict")
+	}
+}
+
+func TestStatusWarnsOnDrift(t *testing.T) {
+	a, _ := stackSetup(t)
+	tk, err := a.Store.Task("t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	landed := git(t, a.Root, "rev-parse", tk.Branch)
+	t.Setenv("SADDLE_TASK", "t1") // t1 rewrites its own landed branch
+	git(t, a.Root, "update-ref", "refs/heads/"+tk.Branch, landed+"~")
+	t.Setenv("SADDLE_TASK", "")
+	drifted := git(t, a.Root, "rev-parse", tk.Branch)
+
+	st, err := Status(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "t1: landed " + landed[:12] + ", branch " + drifted[:12]
+	if !slices.Contains(st.Warnings, want) {
+		t.Fatalf("warnings = %q, want %q", st.Warnings, want)
 	}
 }
