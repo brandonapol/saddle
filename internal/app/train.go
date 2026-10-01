@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 
@@ -27,16 +29,14 @@ func (a *App) Land() ([]LandResult, error) {
 	if err := a.Init(); err != nil {
 		return nil, err
 	}
-	lock, err := os.OpenFile(a.stateDir("train.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if strings.TrimSpace(a.Cfg.Test.Cmd) == "" {
+		return nil, errNoTestCmd
+	}
+	unlock, err := a.lockTrain()
 	if err != nil {
 		return nil, err
 	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return nil, err
-	}
-	// Closing the file also drops the lock, so a failed unlock is harmless.
-	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
+	defer unlock()
 
 	if br, _ := gitx.CurrentBranch(a.Root); br == a.Cfg.Integration {
 		return nil, fmt.Errorf("%s is checked out in %s; switch it to another branch so the train can move it", a.Cfg.Integration, a.Root)
@@ -54,6 +54,24 @@ func (a *App) Land() ([]LandResult, error) {
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// lockTrain takes the train lock, which serialises everything that moves the
+// integration branch or landed task branches.
+func (a *App) lockTrain() (unlock func(), err error) {
+	lock, err := os.OpenFile(a.stateDir("train.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		lock.Close()
+		return nil, err
+	}
+	// Closing the file also drops the lock, so a failed unlock is harmless.
+	return func() {
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		lock.Close()
+	}, nil
 }
 
 func (a *App) landOne(id string) LandResult {
@@ -84,7 +102,7 @@ func (a *App) landOne(id string) LandResult {
 		res.State, res.Note = store.TrainError, err.Error()
 		return res
 	}
-	rr, err := gitx.Rebase(t.Worktree, a.Cfg.Integration, true)
+	rr, err := trainRebase(t.Worktree, a.Cfg.Integration)
 	if err != nil {
 		return fail(store.TrainError, "rebase failed", "Rebasing your branch onto "+a.Cfg.Integration+" failed:\n"+rr.Output+"\nFix it and call done again.")
 	}
@@ -96,7 +114,7 @@ func (a *App) landOne(id string) LandResult {
 				"2. Resolve them, keeping both sides' intent, then `git add` and `git rebase --continue`.\n"+
 				"3. Run the tests, then call the saddle done tool again.", a.Cfg.Integration, files))
 	}
-	if cmd := a.Cfg.Test.Cmd; cmd != "" {
+	if cmd := a.Cfg.Test.Cmd; cmd != NoTestCmd {
 		if out, err := runShell(t.Worktree, cmd); err != nil {
 			return fail(store.TestFailed, "tests failed", fmt.Sprintf(
 				"Your branch rebased cleanly onto %s, but `%s` failed on the result:\n%s\nFix it, commit, and call the saddle done tool again.", a.Cfg.Integration, cmd, tail(out, 40)))
@@ -107,15 +125,19 @@ func (a *App) landOne(id string) LandResult {
 		res.State, res.Note = store.TrainError, err.Error()
 		return res
 	}
-	if err := gitx.UpdateRef(a.Root, a.Cfg.Integration, head, old); err != nil {
+	if _, err := trainGit(a.Root, "update-ref", "refs/heads/"+a.Cfg.Integration, head, old); err != nil {
 		// The entry is still queued, so the next land retries it.
 		res.State, res.Note = store.TrainError, "integration moved during land; will retry: "+err.Error()
 		return res
 	}
 	res.State, res.Note = store.TrainOK, head[:12]
 	a.Store.Event(id, "landed", head)
+	if cl, err := a.Store.Claims(); err == nil && len(cl[id]) > 0 {
+		// Claims are released with the landing; keep them for the stack check.
+		a.Store.Event(id, landedClaimsEvent, strings.Join(cl[id], "\n"))
+	}
 	if err := errors.Join(
-		a.Store.SetTrain(id, store.TrainOK, head[:12], false),
+		a.Store.SetTrain(id, store.TrainOK, old+".."+head, false),
 		a.Store.SetStatus(id, store.Landed),
 	); err != nil {
 		res.Note += " (landed, but state not saved: " + err.Error() + ")"
@@ -234,28 +256,30 @@ func (a *App) Sync(task string) (gitx.RebaseResult, error) {
 
 // PRs pushes every landed branch and opens or updates a stack of PRs: the
 // first targets base, each later one targets the branch landed before it.
+// It pushes the commits the train landed, never whatever the branches point
+// at, and refuses when a branch has drifted from its landed commit.
 func (a *App) PRs() ([]string, error) {
-	entries, err := a.Store.Train()
+	all, err := a.landedStack()
 	if err != nil {
 		return nil, err
 	}
-	var stack []store.Task
-	for _, e := range entries {
-		if e.State == store.TrainOK {
-			t, err := a.Store.Task(e.Task)
-			if err != nil {
-				return nil, err
-			}
-			stack = append(stack, t)
-		}
-	}
-	if len(stack) == 0 {
+	if len(all) == 0 {
 		return nil, fmt.Errorf("nothing has landed yet")
 	}
+	if err := a.checkDrift(all); err != nil {
+		return nil, err
+	}
+	if err := a.checkStack(all); err != nil {
+		return nil, err
+	}
+	var stack []store.Task
 	base := a.Cfg.Base
-	for i := range stack {
-		t := &stack[i]
-		if _, err := gitx.Run(a.Root, "push", "--force-with-lease", "-u", "origin", t.Branch); err != nil {
+	for _, l := range all {
+		if l.merged() {
+			continue
+		}
+		t := l.Task
+		if _, err := trainGit(a.Root, "push", "--force-with-lease=refs/heads/"+t.Branch, "origin", l.To+":refs/heads/"+t.Branch); err != nil {
 			return nil, err
 		}
 		if t.PR == "" {
@@ -271,6 +295,7 @@ func (a *App) PRs() ([]string, error) {
 			return nil, err
 		}
 		base = t.Branch
+		stack = append(stack, t)
 	}
 	var urls []string
 	for i, t := range stack {
@@ -294,6 +319,301 @@ func (a *App) PRs() ([]string, error) {
 		urls = append(urls, t.PR)
 	}
 	return urls, nil
+}
+
+// landedTask is a task the train landed, with the range of commits it landed:
+// From..To on the integration branch. From is empty for entries recorded
+// before the train kept ranges.
+type landedTask struct {
+	store.Task
+	From, To string
+}
+
+// merged reports whether none of the task's commits are left on top of base,
+// i.e. restack found all of them already merged.
+func (l landedTask) merged() bool { return l.From != "" && l.From == l.To }
+
+// landedStack returns the landed tasks in train order.
+func (a *App) landedStack() ([]landedTask, error) {
+	entries, err := a.Store.Train()
+	if err != nil {
+		return nil, err
+	}
+	var out []landedTask
+	for _, e := range entries {
+		if e.State != store.TrainOK {
+			continue
+		}
+		t, err := a.Store.Task(e.Task)
+		if err != nil {
+			return nil, err
+		}
+		l := landedTask{Task: t}
+		from, to, ok := strings.Cut(e.Note, "..")
+		if !ok {
+			to, from = e.Note, ""
+		}
+		if l.To, err = gitx.RevParse(a.Root, to); err != nil {
+			return nil, fmt.Errorf("%s: landed commit %q is gone: %w", t.ID, to, err)
+		}
+		if from != "" {
+			if l.From, err = gitx.RevParse(a.Root, from); err != nil {
+				return nil, fmt.Errorf("%s: landed range %q is gone: %w", t.ID, e.Note, err)
+			}
+		}
+		out = append(out, l)
+	}
+	return out, nil
+}
+
+// Drift lists landed tasks whose branch no longer points at the commit the
+// train landed, as "task: landed X, branch Y".
+func (a *App) Drift() ([]string, error) {
+	stack, err := a.landedStack()
+	if err != nil {
+		return nil, err
+	}
+	return a.drift(stack), nil
+}
+
+func (a *App) drift(stack []landedTask) []string {
+	var out []string
+	for _, l := range stack {
+		if l.merged() {
+			continue
+		}
+		tip, err := gitx.RevParse(a.Root, "refs/heads/"+l.Branch)
+		switch {
+		case err != nil:
+			out = append(out, fmt.Sprintf("%s: landed %s, branch %s is missing", l.ID, short(l.To), l.Branch))
+		case tip != l.To:
+			out = append(out, fmt.Sprintf("%s: landed %s, branch %s", l.ID, short(l.To), short(tip)))
+		}
+	}
+	return out
+}
+
+// checkDrift refuses when any landed branch moved off its landed commit.
+func (a *App) checkDrift(stack []landedTask) error {
+	d := a.drift(stack)
+	if len(d) == 0 {
+		return nil
+	}
+	return fmt.Errorf("landed branches moved off the commits the train landed, so nothing was pushed. "+
+		"Put each branch back on its landed commit, or land the task again:\n  %s", strings.Join(d, "\n  "))
+}
+
+// landedClaimsEvent records the claims a task held when it landed.
+const landedClaimsEvent = "landed_claims"
+
+// baseRef is the ref the bottom PR is diffed against: origin's copy of base
+// when there is one.
+func (a *App) baseRef() string {
+	if sha, err := gitx.RevParse(a.Root, "refs/remotes/origin/"+a.Cfg.Base); err == nil {
+		return sha
+	}
+	return a.Cfg.Base
+}
+
+// checkStack verifies that every PR in the stack shows exactly its task's
+// work: its head descends from its base's head, base..head holds the task's
+// own landed commits (same count, same patch-ids) and no merge commits. Files
+// changed outside the task's claims only warn the orchestrator.
+func (a *App) checkStack(stack []landedTask) error {
+	var bad []string
+	base, baseName := a.baseRef(), a.Cfg.Base
+	for _, l := range stack {
+		if l.merged() {
+			continue
+		}
+		probs, err := a.stackProblems(l, base, baseName)
+		if err != nil {
+			return err
+		}
+		if len(probs) > 0 {
+			bad = append(bad, fmt.Sprintf("%s (%s): %s", l.ID, l.Branch, strings.Join(probs, "; ")))
+		} else {
+			a.warnOutsideClaims(l, base)
+		}
+		base, baseName = l.To, l.ID+"'s branch"
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("the PR stack doesn't match what the train landed, so nothing was pushed and no PR changed. "+
+		"Run restack to rebuild it; don't fix it with git:\n  %s", strings.Join(bad, "\n  "))
+}
+
+func (a *App) stackProblems(l landedTask, base, baseName string) ([]string, error) {
+	var probs []string
+	if mb, _ := gitx.Run(a.Root, "merge-base", base, l.To); mb != base {
+		probs = append(probs, "does not descend from "+baseName)
+	}
+	rng := base + ".." + l.To
+	merges, err := gitx.Run(a.Root, "rev-list", "--merges", rng)
+	if err != nil {
+		return nil, err
+	}
+	ids, err := patchIDs(a.Root, rng)
+	if err != nil {
+		return nil, err
+	}
+	var contains []string
+	if l.From != "" {
+		own, err := patchIDs(a.Root, l.From+".."+l.To)
+		if err != nil {
+			return nil, err
+		}
+		mine := map[string]bool{}
+		for _, id := range own {
+			mine[id] = true
+		}
+		in := map[string]bool{}
+		foreign := 0
+		for _, id := range ids {
+			in[id] = true
+			if !mine[id] {
+				foreign++
+			}
+		}
+		missing := 0
+		for _, id := range own {
+			if !in[id] {
+				missing++
+			}
+		}
+		if foreign > 0 {
+			contains = append(contains, plural(foreign, "commit")+" from other tasks")
+		}
+		if missing > 0 {
+			probs = append(probs, fmt.Sprintf("is missing %d of its %s", missing, plural(len(own), "landed commit")))
+		} else if foreign == 0 && len(ids) != len(own) {
+			probs = append(probs, fmt.Sprintf("has %s, landed %d", plural(len(ids), "commit"), len(own)))
+		}
+	}
+	if merges != "" {
+		contains = append(contains, plural(len(strings.Split(merges, "\n")), "merge commit"))
+	}
+	if len(contains) > 0 {
+		probs = append(probs, "contains "+strings.Join(contains, ", "))
+	}
+	return probs, nil
+}
+
+// warnOutsideClaims tells the orchestrator when a PR changes files outside
+// the claims its task held when it landed.
+func (a *App) warnOutsideClaims(l landedTask, base string) {
+	var globs []string
+	evs, _ := a.Store.Events(-1)
+	for _, e := range evs {
+		if e.Task == l.ID && e.Kind == landedClaimsEvent {
+			globs = strings.Split(e.Data, "\n")
+		}
+	}
+	if len(globs) == 0 {
+		return
+	}
+	files, _ := gitx.ChangedFiles(a.Root, base, l.To)
+	var out []string
+	for _, f := range files {
+		ok := false
+		for _, g := range globs {
+			if claims.Match(g, f) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			out = append(out, f)
+		}
+	}
+	if len(out) == 0 {
+		return
+	}
+	msg := fmt.Sprintf("%s's PR changes files outside its claims: %s", l.ID, strings.Join(out, ", "))
+	a.Store.Event(l.ID, "stack_warn", msg)
+	_ = a.Notify(OrchestratorID, store.NoticeInfo, msg+".")
+}
+
+// patchIDs returns the stable patch-id of each non-merge commit in rng,
+// oldest first.
+func patchIDs(dir, rng string) ([]string, error) {
+	log, err := gitx.Run(dir, "log", "-p", "--reverse", "--no-merges", "--no-color", "--no-ext-diff", rng)
+	if err != nil {
+		return nil, err
+	}
+	out, err := patchID(dir, log)
+	if err != nil || out == "" {
+		return nil, err
+	}
+	var ids []string
+	for _, line := range strings.Split(out, "\n") {
+		id, _, _ := strings.Cut(line, " ")
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// patchID runs `git patch-id --stable` over a diff or log.
+func patchID(dir, diff string) (string, error) {
+	cmd := exec.Command("git", "-C", dir, "patch-id", "--stable")
+	cmd.Stdin = strings.NewReader(diff + "\n")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git patch-id: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+func short(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
+}
+
+// trainGit runs git as the merge train. The ref guard only lets the train
+// move the integration branch and other tasks' branches, and it knows the
+// train by SADDLE_TRAIN=1, set for this command alone.
+func trainGit(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "SADDLE_TRAIN=1")
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(errb.String())
+		if msg == "" {
+			msg = strings.TrimSpace(out.String())
+		}
+		return out.String(), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, msg)
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
+// trainRebase is gitx.Rebase run as the train: it rebases the branch checked
+// out in dir onto onto and aborts on conflict, leaving the worktree as it was.
+func trainRebase(dir, onto string) (gitx.RebaseResult, error) {
+	out, err := trainGit(dir, "-c", "merge.directoryRenames=true", "-c", "merge.renames=true",
+		"-c", "rerere.enabled=true", "-c", "core.editor=true", "rebase", onto)
+	if err == nil {
+		return gitx.RebaseResult{OK: true, Output: out}, nil
+	}
+	conf, _ := gitx.Run(dir, "diff", "--name-only", "--diff-filter=U")
+	if conf == "" {
+		return gitx.RebaseResult{Output: err.Error()}, err
+	}
+	res := gitx.RebaseResult{Conflicts: strings.Split(conf, "\n"), Output: err.Error()}
+	if _, err := trainGit(dir, "rebase", "--abort"); err != nil {
+		return res, err
+	}
+	return res, nil
 }
 
 func gh(dir string, args ...string) (string, error) {
@@ -325,4 +645,62 @@ func tail(s string, n int) string {
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	return lines[len(lines)-1]
+}
+
+// NoTestCmd is the [test] cmd that lands branches without running tests.
+const NoTestCmd = "none"
+
+var errNoTestCmd = errors.New(`set [test] cmd in .saddle/config.toml, or cmd = "none" to land untested`)
+
+var makeCheckRe = regexp.MustCompile(`(?m)^check[ \t]*:([^=]|$)`)
+
+// DetectTestCmd guesses a repo's test command from its build files: `make
+// check` when the Makefile has that target, else the ecosystem's default.
+func DetectTestCmd(root string) string {
+	if b, err := os.ReadFile(filepath.Join(root, "Makefile")); err == nil && makeCheckRe.Match(b) {
+		return "make check"
+	}
+	for _, c := range []struct{ file, cmd string }{
+		{"go.mod", "go test ./..."},
+		{"package.json", "npm test"},
+		{"Cargo.toml", "cargo test"},
+	} {
+		if _, err := os.Stat(filepath.Join(root, c.file)); err == nil {
+			return c.cmd
+		}
+	}
+	return ""
+}
+
+// detectTestCmd writes a detected test command under [test] in
+// .saddle/config.toml when no config sets one.
+func (a *App) detectTestCmd() error {
+	if a.Cfg.Test.Cmd != "" {
+		return nil
+	}
+	cmd := DetectTestCmd(a.Root)
+	if cmd == "" {
+		return nil
+	}
+	path := a.stateDir("config.toml")
+	b, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	s, line := string(b), fmt.Sprintf("cmd = %q\n", cmd)
+	switch i := strings.Index("\n"+s, "\n[test]\n"); {
+	case i >= 0:
+		at := i + len("[test]\n")
+		s = s[:at] + line + s[at:]
+	default:
+		if s != "" && !strings.HasSuffix(s, "\n") {
+			s += "\n"
+		}
+		s += "\n[test]\n" + line
+	}
+	if err := os.WriteFile(path, []byte(s), 0o644); err != nil {
+		return err
+	}
+	a.Cfg.Test.Cmd = cmd
+	return nil
 }
