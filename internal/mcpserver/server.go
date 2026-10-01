@@ -96,6 +96,23 @@ type LandOut struct {
 	Results []app.LandResult `json:"results"`
 }
 
+// RestackConflict is the landed commit restack stopped at and the task that owns it.
+type RestackConflict struct {
+	Task   string   `json:"task"`
+	Commit string   `json:"commit"`
+	Files  []string `json:"files"`
+}
+
+type RestackOut struct {
+	Message    string            `json:"message"`
+	Base       string            `json:"base,omitempty"`
+	Moves      []app.RestackMove `json:"moves,omitempty"`
+	Skipped    []string          `json:"skipped,omitempty" jsonschema:"tasks whose work base already has; their PRs were left alone"`
+	Retargeted []string          `json:"retargeted,omitempty"`
+	Dropped    int               `json:"dropped,omitempty"`
+	Conflict   *RestackConflict  `json:"conflict,omitempty"`
+}
+
 type PRsOut struct {
 	PRs []string `json:"prs"`
 }
@@ -138,6 +155,11 @@ func Status(a *app.App) (StatusOut, error) {
 }
 
 func Serve(ctx context.Context, a *app.App, task string) error {
+	return New(a, task).Run(ctx, &mcp.StdioTransport{})
+}
+
+// New builds the MCP server for task without starting it.
+func New(a *app.App, task string) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "saddle", Version: "0.1.0"}, &mcp.ServerOptions{
 		Instructions: "Saddle coordinates parallel coding agents. Use spawn for disjoint sub-work, claim before large edits, and done when your branch is committed and tested.",
 	})
@@ -216,6 +238,22 @@ func Serve(ctx context.Context, a *app.App, task string) error {
 			return nil, PRsOut{PRs: urls}, err
 		})
 
+	mcp.AddTool(s, &mcp.Tool{Name: "restack", Description: "Rebuild the landed stack on origin's base after the base moved or a bottom PR merged: rebases in train order, moves the branches, pushes and retargets PRs. A conflict moves nothing and goes back to the task that owns the commit."},
+		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, RestackOut, error) {
+			res, err := a.Restack()
+			var c *app.RestackConflict
+			if errors.As(err, &c) {
+				return nil, RestackOut{Message: c.Error(), Conflict: &RestackConflict{Task: c.Task, Commit: c.Commit, Files: c.Files}}, nil
+			}
+			if err != nil {
+				return nil, RestackOut{}, err
+			}
+			return nil, RestackOut{
+				Message: fmt.Sprintf("Restacked onto %s: %d refs moved, %d PRs retargeted.", res.Base, len(res.Moves), len(res.Retargeted)),
+				Base:    res.Base, Moves: res.Moves, Skipped: res.Merged, Retargeted: res.Retargeted, Dropped: res.Dropped,
+			}, nil
+		})
+
 	mcp.AddTool(s, &mcp.Tool{Name: "peek", Description: "Read the last lines of a task's Claude Code terminal, e.g. to see what it is stuck on or what a prompt is asking."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in PeekIn) (*mcp.CallToolResult, PeekOut, error) {
 			out, err := a.Peek(in.Task, in.Lines)
@@ -241,5 +279,5 @@ func Serve(ctx context.Context, a *app.App, task string) error {
 			return nil, OK{Message: "killed " + strings.TrimSpace(in.Task)}, a.Kill(in.Task, false)
 		})
 
-	return s.Run(ctx, &mcp.StdioTransport{})
+	return s
 }
