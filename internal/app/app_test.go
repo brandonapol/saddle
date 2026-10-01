@@ -10,8 +10,22 @@ import (
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/store"
 )
+
+// TestMain lets the test binary stand in for saddle: Init installs a ref
+// guard hook that runs `<bin> refguard <state>`.
+func TestMain(m *testing.M) {
+	if len(os.Args) == 3 && os.Args[1] == "refguard" {
+		if err := refguard.Hook(os.Args[2], os.Stdin, os.Getenv); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 type fakeTmux struct {
 	session bool
@@ -44,13 +58,25 @@ func (f *fakeTmux) Capture(string, int) (string, error) { return "", nil }
 func (f *fakeTmux) SendKeys(string, ...string) error    { return nil }
 func (f *fakeTmux) KillSession() error                  { return nil }
 
+// git runs git in dir. In a task's worktree it runs as that task, the way
+// its agent would, so the ref guard lets it move the task's branch.
 func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	out, err := gitx.Run(dir, args...)
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = os.Environ()
+	if rel, err := filepath.Rel(filepath.Join(filepath.Dir(filepath.Dir(dir)), "worktrees"), dir); err == nil && filepath.Base(filepath.Dir(dir)) == "worktrees" {
+		id, _, _ := strings.Cut(rel, "-")
+		cmd.Env = append(cmd.Env, "SADDLE_TASK="+id)
+	}
+	out, err := cmd.Output()
 	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, ee.Stderr)
+		}
 		t.Fatal(err)
 	}
-	return out
+	return strings.TrimSpace(string(out))
 }
 
 func must(t *testing.T, err error) {
@@ -84,6 +110,10 @@ func setup(t *testing.T) (*App, *fakeTmux) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("SADDLE_ROOT", "")
+	// Tests act as nobody in particular unless they say otherwise; the ref
+	// guard Init installs reads these.
+	t.Setenv("SADDLE_TASK", "")
+	t.Setenv("SADDLE_TRAIN", "")
 	t.Setenv("GIT_AUTHOR_NAME", "t")
 	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
 	t.Setenv("GIT_COMMITTER_NAME", "t")
@@ -104,6 +134,54 @@ func setup(t *testing.T) (*App, *fakeTmux) {
 	a.Tmux = ft
 	a.Cfg.CloseOnLand = true
 	return a, ft
+}
+
+func TestInitInstallsRefGuard(t *testing.T) {
+	a, _ := setup(t)
+	must(t, a.Init())
+	must(t, a.ensureIntegration())
+	integ := "refs/heads/" + a.Cfg.Integration
+	before := git(t, a.Root, "rev-parse", integ)
+	git(t, a.Root, "commit", "-q", "--allow-empty", "-m", "next")
+	head := git(t, a.Root, "rev-parse", "HEAD")
+
+	updateRef := func(env ...string) error {
+		cmd := exec.Command("git", "-C", a.Root, "update-ref", integ, head)
+		cmd.Env = append(os.Environ(), env...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%w: %s", err, out)
+		}
+		return nil
+	}
+	if err := updateRef("SADDLE_TASK=t2"); err == nil {
+		t.Fatal("t2 moved the integration branch")
+	}
+	if got := git(t, a.Root, "rev-parse", integ); got != before {
+		t.Fatalf("denied update moved integration to %s", got)
+	}
+	evs, err := a.Store.Events(100)
+	must(t, err)
+	denied := false
+	for _, e := range evs {
+		denied = denied || (e.Kind == refguard.KindDenied && e.Task == "t2")
+	}
+	if !denied {
+		t.Fatalf("no %s event for t2: %v", refguard.KindDenied, evs)
+	}
+	must(t, updateRef("SADDLE_TRAIN=1", "SADDLE_TASK=t0"))
+	if got := git(t, a.Root, "rev-parse", integ); got != head {
+		t.Fatalf("train update left integration at %s, want %s", got, head)
+	}
+}
+
+func TestInitRefusesForeignRefHook(t *testing.T) {
+	a, _ := setup(t)
+	hooks := git(t, a.Root, "rev-parse", "--path-format=absolute", "--git-path", "hooks")
+	write(t, hooks, "reference-transaction", "#!/bin/sh\nexit 0\n")
+	if err := a.Init(); err == nil || !strings.Contains(err.Error(), "not written by saddle") {
+		t.Fatalf("Init over a foreign hook: err = %v", err)
+	}
 }
 
 func TestSpawnClaimsAndWrites(t *testing.T) {
