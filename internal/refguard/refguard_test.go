@@ -234,15 +234,66 @@ func TestInstallKeepsForeignHook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := filepath.Join(hooks, "reference-transaction")
-	// Reinstalling over our own hook is fine.
-	if err := Install(r.root, "/bin/true"); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"reference-transaction", "pre-push"} {
+		// Reinstalling over our own hooks is fine.
+		if err := Install(r.root, "/bin/true"); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(hooks, name)
+		foreign := "#!/bin/sh\nexit 0\n"
+		if err := os.WriteFile(p, []byte(foreign), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := Install(r.root, "/bin/true"); err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatalf("Install over a foreign %s: err = %v", name, err)
+		}
+		if b, _ := os.ReadFile(p); string(b) != foreign {
+			t.Fatalf("Install overwrote a %s hook it did not write", name)
+		}
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := os.WriteFile(p, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
+}
+
+// Only the train pushes saddle's branches, a task's own branch included.
+// Other refs push freely. Every saddle push is recorded, allowed or denied.
+func TestPushGuard(t *testing.T) {
+	r := setup(t)
+	origin := t.TempDir()
+	r.git("", "init", "-q", "--bare", "-b", "main", origin)
+	r.git("", "remote", "add", "origin", origin)
+	const t1 = "refs/heads/saddle/t1-x"
+	head := r.rev("HEAD")
+	remote := func(ref string) string {
+		out, err := gitx.Run(origin, "rev-parse", "--verify", "--quiet", ref)
+		if err != nil {
+			return ""
+		}
+		return out
 	}
-	if err := Install(r.root, "/bin/true"); err == nil {
-		t.Fatal("Install overwrote a hook it did not write")
+
+	r.deny("t2", "push", "--force", "origin", head+":"+t1)
+	r.deny("t1", "push", "--force", "origin", head+":"+t1)
+	r.deny("", "push", "origin", head+":refs/heads/saddle/integration")
+	if remote(t1) != "" || remote("refs/heads/saddle/integration") != "" {
+		t.Fatal("a denied push reached the remote")
+	}
+	r.git("train", "push", "--force", "origin", head+":"+t1)
+	if remote(t1) != head {
+		t.Fatal("the train's push did not reach the remote")
+	}
+	r.deny("t2", "push", "origin", ":"+t1)
+	r.git("t2", "push", "-q", "origin", "main", head+":refs/heads/feature")
+	if remote("refs/heads/main") != head || remote("refs/heads/feature") != head {
+		t.Fatal("a push to non-saddle refs was blocked")
+	}
+
+	want := []attempt{
+		{"t2", t1, true}, {"t1", t1, true}, {"unknown", "refs/heads/saddle/integration", true},
+		{"train", t1, false}, {"t2", t1, true},
+	}
+	if got := r.attempts(); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("events:\n got %v\nwant %v", got, want)
 	}
 }

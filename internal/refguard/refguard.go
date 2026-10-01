@@ -6,6 +6,9 @@
 // The hook lives in the repo's common hooks directory, so every worktree
 // shares it. It runs `saddle refguard <state>`; only the "prepared" state can
 // abort a transaction, so that is the only one it acts on.
+//
+// Pushes never run reference-transaction, so a pre-push hook beside it runs
+// `saddle refguard pre-push`: only the train pushes saddle's branches.
 package refguard
 
 import (
@@ -44,6 +47,7 @@ type Event struct {
 	Old    string `json:"old"`
 	New    string `json:"new"`
 	Actor  string `json:"actor"`
+	Remote string `json:"remote,omitempty"` // set for pushes
 	Denied string `json:"denied,omitempty"` // why the update was rejected
 }
 
@@ -60,29 +64,49 @@ func Actor(getenv func(string) string) string {
 	return Unknown
 }
 
-// Install writes the reference-transaction hook into the shared hooks
-// directory of the repo at root. bin is the saddle binary the hook runs. A
-// hook saddle didn't write is left alone and reported as an error.
+// Install writes the reference-transaction and pre-push hooks into the shared
+// hooks directory of the repo at root. bin is the saddle binary they run. A
+// hook saddle didn't write is left alone and reported as an error, and then
+// neither hook is written.
 func Install(root, bin string) error {
 	hooks, err := gitx.Run(root, "rev-parse", "--path-format=absolute", "--git-path", "hooks")
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(hooks, "reference-transaction")
-	if b, err := os.ReadFile(path); err == nil && !strings.Contains(string(b), marker) {
-		return fmt.Errorf("%s exists and was not written by saddle; chain `saddle refguard \"$@\"` from it to guard saddle's branches", path)
+	scripts := []struct{ name, chain, body string }{
+		{"reference-transaction", `saddle refguard "$@"`,
+			marker + ": only the merge train moves saddle's branches.\n" +
+				"# Written by saddle; reinstalling overwrites it.\n" +
+				"[ \"$1\" = prepared ] || exit 0\n" +
+				"bin=" + shellQuote(bin) + "\n" +
+				"# A missing binary must not block every ref update in the repo.\n" +
+				"[ -x \"$bin\" ] || exit 0\n" +
+				"exec \"$bin\" refguard \"$@\"\n"},
+		// The remote rides in the environment so the command keeps the
+		// `refguard <state>` shape that test binaries answer.
+		{"pre-push", `SADDLE_PUSH_REMOTE="$1" saddle refguard pre-push`,
+			marker + ": only the merge train pushes saddle's branches.\n" +
+				"# Written by saddle; reinstalling overwrites it.\n" +
+				"bin=" + shellQuote(bin) + "\n" +
+				"# A missing binary must not block every push from the repo.\n" +
+				"[ -x \"$bin\" ] || exit 0\n" +
+				"SADDLE_PUSH_REMOTE=\"$1\" exec \"$bin\" refguard pre-push\n"},
+	}
+	for _, sc := range scripts {
+		path := filepath.Join(hooks, sc.name)
+		if b, err := os.ReadFile(path); err == nil && !strings.Contains(string(b), marker) {
+			return fmt.Errorf("%s exists and was not written by saddle; chain `%s` from it to guard saddle's branches", path, sc.chain)
+		}
 	}
 	if err := os.MkdirAll(hooks, 0o755); err != nil {
 		return err
 	}
-	script := "#!/bin/sh\n" + marker + ": only the merge train moves saddle's branches.\n" +
-		"# Written by saddle; reinstalling overwrites it.\n" +
-		"[ \"$1\" = prepared ] || exit 0\n" +
-		"bin=" + shellQuote(bin) + "\n" +
-		"# A missing binary must not block every ref update in the repo.\n" +
-		"[ -x \"$bin\" ] || exit 0\n" +
-		"exec \"$bin\" refguard \"$@\"\n"
-	return os.WriteFile(path, []byte(script), 0o755)
+	for _, sc := range scripts {
+		if err := os.WriteFile(filepath.Join(hooks, sc.name), []byte("#!/bin/sh\n"+sc.body), 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type update struct{ old, new, ref string }
@@ -90,17 +114,15 @@ type update struct{ old, new, ref string }
 // Hook handles one reference-transaction invocation from the current
 // directory: state is the hook's argument, r carries "<old> <new> <ref>"
 // lines. A non-nil error aborts the transaction; its text is shown by git.
+// State "pre-push" comes from the pre-push hook instead; see Push.
 func Hook(state string, r io.Reader, getenv func(string) string) error {
+	if state == "pre-push" {
+		return Push(getenv("SADDLE_PUSH_REMOTE"), r, getenv)
+	}
 	if state != "prepared" {
 		return nil
 	}
-	cfg := config.Default()
-	root, rootErr := gitx.Root(".")
-	if rootErr == nil {
-		if c, err := config.Load(root); err == nil {
-			cfg = c
-		}
-	}
+	cfg, root, rootErr := load()
 	var us []update
 	sc := bufio.NewScanner(r)
 	for sc.Scan() {
@@ -117,12 +139,9 @@ func Hook(state string, r io.Reader, getenv func(string) string) error {
 	}
 
 	// The store is only for liveness and the log; without it the rules still hold.
-	var st *store.Store
-	if rootErr == nil {
-		if s, err := store.Open(filepath.Join(root, ".saddle", "state.db")); err == nil {
-			st = s
-			defer func() { _ = st.Close() }()
-		}
+	st := openStore(root, rootErr)
+	if st != nil {
+		defer func() { _ = st.Close() }()
 	}
 	live := func(task string) bool {
 		if st == nil {
@@ -147,17 +166,89 @@ func Hook(state string, r io.Reader, getenv func(string) string) error {
 		}
 		e := Event{Ref: u.ref, Old: u.old, New: u.new, Actor: actor,
 			Denied: check(actor, strings.TrimPrefix(u.ref, "refs/heads/"), cfg.Integration, isZero(u.new), exists, live)}
-		kind := KindRef
+		record(st, e)
 		if e.Denied != "" {
-			kind = KindDenied
 			denied = append(denied, fmt.Errorf("[saddle] %s may not update %s: %s", actor, u.ref, e.Denied))
-		}
-		if st != nil {
-			b, _ := json.Marshal(e)
-			st.Event(actor, kind, string(b))
 		}
 	}
 	return errors.Join(denied...)
+}
+
+// Push handles one pre-push invocation from the current directory: remote is
+// the remote's name, r carries "<local ref> <local sha> <remote ref> <remote
+// sha>" lines. Only the train pushes saddle's branches, even a task's own; a
+// non-nil error aborts the whole push.
+func Push(remote string, r io.Reader, getenv func(string) string) error {
+	cfg, root, rootErr := load()
+	var es []Event
+	actor := Actor(getenv)
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		f := strings.Fields(sc.Text())
+		if len(f) != 4 || !guarded(f[2], cfg.Integration) {
+			continue
+		}
+		e := Event{Ref: f[2], Old: f[3], New: f[1], Actor: actor, Remote: remote}
+		if actor != Train {
+			e.Denied = "only the merge train pushes saddle's branches"
+		}
+		es = append(es, e)
+	}
+	if err := sc.Err(); err != nil {
+		return err
+	}
+	if len(es) == 0 {
+		return nil
+	}
+	st := openStore(root, rootErr)
+	if st != nil {
+		defer func() { _ = st.Close() }()
+	}
+	var denied []error
+	for _, e := range es {
+		record(st, e)
+		if e.Denied != "" {
+			denied = append(denied, fmt.Errorf("[saddle] %s may not push %s: %s", actor, e.Ref, e.Denied))
+		}
+	}
+	return errors.Join(denied...)
+}
+
+// load finds the repo from the current directory and its config, falling
+// back to the defaults.
+func load() (config.Config, string, error) {
+	cfg := config.Default()
+	root, err := gitx.Root(".")
+	if err == nil {
+		if c, err := config.Load(root); err == nil {
+			cfg = c
+		}
+	}
+	return cfg, root, err
+}
+
+func openStore(root string, rootErr error) *store.Store {
+	if rootErr != nil {
+		return nil
+	}
+	st, err := store.Open(filepath.Join(root, ".saddle", "state.db"))
+	if err != nil {
+		return nil
+	}
+	return st
+}
+
+// record logs e under its actor; a nil store logs nothing.
+func record(st *store.Store, e Event) {
+	if st == nil {
+		return
+	}
+	kind := KindRef
+	if e.Denied != "" {
+		kind = KindDenied
+	}
+	b, _ := json.Marshal(e)
+	st.Event(e.Actor, kind, string(b))
 }
 
 // check returns why actor may not update branch, or "" to allow it.
