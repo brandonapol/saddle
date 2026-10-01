@@ -16,6 +16,7 @@ type fakeTmux struct {
 	session bool
 	windows map[string]bool
 	sent    map[string][]string
+	names   map[string]string
 	n       int
 }
 
@@ -24,12 +25,14 @@ func (f *fakeTmux) NewSession(name, dir, cmd string) (string, error) {
 	f.session = true
 	return f.NewWindow(name, dir, cmd)
 }
-func (f *fakeTmux) NewWindow(_, _, _ string) (string, error) {
+func (f *fakeTmux) NewWindow(name, _, _ string) (string, error) {
 	f.n++
 	id := fmt.Sprintf("@%d", f.n)
 	f.windows[id] = true
+	f.names[id] = name
 	return id, nil
 }
+func (f *fakeTmux) WindowName(id string) (string, error) { return f.names[id], nil }
 func (f *fakeTmux) KillWindow(id string) error { delete(f.windows, id); return nil }
 func (f *fakeTmux) Alive(id string) bool       { return f.windows[id] }
 func (f *fakeTmux) SendText(id, text string) error {
@@ -96,7 +99,7 @@ func setup(t *testing.T) (*App, *fakeTmux) {
 	}
 	t.Cleanup(func() { a.Close() })
 	a.Cfg.Test.Cmd = "true"
-	ft := &fakeTmux{windows: map[string]bool{}, sent: map[string][]string{}}
+	ft := &fakeTmux{windows: map[string]bool{}, sent: map[string][]string{}, names: map[string]string{}}
 	a.Tmux = ft
 	a.Cfg.CloseOnLand = true
 	return a, ft

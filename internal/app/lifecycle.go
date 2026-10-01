@@ -279,3 +279,22 @@ func (a *App) GC() ([]Leftover, error) {
 	}
 	return out, nil
 }
+
+// windowNamer is implemented by tmux drivers that can report a window's name.
+type windowNamer interface {
+	WindowName(id string) (string, error)
+}
+
+// ownWindow reports whether t's window is one saddle opened for it: a live
+// worker window still named after the task. Keys are never typed anywhere
+// else; window ids outlive the windows saddle made and get reused.
+func (a *App) ownWindow(t store.Task) bool {
+	if t.Role != store.RoleWorker || t.Window == "" || !a.Tmux.Alive(t.Window) {
+		return false
+	}
+	if n, ok := a.Tmux.(windowNamer); ok {
+		name, err := n.WindowName(t.Window)
+		return err == nil && strings.HasPrefix(name, t.ID+"-")
+	}
+	return true
+}
