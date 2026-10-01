@@ -68,6 +68,7 @@ type TaskView struct {
 	ID       string   `json:"id"`
 	Title    string   `json:"title"`
 	Status   string   `json:"status"`
+	Reason   string   `json:"reason,omitempty"` // why a spawn failed
 	Model    string   `json:"model,omitempty"`
 	Parent   string   `json:"parent,omitempty"`
 	Branch   string   `json:"branch,omitempty"`
@@ -122,7 +123,11 @@ func Status(a *app.App) (StatusOut, error) {
 	}
 	for _, t := range ts {
 		n, _ := a.Store.PendingNotices(t.ID)
-		out.Tasks = append(out.Tasks, TaskView{
+		reason := ""
+		if t.Status == app.StatusFailed {
+			reason = t.Summary
+		}
+		out.Tasks = append(out.Tasks, TaskView{Reason: reason,
 			ID: t.ID, Title: t.Title, Status: t.Status, Model: t.Model, Parent: t.Parent, Branch: t.Branch,
 			Claims: cl[t.ID], Train: tr[t.ID], Notices: n, PR: t.PR, Window: t.Window, Worktree: t.Worktree,
 		})

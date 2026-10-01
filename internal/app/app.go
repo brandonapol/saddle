@@ -166,6 +166,16 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if err := a.ensureIntegration(); err != nil {
 		return t, err
 	}
+	// Claims are checked before the row exists, so a conflict leaves nothing behind.
+	if len(r.Claims) > 0 && !r.Force {
+		all, err := a.Store.Claims()
+		if err != nil {
+			return t, err
+		}
+		if c := claims.Conflicts(all, "", r.Claims); len(c) > 0 {
+			return t, conflictErr(c)
+		}
+	}
 	id := r.ID
 	if id == "" {
 		var err error
@@ -185,10 +195,12 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if model == "" {
 		model = a.Cfg.Claude.Model
 	}
+	hint := a.retryHint(r.Title)
 	t = store.Task{
 		ID: id, Title: r.Title, Prompt: r.Prompt, Parent: r.Parent, Role: store.RoleWorker, Model: model,
 		Branch: "saddle/" + name, Worktree: a.stateDir("worktrees", name), Status: store.Running, Issue: r.Issue,
 	}
+	hadBranch := gitx.BranchExists(a.Root, t.Branch)
 	if err := a.Store.CreateTask(t); err != nil {
 		return t, err
 	}
@@ -201,18 +213,18 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 			return r.Claims, nil
 		})
 		if err != nil {
-			return t, errors.Join(err, a.Store.SetStatus(id, store.Killed))
+			return t, a.spawnFailed(t, false, hadBranch, err)
 		}
 	}
 	if err := gitx.WorktreeAdd(a.Root, t.Worktree, t.Branch, base); err != nil {
-		return t, errors.Join(err, a.Store.SetStatus(id, store.Killed))
+		return t, a.spawnFailed(t, false, hadBranch, fmt.Errorf("worktree add: %w", err))
 	}
 	win, err := a.launch(t, r.Claims)
 	if err != nil {
-		return t, errors.Join(err, a.Store.SetStatus(id, store.Killed))
+		return t, a.spawnFailed(t, true, hadBranch, fmt.Errorf("launch: %w", err))
 	}
 	t.Window = win
-	a.Store.Event(id, "spawn", fmt.Sprintf("parent=%s model=%s claims=%s", r.Parent, model, strings.Join(r.Claims, ",")))
+	a.Store.Event(id, "spawn", fmt.Sprintf("parent=%s model=%s claims=%s%s", r.Parent, model, strings.Join(r.Claims, ","), hint))
 	if r.Parent != "" && r.Parent != OrchestratorID {
 		if err := a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf("%s spawned sub-task %s %q.", r.Parent, id, r.Title)); err != nil {
 			return t, err
@@ -292,7 +304,7 @@ func (a *App) Down() (int, error) {
 	}
 	n := 0
 	for _, t := range ts {
-		if t.Role == store.RoleWorker && t.Active() && t.Status != store.Done {
+		if t.Role == store.RoleWorker && t.Active() && t.Status != store.Done && t.Status != StatusFailed {
 			if err := errors.Join(a.Store.Release(t.ID), a.Store.SetStatus(t.ID, store.Killed)); err != nil {
 				return n, err
 			}
