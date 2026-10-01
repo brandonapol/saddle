@@ -35,6 +35,18 @@ type Config struct {
 	Usage  Usage  `toml:"usage"`
 	// Sweeper merges ready saddle PRs. Off unless enabled.
 	Sweeper Sweeper `toml:"sweeper"`
+	// CI watches saddle PRs' checks while saddle up runs.
+	CI CI `toml:"ci"`
+}
+
+// CI configures the CI watcher, which tells the owning task and the
+// orchestrator when a saddle PR's checks fail, and spawns a fix task when the
+// owner has already landed.
+type CI struct {
+	// Interval is how often PR checks are polled.
+	Interval time.Duration `toml:"interval"`
+	// Disabled turns the watcher off.
+	Disabled bool `toml:"disabled"`
 }
 
 // Sweeper configures `saddle sweep`, which merges open saddle PRs that are
@@ -110,6 +122,7 @@ func Default() Config {
 			Method:      "squash",
 			ReviewLabel: "requires review",
 		},
+		CI: CI{Interval: 10 * time.Minute},
 		Usage: Usage{
 			Poll: 15 * time.Second,
 			Windows: []Window{
@@ -156,6 +169,9 @@ func Load(root string) (Config, error) {
 		}
 	}
 	cfg.Usage.Windows = ws
+	if cfg.CI.Interval <= 0 {
+		cfg.CI.Interval = Default().CI.Interval
+	}
 	if cfg.Sweeper.Method == "" {
 		cfg.Sweeper.Method = Default().Sweeper.Method
 	}
@@ -188,6 +204,12 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # model = "opus"                 # workers
 # orchestrator_model = "sonnet"  # the chat agent in the TUI
 # permission_mode = "auto"
+
+[ci]
+# Polls saddle PRs' checks while saddle up runs; a failure goes to the owning
+# task and the orchestrator, or to a new fix task when the owner has landed.
+# interval = "10m"
+# disabled = false
 
 [usage]
 # Plan-limit bars are estimates: set cap to your plan's token budget for each
