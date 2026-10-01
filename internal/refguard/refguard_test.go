@@ -23,6 +23,9 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
+	// The hook runs this binary; built with -race it would sleep a second on
+	// every exit, and so on every ref update.
+	_ = os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	os.Exit(m.Run())
 }
 
