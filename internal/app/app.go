@@ -444,7 +444,10 @@ func (a *App) Notify(task, kind, text string) error {
 	}
 	if t.Status == store.Idle || t.Status == store.Done || t.Status == store.Conflict {
 		if a.Tmux.Alive(t.Window) {
-			return a.Tmux.SendText(t.Window, "[saddle] You have new notices. Read them and act on them.")
+			tmux.SendWhenIdle(a.Tmux, t.Window, "[saddle] You have new notices. Read them and act on them.", func() bool {
+				n, err := a.Store.PendingNotices(task)
+				return err != nil || n > 0
+			})
 		}
 	}
 	return nil
