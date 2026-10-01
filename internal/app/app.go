@@ -91,12 +91,15 @@ func (a *App) Init() error {
 	return nil
 }
 
-// ensureIntegration creates the integration branch from base on first use.
+// ensureIntegration fetches base and creates the integration branch from
+// <remote>/<base> on first use. Later it reports when integration falls behind.
 func (a *App) ensureIntegration() error {
+	base := a.freshBase()
 	if gitx.BranchExists(a.Root, a.Cfg.Integration) {
+		a.checkBehind(base)
 		return nil
 	}
-	_, err := gitx.Run(a.Root, "branch", a.Cfg.Integration, a.Cfg.Base)
+	_, err := gitx.Run(a.Root, "branch", "--no-track", a.Cfg.Integration, base)
 	return err
 }
 
