@@ -1,3 +1,6 @@
 /saddle
+/build/
+coverage.out
+coverage.html
 /dist/
 .saddle/

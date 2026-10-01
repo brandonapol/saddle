@@ -1,0 +1,877 @@
+// Package tui is saddle's terminal UI: tasks and a live peek on the left, a
+// chat with the orchestrator on the right. Agents run hidden in tmux; the
+// orchestrator is a headless Claude Code process this UI talks to.
+package tui
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/brandonapol/saddle/internal/agent"
+	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/mcpserver"
+	"github.com/brandonapol/saddle/internal/orch"
+	"github.com/brandonapol/saddle/internal/store"
+)
+
+// Palette from the design canvas.
+var (
+	cAccent  = lipgloss.Color("#E0A458")
+	cRun     = lipgloss.Color("#56C2B8")
+	cDone    = lipgloss.Color("#8FBF6A")
+	cAlert   = lipgloss.Color("#F2735A")
+	cDim     = lipgloss.Color("#8A8F98")
+	cFaint   = lipgloss.Color("#4A505A")
+	cText    = lipgloss.Color("#D9D6CF")
+	cBright  = lipgloss.Color("#F3EFE6")
+	cBorder  = lipgloss.Color("#2A2F36")
+	cFocus   = lipgloss.Color("#5A626E")
+	cSelBg   = lipgloss.Color("#1E2329")
+	cOpus    = lipgloss.Color("#E0A458")
+	cSonnet  = lipgloss.Color("#2F9F94")
+	cHaiku   = lipgloss.Color("#CFD6DE")
+	sDim     = lipgloss.NewStyle().Foreground(cDim)
+	sFaint   = lipgloss.NewStyle().Foreground(cFaint)
+	sText    = lipgloss.NewStyle().Foreground(cText)
+	sBright  = lipgloss.NewStyle().Foreground(cBright).Bold(true)
+	sKey     = lipgloss.NewStyle().Foreground(cAccent)
+	sLogo    = lipgloss.NewStyle().Foreground(lipgloss.Color("#0E1013")).Background(cAccent).Bold(true).Padding(0, 1)
+	sSection = lipgloss.NewStyle().Foreground(cDim)
+)
+
+const (
+	focusChat = iota
+	focusTasks
+)
+
+type chatLine struct {
+	role string
+	text string
+}
+
+type model struct {
+	app     *app.App
+	launch  agent.Launch
+	proc    *orch.Proc
+	resumed bool // the current process was started with --resume
+	gotInit bool
+
+	width, height int
+	focus         int
+
+	tasks []mcpserver.TaskView
+	sel   int
+	peek  string
+	prev  map[string]string // last seen status per task, for attention events
+
+	chat      []chatLine
+	streaming strings.Builder
+	follow    bool
+	vp        viewport.Model
+	input     textarea.Model
+
+	screens map[string]*screenState // recent screen per live worker, to spot stuck prompts
+
+	pending []string // events waiting for the orchestrator to be idle
+	cost    float64
+	flash   string
+	flashAt time.Time
+}
+
+// screenState tracks how long a worker's screen has been unchanged.
+type screenState struct {
+	text  string
+	since time.Time
+	acted bool
+}
+
+type (
+	tickMsg    time.Time
+	evMsg      struct{ e orch.Event }
+	closedMsg  struct{}
+	refreshMsg struct {
+		tasks   []mcpserver.TaskView
+		peek    string
+		screens map[string]string
+	}
+	flashMsg string
+)
+
+// Run starts the orchestrator and the TUI. first, if set, is sent as the
+// user's opening message.
+func Run(a *app.App, first string) error {
+	l, resume, err := a.Orchestrator()
+	if err != nil {
+		return err
+	}
+	m := &model{app: a, launch: l, prev: map[string]string{}, screens: map[string]*screenState{}, follow: true}
+	if err := m.startProc(resume); err != nil {
+		return err
+	}
+	defer func() { m.proc.Close() }()
+
+	hist, _ := a.Store.Chat(300)
+	for _, c := range hist {
+		m.chat = append(m.chat, chatLine{c.Role, c.Text})
+	}
+	if len(m.chat) == 0 {
+		m.chat = append(m.chat, chatLine{store.ChatEvent,
+			"Tell me what to work on, e.g. \"work #46 and #47 in parallel\", or paste an epic. I'll plan it, run the agents out of sight, and tell you when one needs you."})
+	}
+
+	m.input = textarea.New()
+	m.input.Placeholder = "Message the orchestrator…"
+	m.input.ShowLineNumbers = false
+	m.input.Prompt = "› "
+	m.input.SetHeight(3)
+	m.input.CharLimit = 0
+	m.input.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j")
+	m.input.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	m.input.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(cAccent)
+	m.input.Focus()
+	m.vp = viewport.New(40, 10)
+
+	if first != "" {
+		m.sendUser(first)
+	}
+	_, err = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	return err
+}
+
+func (m *model) startProc(resume string) error {
+	cmd, err := m.launch.Headless(resume)
+	if err != nil {
+		return err
+	}
+	p, err := orch.Start(cmd)
+	if err != nil {
+		return fmt.Errorf("start orchestrator: %w", err)
+	}
+	m.proc, m.resumed, m.gotInit = p, resume != "", false
+	return nil
+}
+
+func (m *model) Init() tea.Cmd {
+	return tea.Batch(m.waitEvent(), m.refresh(), tick(), textarea.Blink)
+}
+
+func tick() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
+
+func (m *model) waitEvent() tea.Cmd {
+	ch := m.proc.Events()
+	return func() tea.Msg {
+		e, ok := <-ch
+		if !ok {
+			return closedMsg{}
+		}
+		return evMsg{e}
+	}
+}
+
+// refresh reads task state and the selected task's screen off the UI goroutine.
+func (m *model) refresh() tea.Cmd {
+	sel := ""
+	if m.sel < len(m.tasks) {
+		sel = m.tasks[m.sel].ID
+	}
+	a := m.app
+	return func() tea.Msg {
+		st, err := mcpserver.Status(a)
+		if err != nil {
+			return flashMsg("status: " + err.Error())
+		}
+		var ts []mcpserver.TaskView
+		for _, t := range st.Tasks {
+			if t.ID != app.OrchestratorID {
+				ts = append(ts, t)
+			}
+		}
+		sort.SliceStable(ts, func(i, j int) bool { return rank(ts[i].Status) < rank(ts[j].Status) })
+		if sel == "" && len(ts) > 0 {
+			sel = ts[0].ID
+		}
+		peek := ""
+		if sel != "" {
+			peek, _ = a.Peek(sel, 200)
+		}
+		screens := map[string]string{}
+		for _, t := range ts {
+			if t.Window != "" && (t.Status == store.Running || t.Status == store.Idle) {
+				if s, err := a.Peek(t.ID, 25); err == nil {
+					screens[t.ID] = s
+				}
+			}
+		}
+		return refreshMsg{tasks: ts, peek: peek, screens: screens}
+	}
+}
+
+// rank orders the task list: what needs attention first, finished work last.
+func rank(status string) int {
+	switch status {
+	case store.NeedsYou:
+		return 0
+	case store.Conflict:
+		return 1
+	case store.Idle:
+		return 2
+	case store.Running:
+		return 3
+	case store.Done:
+		return 4
+	case store.Landed:
+		return 5
+	}
+	return 6
+}
+
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		m.layout()
+
+	case tickMsg:
+		cmds = append(cmds, m.refresh(), tick())
+
+	case refreshMsg:
+		m.watchScreens(msg.tasks, msg.screens)
+		m.noticeTransitions(msg.tasks)
+		selID := ""
+		if m.sel < len(m.tasks) {
+			selID = m.tasks[m.sel].ID
+		}
+		m.tasks, m.peek = msg.tasks, msg.peek
+		m.sel = 0
+		for i, t := range m.tasks {
+			if t.ID == selID {
+				m.sel = i
+			}
+		}
+		m.deliver()
+
+	case evMsg:
+		m.handleEvent(msg.e)
+		cmds = append(cmds, m.waitEvent())
+
+	case closedMsg:
+		// The process is gone; ctrl+r restarts it.
+
+	case flashMsg:
+		m.flash, m.flashAt = string(msg), time.Now()
+
+	case tea.MouseMsg:
+		var c tea.Cmd
+		m.vp, c = m.vp.Update(msg)
+		m.follow = m.vp.AtBottom()
+		cmds = append(cmds, c)
+
+	case tea.KeyMsg:
+		if c, handled := m.key(msg); handled {
+			return m, c
+		}
+		if m.focus == focusChat {
+			var c tea.Cmd
+			m.input, c = m.input.Update(msg)
+			cmds = append(cmds, c)
+		}
+	}
+	m.renderChat()
+	return m, tea.Batch(cmds...)
+}
+
+func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
+	switch k.String() {
+	case "ctrl+c":
+		return tea.Quit, true
+	case "tab", "shift+tab":
+		if m.focus == focusChat {
+			m.focus = focusTasks
+			m.input.Blur()
+		} else {
+			m.focus = focusChat
+			m.input.Focus()
+		}
+		return nil, true
+	case "pgup":
+		m.vp.HalfPageUp()
+		m.follow = false
+		return nil, true
+	case "pgdown":
+		m.vp.HalfPageDown()
+		m.follow = m.vp.AtBottom()
+		return nil, true
+	case "ctrl+r":
+		if m.proc != nil {
+			m.proc.Close()
+		}
+		_, resume, _ := m.app.Orchestrator()
+		if err := m.startProc(resume); err != nil {
+			m.addChat(store.ChatEvent, "Restart failed: "+err.Error())
+			return nil, true
+		}
+		m.addChat(store.ChatEvent, "Orchestrator restarted.")
+		return m.waitEvent(), true
+	}
+	if m.focus == focusChat {
+		if k.String() == "enter" {
+			text := strings.TrimSpace(m.input.Value())
+			if text == "" {
+				return nil, true
+			}
+			m.input.Reset()
+			m.sendUser(text)
+			return nil, true
+		}
+		return nil, false
+	}
+	// Task list keys.
+	switch k.String() {
+	case "esc":
+		m.focus = focusChat
+		m.input.Focus()
+	case "j", "down":
+		if m.sel < len(m.tasks)-1 {
+			m.sel++
+		}
+		return m.refresh(), true
+	case "k", "up":
+		if m.sel > 0 {
+			m.sel--
+		}
+		return m.refresh(), true
+	case "enter", "a":
+		return m.attach(), true
+	case "x":
+		if t, ok := m.selected(); ok {
+			id := t.ID
+			a := m.app
+			return func() tea.Msg {
+				if err := a.Kill(id, false); err != nil {
+					return flashMsg(err.Error())
+				}
+				return flashMsg("killed " + id)
+			}, true
+		}
+	case "L":
+		a := m.app
+		return func() tea.Msg {
+			rs, err := a.Land()
+			if err != nil {
+				return flashMsg("land: " + err.Error())
+			}
+			var parts []string
+			for _, r := range rs {
+				parts = append(parts, r.Task+" "+r.State)
+			}
+			if len(parts) == 0 {
+				return flashMsg("train is empty")
+			}
+			return flashMsg("land: " + strings.Join(parts, ", "))
+		}, true
+	}
+	return nil, true
+}
+
+func (m *model) selected() (mcpserver.TaskView, bool) {
+	if m.sel < len(m.tasks) {
+		return m.tasks[m.sel], true
+	}
+	return mcpserver.TaskView{}, false
+}
+
+// attach hands the terminal to the selected agent's tmux window. Detaching
+// (prefix d) comes back here.
+func (m *model) attach() tea.Cmd {
+	t, ok := m.selected()
+	if !ok || t.Window == "" {
+		return func() tea.Msg { return flashMsg("no live window for that task") }
+	}
+	session := m.app.Cfg.Session
+	_ = exec.Command("tmux", "select-window", "-t", t.Window).Run()
+	var c *exec.Cmd
+	if os.Getenv("TMUX") != "" {
+		c = exec.Command("tmux", "display-popup", "-E", "-w", "95%", "-h", "95%",
+			"env -u TMUX tmux attach-session -t ="+session)
+	} else {
+		c = exec.Command("tmux", "attach-session", "-t", "="+session)
+	}
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		if err != nil {
+			return flashMsg("attach: " + err.Error())
+		}
+		return flashMsg("back from " + t.ID)
+	})
+}
+
+func (m *model) sendUser(text string) {
+	m.addChat(store.ChatUser, text)
+	m.follow = true
+	if err := m.proc.Send(text); err != nil {
+		m.addChat(store.ChatEvent, "Could not reach the orchestrator ("+err.Error()+"). Press ctrl+r to restart it.")
+	}
+}
+
+func (m *model) addChat(role, text string) {
+	m.chat = append(m.chat, chatLine{role, text})
+	_ = m.app.Store.AddChat(role, text)
+}
+
+func (m *model) handleEvent(e orch.Event) {
+	switch e.Kind {
+	case orch.Init:
+		m.gotInit = true
+		if e.SessionID != "" {
+			_ = m.app.Store.SetField(app.OrchestratorID, "session_id", e.SessionID)
+		}
+	case orch.Delta:
+		m.streaming.WriteString(e.Text)
+	case orch.Text:
+		m.streaming.Reset()
+		m.addChat(store.ChatAssistant, strings.TrimSpace(e.Text))
+	case orch.Tool:
+		m.streaming.Reset()
+		m.addChat(store.ChatTool, e.Text)
+	case orch.Result:
+		m.streaming.Reset()
+		m.cost = e.CostUSD
+		if e.SessionID != "" {
+			_ = m.app.Store.SetField(app.OrchestratorID, "session_id", e.SessionID)
+		}
+		m.deliver()
+	case orch.Error:
+		m.streaming.Reset()
+		m.addChat(store.ChatEvent, "Orchestrator error: "+e.Text)
+	case orch.Exit:
+		m.streaming.Reset()
+		if m.resumed && !m.gotInit {
+			// The saved session couldn't be resumed; start a fresh one.
+			_ = m.app.Store.SetField(app.OrchestratorID, "session_id", "")
+			if err := m.startProc(""); err == nil {
+				m.addChat(store.ChatEvent, "Couldn't resume the last conversation; started a new one.")
+				return
+			}
+		}
+		msg := "The orchestrator stopped."
+		if e.Text != "" {
+			msg += " " + lastLines(e.Text, 3)
+		}
+		m.addChat(store.ChatEvent, msg+" Press ctrl+r to restart it.")
+	}
+}
+
+// noticeTransitions turns worker status changes into events for the
+// orchestrator, with the agent's screen when it is blocked.
+func (m *model) noticeTransitions(ts []mcpserver.TaskView) {
+	first := len(m.prev) == 0 && len(m.tasks) == 0
+	for _, t := range ts {
+		was, seen := m.prev[t.ID]
+		m.prev[t.ID] = t.Status
+		if first || !seen || was == t.Status {
+			continue
+		}
+		var ev string
+		switch t.Status {
+		case store.NeedsYou:
+			ev = fmt.Sprintf("%s (%s) is waiting on a permission prompt or a question.", t.ID, t.Title)
+		case store.Idle:
+			if strings.HasPrefix(t.Train, store.Queued) {
+				continue
+			}
+			ev = fmt.Sprintf("%s (%s) stopped without calling done. It may be asking something, stuck, or finished without saying so.", t.ID, t.Title)
+		default:
+			continue
+		}
+		if screen, err := m.app.Peek(t.ID, 30); err == nil && screen != "" {
+			ev += "\nIts screen:\n```\n" + screen + "\n```"
+		}
+		m.pending = append(m.pending, ev)
+		m.addChat(store.ChatEvent, "▲ "+firstLine(ev))
+	}
+}
+
+// watchScreens catches prompts no hook reports (like Claude Code's folder-trust
+// dialog): a prompt that sits unchanged for a few seconds marks the worker as
+// needing attention, which the transition check then reports with its screen.
+func (m *model) watchScreens(ts []mcpserver.TaskView, screens map[string]string) {
+	status := map[string]string{}
+	for _, t := range ts {
+		status[t.ID] = t.Status
+	}
+	for id, s := range screens {
+		st := m.screens[id]
+		if st == nil || st.text != s {
+			m.screens[id] = &screenState{text: s, since: time.Now()}
+			continue
+		}
+		if st.acted || time.Since(st.since) < 4*time.Second {
+			continue
+		}
+		kind := app.DetectPrompt(s)
+		if kind == app.PromptNone {
+			continue
+		}
+		st.acted = true
+		if kind == app.PromptTrust && m.app.RootTrusted() {
+			if err := m.app.SendKeys(id, "", []string{"Down", "Enter"}); err == nil {
+				m.addChat(store.ChatEvent, "Accepted the folder-trust prompt for "+id+"'s worktree (you already trust this repo).")
+				continue
+			}
+		}
+		switch status[id] {
+		case store.Running, store.Idle:
+			// The status change reaches the orchestrator via noticeTransitions.
+			_ = m.app.Store.SetStatus(id, store.NeedsYou)
+		case store.NeedsYou:
+			// Already reported, but the screen changed and it is still a prompt:
+			// an answer didn't take (e.g. a selection moved without Enter).
+			m.pending = append(m.pending, fmt.Sprintf("%s is still waiting on a prompt after the last answer. Its screen:\n```\n%s\n```", id, s))
+			m.addChat(store.ChatEvent, "▲ "+id+" is still waiting on a prompt")
+		}
+	}
+}
+
+// deliver sends queued events and saddle notices to the orchestrator once it is idle.
+func (m *model) deliver() {
+	if m.proc == nil || m.proc.Busy() {
+		return
+	}
+	ns, _ := m.app.Store.TakeNotices(app.OrchestratorID, false)
+	msgs := m.pending
+	for _, n := range ns {
+		msgs = append(msgs, n.Text)
+		if n.Kind == store.NoticeAction {
+			m.addChat(store.ChatEvent, firstLine(n.Text))
+		}
+	}
+	if len(msgs) == 0 {
+		return
+	}
+	m.pending = nil
+	var b strings.Builder
+	for i, s := range msgs {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("[saddle] " + s)
+	}
+	b.WriteString("\n\nDecide what to do. Tell the user only what they need to know, briefly.")
+	if err := m.proc.Send(b.String()); err != nil {
+		m.pending = msgs
+	}
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+func lastLines(s string, n int) string {
+	ls := strings.Split(strings.TrimSpace(s), "\n")
+	if len(ls) > n {
+		ls = ls[len(ls)-n:]
+	}
+	return strings.Join(ls, " ")
+}
+
+// Layout.
+
+func (m *model) chatWidth() int {
+	w := m.width * 42 / 100
+	if w < 44 {
+		w = 44
+	}
+	if w > 90 {
+		w = 90
+	}
+	if w > m.width-30 {
+		w = m.width - 30
+	}
+	return w
+}
+
+func (m *model) layout() {
+	cw := m.chatWidth()
+	m.input.SetWidth(cw - 4)
+	m.vp.Width = cw - 4
+	// header + footer, the box border, the input and its top rule.
+	m.vp.Height = m.height - 2 - 2 - m.input.Height() - 1
+	if m.vp.Height < 3 {
+		m.vp.Height = 3
+	}
+	m.renderChat()
+}
+
+func (m *model) renderChat() {
+	w := m.vp.Width
+	if w <= 0 {
+		return
+	}
+	var b strings.Builder
+	wrap := lipgloss.NewStyle().Width(w - 2)
+	for _, c := range m.chat {
+		b.WriteString(renderLine(c, w, wrap))
+		b.WriteString("\n")
+	}
+	if m.streaming.Len() > 0 {
+		b.WriteString(renderLine(chatLine{store.ChatAssistant, m.streaming.String()}, w, wrap))
+		b.WriteString("\n")
+	} else if m.proc != nil && m.proc.Busy() {
+		b.WriteString(sDim.Render("  thinking…") + "\n")
+	}
+	m.vp.SetContent(b.String())
+	if m.follow {
+		m.vp.GotoBottom()
+	}
+}
+
+func renderLine(c chatLine, w int, wrap lipgloss.Style) string {
+	switch c.role {
+	case store.ChatUser:
+		return lipgloss.NewStyle().Foreground(cAccent).Bold(true).Render("you") + "\n" + sBright.UnsetBold().Render(wrap.Render(c.text)) + "\n"
+	case store.ChatAssistant:
+		return lipgloss.NewStyle().Foreground(cRun).Bold(true).Render("saddle") + "\n" + sText.Render(wrap.Render(c.text)) + "\n"
+	case store.ChatTool:
+		return sFaint.Render("  ⚙ " + truncate(c.text, w-6))
+	default:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#C9A26B")).Render(wrap.Render("◇ " + c.text))
+	}
+}
+
+func truncate(s string, n int) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	r := []rune(s)
+	if n < 2 {
+		n = 2
+	}
+	if len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
+}
+
+// View.
+
+func (m *model) View() string {
+	if m.width == 0 {
+		return ""
+	}
+	header := m.viewHeader()
+	footer := m.viewFooter()
+	bodyH := m.height - lipgloss.Height(header) - lipgloss.Height(footer)
+	cw := m.chatWidth()
+	left := m.viewLeft(m.width-cw, bodyH)
+	right := m.viewChat(cw, bodyH)
+	return lipgloss.JoinVertical(lipgloss.Left, header, lipgloss.JoinHorizontal(lipgloss.Top, left, right), footer)
+}
+
+func (m *model) viewHeader() string {
+	counts := map[string]int{}
+	for _, t := range m.tasks {
+		counts[t.Status]++
+	}
+	parts := []string{sLogo.Render("SADDLE"), sBright.Render(m.app.Cfg.Session), sDim.Render("→ " + m.app.Cfg.Integration)}
+	add := func(n int, s string, c lipgloss.Color) {
+		if n > 0 {
+			parts = append(parts, lipgloss.NewStyle().Foreground(c).Render(fmt.Sprintf(s, n)))
+		}
+	}
+	add(counts[store.Running], "● %d running", cRun)
+	add(counts[store.NeedsYou]+counts[store.Conflict]+counts[store.Idle], "▲ %d need attention", cAlert)
+	add(counts[store.Done], "◆ %d queued", cAccent)
+	add(counts[store.Landed], "✓ %d landed", cDone)
+	left := strings.Join(parts, "  ")
+	state := "idle"
+	if m.proc != nil && m.proc.Busy() {
+		state = "working"
+	}
+	right := sDim.Render(fmt.Sprintf("orchestrator %s · %s · $%.2f ", m.launch.Model, state, m.cost))
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
+	}
+	return lipgloss.NewStyle().Width(m.width).Render(left + strings.Repeat(" ", gap) + right)
+}
+
+func (m *model) viewFooter() string {
+	var keys []string
+	k := func(key, what string) { keys = append(keys, sKey.Render(key)+" "+sDim.Render(what)) }
+	if m.focus == focusChat {
+		k("enter", "send")
+		k("alt+enter", "newline")
+		k("tab", "tasks")
+		k("pgup/pgdn", "scroll")
+	} else {
+		k("j/k", "select")
+		k("enter", "open window (ctrl-b d to come back)")
+		k("x", "kill")
+		k("L", "land")
+		k("tab", "chat")
+	}
+	k("ctrl+r", "restart orchestrator")
+	k("ctrl+c", "quit (agents keep running)")
+	line := " " + strings.Join(keys, "   ")
+	if m.flash != "" && time.Since(m.flashAt) < 6*time.Second {
+		line = " " + lipgloss.NewStyle().Foreground(cAccent).Render(m.flash)
+	}
+	return lipgloss.NewStyle().Width(m.width).MaxWidth(m.width).Render(line)
+}
+
+func box(title string, w, h int, focused bool, body string) string {
+	bc := cBorder
+	if focused {
+		bc = cFocus
+	}
+	inner := lipgloss.NewStyle().Width(w - 2).Height(h - 2).MaxHeight(h - 2).Render(body)
+	b := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(bc).Render(inner)
+	// Put the title into the top border.
+	lines := strings.SplitN(b, "\n", 2)
+	if len(lines) == 2 && title != "" {
+		t := " " + title + " "
+		top := lipgloss.NewStyle().Foreground(bc).Render("╭─") + sSection.Render(t)
+		rest := w - lipgloss.Width(top) - 1
+		if rest < 0 {
+			rest = 0
+		}
+		top += lipgloss.NewStyle().Foreground(bc).Render(strings.Repeat("─", rest) + "╮")
+		b = top + "\n" + lines[1]
+	}
+	return b
+}
+
+func glyph(status string) (string, lipgloss.Color) {
+	switch status {
+	case store.Running:
+		return "●", cRun
+	case store.Idle:
+		return "◐", cAccent
+	case store.NeedsYou:
+		return "▲", cAlert
+	case store.Done:
+		return "◆", cAccent
+	case store.Conflict:
+		return "✗", cAlert
+	case store.Landed:
+		return "✓", cDone
+	}
+	return "·", cFaint
+}
+
+func modelColor(model string) lipgloss.Color {
+	switch {
+	case strings.Contains(model, "opus"):
+		return cOpus
+	case strings.Contains(model, "sonnet"):
+		return cSonnet
+	case strings.Contains(model, "haiku"):
+		return cHaiku
+	}
+	return cDim
+}
+
+func (m *model) viewLeft(w, h int) string {
+	listH := len(m.tasks) + 2
+	if listH < 5 {
+		listH = 5
+	}
+	if listH > h/2 {
+		listH = h / 2
+	}
+	var rows []string
+	if len(m.tasks) == 0 {
+		rows = append(rows, sDim.Render(" No agents yet. Ask the orchestrator to start some."))
+	}
+	for i, t := range m.tasks {
+		g, gc := glyph(t.Status)
+		train := ""
+		if t.Train != "" {
+			train = firstWord(t.Train)
+		}
+		meta := lipgloss.NewStyle().Foreground(modelColor(t.Model)).Render(fmt.Sprintf("%-6s", t.Model)) + " " + sDim.Render(fmt.Sprintf("%-9s", statusLabel(t.Status)))
+		if train != "" && train != "landed" {
+			meta += " " + sDim.Render(train)
+		}
+		titleW := w - 4 - 3 - 6 - lipgloss.Width(meta) - 2
+		row := lipgloss.NewStyle().Foreground(gc).Render(g) + " " + sDim.Render(fmt.Sprintf("%-5s", t.ID)) + " " +
+			sText.Render(fmt.Sprintf("%-*s", maxInt(titleW, 4), truncate(t.Title, maxInt(titleW, 4)))) + " " + meta
+		if i == m.sel {
+			marker := "›"
+			row = lipgloss.NewStyle().Foreground(cAccent).Render(marker) + row
+			if m.focus == focusTasks {
+				row = lipgloss.NewStyle().Background(cSelBg).Width(w - 2).Render(row)
+			}
+		} else {
+			row = " " + row
+		}
+		rows = append(rows, row)
+	}
+	list := box("AGENTS", w, listH, m.focus == focusTasks, strings.Join(rows, "\n"))
+
+	peekH := h - listH
+	title := "PEEK"
+	body := sDim.Render(" Select an agent to see its terminal.")
+	if t, ok := m.selected(); ok {
+		title = "PEEK · " + t.ID + " " + truncate(t.Title, w-20)
+		if m.peek != "" {
+			lines := strings.Split(m.peek, "\n")
+			if n := peekH - 2; len(lines) > n && n > 0 {
+				lines = lines[len(lines)-n:]
+			}
+			for i, l := range lines {
+				lines[i] = truncate(l, w-3)
+			}
+			body = sText.Render(strings.Join(lines, "\n"))
+		} else if t.Window == "" || t.Status == store.Landed || t.Status == store.Killed {
+			body = sDim.Render(" Window closed (" + statusLabel(t.Status) + ").")
+			if t.PR != "" {
+				body += "\n " + sDim.Render(t.PR)
+			}
+		}
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, list, box(title, w, peekH, false, body))
+}
+
+func (m *model) viewChat(w, h int) string {
+	m.input.SetWidth(w - 4)
+	in := lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(cBorder).Width(w - 2).Render(m.input.View())
+	body := lipgloss.JoinVertical(lipgloss.Left, m.vp.View(), in)
+	return box("ORCHESTRATOR · "+m.launch.Model, w, h, m.focus == focusChat, body)
+}
+
+func statusLabel(s string) string {
+	switch s {
+	case store.NeedsYou:
+		return "needs you"
+	case store.Done:
+		return "queued"
+	}
+	return s
+}
+
+func firstWord(s string) string {
+	if i := strings.IndexAny(s, ": "); i > 0 {
+		return s[:i]
+	}
+	return s
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
