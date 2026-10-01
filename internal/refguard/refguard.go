@@ -142,6 +142,9 @@ func Hook(state string, r io.Reader, getenv func(string) string) error {
 		if isZero(u.old) && exists {
 			u.old = cur
 		}
+		if exists && u.old == u.new {
+			continue // checking out a branch rewrites it in place; nothing moves
+		}
 		e := Event{Ref: u.ref, Old: u.old, New: u.new, Actor: actor,
 			Denied: check(actor, strings.TrimPrefix(u.ref, "refs/heads/"), cfg.Integration, isZero(u.new), exists, live)}
 		kind := KindRef
