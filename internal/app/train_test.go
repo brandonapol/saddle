@@ -1,10 +1,13 @@
 package app
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -14,6 +17,44 @@ func trainSetup(t *testing.T) *App {
 	a, _ := setup(t)
 	a.Cfg.Test.Cmd = "none"
 	return a
+}
+
+// originWithGh gives the repo a bare origin holding base, and puts a fake gh on
+// PATH. It returns the origin's path and a func reading gh's call log.
+func originWithGh(t *testing.T, a *App) (string, func() []string) {
+	t.Helper()
+	origin := t.TempDir()
+	git(t, origin, "init", "-q", "--bare", "-b", "main")
+	git(t, a.Root, "remote", "add", "origin", origin)
+	git(t, a.Root, "push", "-q", "origin", a.Cfg.Base)
+	git(t, a.Root, "fetch", "-q", "origin")
+
+	bin := t.TempDir()
+	log := filepath.Join(bin, "gh.log")
+	script := `#!/bin/sh
+echo "$*" >> "` + log + `"
+if [ "$1 $2" = "pr create" ]; then
+	n=$(grep -c '^pr create' "` + log + `")
+	echo "https://github.com/o/r/pull/$n"
+fi
+`
+	must(t, os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return origin, func() []string {
+		b, err := os.ReadFile(log)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		must(t, err)
+		return strings.Split(strings.TrimSpace(string(b)), "\n")
+	}
+}
+
+// remoteRev is the commit a branch points at in the bare origin, or "".
+func remoteRev(t *testing.T, origin, branch string) string {
+	t.Helper()
+	out, _ := gitx.Run(origin, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+	return out
 }
 
 // landTask spawns a task, commits files on its branch and lands it.
@@ -102,5 +143,50 @@ func TestDetectTestCmd(t *testing.T) {
 	}
 	if got := DetectTestCmd(t.TempDir()); got != "" {
 		t.Errorf("DetectTestCmd on an empty repo = %q", got)
+	}
+}
+
+func TestPRsPushesLandedSHAs(t *testing.T) {
+	a := trainSetup(t)
+	origin, ghLog := originWithGh(t, a)
+	t1 := landTask(t, a, "one", map[string]string{"one.txt": "one\n"})
+	t2 := landTask(t, a, "two", map[string]string{"two.txt": "two\n"})
+	landed := map[string]string{t1.ID: git(t, a.Root, "rev-parse", a.Cfg.Integration+"~1"), t2.ID: git(t, a.Root, "rev-parse", a.Cfg.Integration)}
+
+	if _, err := a.PRs(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tk := range []store.Task{t1, t2} {
+		if got := remoteRev(t, origin, tk.Branch); got != landed[tk.ID] {
+			t.Fatalf("%s: remote %s = %q, landed %s", tk.ID, tk.Branch, got, landed[tk.ID])
+		}
+	}
+	if len(ghLog()) == 0 {
+		t.Fatal("gh was not called")
+	}
+}
+
+func TestPRsRefusesDriftedBranch(t *testing.T) {
+	a := trainSetup(t)
+	origin, ghLog := originWithGh(t, a)
+	t1 := landTask(t, a, "one", map[string]string{"one.txt": "one\n"})
+	landed := git(t, a.Root, "rev-parse", t1.Branch)
+
+	// Something rewrites the landed branch after the train recorded it.
+	wt := filepath.Join(t.TempDir(), "wt")
+	git(t, a.Root, "worktree", "add", "-q", wt, t1.Branch)
+	git(t, wt, "commit", "-q", "--amend", "-m", "one, amended")
+	drifted := git(t, a.Root, "rev-parse", t1.Branch)
+
+	_, err := a.PRs()
+	want := t1.ID + ": landed " + landed[:12] + ", branch " + drifted[:12]
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("PRs on a drifted branch: err = %v, want %q", err, want)
+	}
+	if got := remoteRev(t, origin, t1.Branch); got != "" {
+		t.Fatalf("drifted branch was pushed: %s", got)
+	}
+	if l := ghLog(); len(l) > 0 {
+		t.Fatalf("gh called: %v", l)
 	}
 }

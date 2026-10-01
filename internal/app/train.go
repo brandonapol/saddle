@@ -89,7 +89,7 @@ func (a *App) landOne(id string) LandResult {
 		res.State, res.Note = store.TrainError, err.Error()
 		return res
 	}
-	rr, err := gitx.Rebase(t.Worktree, a.Cfg.Integration, true)
+	rr, err := trainRebase(t.Worktree, a.Cfg.Integration)
 	if err != nil {
 		return fail(store.TrainError, "rebase failed", "Rebasing your branch onto "+a.Cfg.Integration+" failed:\n"+rr.Output+"\nFix it and call done again.")
 	}
@@ -112,7 +112,7 @@ func (a *App) landOne(id string) LandResult {
 		res.State, res.Note = store.TrainError, err.Error()
 		return res
 	}
-	if err := gitx.UpdateRef(a.Root, a.Cfg.Integration, head, old); err != nil {
+	if _, err := trainGit(a.Root, "update-ref", "refs/heads/"+a.Cfg.Integration, head, old); err != nil {
 		// The entry is still queued, so the next land retries it.
 		res.State, res.Note = store.TrainError, "integration moved during land; will retry: "+err.Error()
 		return res
@@ -120,7 +120,7 @@ func (a *App) landOne(id string) LandResult {
 	res.State, res.Note = store.TrainOK, head[:12]
 	a.Store.Event(id, "landed", head)
 	if err := errors.Join(
-		a.Store.SetTrain(id, store.TrainOK, head[:12], false),
+		a.Store.SetTrain(id, store.TrainOK, old+".."+head, false),
 		a.Store.SetStatus(id, store.Landed),
 	); err != nil {
 		res.Note += " (landed, but state not saved: " + err.Error() + ")"
@@ -239,28 +239,27 @@ func (a *App) Sync(task string) (gitx.RebaseResult, error) {
 
 // PRs pushes every landed branch and opens or updates a stack of PRs: the
 // first targets base, each later one targets the branch landed before it.
+// It pushes the commits the train landed, never whatever the branches point
+// at, and refuses when a branch has drifted from its landed commit.
 func (a *App) PRs() ([]string, error) {
-	entries, err := a.Store.Train()
+	all, err := a.landedStack()
 	if err != nil {
 		return nil, err
 	}
-	var stack []store.Task
-	for _, e := range entries {
-		if e.State == store.TrainOK {
-			t, err := a.Store.Task(e.Task)
-			if err != nil {
-				return nil, err
-			}
-			stack = append(stack, t)
-		}
-	}
-	if len(stack) == 0 {
+	if len(all) == 0 {
 		return nil, fmt.Errorf("nothing has landed yet")
 	}
+	if err := a.checkDrift(all); err != nil {
+		return nil, err
+	}
+	var stack []store.Task
 	base := a.Cfg.Base
-	for i := range stack {
-		t := &stack[i]
-		if _, err := gitx.Run(a.Root, "push", "--force-with-lease", "-u", "origin", t.Branch); err != nil {
+	for _, l := range all {
+		if l.merged() {
+			continue
+		}
+		t := l.Task
+		if _, err := trainGit(a.Root, "push", "--force-with-lease=refs/heads/"+t.Branch, "origin", l.To+":refs/heads/"+t.Branch); err != nil {
 			return nil, err
 		}
 		if t.PR == "" {
@@ -276,6 +275,7 @@ func (a *App) PRs() ([]string, error) {
 			return nil, err
 		}
 		base = t.Branch
+		stack = append(stack, t)
 	}
 	var urls []string
 	for i, t := range stack {
@@ -299,6 +299,132 @@ func (a *App) PRs() ([]string, error) {
 		urls = append(urls, t.PR)
 	}
 	return urls, nil
+}
+
+// landedTask is a task the train landed, with the range of commits it landed:
+// From..To on the integration branch. From is empty for entries recorded
+// before the train kept ranges.
+type landedTask struct {
+	store.Task
+	From, To string
+}
+
+// merged reports whether none of the task's commits are left on top of base,
+// i.e. restack found all of them already merged.
+func (l landedTask) merged() bool { return l.From != "" && l.From == l.To }
+
+// landedStack returns the landed tasks in train order.
+func (a *App) landedStack() ([]landedTask, error) {
+	entries, err := a.Store.Train()
+	if err != nil {
+		return nil, err
+	}
+	var out []landedTask
+	for _, e := range entries {
+		if e.State != store.TrainOK {
+			continue
+		}
+		t, err := a.Store.Task(e.Task)
+		if err != nil {
+			return nil, err
+		}
+		l := landedTask{Task: t}
+		from, to, ok := strings.Cut(e.Note, "..")
+		if !ok {
+			to, from = e.Note, ""
+		}
+		if l.To, err = gitx.RevParse(a.Root, to); err != nil {
+			return nil, fmt.Errorf("%s: landed commit %q is gone: %w", t.ID, to, err)
+		}
+		if from != "" {
+			if l.From, err = gitx.RevParse(a.Root, from); err != nil {
+				return nil, fmt.Errorf("%s: landed range %q is gone: %w", t.ID, e.Note, err)
+			}
+		}
+		out = append(out, l)
+	}
+	return out, nil
+}
+
+// Drift lists landed tasks whose branch no longer points at the commit the
+// train landed, as "task: landed X, branch Y".
+func (a *App) Drift() ([]string, error) {
+	stack, err := a.landedStack()
+	if err != nil {
+		return nil, err
+	}
+	return a.drift(stack), nil
+}
+
+func (a *App) drift(stack []landedTask) []string {
+	var out []string
+	for _, l := range stack {
+		if l.merged() {
+			continue
+		}
+		tip, err := gitx.RevParse(a.Root, "refs/heads/"+l.Branch)
+		switch {
+		case err != nil:
+			out = append(out, fmt.Sprintf("%s: landed %s, branch %s is missing", l.ID, short(l.To), l.Branch))
+		case tip != l.To:
+			out = append(out, fmt.Sprintf("%s: landed %s, branch %s", l.ID, short(l.To), short(tip)))
+		}
+	}
+	return out
+}
+
+// checkDrift refuses when any landed branch moved off its landed commit.
+func (a *App) checkDrift(stack []landedTask) error {
+	d := a.drift(stack)
+	if len(d) == 0 {
+		return nil
+	}
+	return fmt.Errorf("landed branches moved off the commits the train landed, so nothing was pushed. "+
+		"Put each branch back on its landed commit, or land the task again:\n  %s", strings.Join(d, "\n  "))
+}
+
+func short(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
+}
+
+// trainGit runs git as the merge train. The ref guard only lets the train
+// move the integration branch and other tasks' branches, and it knows the
+// train by SADDLE_TRAIN=1, set for this command alone.
+func trainGit(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "SADDLE_TRAIN=1")
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(errb.String())
+		if msg == "" {
+			msg = strings.TrimSpace(out.String())
+		}
+		return out.String(), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, msg)
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
+// trainRebase is gitx.Rebase run as the train: it rebases the branch checked
+// out in dir onto onto and aborts on conflict, leaving the worktree as it was.
+func trainRebase(dir, onto string) (gitx.RebaseResult, error) {
+	out, err := trainGit(dir, "-c", "merge.directoryRenames=true", "-c", "merge.renames=true",
+		"-c", "rerere.enabled=true", "-c", "core.editor=true", "rebase", onto)
+	if err == nil {
+		return gitx.RebaseResult{OK: true, Output: out}, nil
+	}
+	conf, _ := gitx.Run(dir, "diff", "--name-only", "--diff-filter=U")
+	if conf == "" {
+		return gitx.RebaseResult{Output: err.Error()}, err
+	}
+	res := gitx.RebaseResult{Conflicts: strings.Split(conf, "\n"), Output: err.Error()}
+	if _, err := trainGit(dir, "rebase", "--abort"); err != nil {
+		return res, err
+	}
+	return res, nil
 }
 
 func gh(dir string, args ...string) (string, error) {
