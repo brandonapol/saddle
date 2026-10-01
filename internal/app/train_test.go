@@ -172,7 +172,9 @@ func TestPRsRefusesDriftedBranch(t *testing.T) {
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
 	landed := git(t, a.Root, "rev-parse", t1.Branch)
 
-	// Something rewrites the landed branch after the train recorded it.
+	// Something rewrites the landed branch after the train recorded it. It
+	// moves as its owner, so the ref guard lets it through.
+	t.Setenv("SADDLE_TASK", t1.ID)
 	wt := filepath.Join(t.TempDir(), "wt")
 	git(t, a.Root, "worktree", "add", "-q", wt, t1.Branch)
 	git(t, wt, "commit", "-q", "--amend", "-m", "one, amended")
@@ -229,6 +231,7 @@ func TestPRsRefusesForkedStack(t *testing.T) {
 		tk       store.Task
 		from, to string
 	}{{t1, m, n1}, {t2, n1, n2}, {t4, g, n4}} {
+		t.Setenv("SADDLE_TASK", r.tk.ID) // each branch moves as its owner
 		git(t, a.Root, "update-ref", "refs/heads/"+r.tk.Branch, r.to)
 		must(t, a.Store.SetTrain(r.tk.ID, store.TrainOK, r.from+".."+r.to, false))
 	}
