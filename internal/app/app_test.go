@@ -33,8 +33,8 @@ func (f *fakeTmux) NewWindow(name, _, _ string) (string, error) {
 	return id, nil
 }
 func (f *fakeTmux) WindowName(id string) (string, error) { return f.names[id], nil }
-func (f *fakeTmux) KillWindow(id string) error { delete(f.windows, id); return nil }
-func (f *fakeTmux) Alive(id string) bool       { return f.windows[id] }
+func (f *fakeTmux) KillWindow(id string) error           { delete(f.windows, id); return nil }
+func (f *fakeTmux) Alive(id string) bool                 { return f.windows[id] }
 func (f *fakeTmux) SendText(id, text string) error {
 	f.sent[id] = append(f.sent[id], text)
 	return nil

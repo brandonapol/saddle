@@ -10,6 +10,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/tmux"
 )
 
 // remote is the remote base tracks: its configured upstream, else origin.
@@ -284,6 +285,8 @@ func (a *App) GC() ([]Leftover, error) {
 type windowNamer interface {
 	WindowName(id string) (string, error)
 }
+
+var _ windowNamer = tmux.Tmux{}
 
 // ownWindow reports whether t's window is one saddle opened for it: a live
 // worker window still named after the task. Keys are never typed anywhere
