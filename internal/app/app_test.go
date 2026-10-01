@@ -95,6 +95,7 @@ func setup(t *testing.T) (*App, *fakeTmux) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { a.Close() })
+	a.Cfg.Test.Cmd = "true"
 	ft := &fakeTmux{windows: map[string]bool{}, sent: map[string][]string{}}
 	a.Tmux = ft
 	a.Cfg.CloseOnLand = true
