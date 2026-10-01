@@ -79,8 +79,10 @@ func (a *App) Init() error {
 	if err := a.detectTestCmd(); err != nil {
 		return err
 	}
-	if err := refguard.Install(a.Root, a.Bin); err != nil {
-		return err
+	if hookable(a.Bin) {
+		if err := refguard.Install(a.Root, a.Bin); err != nil {
+			return err
+		}
 	}
 	exclude := filepath.Join(a.Root, ".git", "info", "exclude")
 	b, _ := os.ReadFile(exclude)
@@ -98,6 +100,16 @@ func (a *App) Init() error {
 		}
 	}
 	return nil
+}
+
+// TestRefguardEnv opts a Go test binary in as the ref guard hook. Its TestMain
+// must set it and answer `<bin> refguard <state>` with refguard.Hook.
+const TestRefguardEnv = "SADDLE_TEST_REFGUARD"
+
+// hookable reports whether bin can run as the ref guard hook. A Go test binary
+// would rerun its whole suite on every ref update unless it opted in.
+func hookable(bin string) bool {
+	return !strings.HasSuffix(filepath.Base(bin), ".test") || os.Getenv(TestRefguardEnv) == "1"
 }
 
 // ensureIntegration fetches base and creates the integration branch from
