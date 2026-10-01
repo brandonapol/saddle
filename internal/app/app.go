@@ -116,7 +116,15 @@ type SpawnReq struct {
 	Base   string // defaults to the integration branch
 	Issue  int    // GitHub issue the task implements; its PR will close it
 	Force  bool   // ignore claim conflicts and the concurrency cap
+	// Confirm goes ahead when every claim covers work landed or queued tasks
+	// already changed. Without it such a spawn returns ErrNeedsConfirm.
+	Confirm bool
 }
+
+// ErrNeedsConfirm means a spawn owns no new work: every claim covers files
+// that landed or queued tasks changed. That is usually a stack repair, which
+// belongs to the owning task or restack, so the user must confirm it first.
+var ErrNeedsConfirm = errors.New("spawn needs confirmation")
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
@@ -179,6 +187,11 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 			return t, conflictErr(c)
 		}
 	}
+	if len(r.Claims) > 0 && !r.Force && !r.Confirm {
+		if err := a.checkNewWork(r.Claims); err != nil {
+			return t, err
+		}
+	}
 	id := r.ID
 	if id == "" {
 		var err error
@@ -234,6 +247,58 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 		}
 	}
 	return t, nil
+}
+
+// checkNewWork returns ErrNeedsConfirm when every claim covers a file that a
+// landed or queued task changed.
+func (a *App) checkNewWork(want []string) error {
+	changed := a.trainFiles()
+	var lines []string
+	for _, c := range want {
+		hit := ""
+		for f := range changed {
+			if claims.Match(c, f) && (hit == "" || f < hit) {
+				hit = f
+			}
+		}
+		if hit == "" {
+			return nil
+		}
+		lines = append(lines, fmt.Sprintf("%s covers %s (changed by %s)", c, hit, changed[hit]))
+	}
+	return fmt.Errorf("%w: every claim covers work landed or queued tasks already did: %s. "+
+		"A task with no new work of its own is usually a stack repair: message the owning task, or call restack if the base moved. "+
+		"Ask the user before spawning it anyway with confirm",
+		ErrNeedsConfirm, strings.Join(lines, "; "))
+}
+
+// trainFiles maps each file a landed or queued task changed to that task.
+func (a *App) trainFiles() map[string]string {
+	out := map[string]string{}
+	entries, err := a.Store.Train()
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		t, err := a.Store.Task(e.Task)
+		if err != nil || t.Status == store.Killed {
+			continue
+		}
+		var files []string
+		if e.State == store.TrainOK {
+			from, to, ok := strings.Cut(e.Note, "..")
+			if !ok {
+				continue // recorded before the train kept ranges
+			}
+			files, _ = gitx.ChangedFiles(a.Root, from, to)
+		} else if diff, err := gitx.Run(a.Root, "diff", "--name-only", a.Cfg.Integration+"..."+t.Branch); err == nil && diff != "" {
+			files = strings.Split(diff, "\n")
+		}
+		for _, f := range files {
+			out[f] = t.ID
+		}
+	}
+	return out
 }
 
 func conflictErr(c map[string]string) error {

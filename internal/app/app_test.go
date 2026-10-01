@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -269,5 +270,51 @@ func TestBriefsCarryStackRules(t *testing.T) {
 	w := a.workerBrief(store.Task{ID: "t1", Title: "x", Branch: "saddle/t1-x"}, nil)
 	if want := "Only the merge train pushes or moves " + a.Cfg.Integration + "."; !strings.Contains(w, want) {
 		t.Errorf("worker brief lacks %q", want)
+	}
+}
+
+// A spawn whose every claim covers files landed or queued tasks changed owns
+// no new work: it is likely a stack repair, so it needs confirmation first.
+func TestSpawnNeedsConfirmWhenClaimsOnlyCoverTrainWork(t *testing.T) {
+	a := trainSetup(t)
+	landTask(t, a, "t1", "meter", map[string]string{"billing/meter.go": "package billing\n\nfunc Meter() int { return 2 }\n"})
+
+	noTrace := func(id, name string) {
+		t.Helper()
+		if _, err := a.Store.Task(id); err == nil {
+			t.Fatalf("%s: task row created before confirmation", id)
+		}
+		if _, err := os.Stat(a.stateDir("worktrees", name)); !os.IsNotExist(err) {
+			t.Fatalf("%s: worktree created before confirmation", id)
+		}
+		if gitx.BranchExists(a.Root, "saddle/"+name) {
+			t.Fatalf("%s: branch created before confirmation", id)
+		}
+	}
+	_, err := a.Spawn(SpawnReq{ID: "t2", Title: "fix meter PR", Claims: []string{"billing/**"}})
+	if !errors.Is(err, ErrNeedsConfirm) || !strings.Contains(err.Error(), "t1") {
+		t.Fatalf("spawn over landed work: err = %v", err)
+	}
+	noTrace("t2", "t2-fix-meter-pr")
+
+	// Work queued in the train counts too, even when its task holds no claims.
+	q, err := a.Spawn(SpawnReq{ID: "t3", Title: "readme"})
+	must(t, err)
+	write(t, q.Worktree, "README.md", "queued\n")
+	commitAll(t, q.Worktree, "readme")
+	must(t, a.Done(q.ID, "readme"))
+	_, err = a.Spawn(SpawnReq{ID: "t4", Title: "fix readme PR", Claims: []string{"README.md", "billing/meter.go"}})
+	if !errors.Is(err, ErrNeedsConfirm) || !strings.Contains(err.Error(), "t3") {
+		t.Fatalf("spawn over queued work: err = %v", err)
+	}
+	noTrace("t4", "t4-fix-readme-pr")
+
+	// Confirmed, it goes ahead.
+	if _, err := a.Spawn(SpawnReq{ID: "t4", Title: "fix readme PR", Claims: []string{"billing/meter.go"}, Confirm: true}); err != nil {
+		t.Fatalf("confirmed spawn: %v", err)
+	}
+	// A claim on new ground makes it a normal spawn.
+	if _, err := a.Spawn(SpawnReq{ID: "t5", Title: "tax", Claims: []string{"README.md", "tax/**"}}); err != nil {
+		t.Fatalf("normal spawn: %v", err)
 	}
 }
