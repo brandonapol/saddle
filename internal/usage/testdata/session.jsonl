@@ -1,0 +1,7 @@
+{"type":"user","timestamp":"2026-01-01T10:00:05Z","message":{"role":"user","content":"hi"}}
+{"type":"assistant","timestamp":"2026-01-01T10:00:10Z","message":{"id":"m1","model":"claude-opus-5-5","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":100,"cache_read_input_tokens":1000}}}
+{"type":"assistant","timestamp":"2026-01-01T10:00:11Z","message":{"id":"m1","model":"claude-opus-5-5","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":100,"cache_read_input_tokens":1000}}}
+this is not json
+{"type":"assistant","timestamp":"2026-01-01T10:00:50Z","message":{"id":"m2","model":"claude-haiku-4-5-20251001","usage":{"input_tokens":1,"output_tokens":2}}}
+{"type":"assistant","timestamp":"2026-01-01T10:01:00Z","message":{"id":"m3","model":"claude-opus-5-5","usage":{"input_tokens":5,"output_tokens":5}}}
+{"type":"assistant","timestamp":"2026-01-01T10:01:05Z","message":{"id":"m4","model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0}}}
