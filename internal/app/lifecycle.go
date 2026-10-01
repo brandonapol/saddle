@@ -114,7 +114,8 @@ func (a *App) spawnFailed(t store.Task, worktree, hadBranch bool, cause error) e
 		errs = append(errs, gitx.WorktreeRemove(a.Root, t.Worktree))
 	}
 	if !hadBranch && gitx.BranchExists(a.Root, t.Branch) {
-		_, err := gitx.Run(a.Root, "branch", "-D", t.Branch)
+		// The task is still live, so only the train may delete its branch.
+		_, err := trainGit(a.Root, "branch", "-D", t.Branch)
 		errs = append(errs, err)
 	}
 	reason := cause.Error()
