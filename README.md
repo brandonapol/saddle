@@ -8,6 +8,12 @@ narrator to tell you what every window is doing.
 
 The goal is that you stop paying Opus to rebase.
 
+![saddle up: agents and a live peek on the left, the orchestrator chat on the right](docs/images/saddle-up.png)
+
+*`saddle up` mid-run: three agents (two Opus workers running, one Sonnet task
+landed), a live peek at t1's hidden Claude Code terminal, and the Sonnet
+orchestrator explaining a stale base and asking before it acts.*
+
 - Design: [TUI canvas](https://claude.ai/artifact/TKRvnLJoDLBonpdKDU19L4)
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Roadmap: GitHub epics, milestone **M0: dogfood**
