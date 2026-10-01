@@ -119,6 +119,10 @@ func (a *App) landOne(id string) LandResult {
 	}
 	res.State, res.Note = store.TrainOK, head[:12]
 	a.Store.Event(id, "landed", head)
+	if cl, err := a.Store.Claims(); err == nil && len(cl[id]) > 0 {
+		// Claims are released with the landing; keep them for the stack check.
+		a.Store.Event(id, landedClaimsEvent, strings.Join(cl[id], "\n"))
+	}
 	if err := errors.Join(
 		a.Store.SetTrain(id, store.TrainOK, old+".."+head, false),
 		a.Store.SetStatus(id, store.Landed),
@@ -252,6 +256,9 @@ func (a *App) PRs() ([]string, error) {
 	if err := a.checkDrift(all); err != nil {
 		return nil, err
 	}
+	if err := a.checkStack(all); err != nil {
+		return nil, err
+	}
 	var stack []store.Task
 	base := a.Cfg.Base
 	for _, l := range all {
@@ -381,6 +388,175 @@ func (a *App) checkDrift(stack []landedTask) error {
 	}
 	return fmt.Errorf("landed branches moved off the commits the train landed, so nothing was pushed. "+
 		"Put each branch back on its landed commit, or land the task again:\n  %s", strings.Join(d, "\n  "))
+}
+
+// landedClaimsEvent records the claims a task held when it landed.
+const landedClaimsEvent = "landed_claims"
+
+// baseRef is the ref the bottom PR is diffed against: origin's copy of base
+// when there is one.
+func (a *App) baseRef() string {
+	if sha, err := gitx.RevParse(a.Root, "refs/remotes/origin/"+a.Cfg.Base); err == nil {
+		return sha
+	}
+	return a.Cfg.Base
+}
+
+// checkStack verifies that every PR in the stack shows exactly its task's
+// work: its head descends from its base's head, base..head holds the task's
+// own landed commits (same count, same patch-ids) and no merge commits. Files
+// changed outside the task's claims only warn the orchestrator.
+func (a *App) checkStack(stack []landedTask) error {
+	var bad []string
+	base, baseName := a.baseRef(), a.Cfg.Base
+	for _, l := range stack {
+		if l.merged() {
+			continue
+		}
+		probs, err := a.stackProblems(l, base, baseName)
+		if err != nil {
+			return err
+		}
+		if len(probs) > 0 {
+			bad = append(bad, fmt.Sprintf("%s (%s): %s", l.ID, l.Branch, strings.Join(probs, "; ")))
+		} else {
+			a.warnOutsideClaims(l, base)
+		}
+		base, baseName = l.To, l.ID+"'s branch"
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("the PR stack doesn't match what the train landed, so nothing was pushed and no PR changed. "+
+		"Run restack to rebuild it; don't fix it with git:\n  %s", strings.Join(bad, "\n  "))
+}
+
+func (a *App) stackProblems(l landedTask, base, baseName string) ([]string, error) {
+	var probs []string
+	if mb, _ := gitx.Run(a.Root, "merge-base", base, l.To); mb != base {
+		probs = append(probs, "does not descend from "+baseName)
+	}
+	rng := base + ".." + l.To
+	merges, err := gitx.Run(a.Root, "rev-list", "--merges", rng)
+	if err != nil {
+		return nil, err
+	}
+	ids, err := patchIDs(a.Root, rng)
+	if err != nil {
+		return nil, err
+	}
+	var contains []string
+	if l.From != "" {
+		own, err := patchIDs(a.Root, l.From+".."+l.To)
+		if err != nil {
+			return nil, err
+		}
+		mine := map[string]bool{}
+		for _, id := range own {
+			mine[id] = true
+		}
+		in := map[string]bool{}
+		foreign := 0
+		for _, id := range ids {
+			in[id] = true
+			if !mine[id] {
+				foreign++
+			}
+		}
+		missing := 0
+		for _, id := range own {
+			if !in[id] {
+				missing++
+			}
+		}
+		if foreign > 0 {
+			contains = append(contains, plural(foreign, "commit")+" from other tasks")
+		}
+		if missing > 0 {
+			probs = append(probs, fmt.Sprintf("is missing %d of its %s", missing, plural(len(own), "landed commit")))
+		} else if foreign == 0 && len(ids) != len(own) {
+			probs = append(probs, fmt.Sprintf("has %s, landed %d", plural(len(ids), "commit"), len(own)))
+		}
+	}
+	if merges != "" {
+		contains = append(contains, plural(len(strings.Split(merges, "\n")), "merge commit"))
+	}
+	if len(contains) > 0 {
+		probs = append(probs, "contains "+strings.Join(contains, ", "))
+	}
+	return probs, nil
+}
+
+// warnOutsideClaims tells the orchestrator when a PR changes files outside
+// the claims its task held when it landed.
+func (a *App) warnOutsideClaims(l landedTask, base string) {
+	var globs []string
+	evs, _ := a.Store.Events(-1)
+	for _, e := range evs {
+		if e.Task == l.ID && e.Kind == landedClaimsEvent {
+			globs = strings.Split(e.Data, "\n")
+		}
+	}
+	if len(globs) == 0 {
+		return
+	}
+	files, _ := gitx.ChangedFiles(a.Root, base, l.To)
+	var out []string
+	for _, f := range files {
+		ok := false
+		for _, g := range globs {
+			if claims.Match(g, f) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			out = append(out, f)
+		}
+	}
+	if len(out) == 0 {
+		return
+	}
+	msg := fmt.Sprintf("%s's PR changes files outside its claims: %s", l.ID, strings.Join(out, ", "))
+	a.Store.Event(l.ID, "stack_warn", msg)
+	_ = a.Notify(OrchestratorID, store.NoticeInfo, msg+".")
+}
+
+// patchIDs returns the stable patch-id of each non-merge commit in rng,
+// oldest first.
+func patchIDs(dir, rng string) ([]string, error) {
+	log, err := gitx.Run(dir, "log", "-p", "--reverse", "--no-merges", "--no-color", "--no-ext-diff", rng)
+	if err != nil {
+		return nil, err
+	}
+	out, err := patchID(dir, log)
+	if err != nil || out == "" {
+		return nil, err
+	}
+	var ids []string
+	for _, line := range strings.Split(out, "\n") {
+		id, _, _ := strings.Cut(line, " ")
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// patchID runs `git patch-id --stable` over a diff or log.
+func patchID(dir, diff string) (string, error) {
+	cmd := exec.Command("git", "-C", dir, "patch-id", "--stable")
+	cmd.Stdin = strings.NewReader(diff + "\n")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git patch-id: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 func short(sha string) string {
