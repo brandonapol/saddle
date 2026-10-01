@@ -93,6 +93,8 @@ type model struct {
 	follow    bool
 	vp        viewport.Model
 	input     textarea.Model
+	target    string   // task whose pane gets the next /command, if not the orchestrator
+	skills    []string // skill names for completion, loaded on first use
 
 	screens map[string]*screenState // recent screen per live worker, to spot stuck prompts
 
@@ -338,6 +340,11 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 	case "ctrl+c":
 		return tea.Quit, true
 	case "tab", "shift+tab":
+		if m.focus == focusChat && k.String() == "tab" {
+			if c, ok := m.completeInput(); ok {
+				return c, true
+			}
+		}
 		if m.focus == focusChat {
 			m.focus = focusTasks
 			m.input.Blur()
@@ -367,10 +374,18 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		return m.waitEvent(), true
 	}
 	if m.focus == focusChat {
+		if k.String() == "esc" && m.target != "" {
+			m.input.Reset()
+			m.unaim()
+			return nil, true
+		}
 		if k.String() == "enter" {
 			text := strings.TrimSpace(m.input.Value())
 			if text == "" {
 				return nil, true
+			}
+			if m.target != "" {
+				return m.submitTargeted(text), true
 			}
 			m.input.Reset()
 			m.sendUser(text)
@@ -395,6 +410,8 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		return m.refresh(), true
 	case "enter", "a":
 		return m.attach(), true
+	case "/":
+		return m.aimAtAgent(), true
 	case "x":
 		if t, ok := m.selected(); ok {
 			id := t.ID
@@ -849,11 +866,17 @@ func (m *model) viewFooter() string {
 	if m.focus == focusChat {
 		k("enter", "send")
 		k("alt+enter", "newline")
+		if m.target != "" {
+			k("esc", "back to orchestrator")
+		} else {
+			k("/skill tab", "complete")
+		}
 		k("tab", "tasks")
 		k("pgup/pgdn", "scroll")
 	} else {
 		k("j/k", "select")
 		k("enter", "open window (ctrl-b d to come back)")
+		k("/", "skill in agent")
 		k("x", "kill")
 		k("L", "land")
 		k("tab", "chat")
