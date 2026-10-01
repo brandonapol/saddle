@@ -113,6 +113,20 @@ CREATE TABLE renames(id INTEGER PRIMARY KEY, by_task TEXT NOT NULL, old TEXT NOT
 `, `
 ALTER TABLE tasks ADD COLUMN issue INTEGER NOT NULL DEFAULT 0;
 CREATE TABLE chat(id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL);
+`, `
+CREATE TABLE usage(
+  minute INTEGER NOT NULL,
+  task TEXT NOT NULL,
+  model TEXT NOT NULL,
+  session TEXT NOT NULL,
+  input INTEGER NOT NULL DEFAULT 0,
+  output INTEGER NOT NULL DEFAULT 0,
+  cache_read INTEGER NOT NULL DEFAULT 0,
+  cache_creation INTEGER NOT NULL DEFAULT 0,
+  messages INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(minute, task, model, session)
+);
+CREATE INDEX usage_session ON usage(session);
 `}
 
 // Open opens (creating if needed) the database at path and applies migrations.

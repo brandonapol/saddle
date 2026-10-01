@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -28,6 +29,26 @@ type Config struct {
 	Test   Test   `toml:"test"`
 	Claude Claude `toml:"claude"`
 	Triage Triage `toml:"triage"`
+	Usage  Usage  `toml:"usage"`
+}
+
+// Usage configures token metering and the plan-limit bars.
+type Usage struct {
+	// Poll is how often transcripts are read for new usage.
+	Poll time.Duration `toml:"poll"`
+	// CountCacheReads includes cache-read tokens in window totals. Off by
+	// default: they dwarf everything else and weigh little against plan limits.
+	CountCacheReads bool `toml:"count_cache_reads"`
+	// Windows are trailing windows shown as bars. Setting any replaces the defaults.
+	Windows []Window `toml:"windows"`
+}
+
+// Window is a trailing usage window, e.g. the last 5 hours.
+type Window struct {
+	Name string        `toml:"name"`
+	Span time.Duration `toml:"span"`
+	// Cap is the token cap for the window; 0 means no cap, so no bar, only a total.
+	Cap int64 `toml:"cap"`
 }
 
 // Triage gates attention with TypeSafe's Jev when TYPESAFE_API_KEY is set.
@@ -63,6 +84,13 @@ func Default() Config {
 			OrchestratorModel: "sonnet",
 			PermissionMode:    "auto",
 		},
+		Usage: Usage{
+			Poll: 15 * time.Second,
+			Windows: []Window{
+				{Name: "5h", Span: 5 * time.Hour},
+				{Name: "7d", Span: 7 * 24 * time.Hour},
+			},
+		},
 	}
 }
 
@@ -74,8 +102,16 @@ func Load(root string) (Config, error) {
 		paths = append([]string{filepath.Join(home, "saddle", "config.toml")}, paths...)
 	}
 	for _, p := range paths {
-		if _, err := toml.DecodeFile(p, &cfg); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		// TOML decodes arrays element by element over what is already there, so
+		// a file that sets windows would otherwise inherit leftover defaults.
+		prev := cfg.Usage.Windows
+		cfg.Usage.Windows = nil
+		md, err := toml.DecodeFile(p, &cfg)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return cfg, err
+		}
+		if !md.IsDefined("usage", "windows") {
+			cfg.Usage.Windows = prev
 		}
 	}
 	if cfg.Session == "" {
@@ -84,6 +120,16 @@ func Load(root string) (Config, error) {
 	if cfg.Concurrency < 1 {
 		cfg.Concurrency = 1
 	}
+	if cfg.Usage.Poll <= 0 {
+		cfg.Usage.Poll = Default().Usage.Poll
+	}
+	var ws []Window
+	for _, w := range cfg.Usage.Windows {
+		if w.Span > 0 {
+			ws = append(ws, w)
+		}
+	}
+	cfg.Usage.Windows = ws
 	return cfg, nil
 }
 
@@ -107,4 +153,18 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # model = "opus"                 # workers
 # orchestrator_model = "sonnet"  # the chat agent in the TUI
 # permission_mode = "auto"
+
+[usage]
+# Plan-limit bars are estimates: set cap to your plan's token budget for each
+# window. A window with no cap shows only its total.
+# poll = "15s"
+# count_cache_reads = false
+# [[usage.windows]]
+# name = "5h"
+# span = "5h"
+# cap = 0
+# [[usage.windows]]
+# name = "7d"
+# span = "168h"
+# cap = 0
 `
