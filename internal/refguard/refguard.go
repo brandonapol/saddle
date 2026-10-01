@@ -121,7 +121,7 @@ func Hook(state string, r io.Reader, getenv func(string) string) error {
 	if rootErr == nil {
 		if s, err := store.Open(filepath.Join(root, ".saddle", "state.db")); err == nil {
 			st = s
-			defer st.Close()
+			defer func() { _ = st.Close() }()
 		}
 	}
 	live := func(task string) bool {

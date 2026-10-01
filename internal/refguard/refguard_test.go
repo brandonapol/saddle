@@ -46,7 +46,7 @@ func setup(t *testing.T) *repo {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 	r.st = st
 	for _, id := range []string{"t1", "t2"} {
 		if err := st.CreateTask(store.Task{ID: id, Title: id, Status: store.Running}); err != nil {
