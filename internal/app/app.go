@@ -283,7 +283,8 @@ func (a *App) Orchestrator() (agent.Launch, string, error) {
 	} else if err != nil {
 		return agent.Launch{}, "", err
 	}
-	if err := a.Store.SetStatus(t.ID, store.Running); err != nil {
+	// It runs headless; a window left from an old tmux-based run is not its own.
+	if err := errors.Join(a.Store.SetStatus(t.ID, store.Running), a.Store.SetField(t.ID, "window", "")); err != nil {
 		return agent.Launch{}, "", err
 	}
 	l := agent.Launch{
@@ -342,8 +343,8 @@ func (a *App) SendKeys(task, text string, keys []string) error {
 	if err != nil {
 		return err
 	}
-	if t.Window == "" || !a.Tmux.Alive(t.Window) {
-		return fmt.Errorf("%s has no live window", task)
+	if !a.ownWindow(t) {
+		return fmt.Errorf("%s has no live window saddle opened for it", task)
 	}
 	a.Store.Event(task, "keys", text+strings.Join(keys, " "))
 	if text != "" {
@@ -444,8 +445,9 @@ func (a *App) CheckWrite(task, abs string) Decision {
 	return Decision{Allow: true}
 }
 
-// Notify queues a notice for a task. Action notices wake an idle agent by
-// typing into its window; info notices arrive with its next tool call.
+// Notify queues a notice for a task. Action notices wake an idle worker by
+// typing into its window; info notices arrive with its next tool call. The
+// orchestrator is never typed at: the TUI delivers its notices.
 func (a *App) Notify(task, kind, text string) error {
 	if err := a.Store.Notify(task, kind, text); err != nil {
 		return err
@@ -458,7 +460,7 @@ func (a *App) Notify(task, kind, text string) error {
 		return nil
 	}
 	if t.Status == store.Idle || t.Status == store.Done || t.Status == store.Conflict {
-		if a.Tmux.Alive(t.Window) {
+		if a.ownWindow(t) {
 			tmux.SendWhenIdle(a.Tmux, t.Window, "[saddle] You have new notices. Read them and act on them.", func() bool {
 				n, err := a.Store.PendingNotices(task)
 				return err != nil || n > 0

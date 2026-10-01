@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/store"
 	"os"
 	"path/filepath"
 	"strings"
@@ -190,5 +191,43 @@ func TestGCRemovesLeftovers(t *testing.T) {
 	}
 	if strings.Contains(git(t, a.Root, "worktree", "list"), "t99-orphan") {
 		t.Fatal("orphan still registered with git")
+	}
+}
+
+// #93: the headless orchestrator never gets keys typed into a stale window.
+func TestOrchestratorGetsNoWakeKeys(t *testing.T) {
+	a, ft := setup(t)
+	ft.windows["@0"] = true // the TUI's own window, recorded by an old-style saddle up
+	must(t, a.Store.CreateTask(store.Task{ID: OrchestratorID, Title: "orchestrator", Role: store.RoleOrchestrator,
+		Worktree: a.Root, Window: "@0", Status: store.Idle}))
+	must(t, a.Notify(OrchestratorID, store.NoticeAction, "t1 is done"))
+	if len(ft.sent["@0"]) > 0 {
+		t.Fatalf("typed into the orchestrator's window: %q", ft.sent["@0"])
+	}
+	if err := a.SendKeys(OrchestratorID, "hi", nil); err == nil || len(ft.sent["@0"]) > 0 {
+		t.Fatalf("SendKeys to the orchestrator: err = %v", err)
+	}
+	_, _, err := a.Orchestrator()
+	must(t, err)
+	if o, _ := a.Store.Task(OrchestratorID); o.Window != "" {
+		t.Fatalf("orchestrator window = %q after Orchestrator()", o.Window)
+	}
+}
+
+// #93: a window id that now belongs to something else is never typed into.
+func TestNoKeysIntoForeignWindow(t *testing.T) {
+	a, ft := setup(t)
+	w, err := a.Spawn(SpawnReq{Title: "worker"})
+	must(t, err)
+	must(t, a.Store.SetStatus(w.ID, store.Idle))
+	ft.names[w.Window] = "zsh" // tmux reused the id for a window saddle didn't open
+	must(t, a.Notify(w.ID, store.NoticeAction, "rebase"))
+	if len(ft.sent[w.Window]) > 0 {
+		t.Fatalf("typed into a foreign window: %q", ft.sent[w.Window])
+	}
+	ft.names[w.Window] = w.ID + "-worker"
+	must(t, a.Notify(w.ID, store.NoticeAction, "rebase"))
+	if len(ft.sent[w.Window]) != 1 {
+		t.Fatal("own window was not woken")
 	}
 }
