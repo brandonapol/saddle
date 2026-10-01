@@ -89,3 +89,8 @@ func (t Tmux) KillSession() error {
 func (t Tmux) Capture(id string, lines int) (string, error) {
 	return run("capture-pane", "-p", "-t", id, "-S", fmt.Sprintf("-%d", lines))
 }
+
+// WindowName returns the window's name, which saddle sets to <task>-<slug>.
+func (t Tmux) WindowName(id string) (string, error) {
+	return run("display-message", "-p", "-t", id, "#{window_name}")
+}
