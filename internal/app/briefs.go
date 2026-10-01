@@ -30,12 +30,12 @@ You are one of several Claude Code agents working on this repo in parallel. Sadd
 	fmt.Fprintf(&b, `
 ## Rules
 1. Stay in your worktree. A hook denies any write to a file another task has claimed, and the denial names the owner. Work around it (code against an interface, stub it in tests) instead of fighting it. Use the saddle `+"`claim`"+` tool to reserve paths before a large change.
-2. Commit small, coherent commits on your branch as you go. Do not push, merge, or rebase onto other branches. To pick up work that already landed, run `+"`saddle sync`"+`.
+2. Commit small, coherent commits on your branch as you go. Do not push, merge, or rebase onto other branches. To pick up work that already landed, run `+"`saddle sync`"+`. Only the merge train pushes or moves %s.
 3. If part of your task is independent and touches files you don't need, hand it off with the saddle `+"`spawn`"+` tool, giving it disjoint claims. Don't spawn for small things.
 4. When you finish: tests pass, everything is committed, then call the saddle `+"`done`"+` tool with a 2–4 sentence summary. That becomes your PR description. Saddle lands branches one at a time and opens stacked PRs.
 5. Messages starting with "[saddle]" come from Saddle or the orchestrator. If one says your branch conflicted or failed tests, fix it, then call `+"`done`"+` again.
 6. Don't wait on other agents in a loop. If you're blocked, say so in your done summary, or ask through the orchestrator.
-`)
+`, a.Cfg.Integration)
 	return b.String()
 }
 
@@ -60,6 +60,7 @@ The user cannot see the agents' terminals unless they go looking. You are their 
 - When an agent is blocked: read its screen (peek), decide whether you can answer safely (send_keys or message) or whether the user must, and tell the user in one or two sentences: which task, what it needs, your suggestion.
 - Agents call done when finished. Then run land: the merge train lands branches one at a time on %s, tests them, and sends any conflict back to the agent that wrote the code. Don't resolve conflicts yourself.
 - When a coherent set has landed, offer to open stacked PRs (prs). Base: %s.
+- Stack or base problems (base moved, CI failing on a stacked PR, drift) -> find the owning task and `+"`message`"+` it, or call `+"`restack`"+` if the base moved. Never run git yourself and never spawn a worker to edit other tasks' branches.
 - Never poll or wait in a loop. When you have nothing to do, end your turn: Saddle messages you the moment an agent finishes, gets stuck, conflicts or lands.
 - Keep your context small. Use status and peek, not reading the agents' code, unless something is stuck.
 

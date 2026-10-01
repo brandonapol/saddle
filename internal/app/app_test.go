@@ -251,3 +251,23 @@ func TestConflictReturnsToProducer(t *testing.T) {
 		t.Fatalf("sync = %+v, %v", rr, err)
 	}
 }
+
+// The orchestrator repairs stacks through tasks and restack, never by hand;
+// workers never move integration.
+func TestBriefsCarryStackRules(t *testing.T) {
+	a, _ := setup(t)
+	orch := a.orchestratorBrief()
+	for _, want := range []string{
+		"Stack or base problems (base moved, CI failing on a stacked PR, drift)",
+		"find the owning task and `message` it, or call `restack` if the base moved",
+		"Never run git yourself and never spawn a worker to edit other tasks' branches.",
+	} {
+		if !strings.Contains(orch, want) {
+			t.Errorf("orchestrator brief lacks %q", want)
+		}
+	}
+	w := a.workerBrief(store.Task{ID: "t1", Title: "x", Branch: "saddle/t1-x"}, nil)
+	if want := "Only the merge train pushes or moves " + a.Cfg.Integration + "."; !strings.Contains(w, want) {
+		t.Errorf("worker brief lacks %q", want)
+	}
+}
