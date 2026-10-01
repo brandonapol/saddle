@@ -37,6 +37,8 @@ func (f *fakeTmux) SendText(id, text string) error {
 	return nil
 }
 func (f *fakeTmux) Capture(string, int) (string, error) { return "", nil }
+func (f *fakeTmux) SendKeys(string, ...string) error    { return nil }
+func (f *fakeTmux) KillSession() error                  { return nil }
 
 func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()

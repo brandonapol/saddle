@@ -49,8 +49,8 @@ func Default() Config {
 		CloseOnLand: true,
 		Claude: Claude{
 			Cmd:               "claude",
-			Model:             "sonnet",
-			OrchestratorModel: "opus",
+			Model:             "opus",
+			OrchestratorModel: "sonnet",
 			PermissionMode:    "auto",
 		},
 	}
@@ -88,7 +88,7 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # cmd = "go test ./..."
 
 [claude]
-# model = "sonnet"
-# orchestrator_model = "opus"
+# model = "opus"                 # workers
+# orchestrator_model = "sonnet"  # the chat agent in the TUI
 # permission_mode = "auto"
 `

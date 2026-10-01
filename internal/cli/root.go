@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -17,6 +17,7 @@ import (
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/hook"
 	"github.com/brandonapol/saddle/internal/mcpserver"
+	"github.com/brandonapol/saddle/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -35,7 +36,7 @@ func Root() *cobra.Command {
 			Short: "Print the saddle version",
 			Run:   func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), Version) },
 		},
-		initCmd(), upCmd(), spawnCmd(), statusCmd(), claimCmd(), releaseCmd(), doneCmd(),
+		initCmd(), upCmd(), downCmd(), spawnCmd(), statusCmd(), claimCmd(), releaseCmd(), doneCmd(),
 		landCmd(), syncCmd(), prsCmd(), killCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(),
 	)
 	return root
@@ -92,42 +93,56 @@ func initCmd() *cobra.Command {
 }
 
 func upCmd() *cobra.Command {
-	var noAttach bool
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "up [epic-file|-]",
-		Short: "Start the tmux session with the orchestrator in window 0, optionally handing it an epic",
-		Args:  cobra.MaximumNArgs(1),
+		Short: "Open the Saddle TUI: chat with the orchestrator, watch your agents",
+		Long: `Opens Saddle's TUI. The orchestrator (a headless Claude Code session) lives in
+the chat on the right. Tell it what to work on, e.g. "do #46 and #47 in parallel".
+It starts agents in a hidden tmux session, watches them, and tells you when one
+needs you. Quitting leaves the agents running; run saddle up again to come back.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, args []string) error {
-			epic := ""
+			if err := a.Init(); err != nil {
+				return err
+			}
+			lock, err := os.OpenFile(filepath.Join(a.Root, ".saddle", "tui.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+			if err != nil {
+				return err
+			}
+			defer lock.Close()
+			if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+				return errors.New("saddle up is already running for this repo in another terminal")
+			}
+			first := ""
 			if len(args) == 1 {
 				b, err := readArg(args[0])
 				if err != nil {
 					return err
 				}
-				epic = "Here is the epic. Plan it and run it.\n\n" + string(b)
+				first = "Here is an epic. Plan it and show me the plan.\n\n" + string(b)
 			}
-			t, started, err := a.Up(epic)
-			if err != nil {
+			if err := tui.Run(a, first); err != nil {
 				return err
 			}
-			if started {
-				fmt.Fprintf(cmd.OutOrStdout(), "orchestrator started in %s (session %s)\n", t.Window, a.Cfg.Session)
-			}
-			if noAttach {
-				return nil
-			}
-			if os.Getenv("TMUX") != "" {
-				return exec.Command("tmux", "switch-client", "-t", a.Cfg.Session).Run()
-			}
-			tm, err := exec.LookPath("tmux")
-			if err != nil {
-				return err
-			}
-			return syscall.Exec(tm, []string{"tmux", "attach-session", "-t", a.Cfg.Session}, os.Environ())
+			fmt.Fprintln(cmd.OutOrStdout(), "Agents keep running in tmux session "+a.Cfg.Session+". Run `saddle up` to come back, `saddle down` to stop them.")
+			return nil
 		}),
 	}
-	cmd.Flags().BoolVar(&noAttach, "no-attach", false, "don't attach to the tmux session")
-	return cmd
+}
+
+func downCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "down",
+		Short: "Stop every agent (worktrees and branches are kept)",
+		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
+			n, err := a.Down()
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "stopped %d agents\n", n)
+			return nil
+		}),
+	}
 }
 
 func readArg(arg string) ([]byte, error) {

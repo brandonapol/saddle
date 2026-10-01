@@ -108,6 +108,7 @@ type SpawnReq struct {
 	Model  string
 	Parent string
 	Base   string // defaults to the integration branch
+	Issue  int    // GitHub issue the task implements; its PR will close it
 	Force  bool   // ignore claim conflicts and the concurrency cap
 }
 
@@ -183,7 +184,7 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	}
 	t = store.Task{
 		ID: id, Title: r.Title, Prompt: r.Prompt, Parent: r.Parent, Role: store.RoleWorker, Model: model,
-		Branch: "saddle/" + name, Worktree: a.stateDir("worktrees", name), Status: store.Running,
+		Branch: "saddle/" + name, Worktree: a.stateDir("worktrees", name), Status: store.Running, Issue: r.Issue,
 	}
 	if err := a.Store.CreateTask(t); err != nil {
 		return t, err
@@ -248,53 +249,92 @@ func (a *App) launch(t store.Task, cl []string) (string, error) {
 	return win, a.Store.SetField(t.ID, "window", win)
 }
 
-// Up starts the orchestrator (window 0) if it isn't running. epic, if set, is its first prompt.
-func (a *App) Up(epic string) (store.Task, bool, error) {
+// Orchestrator ensures the orchestrator task exists and returns the launch
+// for its headless Claude Code process, plus the session to resume (if any).
+func (a *App) Orchestrator() (agent.Launch, string, error) {
 	if err := a.Init(); err != nil {
-		return store.Task{}, false, err
+		return agent.Launch{}, "", err
 	}
 	if err := a.ensureIntegration(); err != nil {
-		return store.Task{}, false, err
+		return agent.Launch{}, "", err
 	}
 	t, err := a.Store.Task(OrchestratorID)
-	if err == nil && t.Window != "" && a.Tmux.Alive(t.Window) {
-		if epic != "" {
-			return t, false, a.Tmux.SendText(t.Window, epic)
-		}
-		return t, false, nil
-	}
 	if errors.Is(err, store.ErrNotFound) {
 		t = store.Task{ID: OrchestratorID, Title: "orchestrator", Role: store.RoleOrchestrator,
 			Model: a.Cfg.Claude.OrchestratorModel, Worktree: a.Root, Status: store.Running}
 		if err := a.Store.CreateTask(t); err != nil {
-			return t, false, err
+			return agent.Launch{}, "", err
 		}
 	} else if err != nil {
-		return t, false, err
+		return agent.Launch{}, "", err
 	}
 	if err := a.Store.SetStatus(t.ID, store.Running); err != nil {
-		return t, false, err
+		return agent.Launch{}, "", err
 	}
 	l := agent.Launch{
-		Root: a.Root, Bin: a.Bin, Task: t.ID, Title: "orchestrator", Dir: a.Root, Model: t.Model,
-		Mode: a.Cfg.Claude.PermissionMode, Cmd: a.Cfg.Claude.Cmd, RunDir: a.stateDir("run", t.ID),
-		Brief: a.orchestratorBrief(), Prompt: epic,
+		Root: a.Root, Bin: a.Bin, Task: t.ID, Title: "orchestrator", Dir: a.Root,
+		Model: a.Cfg.Claude.OrchestratorModel, Mode: a.Cfg.Claude.PermissionMode, Cmd: a.Cfg.Claude.Cmd,
+		RunDir: a.stateDir("run", t.ID), Brief: a.orchestratorBrief(), Allow: agent.OrchestratorAllow(),
+		Deny: agent.OrchestratorDeny(),
 	}
-	cmd, err := l.Write()
+	return l, t.SessionID, nil
+}
+
+// Down stops every agent (the tmux session) and releases their claims.
+// Worktrees and branches stay, so no committed work is lost.
+func (a *App) Down() (int, error) {
+	ts, err := a.Store.Tasks()
 	if err != nil {
-		return t, false, err
+		return 0, err
 	}
-	var win string
+	n := 0
+	for _, t := range ts {
+		if t.Role == store.RoleWorker && t.Active() && t.Status != store.Done {
+			if err := errors.Join(a.Store.Release(t.ID), a.Store.SetStatus(t.ID, store.Killed)); err != nil {
+				return n, err
+			}
+			n++
+		}
+	}
 	if a.Tmux.HasSession() {
-		win, err = a.Tmux.NewWindow("control", a.Root, cmd)
-	} else {
-		win, err = a.Tmux.NewSession("control", a.Root, cmd)
+		if err := a.Tmux.KillSession(); err != nil {
+			return n, err
+		}
 	}
+	return n, nil
+}
+
+// Peek returns the last lines of a task's terminal.
+func (a *App) Peek(task string, lines int) (string, error) {
+	t, err := a.Store.Task(task)
 	if err != nil {
-		return t, false, err
+		return "", err
 	}
-	t.Window = win
-	return t, true, a.Store.SetField(t.ID, "window", win)
+	if t.Window == "" || !a.Tmux.Alive(t.Window) {
+		return "", fmt.Errorf("%s has no live window (status %s)", task, t.Status)
+	}
+	if lines <= 0 {
+		lines = 40
+	}
+	out, err := a.Tmux.Capture(t.Window, lines)
+	return strings.TrimRight(out, "\n "), err
+}
+
+// SendKeys presses keys in a task's terminal, e.g. "1" to pick a prompt option
+// or "Escape". With text set, it types that text and presses Enter instead.
+func (a *App) SendKeys(task, text string, keys []string) error {
+	t, err := a.Store.Task(task)
+	if err != nil {
+		return err
+	}
+	if t.Window == "" || !a.Tmux.Alive(t.Window) {
+		return fmt.Errorf("%s has no live window", task)
+	}
+	a.Store.Event(task, "keys", text+strings.Join(keys, " "))
+	if text != "" {
+		return a.Tmux.SendText(t.Window, text)
+	}
+	return a.Tmux.SendKeys(t.Window, keys...)
 }
 
 // ClaimResult reports what a claim request got.

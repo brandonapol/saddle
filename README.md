@@ -12,35 +12,57 @@ The goal is that you stop paying Opus to rebase.
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Roadmap: GitHub epics, milestone **M0: dogfood**
 
-## Quickstart (M0 dogfood)
+## Quickstart
 
 ```sh
-go install ./cmd/saddle            # puts saddle on your PATH
-cd your-repo && saddle init        # .saddle/config.toml: test cmd, serial files, models
-saddle up epics/my-epic.md         # tmux session; window 0 is the orchestrator (Claude)
+make install          # puts saddle on your PATH
+cd your-repo
+saddle up             # opens the TUI
 ```
 
-The orchestrator plans the epic and calls the saddle MCP tools: `spawn` puts
-each task in its own worktree, branch and tmux window. Agents call `done`.
-`land` merges them one at a time onto `saddle/integration`, following
-directory moves and sending any conflict back to the agent that produced it.
-`prs` opens stacked PRs.
+Then talk to the orchestrator in the right-hand chat:
 
-You can also drive it by hand:
+> work on #46 and #47 in parallel
 
-```sh
-saddle spawn "meter worker" -c 'pkg/meter/**' -m opus -f prompt.md
-saddle status                      # tasks, claims, train
-saddle message t2 "use the new interface in pkg/meter"
-saddle land && saddle prs
-```
+> here's an epic: …, plan it and show me before starting
 
-Inside a task worktree, `saddle sync` rebases onto everything that has landed.
+The orchestrator is a headless Sonnet session. It reads your issues, proposes
+a plan with disjoint path claims, and starts Opus workers once you say go.
+The workers run Claude Code in a hidden tmux session. You see them as rows in
+**AGENTS** and as a live **PEEK** at the selected one's terminal.
+
+You don't babysit them. When an agent hits a prompt, stops without finishing
+or conflicts, Saddle hands its screen to the orchestrator. The orchestrator
+answers it if that's safe, or tells you in chat what's needed. Finished agents
+call `done`. The orchestrator runs the merge train (one branch at a time, so
+moved directories are followed and conflicts go back to the agent that wrote
+them) and offers stacked PRs that close the issues.
+
+| Key | |
+|---|---|
+| `enter` / `alt+enter` | send / newline |
+| `tab` | switch between chat and the agent list |
+| `j` `k` | select an agent (peek follows) |
+| `enter` on an agent | open its real terminal; `ctrl-b d` comes back |
+| `x` / `L` | kill the agent / land queued branches |
+| `ctrl+r` | restart the orchestrator (resumes the conversation) |
+| `ctrl+c` | quit. Agents keep running; `saddle up` reconnects |
+
+`saddle down` stops every agent. Worktrees and branches are kept.
+
+Config lives in `.saddle/config.toml` (`saddle init` writes a template):
+worker and orchestrator models, concurrency, the test command the merge train
+runs, and serial files only the train may touch.
+
+### Under the hood
+
+The TUI uses the same building blocks you can call yourself:
+`saddle spawn | status | claim | done | land | sync | prs | message | kill`.
 
 How agents are kept apart:
 - Each agent works in its own worktree.
 - A Claude Code PreToolUse hook denies writes to files another task has
   claimed, and the denial names the owner. Unclaimed files are claimed on
   first write.
-- Notices arrive through hooks. An idle agent is woken by typing into its
-  tmux window.
+- Notices reach agents through hooks. Inside a worktree, `saddle sync` rebases
+  onto everything that has landed.

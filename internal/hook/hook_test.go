@@ -26,6 +26,8 @@ func (f *nopTmux) KillWindow(string) error             { return nil }
 func (f *nopTmux) Alive(string) bool                   { return false }
 func (f *nopTmux) SendText(string, string) error       { return nil }
 func (f *nopTmux) Capture(string, int) (string, error) { return "", nil }
+func (f *nopTmux) SendKeys(string, ...string) error    { return nil }
+func (f *nopTmux) KillSession() error                  { return nil }
 
 func setup(t *testing.T) *app.App {
 	if _, err := exec.LookPath("git"); err != nil {

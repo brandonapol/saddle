@@ -16,7 +16,9 @@ type Driver interface {
 	KillWindow(id string) error
 	Alive(id string) bool
 	SendText(id, text string) error
+	SendKeys(id string, keys ...string) error
 	Capture(id string, lines int) (string, error)
+	KillSession() error
 }
 
 type Tmux struct{ Session string }
@@ -70,6 +72,17 @@ func (t Tmux) SendText(id, text string) error {
 		return err
 	}
 	_, err := run("send-keys", "-t", id, "Enter")
+	return err
+}
+
+// SendKeys sends tmux key names (Enter, Escape, Down, "1"…) without typing them literally.
+func (t Tmux) SendKeys(id string, keys ...string) error {
+	_, err := run(append([]string{"send-keys", "-t", id}, keys...)...)
+	return err
+}
+
+func (t Tmux) KillSession() error {
+	_, err := run("kill-session", "-t", "="+t.Session)
 	return err
 }
 

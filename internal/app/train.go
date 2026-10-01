@@ -276,6 +276,9 @@ func (a *App) PRs() ([]string, error) {
 	for i, t := range stack {
 		var b strings.Builder
 		b.WriteString(t.Summary)
+		if t.Issue > 0 {
+			fmt.Fprintf(&b, "\n\nCloses #%d", t.Issue)
+		}
 		b.WriteString("\n\n---\n**Stack** (opened by saddle; merge bottom-up)\n\n")
 		for j := len(stack) - 1; j >= 0; j-- {
 			mark := ""

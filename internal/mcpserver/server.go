@@ -19,6 +19,26 @@ type SpawnIn struct {
 	Claims []string `json:"claims,omitempty" jsonschema:"repo-relative path globs this task owns, e.g. internal/meter/**; must not overlap other live tasks"`
 	Model  string   `json:"model,omitempty" jsonschema:"claude model alias: opus, sonnet or haiku; defaults to config"`
 	ID     string   `json:"id,omitempty" jsonschema:"optional task id; defaults to the next tN"`
+	Issue  int      `json:"issue,omitempty" jsonschema:"GitHub issue number this task implements; its PR will close it"`
+}
+
+type PeekIn struct {
+	Task  string `json:"task" jsonschema:"task id, e.g. t3"`
+	Lines int    `json:"lines,omitempty" jsonschema:"how many lines of the agent's terminal to return (default 40)"`
+}
+
+type PeekOut struct {
+	Screen string `json:"screen"`
+}
+
+type KeysIn struct {
+	Task string   `json:"task" jsonschema:"task id"`
+	Text string   `json:"text,omitempty" jsonschema:"text to type followed by Enter, e.g. an answer to the agent's question"`
+	Keys []string `json:"keys,omitempty" jsonschema:"tmux key names to press instead, e.g. [\"1\"] to choose option 1 of a prompt, [\"Escape\"], [\"Down\",\"Enter\"]"`
+}
+
+type TicketIn struct {
+	Number int `json:"number" jsonschema:"GitHub issue number"`
 }
 
 type SpawnOut struct {
@@ -125,7 +145,7 @@ func Serve(ctx context.Context, a *app.App, task string) error {
 			if err := self(); err != nil {
 				return nil, SpawnOut{}, err
 			}
-			t, err := a.Spawn(app.SpawnReq{ID: in.ID, Title: in.Title, Prompt: in.Prompt, Claims: in.Claims, Model: in.Model, Parent: task})
+			t, err := a.Spawn(app.SpawnReq{ID: in.ID, Title: in.Title, Prompt: in.Prompt, Claims: in.Claims, Model: in.Model, Parent: task, Issue: in.Issue})
 			if err != nil {
 				return nil, SpawnOut{}, err
 			}
@@ -186,6 +206,26 @@ func Serve(ctx context.Context, a *app.App, task string) error {
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, PRsOut, error) {
 			urls, err := a.PRs()
 			return nil, PRsOut{PRs: urls}, err
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "peek", Description: "Read the last lines of a task's Claude Code terminal, e.g. to see what it is stuck on or what a prompt is asking."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in PeekIn) (*mcp.CallToolResult, PeekOut, error) {
+			out, err := a.Peek(in.Task, in.Lines)
+			return nil, PeekOut{Screen: out}, err
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "send_keys", Description: "Type into a task's terminal: answer its question (text) or pick a prompt option (keys). Claude Code menus: a numbered menu takes the digit alone (keys [\"1\"]); an unnumbered menu needs arrows then Enter (keys [\"Down\",\"Enter\"]). Only answer when it is clearly safe or the user told you what to answer. Peek first, and peek again afterwards to confirm the prompt is gone."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in KeysIn) (*mcp.CallToolResult, OK, error) {
+			if in.Text == "" && len(in.Keys) == 0 {
+				return nil, OK{}, errors.New("give text or keys")
+			}
+			return nil, OK{Message: "sent"}, a.SendKeys(in.Task, in.Text, in.Keys)
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "ticket", Description: "Fetch a GitHub issue (title, body, labels, sub-issues) from this repo to plan tasks from."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in TicketIn) (*mcp.CallToolResult, app.Ticket, error) {
+			t, err := a.Ticket(in.Number)
+			return nil, t, err
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "kill", Description: "Stop a task's agent and release its claims. Its branch is kept."},

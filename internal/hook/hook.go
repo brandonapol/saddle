@@ -58,6 +58,7 @@ func Handle(a *app.App, task string, in Input) *Output {
 			PermissionDecisionReason: "[saddle] " + d.Reason}}
 
 	case "PostToolUse":
+		markActive(st, task) // a tool ran, so any prompt it was waiting on was answered
 		st.Event(task, "tool", strings.TrimSpace(in.ToolName+" "+filePath(in.ToolInput)))
 		return context(in.Event, takeAll(st, task))
 

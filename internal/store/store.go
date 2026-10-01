@@ -62,6 +62,7 @@ type Task struct {
 	Summary   string
 	SessionID string
 	PR        string
+	Issue     int // GitHub issue this task works on; its PR closes it
 	CreatedAt time.Time
 }
 
@@ -109,6 +110,9 @@ CREATE TABLE events(id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, task TEXT NOT N
 CREATE TABLE train(task TEXT PRIMARY KEY, seq INTEGER NOT NULL, state TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE notices(id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, task TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL, delivered INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE renames(id INTEGER PRIMARY KEY, by_task TEXT NOT NULL, old TEXT NOT NULL, new TEXT NOT NULL);
+`, `
+ALTER TABLE tasks ADD COLUMN issue INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE chat(id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL);
 `}
 
 // Open opens (creating if needed) the database at path and applies migrations.
@@ -162,21 +166,21 @@ func (s *Store) tx(fn func(*sql.Tx) error) error {
 
 func now() int64 { return time.Now().Unix() }
 
-const taskCols = `id, title, prompt, parent, role, model, branch, worktree, window, status, summary, session_id, pr, created_at`
+const taskCols = `id, title, prompt, parent, role, model, branch, worktree, window, status, summary, session_id, pr, issue, created_at`
 
 func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	var created int64
 	err := row.Scan(&t.ID, &t.Title, &t.Prompt, &t.Parent, &t.Role, &t.Model, &t.Branch, &t.Worktree,
-		&t.Window, &t.Status, &t.Summary, &t.SessionID, &t.PR, &created)
+		&t.Window, &t.Status, &t.Summary, &t.SessionID, &t.PR, &t.Issue, &created)
 	t.CreatedAt = time.Unix(created, 0)
 	return t, err
 }
 
 func (s *Store) CreateTask(t Task) error {
-	_, err := s.db.Exec(`INSERT INTO tasks(`+taskCols+`, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err := s.db.Exec(`INSERT INTO tasks(`+taskCols+`, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Title, t.Prompt, t.Parent, t.Role, t.Model, t.Branch, t.Worktree, t.Window, t.Status,
-		t.Summary, t.SessionID, t.PR, now(), now())
+		t.Summary, t.SessionID, t.PR, t.Issue, now(), now())
 	return err
 }
 
@@ -444,4 +448,44 @@ func FormatNotices(ns []Notice) string {
 		b.WriteString(n.Text)
 	}
 	return b.String()
+}
+
+// Chat roles.
+const (
+	ChatUser      = "user"
+	ChatAssistant = "assistant"
+	ChatTool      = "tool"
+	ChatEvent     = "event"
+)
+
+type ChatLine struct {
+	TS   time.Time
+	Role string
+	Text string
+}
+
+// AddChat appends to the orchestrator conversation shown in the TUI.
+func (s *Store) AddChat(role, text string) error {
+	_, err := s.db.Exec(`INSERT INTO chat(ts, role, text) VALUES(?,?,?)`, now(), role, text)
+	return err
+}
+
+// Chat returns the newest n chat lines, oldest first.
+func (s *Store) Chat(n int) ([]ChatLine, error) {
+	rows, err := s.db.Query(`SELECT ts, role, text FROM (SELECT * FROM chat ORDER BY id DESC LIMIT ?) ORDER BY id`, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ChatLine
+	for rows.Next() {
+		var c ChatLine
+		var ts int64
+		if err := rows.Scan(&ts, &c.Role, &c.Text); err != nil {
+			return nil, err
+		}
+		c.TS = time.Unix(ts, 0)
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
