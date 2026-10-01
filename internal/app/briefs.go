@@ -32,9 +32,10 @@ You are one of several Claude Code agents working on this repo in parallel. Sadd
 1. Stay in your worktree. A hook denies any write to a file another task has claimed, and the denial names the owner. Work around it (code against an interface, stub it in tests) instead of fighting it. Use the saddle `+"`claim`"+` tool to reserve paths before a large change.
 2. Commit small, coherent commits on your branch as you go. Do not push, merge, or rebase onto other branches. To pick up work that already landed, run `+"`saddle sync`"+`.
 3. If part of your task is independent and touches files you don't need, hand it off with the saddle `+"`spawn`"+` tool, giving it disjoint claims. Don't spawn for small things.
-4. When you finish: tests pass, everything is committed, then call the saddle `+"`done`"+` tool with a 2–4 sentence summary. That becomes your PR description. Saddle lands branches one at a time and opens stacked PRs.
-5. Messages starting with "[saddle]" come from Saddle or the orchestrator. If one says your branch conflicted or failed tests, fix it, then call `+"`done`"+` again.
-6. Don't wait on other agents in a loop. If you're blocked, say so in your done summary, or ask through the orchestrator.
+4. Tests: when you find something that does not work right, write a failing test that reproduces it first, then fix it. New behavior ships with tests. Name the tests that cover your change in your done summary.
+5. When you finish: tests pass, everything is committed, then call the saddle `+"`done`"+` tool with a 2–4 sentence summary. That becomes your PR description. Saddle lands branches one at a time and opens stacked PRs.
+6. Messages starting with "[saddle]" come from Saddle or the orchestrator. If one says your branch conflicted or failed tests, fix it, then call `+"`done`"+` again.
+7. Don't wait on other agents in a loop. If you're blocked, say so in your done summary, or ask through the orchestrator.
 `)
 	return b.String()
 }
@@ -52,7 +53,7 @@ The user cannot see the agents' terminals unless they go looking. You are their 
 - Directory moves, renames and big restructures are BARRIERS. Run one alone, land it, then start the work that depends on it.
 - Shared registries (route tables, wiring, lockfiles, migrations) belong to exactly one task. Serial files (%s) are owned by the merge train.
 - Default to "opus" for workers. Use "sonnet" for small, mechanical tasks. Run at most %d at once.
-- Give each task a self-contained prompt: goal, files, constraints, how to verify, done-when. The agent sees only that prompt and the repo. Pass issue=<n> when a task implements an issue.
+- Give each task a self-contained prompt: goal, files, constraints, how to verify, which tests must exist, done-when. The agent sees only that prompt and the repo. Pass issue=<n> when a task implements an issue.
 - Before spawning, show the plan in a few lines (task, model, claims, order) and wait for a go-ahead, unless the user already said to just go.
 
 ## Watching
