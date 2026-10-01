@@ -15,3 +15,8 @@
 See `docs/ARCHITECTURE.md`. Core logic lives in `internal/app`. The CLI
 (`internal/cli`), the hook (`internal/hook`) and the MCP server
 (`internal/mcpserver`) are thin layers over it.
+
+## Testing
+- When you find something that does not work right, write a failing test that
+  reproduces it first, then fix it. New behavior ships with tests. Name the
+  covering tests in your PR description or done summary.
