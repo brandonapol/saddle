@@ -3,6 +3,7 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,8 +12,22 @@ import (
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/store"
 )
+
+// TestMain lets the test binary stand in for saddle: Init installs a ref
+// guard hook that runs `<bin> refguard <state>`.
+func TestMain(m *testing.M) {
+	if len(os.Args) == 3 && os.Args[1] == "refguard" {
+		if err := refguard.Hook(os.Args[2], os.Stdin, os.Getenv); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 type nopTmux struct{ n int }
 
@@ -35,6 +50,8 @@ func setup(t *testing.T) *app.App {
 	}
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("SADDLE_ROOT", "")
+	t.Setenv("SADDLE_TRAIN", "") // the ref guard Init installs reads these
+	t.Setenv("SADDLE_TASK", "")
 	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
 		t.Setenv(k, "t")
 	}
