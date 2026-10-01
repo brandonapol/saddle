@@ -234,7 +234,7 @@ func Serve(ctx context.Context, a *app.App, task string) error {
 			return nil, t, err
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "kill", Description: "Stop a task's agent and release its claims. Its branch is kept."},
+	mcp.AddTool(s, &mcp.Tool{Name: "kill", Description: "Stop a task's agent and release its claims. Its worktree is removed; a branch with commits is kept."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in TaskIn) (*mcp.CallToolResult, OK, error) {
 			return nil, OK{Message: "killed " + strings.TrimSpace(in.Task)}, a.Kill(in.Task, false)
 		})

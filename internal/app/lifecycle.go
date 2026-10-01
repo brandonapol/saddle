@@ -3,6 +3,9 @@ package app
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/gitx"
@@ -133,4 +136,146 @@ func (a *App) retryHint(title string) string {
 		}
 	}
 	return hint
+}
+
+// Leftover is a worktree, branch or ref that no live task uses.
+type Leftover struct {
+	Kind string `json:"kind"` // worktree, branch or ref
+	Name string `json:"name"`
+	Keep string `json:"keep,omitempty"` // why gc won't remove it
+}
+
+// cleanup removes a dead task's worktree and, when it holds no commits
+// beyond integration, its branch. It says what it kept and why.
+func (a *App) cleanup(t store.Task) (string, error) {
+	if _, err := os.Stat(t.Worktree); err == nil {
+		if dirty, _ := gitx.Dirty(t.Worktree); len(dirty) > 0 {
+			return "kept worktree: uncommitted changes", nil
+		}
+		if err := gitx.WorktreeRemove(a.Root, t.Worktree); err != nil {
+			return "", err
+		}
+	}
+	if t.Branch == "" || !gitx.BranchExists(a.Root, t.Branch) {
+		return "", nil
+	}
+	if n := a.unique(t.Branch); n > 0 {
+		return fmt.Sprintf("kept branch %s: %d commit(s) not on integration", t.Branch, n), nil
+	}
+	_, err := gitx.Run(a.Root, "branch", "-D", t.Branch)
+	return "", err
+}
+
+// unique counts commits on branch that integration lacks (-1 if unknown).
+func (a *App) unique(branch string) int {
+	n, err := gitx.CommitsBetween(a.Root, a.Cfg.Integration, branch)
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+var taskIDRe = regexp.MustCompile(`^t[0-9]+\b`)
+
+// Leftovers lists worktrees, saddle/* branches and refs/saddle/* refs that
+// belong to no live task: killed, failed or landed tasks, or none at all.
+func (a *App) Leftovers() ([]Leftover, error) {
+	ts, err := a.Store.Tasks()
+	if err != nil {
+		return nil, err
+	}
+	live := map[string]bool{}
+	for _, t := range ts {
+		if t.Active() && t.Status != StatusFailed {
+			live[t.ID] = true
+		}
+	}
+	// Names are <id>-<slug> (worktree dirs, branches) or end in <id> (refs).
+	// Anything not named after a task, like saddle/integration, isn't ours to remove.
+	owned := func(name string) bool {
+		id := taskIDRe.FindString(name)
+		return id == "" || live[id]
+	}
+	if _, err := gitx.Run(a.Root, "worktree", "prune"); err != nil {
+		return nil, err
+	}
+	var out []Leftover
+	inUse := map[string]bool{} // branches checked out in worktrees gc keeps
+	wts, err := gitx.Run(a.Root, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	dir := a.stateDir("worktrees") + string(filepath.Separator)
+	for _, block := range strings.Split(wts, "\n\n") {
+		var path, branch string
+		for _, line := range strings.Split(block, "\n") {
+			if p, ok := strings.CutPrefix(line, "worktree "); ok {
+				path = p
+			} else if b, ok := strings.CutPrefix(line, "branch refs/heads/"); ok {
+				branch = b
+			}
+		}
+		if !strings.HasPrefix(path, dir) || owned(filepath.Base(path)) {
+			inUse[branch] = true
+			continue
+		}
+		l := Leftover{Kind: "worktree", Name: path}
+		if dirty, _ := gitx.Dirty(path); len(dirty) > 0 {
+			l.Keep = "uncommitted changes"
+			inUse[branch] = true
+		}
+		out = append(out, l)
+	}
+	brs, err := gitx.Run(a.Root, "for-each-ref", "--format=%(refname:short)", "refs/heads/saddle/")
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range strings.Fields(brs) {
+		if inUse[b] || owned(strings.TrimPrefix(b, "saddle/")) {
+			continue
+		}
+		l := Leftover{Kind: "branch", Name: b}
+		if n := a.unique(b); n != 0 {
+			l.Keep = fmt.Sprintf("%d commit(s) not on integration; delete with git branch -D", n)
+		}
+		out = append(out, l)
+	}
+	refs, err := gitx.Run(a.Root, "for-each-ref", "--format=%(refname)", "refs/saddle/")
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range strings.Fields(refs) {
+		if !owned(filepath.Base(r)) {
+			out = append(out, Leftover{Kind: "ref", Name: r})
+		}
+	}
+	return out, nil
+}
+
+// GC removes every leftover it safely can. It returns what it removed and
+// what it kept, stopping at the first error.
+func (a *App) GC() ([]Leftover, error) {
+	ls, err := a.Leftovers()
+	if err != nil {
+		return nil, err
+	}
+	var out []Leftover
+	for _, l := range ls {
+		if l.Keep == "" {
+			switch l.Kind {
+			case "worktree":
+				err = gitx.WorktreeRemove(a.Root, l.Name)
+			case "branch":
+				_, err = gitx.Run(a.Root, "branch", "-D", l.Name)
+			case "ref":
+				_, err = gitx.Run(a.Root, "update-ref", "-d", l.Name)
+			}
+			if err != nil {
+				return out, err
+			}
+			a.Store.Event("", "gc", l.Kind+" "+l.Name)
+		}
+		out = append(out, l)
+	}
+	return out, nil
 }

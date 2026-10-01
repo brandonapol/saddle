@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/brandonapol/saddle/internal/gitx"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -119,5 +120,75 @@ func TestFailedSpawnIsRecorded(t *testing.T) {
 	}
 	if after, _ := a.Store.Tasks(); len(after) != len(before) {
 		t.Fatalf("claim conflict created a task row: %d -> %d", len(before), len(after))
+	}
+}
+
+func exists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+// #92: kill cleans up after itself unless the branch holds work.
+func TestKillCleansUp(t *testing.T) {
+	a, _ := setup(t)
+	empty, err := a.Spawn(SpawnReq{Title: "empty"})
+	must(t, err)
+	must(t, a.Kill(empty.ID, false))
+	if exists(empty.Worktree) || gitx.BranchExists(a.Root, empty.Branch) {
+		t.Fatal("killed task without commits left its worktree or branch")
+	}
+
+	work, err := a.Spawn(SpawnReq{Title: "work"})
+	must(t, err)
+	write(t, work.Worktree, "work.txt", "work\n")
+	commitAll(t, work.Worktree, "work")
+	must(t, a.Kill(work.ID, false))
+	if exists(work.Worktree) {
+		t.Fatal("killed task kept its worktree")
+	}
+	if !gitx.BranchExists(a.Root, work.Branch) {
+		t.Fatal("killed task lost a branch with commits")
+	}
+
+	kept, err := a.Spawn(SpawnReq{Title: "kept"})
+	must(t, err)
+	must(t, a.Kill(kept.ID, true))
+	if !exists(kept.Worktree) {
+		t.Fatal("kill --keep removed the worktree")
+	}
+}
+
+// #92: gc removes orphaned worktrees, branches and refs/saddle leftovers.
+func TestGCRemovesLeftovers(t *testing.T) {
+	a, _ := setup(t)
+	live, err := a.Spawn(SpawnReq{Title: "live"})
+	must(t, err)
+	orphan := a.stateDir("worktrees", "t99-orphan")
+	git(t, a.Root, "worktree", "add", "-q", "-b", "saddle/t99-orphan", orphan, a.Cfg.Integration)
+	git(t, a.Root, "update-ref", "refs/saddle/wip/t99", "HEAD")
+	git(t, a.Root, "update-ref", "refs/saddle/wip/"+live.ID, "HEAD")
+
+	ls, err := a.Leftovers()
+	must(t, err)
+	if len(ls) != 3 {
+		t.Fatalf("leftovers = %+v, want orphan worktree, branch and ref", ls)
+	}
+	if _, err := a.GC(); err != nil {
+		t.Fatal(err)
+	}
+	if exists(orphan) || gitx.BranchExists(a.Root, "saddle/t99-orphan") {
+		t.Fatal("gc left the orphaned worktree or branch")
+	}
+	if _, err := gitx.RevParse(a.Root, "refs/saddle/wip/t99"); err == nil {
+		t.Fatal("gc left refs/saddle/wip/t99")
+	}
+	if _, err := gitx.RevParse(a.Root, "refs/saddle/wip/"+live.ID); err != nil {
+		t.Fatal("gc removed a live task's ref")
+	}
+	if !exists(live.Worktree) || !gitx.BranchExists(a.Root, live.Branch) {
+		t.Fatal("gc touched a live task")
+	}
+	if strings.Contains(git(t, a.Root, "worktree", "list"), "t99-orphan") {
+		t.Fatal("orphan still registered with git")
 	}
 }
