@@ -225,6 +225,9 @@ func statusCmd() *cobra.Command {
 				if t.Notices > 0 {
 					status += fmt.Sprintf(" (%d)", t.Notices)
 				}
+				if t.Reason != "" {
+					status += ": " + trunc(t.Reason, 60)
+				}
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, status, t.Model, t.Window, trunc(t.Title, 36),
 					trunc(strings.Join(t.Claims, ","), 40), t.Train)
 			}

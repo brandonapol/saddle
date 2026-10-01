@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -95,4 +96,41 @@ func (a *App) LocalBaseBehind() string {
 		return ""
 	}
 	return fmt.Sprintf("local %s is %d commit(s) behind %s; saddle cuts work from %s", a.Cfg.Base, n, up, up)
+}
+
+// StatusFailed marks a task whose spawn failed. Its id stays burned.
+const StatusFailed = "failed"
+
+// spawnFailed undoes a half-made spawn and records why it failed. The task
+// row stays (status failed, reason in its summary) so the id is not reused
+// and the failure doesn't look like a kill.
+func (a *App) spawnFailed(t store.Task, worktree, hadBranch bool, cause error) error {
+	var errs []error
+	if worktree {
+		errs = append(errs, gitx.WorktreeRemove(a.Root, t.Worktree))
+	}
+	if !hadBranch && gitx.BranchExists(a.Root, t.Branch) {
+		_, err := gitx.Run(a.Root, "branch", "-D", t.Branch)
+		errs = append(errs, err)
+	}
+	reason := cause.Error()
+	a.Store.Event(t.ID, "spawn_failed", reason)
+	errs = append(errs, a.Store.Release(t.ID), a.Store.SetField(t.ID, "summary", reason), a.Store.SetStatus(t.ID, StatusFailed))
+	return errors.Join(append([]error{fmt.Errorf("%s failed: %w", t.ID, cause)}, errs...)...)
+}
+
+// retryHint names the latest failed spawn with the same title, so a retry
+// says what went wrong last time.
+func (a *App) retryHint(title string) string {
+	ts, err := a.Store.Tasks()
+	if err != nil {
+		return ""
+	}
+	hint := ""
+	for _, t := range ts {
+		if t.Status == StatusFailed && t.Title == title {
+			hint = fmt.Sprintf(" retry: %s failed: %s", t.ID, t.Summary)
+		}
+	}
+	return hint
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/brandonapol/saddle/internal/gitx"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -75,5 +76,48 @@ func TestIntegrationCutFromOrigin(t *testing.T) {
 	}
 	if ws := a.Warnings(); len(ws) != 1 || ws[0] != "integration behind origin/main by 1" {
 		t.Fatalf("warnings = %q", ws)
+	}
+}
+
+// #91: a spawn that fails after its row exists is marked failed with the
+// reason, leaves no branch, and a claim conflict leaves no row at all.
+func TestFailedSpawnIsRecorded(t *testing.T) {
+	a, _ := setup(t)
+	id, err := a.Store.NextID()
+	must(t, err)
+	wt := a.stateDir("worktrees", id+"-"+slug("blocked"))
+	write(t, wt, "squatter.txt", "in the way\n")
+	_, err = a.Spawn(SpawnReq{Title: "blocked", Claims: []string{"billing/**"}})
+	if err == nil {
+		t.Fatal("spawn into an occupied path succeeded")
+	}
+	got, err := a.Store.Task(id)
+	must(t, err)
+	if got.Status != StatusFailed {
+		t.Fatalf("status = %s, want %s", got.Status, StatusFailed)
+	}
+	if !hasEvent(t, a, "spawn_failed", "worktree") {
+		t.Fatal("no spawn_failed event with the error")
+	}
+	if gitx.BranchExists(a.Root, got.Branch) {
+		t.Fatalf("branch %s left behind", got.Branch)
+	}
+	if cl, _ := a.Store.Claims(); len(cl[id]) > 0 {
+		t.Fatalf("failed spawn kept claims %v", cl[id])
+	}
+
+	// The retry gets a fresh id and a hint about the failure.
+	t2, err := a.Spawn(SpawnReq{Title: "blocked", Claims: []string{"billing/**"}})
+	must(t, err)
+	if !hasEvent(t, a, "spawn", id+" failed") {
+		t.Fatalf("retry %s carries no hint about %s", t2.ID, id)
+	}
+
+	before, _ := a.Store.Tasks()
+	if _, err := a.Spawn(SpawnReq{Title: "dup", Claims: []string{"billing/meter.go"}}); err == nil || !strings.Contains(err.Error(), "claim conflict") {
+		t.Fatalf("conflicting spawn: err = %v", err)
+	}
+	if after, _ := a.Store.Tasks(); len(after) != len(before) {
+		t.Fatalf("claim conflict created a task row: %d -> %d", len(before), len(after))
 	}
 }
