@@ -4,9 +4,12 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -30,7 +33,26 @@ type Config struct {
 	Claude Claude `toml:"claude"`
 	Triage Triage `toml:"triage"`
 	Usage  Usage  `toml:"usage"`
+	// Sweeper merges ready saddle PRs. Off unless enabled.
+	Sweeper Sweeper `toml:"sweeper"`
 }
+
+// Sweeper configures `saddle sweep`, which merges open saddle PRs that are
+// green, mergeable, tested and not flagged for review.
+type Sweeper struct {
+	// Enabled opts the repo in. Off by default; a dry run works either way.
+	Enabled bool `toml:"enabled"`
+	// Method is the gh merge method: squash, merge or rebase.
+	Method string `toml:"method"`
+	// ReviewLabel marks PRs a human must look at. The sweeper never merges a
+	// PR that carries it, and applies it to risky PRs.
+	ReviewLabel string `toml:"review_label"`
+	// DryRun makes every sweep report only, as if --dry-run were passed.
+	DryRun bool `toml:"dry_run"`
+}
+
+// SweepMethods are the merge methods gh accepts.
+var SweepMethods = []string{"squash", "merge", "rebase"}
 
 // Usage configures token metering and the plan-limit bars.
 type Usage struct {
@@ -84,6 +106,10 @@ func Default() Config {
 			OrchestratorModel: "sonnet",
 			PermissionMode:    "auto",
 		},
+		Sweeper: Sweeper{
+			Method:      "squash",
+			ReviewLabel: "requires review",
+		},
 		Usage: Usage{
 			Poll: 15 * time.Second,
 			Windows: []Window{
@@ -130,6 +156,15 @@ func Load(root string) (Config, error) {
 		}
 	}
 	cfg.Usage.Windows = ws
+	if cfg.Sweeper.Method == "" {
+		cfg.Sweeper.Method = Default().Sweeper.Method
+	}
+	if !slices.Contains(SweepMethods, cfg.Sweeper.Method) {
+		return cfg, fmt.Errorf("sweeper.method %q: want one of %s", cfg.Sweeper.Method, strings.Join(SweepMethods, ", "))
+	}
+	if strings.TrimSpace(cfg.Sweeper.ReviewLabel) == "" {
+		cfg.Sweeper.ReviewLabel = Default().Sweeper.ReviewLabel
+	}
 	return cfg, nil
 }
 
@@ -167,4 +202,13 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # name = "7d"
 # span = "168h"
 # cap = 0
+
+[sweeper]
+# saddle sweep merges open saddle/ PRs that are green, mergeable, carry tests
+# and are not labeled for review. Off until enabled; saddle sweep --dry-run
+# only reports.
+# enabled = false
+# method = "squash"                # squash, merge or rebase
+# review_label = "requires review" # never merged; applied to risky PRs
+# dry_run = false
 `
