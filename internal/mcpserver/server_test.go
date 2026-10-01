@@ -7,14 +7,30 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// TestMain lets the test binary stand in for saddle, so Init installs the ref
+// guard hook, which runs `<bin> refguard <state>`.
+func TestMain(m *testing.M) {
+	if len(os.Args) == 3 && os.Args[1] == "refguard" {
+		if err := refguard.Hook(os.Args[2], os.Stdin, os.Getenv); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	_ = os.Setenv(app.TestRefguardEnv, "1")
+	os.Exit(m.Run())
+}
 
 type fakeTmux struct {
 	session bool
@@ -66,6 +82,8 @@ func stackSetup(t *testing.T) (a *app.App, other string) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("SADDLE_ROOT", "")
+	t.Setenv("SADDLE_TRAIN", "") // the ref guard Init installs reads these
+	t.Setenv("SADDLE_TASK", "")
 	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
 		t.Setenv(k, "t")
 	}
@@ -94,7 +112,9 @@ func stackSetup(t *testing.T) (a *app.App, other string) {
 		t.Fatal(err)
 	}
 	write(t, tk.Worktree, "README.md", "hi from t1\n")
+	t.Setenv("SADDLE_TASK", tk.ID) // as t1's agent, so the ref guard lets it move its branch
 	git(t, tk.Worktree, "commit", "-qam", "readme")
+	t.Setenv("SADDLE_TASK", "")
 	if err := a.Done(tk.ID, "readme"); err != nil {
 		t.Fatal(err)
 	}
@@ -175,5 +195,27 @@ func TestRestackToolReportsConflictOwner(t *testing.T) {
 	}
 	if len(out.Moves) != 0 || git(t, a.Root, "rev-parse", a.Cfg.Integration) != integ {
 		t.Fatal("restack moved refs despite the conflict")
+	}
+}
+
+func TestStatusWarnsOnDrift(t *testing.T) {
+	a, _ := stackSetup(t)
+	tk, err := a.Store.Task("t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	landed := git(t, a.Root, "rev-parse", tk.Branch)
+	t.Setenv("SADDLE_TASK", "t1") // t1 rewrites its own landed branch
+	git(t, a.Root, "update-ref", "refs/heads/"+tk.Branch, landed+"~")
+	t.Setenv("SADDLE_TASK", "")
+	drifted := git(t, a.Root, "rev-parse", tk.Branch)
+
+	st, err := Status(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "t1: landed " + landed[:12] + ", branch " + drifted[:12]
+	if !slices.Contains(st.Warnings, want) {
+		t.Fatalf("warnings = %q, want %q", st.Warnings, want)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/brandonapol/saddle/internal/claims"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/tmux"
 )
@@ -62,7 +63,9 @@ func (a *App) stateDir(parts ...string) string {
 	return filepath.Join(append([]string{a.Root, ".saddle"}, parts...)...)
 }
 
-// Init creates .saddle/, a config template and a git exclude entry.
+// Init creates .saddle/, a config template and a git exclude entry, and
+// installs the ref guard hook. It fails when the repo already has a
+// reference-transaction hook saddle didn't write.
 func (a *App) Init() error {
 	if err := os.MkdirAll(a.stateDir("worktrees"), 0o755); err != nil {
 		return err
@@ -75,6 +78,11 @@ func (a *App) Init() error {
 	}
 	if err := a.detectTestCmd(); err != nil {
 		return err
+	}
+	if hookable(a.Bin) {
+		if err := refguard.Install(a.Root, a.Bin); err != nil {
+			return err
+		}
 	}
 	exclude := filepath.Join(a.Root, ".git", "info", "exclude")
 	b, _ := os.ReadFile(exclude)
@@ -92,6 +100,16 @@ func (a *App) Init() error {
 		}
 	}
 	return nil
+}
+
+// TestRefguardEnv opts a Go test binary in as the ref guard hook. Its TestMain
+// must set it and answer `<bin> refguard <state>` with refguard.Hook.
+const TestRefguardEnv = "SADDLE_TEST_REFGUARD"
+
+// hookable reports whether bin can run as the ref guard hook. A Go test binary
+// would rerun its whole suite on every ref update unless it opted in.
+func hookable(bin string) bool {
+	return !strings.HasSuffix(filepath.Base(bin), ".test") || os.Getenv(TestRefguardEnv) == "1"
 }
 
 // ensureIntegration fetches base and creates the integration branch from
@@ -591,17 +609,18 @@ func (a *App) Kill(task string, keep bool) error {
 			return err
 		}
 	}
+	// The ref guard won't delete a live task's branch, so it dies first.
+	if err := errors.Join(a.Store.Release(task), a.Store.SetStatus(task, store.Killed)); err != nil {
+		return err
+	}
 	note := ""
 	if !keep && t.Role == store.RoleWorker {
 		if note, err = a.cleanup(t); err != nil {
 			return err
 		}
 	}
-	if err := a.Store.Release(task); err != nil {
-		return err
-	}
 	a.Store.Event(task, "kill", note)
-	return a.Store.SetStatus(task, store.Killed)
+	return nil
 }
 
 // TaskForDir finds the worker task whose worktree contains dir.

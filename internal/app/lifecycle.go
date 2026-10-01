@@ -76,7 +76,8 @@ func (a *App) checkBehind(base string) {
 		w+". New tasks still start from integration. Restack it onto "+base+"; don't merge base into task branches.")
 }
 
-// Warnings lists problems the human and the orchestrator should see in status.
+// Warnings lists problems the human and the orchestrator should see in status,
+// including landed branches that drifted off their landed commit.
 // It uses the last fetched remote refs and does not fetch.
 func (a *App) Warnings() []string {
 	var ws []string
@@ -85,7 +86,12 @@ func (a *App) Warnings() []string {
 			ws = append(ws, w)
 		}
 	}
-	return ws
+	// A landed branch that moved off its landed commit would make its PR lie.
+	drift, err := a.Drift()
+	if err != nil {
+		drift = []string{"can't check landed branches for drift: " + err.Error()}
+	}
+	return append(ws, drift...)
 }
 
 // LocalBaseBehind fetches and warns when the local base branch is behind its
@@ -114,7 +120,8 @@ func (a *App) spawnFailed(t store.Task, worktree, hadBranch bool, cause error) e
 		errs = append(errs, gitx.WorktreeRemove(a.Root, t.Worktree))
 	}
 	if !hadBranch && gitx.BranchExists(a.Root, t.Branch) {
-		_, err := gitx.Run(a.Root, "branch", "-D", t.Branch)
+		// The task is still live, so only the train may delete its branch.
+		_, err := trainGit(a.Root, "branch", "-D", t.Branch)
 		errs = append(errs, err)
 	}
 	reason := cause.Error()

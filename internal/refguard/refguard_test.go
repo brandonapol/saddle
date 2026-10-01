@@ -213,6 +213,21 @@ func TestEventRecordsCurrentOld(t *testing.T) {
 	}
 }
 
+// Checking out a new branch rewrites it in place; that moves nothing, so
+// anyone may, and it isn't logged.
+func TestNoOpUpdateAllowed(t *testing.T) {
+	r := setup(t)
+	r.git("", "worktree", "add", "-q", "-b", "saddle/t1-x", filepath.Join(t.TempDir(), "wt"), "HEAD~1")
+	r.git("t2", "update-ref", "refs/heads/saddle/t1-x", "HEAD~1")
+	if r.rev("refs/heads/saddle/t1-x") != r.rev("HEAD~1") {
+		t.Fatal("a no-op update moved the branch")
+	}
+	want := []attempt{{"unknown", "refs/heads/saddle/t1-x", false}}
+	if got := r.attempts(); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("events:\n got %v\nwant %v", got, want)
+	}
+}
+
 func TestInstallKeepsForeignHook(t *testing.T) {
 	r := setup(t)
 	hooks, err := gitx.Run(r.root, "rev-parse", "--path-format=absolute", "--git-path", "hooks")
