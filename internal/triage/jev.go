@@ -41,9 +41,12 @@ type Client struct {
 	HTTP    *http.Client
 }
 
-// FromEnv returns a client when TYPESAFE_API_KEY is set, else nil.
+// FromEnv returns a client when JEV_TOKEN (or TYPESAFE_API_KEY) is set, else nil.
 func FromEnv() *Client {
-	key := os.Getenv("TYPESAFE_API_KEY")
+	key := os.Getenv("JEV_TOKEN")
+	if key == "" {
+		key = os.Getenv("TYPESAFE_API_KEY")
+	}
 	if key == "" {
 		return nil
 	}

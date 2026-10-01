@@ -15,6 +15,7 @@ The goal is that you stop paying Opus to rebase.
 ## Quickstart
 
 ```sh
+make setup            # dev tools; asks for a Jev key / Claude login only if missing
 make install          # puts saddle on your PATH
 cd your-repo
 saddle up             # opens the TUI

@@ -98,7 +98,7 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # cmd = "go test ./..."
 
 [triage]
-# Uses TypeSafe Jev (set TYPESAFE_API_KEY) to decide which agent events reach
+# Uses TypeSafe Jev (set JEV_TOKEN; make setup asks for it) to decide which agent events reach
 # the orchestrator or you, and to auto-approve routine permission prompts.
 # disabled = false
 # no_auto_approve = false
