@@ -91,12 +91,15 @@ func (a *App) Init() error {
 	return nil
 }
 
-// ensureIntegration creates the integration branch from base on first use.
+// ensureIntegration fetches base and creates the integration branch from
+// <remote>/<base> on first use. Later it reports when integration falls behind.
 func (a *App) ensureIntegration() error {
+	base := a.freshBase()
 	if gitx.BranchExists(a.Root, a.Cfg.Integration) {
+		a.checkBehind(base)
 		return nil
 	}
-	_, err := gitx.Run(a.Root, "branch", a.Cfg.Integration, a.Cfg.Base)
+	_, err := gitx.Run(a.Root, "branch", "--no-track", a.Cfg.Integration, base)
 	return err
 }
 
@@ -163,6 +166,16 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if err := a.ensureIntegration(); err != nil {
 		return t, err
 	}
+	// Claims are checked before the row exists, so a conflict leaves nothing behind.
+	if len(r.Claims) > 0 && !r.Force {
+		all, err := a.Store.Claims()
+		if err != nil {
+			return t, err
+		}
+		if c := claims.Conflicts(all, "", r.Claims); len(c) > 0 {
+			return t, conflictErr(c)
+		}
+	}
 	id := r.ID
 	if id == "" {
 		var err error
@@ -182,10 +195,12 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if model == "" {
 		model = a.Cfg.Claude.Model
 	}
+	hint := a.retryHint(r.Title)
 	t = store.Task{
 		ID: id, Title: r.Title, Prompt: r.Prompt, Parent: r.Parent, Role: store.RoleWorker, Model: model,
 		Branch: "saddle/" + name, Worktree: a.stateDir("worktrees", name), Status: store.Running, Issue: r.Issue,
 	}
+	hadBranch := gitx.BranchExists(a.Root, t.Branch)
 	if err := a.Store.CreateTask(t); err != nil {
 		return t, err
 	}
@@ -198,18 +213,18 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 			return r.Claims, nil
 		})
 		if err != nil {
-			return t, errors.Join(err, a.Store.SetStatus(id, store.Killed))
+			return t, a.spawnFailed(t, false, hadBranch, err)
 		}
 	}
 	if err := gitx.WorktreeAdd(a.Root, t.Worktree, t.Branch, base); err != nil {
-		return t, errors.Join(err, a.Store.SetStatus(id, store.Killed))
+		return t, a.spawnFailed(t, false, hadBranch, fmt.Errorf("worktree add: %w", err))
 	}
 	win, err := a.launch(t, r.Claims)
 	if err != nil {
-		return t, errors.Join(err, a.Store.SetStatus(id, store.Killed))
+		return t, a.spawnFailed(t, true, hadBranch, fmt.Errorf("launch: %w", err))
 	}
 	t.Window = win
-	a.Store.Event(id, "spawn", fmt.Sprintf("parent=%s model=%s claims=%s", r.Parent, model, strings.Join(r.Claims, ",")))
+	a.Store.Event(id, "spawn", fmt.Sprintf("parent=%s model=%s claims=%s%s", r.Parent, model, strings.Join(r.Claims, ","), hint))
 	if r.Parent != "" && r.Parent != OrchestratorID {
 		if err := a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf("%s spawned sub-task %s %q.", r.Parent, id, r.Title)); err != nil {
 			return t, err
@@ -268,7 +283,8 @@ func (a *App) Orchestrator() (agent.Launch, string, error) {
 	} else if err != nil {
 		return agent.Launch{}, "", err
 	}
-	if err := a.Store.SetStatus(t.ID, store.Running); err != nil {
+	// It runs headless; a window left from an old tmux-based run is not its own.
+	if err := errors.Join(a.Store.SetStatus(t.ID, store.Running), a.Store.SetField(t.ID, "window", "")); err != nil {
 		return agent.Launch{}, "", err
 	}
 	l := agent.Launch{
@@ -289,7 +305,7 @@ func (a *App) Down() (int, error) {
 	}
 	n := 0
 	for _, t := range ts {
-		if t.Role == store.RoleWorker && t.Active() && t.Status != store.Done {
+		if t.Role == store.RoleWorker && t.Active() && t.Status != store.Done && t.Status != StatusFailed {
 			if err := errors.Join(a.Store.Release(t.ID), a.Store.SetStatus(t.ID, store.Killed)); err != nil {
 				return n, err
 			}
@@ -327,8 +343,8 @@ func (a *App) SendKeys(task, text string, keys []string) error {
 	if err != nil {
 		return err
 	}
-	if t.Window == "" || !a.Tmux.Alive(t.Window) {
-		return fmt.Errorf("%s has no live window", task)
+	if !a.ownWindow(t) {
+		return fmt.Errorf("%s has no live window saddle opened for it", task)
 	}
 	a.Store.Event(task, "keys", text+strings.Join(keys, " "))
 	if text != "" {
@@ -429,8 +445,9 @@ func (a *App) CheckWrite(task, abs string) Decision {
 	return Decision{Allow: true}
 }
 
-// Notify queues a notice for a task. Action notices wake an idle agent by
-// typing into its window; info notices arrive with its next tool call.
+// Notify queues a notice for a task. Action notices wake an idle worker by
+// typing into its window; info notices arrive with its next tool call. The
+// orchestrator is never typed at: the TUI delivers its notices.
 func (a *App) Notify(task, kind, text string) error {
 	if err := a.Store.Notify(task, kind, text); err != nil {
 		return err
@@ -443,7 +460,7 @@ func (a *App) Notify(task, kind, text string) error {
 		return nil
 	}
 	if t.Status == store.Idle || t.Status == store.Done || t.Status == store.Conflict {
-		if a.Tmux.Alive(t.Window) {
+		if a.ownWindow(t) {
 			tmux.SendWhenIdle(a.Tmux, t.Window, "[saddle] You have new notices. Read them and act on them.", func() bool {
 				n, err := a.Store.PendingNotices(task)
 				return err != nil || n > 0
@@ -492,8 +509,11 @@ func (a *App) Done(task, summary string) error {
 		fmt.Sprintf("%s %q is done and queued in the merge train: %s\nRun the saddle land tool when you're ready.", task, t.Title, summary))
 }
 
-// Kill stops a task's window and releases its claims. With rm, its worktree is removed too.
-func (a *App) Kill(task string, rm bool) error {
+// Kill stops a task's window and releases its claims. Unless keep is set it
+// removes the worktree, and the branch too when it has no commits beyond
+// integration. A branch with commits, or a worktree with uncommitted
+// changes, is always kept.
+func (a *App) Kill(task string, keep bool) error {
 	t, err := a.Store.Task(task)
 	if err != nil {
 		return err
@@ -503,15 +523,16 @@ func (a *App) Kill(task string, rm bool) error {
 			return err
 		}
 	}
-	if rm && t.Role == store.RoleWorker {
-		if err := gitx.WorktreeRemove(a.Root, t.Worktree); err != nil {
+	note := ""
+	if !keep && t.Role == store.RoleWorker {
+		if note, err = a.cleanup(t); err != nil {
 			return err
 		}
 	}
 	if err := a.Store.Release(task); err != nil {
 		return err
 	}
-	a.Store.Event(task, "kill", "")
+	a.Store.Event(task, "kill", note)
 	return a.Store.SetStatus(task, store.Killed)
 }
 

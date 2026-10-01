@@ -68,6 +68,7 @@ type TaskView struct {
 	ID       string   `json:"id"`
 	Title    string   `json:"title"`
 	Status   string   `json:"status"`
+	Reason   string   `json:"reason,omitempty"` // why a spawn failed
 	Model    string   `json:"model,omitempty"`
 	Parent   string   `json:"parent,omitempty"`
 	Branch   string   `json:"branch,omitempty"`
@@ -81,6 +82,7 @@ type TaskView struct {
 
 type StatusOut struct {
 	Integration string     `json:"integration"`
+	Warnings    []string   `json:"warnings,omitempty"`
 	Tasks       []TaskView `json:"tasks"`
 }
 
@@ -98,7 +100,7 @@ type PRsOut struct {
 
 // Status builds the shared status view used by the MCP tool and the CLI.
 func Status(a *app.App) (StatusOut, error) {
-	out := StatusOut{Integration: a.Cfg.Integration}
+	out := StatusOut{Integration: a.Cfg.Integration, Warnings: a.Warnings()}
 	ts, err := a.Store.Tasks()
 	if err != nil {
 		return out, err
@@ -121,7 +123,11 @@ func Status(a *app.App) (StatusOut, error) {
 	}
 	for _, t := range ts {
 		n, _ := a.Store.PendingNotices(t.ID)
-		out.Tasks = append(out.Tasks, TaskView{
+		reason := ""
+		if t.Status == app.StatusFailed {
+			reason = t.Summary
+		}
+		out.Tasks = append(out.Tasks, TaskView{Reason: reason,
 			ID: t.ID, Title: t.Title, Status: t.Status, Model: t.Model, Parent: t.Parent, Branch: t.Branch,
 			Claims: cl[t.ID], Train: tr[t.ID], Notices: n, PR: t.PR, Window: t.Window, Worktree: t.Worktree,
 		})
@@ -228,7 +234,7 @@ func Serve(ctx context.Context, a *app.App, task string) error {
 			return nil, t, err
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "kill", Description: "Stop a task's agent and release its claims. Its branch is kept."},
+	mcp.AddTool(s, &mcp.Tool{Name: "kill", Description: "Stop a task's agent and release its claims. Its worktree is removed; a branch with commits is kept."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in TaskIn) (*mcp.CallToolResult, OK, error) {
 			return nil, OK{Message: "killed " + strings.TrimSpace(in.Task)}, a.Kill(in.Task, false)
 		})
