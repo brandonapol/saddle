@@ -133,6 +133,7 @@ func landTask(t *testing.T, a *app.App, id, file string) store.Task {
 	tk, err := a.Spawn(app.SpawnReq{ID: id, Title: file})
 	must(t, err)
 	write(t, tk.Worktree, file+".txt", file+"\n")
+	t.Setenv("SADDLE_TASK", tk.ID) // commit as the task, as the ref guard expects
 	commitAll(t, tk.Worktree, file)
 	must(t, a.Done(tk.ID, file+" summary"))
 	rs, err := a.Land()
@@ -214,10 +215,14 @@ func TestSentinelFlagsForkedStackUntilRestack(t *testing.T) {
 		tk       store.Task
 		from, to string
 	}{{t1, m, n1}, {t2, n1, n2}, {t4, g, n4}, {t6, n4, n6}} {
+		t.Setenv("SADDLE_TASK", r.tk.ID) // each branch moves as its owner
 		git(t, a.Root, "update-ref", "refs/heads/"+r.tk.Branch, r.to)
 		must(t, a.Store.SetTrain(r.tk.ID, store.TrainOK, r.from+".."+r.to, false))
 	}
+	// Only the train may move integration.
+	t.Setenv("SADDLE_TRAIN", "1")
 	git(t, a.Root, "update-ref", "refs/heads/"+a.Cfg.Integration, n6)
+	t.Setenv("SADDLE_TRAIN", "")
 	gh.setPR(t4.PR, "OPEN", "CONFLICTING")
 	before := len(gh.log())
 
