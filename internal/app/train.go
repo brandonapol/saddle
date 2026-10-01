@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -31,6 +32,9 @@ func (a *App) Land() ([]LandResult, error) {
 	}
 	if strings.TrimSpace(a.Cfg.Test.Cmd) == "" {
 		return nil, errNoTestCmd
+	}
+	if err := a.checkFlag(); err != nil {
+		return nil, err
 	}
 	unlock, err := a.lockTrain()
 	if err != nil {
@@ -72,6 +76,84 @@ func (a *App) lockTrain() (unlock func(), err error) {
 		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 		lock.Close()
 	}, nil
+}
+
+// TryLockTrain takes the train lock if nobody holds it. ok is false when the
+// train is busy, so a watcher can skip a cycle instead of waiting out a land.
+func (a *App) TryLockTrain() (unlock func(), ok bool, err error) {
+	lock, err := os.OpenFile(a.stateDir("train.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return func() {
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		lock.Close()
+	}, true, nil
+}
+
+// StackFlag marks the PR stack as at risk. While it is set, prs and land
+// refuse to push or open anything on top of the stack. The stack sentinel
+// sets it and clears it once the stack checks clean; restack is the fix.
+type StackFlag struct {
+	Task  string   `json:"task"`  // the first broken task
+	Cause string   `json:"cause"` // why the stack is at risk
+	PRs   []string `json:"prs"`   // PRs labeled for it
+}
+
+func (a *App) flagPath() string { return a.stateDir("stack-at-risk.json") }
+
+// Flag returns the stack's at-risk flag, if one is set.
+func (a *App) Flag() (StackFlag, bool, error) {
+	var f StackFlag
+	b, err := os.ReadFile(a.flagPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return f, false, nil
+	}
+	if err != nil {
+		return f, false, err
+	}
+	if err := json.Unmarshal(b, &f); err != nil {
+		return f, false, fmt.Errorf("%s: %w", a.flagPath(), err)
+	}
+	return f, true, nil
+}
+
+// SetFlag flags the stack as at risk.
+func (a *App) SetFlag(f StackFlag) error {
+	b, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := a.flagPath() + ".tmp"
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, a.flagPath())
+}
+
+// ClearFlag lifts the at-risk flag.
+func (a *App) ClearFlag() error {
+	if err := os.Remove(a.flagPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// checkFlag refuses while the stack is flagged at risk.
+func (a *App) checkFlag() error {
+	f, ok, err := a.Flag()
+	if err != nil || !ok {
+		return err
+	}
+	return fmt.Errorf("the PR stack is flagged at risk from %s up (%s), so nothing was pushed, landed or opened. "+
+		"Run restack to rebuild it; the flag clears once the stack checks clean", f.Task, f.Cause)
 }
 
 func (a *App) landOne(id string) LandResult {
@@ -259,6 +341,9 @@ func (a *App) Sync(task string) (gitx.RebaseResult, error) {
 // It pushes the commits the train landed, never whatever the branches point
 // at, and refuses when a branch has drifted from its landed commit.
 func (a *App) PRs() ([]string, error) {
+	if err := a.checkFlag(); err != nil {
+		return nil, err
+	}
 	all, err := a.landedStack()
 	if err != nil {
 		return nil, err
@@ -401,6 +486,43 @@ func (a *App) checkDrift(stack []landedTask) error {
 	}
 	return fmt.Errorf("landed branches moved off the commits the train landed, so nothing was pushed. "+
 		"Put each branch back on its landed commit, or land the task again:\n  %s", strings.Join(d, "\n  "))
+}
+
+// StackLayer is one landed task in the PR stack, bottom first.
+type StackLayer struct {
+	Task   store.Task
+	Merged bool // base already has all of its work
+	// Problem says why the layer's PR wouldn't show exactly its task's landed
+	// work (its branch drifted, or base..head holds other work); "" if sound.
+	Problem string
+}
+
+// StackLayers checks every landed task's layer of the PR stack the way prs
+// does, without pushing or warning anyone.
+func (a *App) StackLayers() ([]StackLayer, error) {
+	stack, err := a.landedStack()
+	if err != nil {
+		return nil, err
+	}
+	var out []StackLayer
+	base, baseName := a.baseRef(), a.Cfg.Base
+	for _, l := range stack {
+		sl := StackLayer{Task: l.Task, Merged: l.merged()}
+		if !sl.Merged {
+			if d := a.drift([]landedTask{l}); len(d) > 0 {
+				_, sl.Problem, _ = strings.Cut(d[0], ": ")
+			} else {
+				probs, err := a.stackProblems(l, base, baseName)
+				if err != nil {
+					return nil, err
+				}
+				sl.Problem = strings.Join(probs, "; ")
+			}
+			base, baseName = l.To, l.ID+"'s branch"
+		}
+		out = append(out, sl)
+	}
+	return out, nil
 }
 
 // landedClaimsEvent records the claims a task held when it landed.

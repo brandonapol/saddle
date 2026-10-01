@@ -255,3 +255,41 @@ func TestPRsRefusesForkedStack(t *testing.T) {
 		t.Fatalf("gh called: %v", l)
 	}
 }
+
+// While the stack is flagged at risk, prs and land push, open and land nothing.
+func TestFlaggedStackFreezesPRsAndLand(t *testing.T) {
+	a := trainSetup(t)
+	origin, ghLog := originWithGh(t, a)
+	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+	tk, err := a.Spawn(SpawnReq{ID: "t2", Title: "two"})
+	must(t, err)
+	write(t, tk.Worktree, "two.txt", "two\n")
+	commitAll(t, tk.Worktree, "two")
+	must(t, a.Done(tk.ID, "two"))
+	before := git(t, a.Root, "rev-parse", a.Cfg.Integration)
+
+	must(t, a.SetFlag(StackFlag{Task: t1.ID, Cause: "GitHub reports its PR conflicts with its base"}))
+	for name, call := range map[string]func() error{
+		"PRs":  func() error { _, err := a.PRs(); return err },
+		"Land": func() error { _, err := a.Land(); return err },
+	} {
+		err := call()
+		if err == nil || !strings.Contains(err.Error(), "restack") || !strings.Contains(err.Error(), t1.ID) {
+			t.Fatalf("%s while flagged: err = %v", name, err)
+		}
+	}
+	if got := remoteRev(t, origin, t1.Branch); got != "" {
+		t.Fatal("pushed while flagged")
+	}
+	if l := ghLog(); len(l) > 0 {
+		t.Fatalf("gh called while flagged: %v", l)
+	}
+	if got := git(t, a.Root, "rev-parse", a.Cfg.Integration); got != before {
+		t.Fatal("landed while flagged")
+	}
+
+	must(t, a.ClearFlag())
+	if _, err := a.PRs(); err != nil {
+		t.Fatalf("PRs after the flag cleared: %v", err)
+	}
+}
