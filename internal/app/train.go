@@ -32,16 +32,11 @@ func (a *App) Land() ([]LandResult, error) {
 	if strings.TrimSpace(a.Cfg.Test.Cmd) == "" {
 		return nil, errNoTestCmd
 	}
-	lock, err := os.OpenFile(a.stateDir("train.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	unlock, err := a.lockTrain()
 	if err != nil {
 		return nil, err
 	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return nil, err
-	}
-	// Closing the file also drops the lock, so a failed unlock is harmless.
-	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
+	defer unlock()
 
 	if br, _ := gitx.CurrentBranch(a.Root); br == a.Cfg.Integration {
 		return nil, fmt.Errorf("%s is checked out in %s; switch it to another branch so the train can move it", a.Cfg.Integration, a.Root)
@@ -59,6 +54,24 @@ func (a *App) Land() ([]LandResult, error) {
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// lockTrain takes the train lock, which serialises everything that moves the
+// integration branch or landed task branches.
+func (a *App) lockTrain() (unlock func(), err error) {
+	lock, err := os.OpenFile(a.stateDir("train.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		lock.Close()
+		return nil, err
+	}
+	// Closing the file also drops the lock, so a failed unlock is harmless.
+	return func() {
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		lock.Close()
+	}, nil
 }
 
 func (a *App) landOne(id string) LandResult {
