@@ -38,9 +38,12 @@ func WorkerAllow(bin string) []string {
 }
 
 // OrchestratorDeny removes tools the orchestrator must not use: saddle wakes it
-// on every change, so polling and scheduling only burn tokens, and it never edits.
+// on every change, so polling and scheduling only burn tokens, and it never
+// edits. Only the merge train moves branches, so git commands that do are out too.
 func OrchestratorDeny() []string {
-	return []string{"ScheduleWakeup", "CronCreate", "Monitor", "Edit", "Write", "MultiEdit", "NotebookEdit", "Agent"}
+	return []string{"ScheduleWakeup", "CronCreate", "Monitor", "Edit", "Write", "MultiEdit", "NotebookEdit", "Agent",
+		"Bash(git merge:*)", "Bash(git rebase:*)", "Bash(git reset:*)", "Bash(git push:*)",
+		"Bash(git branch -f:*)", "Bash(git update-ref:*)", "Bash(git checkout:*)"}
 }
 
 // OrchestratorAllow lets the chat agent read the repo and GitHub, never edit.
@@ -131,6 +134,9 @@ func (l Launch) Write() (string, error) {
 		"-n", shellQuote("saddle "+l.Task+": "+l.Title),
 		"--append-system-prompt", `"$(cat "$run/brief.md")"`,
 	)
+	if len(l.Deny) > 0 {
+		args = append(args, "--disallowedTools", shellQuote(strings.Join(l.Deny, ",")))
+	}
 	if l.Prompt != "" {
 		args = append(args, `"$(cat "$run/prompt.md")"`)
 	}
