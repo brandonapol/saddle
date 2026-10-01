@@ -58,9 +58,9 @@ func remoteRev(t *testing.T, origin, branch string) string {
 }
 
 // landTask spawns a task, commits files on its branch and lands it.
-func landTask(t *testing.T, a *App, title string, commits ...map[string]string) store.Task {
+func landTask(t *testing.T, a *App, id, title string, commits ...map[string]string) store.Task {
 	t.Helper()
-	tk, err := a.Spawn(SpawnReq{Title: title})
+	tk, err := a.Spawn(SpawnReq{ID: id, Title: title})
 	must(t, err)
 	for i, files := range commits {
 		for rel, body := range files {
@@ -149,8 +149,8 @@ func TestDetectTestCmd(t *testing.T) {
 func TestPRsPushesLandedSHAs(t *testing.T) {
 	a := trainSetup(t)
 	origin, ghLog := originWithGh(t, a)
-	t1 := landTask(t, a, "one", map[string]string{"one.txt": "one\n"})
-	t2 := landTask(t, a, "two", map[string]string{"two.txt": "two\n"})
+	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+	t2 := landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})
 	landed := map[string]string{t1.ID: git(t, a.Root, "rev-parse", a.Cfg.Integration+"~1"), t2.ID: git(t, a.Root, "rev-parse", a.Cfg.Integration)}
 
 	if _, err := a.PRs(); err != nil {
@@ -169,7 +169,7 @@ func TestPRsPushesLandedSHAs(t *testing.T) {
 func TestPRsRefusesDriftedBranch(t *testing.T) {
 	a := trainSetup(t)
 	origin, ghLog := originWithGh(t, a)
-	t1 := landTask(t, a, "one", map[string]string{"one.txt": "one\n"})
+	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
 	landed := git(t, a.Root, "rev-parse", t1.Branch)
 
 	// Something rewrites the landed branch after the train recorded it.
@@ -185,6 +185,71 @@ func TestPRsRefusesDriftedBranch(t *testing.T) {
 	}
 	if got := remoteRev(t, origin, t1.Branch); got != "" {
 		t.Fatalf("drifted branch was pushed: %s", got)
+	}
+	if l := ghLog(); len(l) > 0 {
+		t.Fatalf("gh called: %v", l)
+	}
+}
+
+// Rebuilds the PR #69 incident: t1 and t2 were rewritten onto a new main, but
+// t4 still sits on their old lineage plus a merge commit.
+func TestPRsRefusesForkedStack(t *testing.T) {
+	a := trainSetup(t)
+	origin, ghLog := originWithGh(t, a)
+	t1 := landTask(t, a, "t1", "usage", map[string]string{"usage.txt": "usage\n"})
+	t2 := landTask(t, a, "t2", "planner", map[string]string{"planner.txt": "planner\n"})
+	t4 := landTask(t, a, "t4", "ciwatch", map[string]string{"ciwatch.txt": "ciwatch\n"})
+	c1, c2, c4 := git(t, a.Root, "rev-parse", t1.Branch), git(t, a.Root, "rev-parse", t2.Branch), git(t, a.Root, "rev-parse", t4.Branch)
+
+	// main moves; t1 and t2 are rebased onto it by hand and recorded as landed.
+	write(t, a.Root, "main.txt", "main\n")
+	commitAll(t, a.Root, "main moves")
+	m := git(t, a.Root, "rev-parse", "HEAD")
+	git(t, a.Root, "push", "-q", "origin", "main")
+	git(t, a.Root, "fetch", "-q", "origin")
+	wt := filepath.Join(t.TempDir(), "wt")
+	git(t, a.Root, "worktree", "add", "-q", "--detach", wt, m)
+	git(t, wt, "cherry-pick", c1)
+	n1 := git(t, wt, "rev-parse", "HEAD")
+	git(t, wt, "cherry-pick", c2)
+	n2 := git(t, wt, "rev-parse", "HEAD")
+
+	// The old lineage gets a side commit merged in, and t4 is rebuilt on top.
+	git(t, wt, "checkout", "-q", "--detach", m+"~1")
+	write(t, wt, "watcher.txt", "watcher\n")
+	commitAll(t, wt, "git watcher")
+	x := git(t, wt, "rev-parse", "HEAD")
+	git(t, wt, "checkout", "-q", "--detach", c2)
+	git(t, wt, "merge", "-q", "--no-ff", "-m", "merge main", x)
+	g := git(t, wt, "rev-parse", "HEAD")
+	git(t, wt, "cherry-pick", c4)
+	n4 := git(t, wt, "rev-parse", "HEAD")
+
+	for _, r := range []struct {
+		tk       store.Task
+		from, to string
+	}{{t1, m, n1}, {t2, n1, n2}, {t4, g, n4}} {
+		git(t, a.Root, "update-ref", "refs/heads/"+r.tk.Branch, r.to)
+		must(t, a.Store.SetTrain(r.tk.ID, store.TrainOK, r.from+".."+r.to, false))
+	}
+
+	_, err := a.PRs()
+	if err == nil {
+		t.Fatal("PRs accepted a forked stack")
+	}
+	msg := err.Error()
+	for _, want := range []string{"t4", "contains 3 commits from other tasks, 1 merge commit", "restack"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error %q does not mention %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "t1:") || strings.Contains(msg, "t2:") {
+		t.Fatalf("error blames healthy layers: %s", msg)
+	}
+	for _, tk := range []store.Task{t1, t2, t4} {
+		if got := remoteRev(t, origin, tk.Branch); got != "" {
+			t.Fatalf("%s pushed despite the refusal", tk.Branch)
+		}
 	}
 	if l := ghLog(); len(l) > 0 {
 		t.Fatalf("gh called: %v", l)
