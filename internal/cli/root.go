@@ -37,7 +37,7 @@ func Root() *cobra.Command {
 			Run:   func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), Version) },
 		},
 		initCmd(), upCmd(), downCmd(), spawnCmd(), statusCmd(), claimCmd(), releaseCmd(), doneCmd(),
-		landCmd(), syncCmd(), prsCmd(), killCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(),
+		landCmd(), syncCmd(), prsCmd(), killCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(),
 	)
 	return root
 }
