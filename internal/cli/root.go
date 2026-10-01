@@ -246,6 +246,13 @@ func statusCmd() *cobra.Command {
 			for _, warn := range st.Warnings {
 				fmt.Fprintln(cmd.OutOrStdout(), "warning: "+warn)
 			}
+			if r := st.StackAtRisk; r != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "stack at risk from %s up: %s\n", r.Task, r.Cause)
+				if len(r.PRs) > 0 {
+					fmt.Fprintln(cmd.OutOrStdout(), "  labeled needs-human: "+strings.Join(r.PRs, ", "))
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "  "+r.Fix)
+			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(w, "ID\tSTATUS\tMODEL\tWIN\tTITLE\tCLAIMS\tTRAIN")
 			for _, t := range st.Tasks {
