@@ -96,6 +96,12 @@ test/race: ## Run tests with the race detector
 	# so races here are real bugs.
 	$(GO) test -race ./...
 
+.PHONY: bench
+bench: ## Run benchmarks (BENCH=Status to pick some)
+	# Status and the TUI's task read run every second; their benchmarks seed 10
+	# and 100 landed tasks so cost that grows with history shows up.
+	$(GO) test -run '^$$' -bench '$(or $(BENCH),.)' -benchmem ./...
+
 .PHONY: test/cover
 test/cover: ## Run tests and write coverage.html
 	$(GO) test -coverprofile=coverage.out -covermode=atomic ./...

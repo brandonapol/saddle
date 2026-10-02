@@ -140,17 +140,28 @@ func Status(a *app.App) (StatusOut, error) {
 	if flagged {
 		out.StackAtRisk = &StackRisk{Task: f.Task, Cause: f.Cause, PRs: f.PRs, Fix: StackFix}
 	}
+	out.Tasks, err = Tasks(a)
+	return out, err
+}
+
+// Tasks lists every task with its claims, train state and pending notices.
+// It reads only the store, so the TUI can poll it every second.
+func Tasks(a *app.App) ([]TaskView, error) {
 	ts, err := a.Store.Tasks()
 	if err != nil {
-		return out, err
+		return nil, err
 	}
 	cl, err := a.Store.Claims()
 	if err != nil {
-		return out, err
+		return nil, err
 	}
 	train, err := a.Store.Train()
 	if err != nil {
-		return out, err
+		return nil, err
+	}
+	pending, err := a.Store.PendingNoticeCounts()
+	if err != nil {
+		return nil, err
 	}
 	tr := map[string]string{}
 	for _, e := range train {
@@ -160,15 +171,15 @@ func Status(a *app.App) (StatusOut, error) {
 		}
 		tr[e.Task] = s
 	}
+	out := make([]TaskView, 0, len(ts))
 	for _, t := range ts {
-		n, _ := a.Store.PendingNotices(t.ID)
 		reason := ""
 		if t.Status == app.StatusFailed {
 			reason = t.Summary
 		}
-		out.Tasks = append(out.Tasks, TaskView{Reason: reason,
+		out = append(out, TaskView{Reason: reason,
 			ID: t.ID, Title: t.Title, Status: t.Status, Model: t.Model, Parent: t.Parent, Branch: t.Branch,
-			Claims: cl[t.ID], Train: tr[t.ID], Notices: n, PR: t.PR, Window: t.Window, Worktree: t.Worktree,
+			Claims: cl[t.ID], Train: tr[t.ID], Notices: pending[t.ID], PR: t.PR, Window: t.Window, Worktree: t.Worktree,
 		})
 	}
 	return out, nil

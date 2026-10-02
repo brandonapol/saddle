@@ -440,6 +440,42 @@ func (s *Store) PendingNotices(task string) (int, error) {
 	return n, err
 }
 
+// Tables lists the tables RowCounts reports, in schema order.
+var Tables = []string{"tasks", "claims", "events", "train", "notices", "renames", "chat", "usage"}
+
+// RowCounts returns how many rows each table in Tables holds.
+func (s *Store) RowCounts() (map[string]int, error) {
+	out := make(map[string]int, len(Tables))
+	for _, t := range Tables {
+		var n int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM ` + t).Scan(&n); err != nil {
+			return nil, fmt.Errorf("count %s: %w", t, err)
+		}
+		out[t] = n
+	}
+	return out, nil
+}
+
+// PendingNoticeCounts returns how many undelivered notices each task has.
+// Tasks with none are absent.
+func (s *Store) PendingNoticeCounts() (map[string]int, error) {
+	rows, err := s.db.Query(`SELECT task, COUNT(*) FROM notices WHERE delivered = 0 GROUP BY task`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var task string
+		var n int
+		if err := rows.Scan(&task, &n); err != nil {
+			return nil, err
+		}
+		out[task] = n
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) AddRenames(byTask string, rs []Rename) error {
 	return s.tx(func(tx *sql.Tx) error {
 		for _, r := range rs {
