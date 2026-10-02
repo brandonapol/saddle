@@ -7,10 +7,19 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 )
+
+// calls counts git processes this package started, so tests can catch work
+// that grows with history.
+var calls atomic.Int64
+
+// Calls returns how many git processes this package has started.
+func Calls() int64 { return calls.Load() }
 
 // Run executes git in dir and returns trimmed stdout. Errors carry stderr.
 func Run(dir string, args ...string) (string, error) {
+	calls.Add(1)
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -40,6 +49,36 @@ func Toplevel(dir string) (string, error) {
 
 func RevParse(dir, ref string) (string, error) {
 	return Run(dir, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+}
+
+// ResolveCommits resolves each ref to the commit it names, in one git process.
+// Refs that name no commit are left out of the map.
+func ResolveCommits(dir string, refs []string) (map[string]string, error) {
+	out := make(map[string]string, len(refs))
+	if len(refs) == 0 {
+		return out, nil
+	}
+	calls.Add(1)
+	cmd := exec.Command("git", "-C", dir, "cat-file", "--batch-check=%(objectname)")
+	var in, stdout, errb bytes.Buffer
+	for _, r := range refs {
+		in.WriteString(r + "^{commit}\n")
+	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = &in, &stdout, &errb
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("git cat-file: %w: %s", err, strings.TrimSpace(errb.String()))
+	}
+	lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
+	if len(lines) != len(refs) {
+		return nil, fmt.Errorf("git cat-file: resolved %d of %d refs", len(lines), len(refs))
+	}
+	for i, l := range lines {
+		// A ref that names nothing comes back as "<ref> missing" or "<ref> ambiguous".
+		if !strings.ContainsRune(l, ' ') {
+			out[refs[i]] = l
+		}
+	}
+	return out, nil
 }
 
 func BranchExists(dir, branch string) bool {

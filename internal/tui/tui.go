@@ -101,6 +101,11 @@ type model struct {
 
 	screens map[string]*screenState // recent screen per live worker, to spot stuck prompts
 
+	// One refresh runs at a time. A slow one must not let ticks stack up
+	// behind it and land out of order; a request made meanwhile sets stale,
+	// which runs one more refresh when the current one lands.
+	refreshing, stale bool
+
 	pending   []string // events waiting for the orchestrator to be idle
 	held      []string // info notices that ride along with the next message
 	jev       *triage.Client
@@ -122,6 +127,7 @@ type (
 	evMsg      struct{ e orch.Event }
 	closedMsg  struct{}
 	refreshMsg struct {
+		err     error
 		tasks   []mcpserver.TaskView
 		peek    string
 		screens map[string]string
@@ -215,18 +221,23 @@ func (m *model) waitEvent() tea.Cmd {
 
 // refresh reads task state and the selected task's screen off the UI goroutine.
 func (m *model) refresh() tea.Cmd {
+	if m.refreshing {
+		m.stale = true
+		return nil
+	}
+	m.refreshing = true
 	sel := ""
 	if m.sel < len(m.tasks) {
 		sel = m.tasks[m.sel].ID
 	}
 	a := m.app
 	return func() tea.Msg {
-		st, err := mcpserver.Status(a)
+		all, err := mcpserver.Tasks(a)
 		if err != nil {
-			return flashMsg("status: " + err.Error())
+			return refreshMsg{err: err}
 		}
 		var ts []mcpserver.TaskView
-		for _, t := range st.Tasks {
+		for _, t := range all {
 			if t.ID != app.OrchestratorID {
 				ts = append(ts, t)
 			}
@@ -242,13 +253,24 @@ func (m *model) refresh() tea.Cmd {
 		screens := map[string]string{}
 		for _, t := range ts {
 			if t.Window != "" && (t.Status == store.Running || t.Status == store.Idle) {
-				if s, err := a.Peek(t.ID, 25); err == nil {
+				if t.ID == sel && peek != "" {
+					screens[t.ID] = tailLines(peek, 25)
+				} else if s, err := a.Peek(t.ID, 25); err == nil {
 					screens[t.ID] = s
 				}
 			}
 		}
 		return refreshMsg{tasks: ts, peek: peek, screens: screens}
 	}
+}
+
+// tailLines returns the last n lines of s, newlines kept.
+func tailLines(s string, n int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // rank orders the task list: what needs attention first, finished work last.
@@ -281,6 +303,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.refresh(), tick())
 
 	case refreshMsg:
+		m.refreshing = false
+		if m.stale {
+			m.stale = false
+			cmds = append(cmds, m.refresh())
+		}
+		if msg.err != nil {
+			m.flash, m.flashAt = "status: "+msg.err.Error(), time.Now()
+			break
+		}
 		m.watchScreens(msg.tasks, msg.screens)
 		cmds = append(cmds, m.noticeTransitions(msg.tasks)...)
 		selID := ""

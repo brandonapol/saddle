@@ -418,32 +418,58 @@ type landedTask struct {
 // i.e. restack found all of them already merged.
 func (l landedTask) merged() bool { return l.From != "" && l.From == l.To }
 
-// landedStack returns the landed tasks in train order.
+// landedStack returns the landed tasks in train order. It resolves every
+// landed range in one git process, however many tasks have landed.
 func (a *App) landedStack() ([]landedTask, error) {
 	entries, err := a.Store.Train()
 	if err != nil {
 		return nil, err
 	}
-	var out []landedTask
+	tasks, err := a.Store.Tasks()
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]store.Task, len(tasks))
+	for _, t := range tasks {
+		byID[t.ID] = t
+	}
+	type span struct {
+		task           store.Task
+		note, from, to string
+	}
+	var spans []span
+	var refs []string
 	for _, e := range entries {
 		if e.State != store.TrainOK {
 			continue
 		}
-		t, err := a.Store.Task(e.Task)
-		if err != nil {
-			return nil, err
+		t, ok := byID[e.Task]
+		if !ok {
+			return nil, fmt.Errorf("task %s: %w", e.Task, store.ErrNotFound)
 		}
-		l := landedTask{Task: t}
 		from, to, ok := strings.Cut(e.Note, "..")
 		if !ok {
 			to, from = e.Note, ""
 		}
-		if l.To, err = gitx.RevParse(a.Root, to); err != nil {
-			return nil, fmt.Errorf("%s: landed commit %q is gone: %w", t.ID, to, err)
-		}
+		spans = append(spans, span{t, e.Note, from, to})
+		refs = append(refs, to)
 		if from != "" {
-			if l.From, err = gitx.RevParse(a.Root, from); err != nil {
-				return nil, fmt.Errorf("%s: landed range %q is gone: %w", t.ID, e.Note, err)
+			refs = append(refs, from)
+		}
+	}
+	commits, err := gitx.ResolveCommits(a.Root, refs)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]landedTask, 0, len(spans))
+	for _, sp := range spans {
+		l := landedTask{Task: sp.task}
+		if l.To = commits[sp.to]; l.To == "" {
+			return nil, fmt.Errorf("%s: landed commit %q is gone", sp.task.ID, sp.to)
+		}
+		if sp.from != "" {
+			if l.From = commits[sp.from]; l.From == "" {
+				return nil, fmt.Errorf("%s: landed range %q is gone", sp.task.ID, sp.note)
 			}
 		}
 		out = append(out, l)
@@ -462,14 +488,24 @@ func (a *App) Drift() ([]string, error) {
 }
 
 func (a *App) drift(stack []landedTask) []string {
+	var refs []string
+	for _, l := range stack {
+		if !l.merged() {
+			refs = append(refs, "refs/heads/"+l.Branch)
+		}
+	}
+	tips, err := gitx.ResolveCommits(a.Root, refs)
+	if err != nil {
+		return []string{"can't read landed branches: " + err.Error()}
+	}
 	var out []string
 	for _, l := range stack {
 		if l.merged() {
 			continue
 		}
-		tip, err := gitx.RevParse(a.Root, "refs/heads/"+l.Branch)
+		tip, ok := tips["refs/heads/"+l.Branch]
 		switch {
-		case err != nil:
+		case !ok:
 			out = append(out, fmt.Sprintf("%s: landed %s, branch %s is missing", l.ID, short(l.To), l.Branch))
 		case tip != l.To:
 			out = append(out, fmt.Sprintf("%s: landed %s, branch %s", l.ID, short(l.To), short(tip)))
