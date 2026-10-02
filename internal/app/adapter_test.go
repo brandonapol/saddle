@@ -1,0 +1,104 @@
+package app
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/brandonapol/saddle/internal/agent"
+	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/usage"
+)
+
+func TestSpawnWithCodexAdapter(t *testing.T) {
+	a, _ := setup(t)
+	if _, err := a.Spawn(SpawnReq{Title: "bad", Adapter: "nope"}); err == nil || !strings.Contains(err.Error(), "unknown adapter") {
+		t.Fatalf("unknown adapter: err = %v", err)
+	}
+	if ts, _ := a.Store.Tasks(); len(ts) != 0 {
+		t.Fatalf("unknown adapter left tasks behind: %+v", ts)
+	}
+	c, err := a.Spawn(SpawnReq{Title: "codex work", Adapter: "codex"})
+	must(t, err)
+	run := a.stateDir("run", c.ID)
+	if got := agent.Recorded(run); got != "codex" {
+		t.Errorf("recorded adapter %q", got)
+	}
+	script, err := os.ReadFile(filepath.Join(run, "launch.sh"))
+	must(t, err)
+	if !strings.Contains(string(script), "'codex'") || strings.Contains(string(script), "'opus'") {
+		t.Errorf("codex launch should not inherit the claude model:\n%s", script)
+	}
+	if c.Model != "" {
+		t.Errorf("codex task model = %q, want the CLI's default", c.Model)
+	}
+	cl, err := a.Spawn(SpawnReq{Title: "claude work"})
+	must(t, err)
+	if agent.Recorded(a.stateDir("run", cl.ID)) != "claude" || cl.Model != a.Cfg.Claude.Model {
+		t.Errorf("default spawn is not claude: %+v", cl)
+	}
+}
+
+// A hookless agent never calls the hook that hands out notices, and its
+// status never turns idle, so notices are typed in whole.
+func TestNotifyTypesNoticesIntoHooklessAgent(t *testing.T) {
+	a, ft := setup(t)
+	c, err := a.Spawn(SpawnReq{Title: "codex work", Adapter: "codex"})
+	must(t, err)
+	must(t, a.Notify(c.ID, store.NoticeInfo, "t3 landed"))
+	if len(ft.sent[c.Window]) != 0 {
+		t.Fatalf("info notice typed: %q", ft.sent[c.Window])
+	}
+	must(t, a.Notify(c.ID, store.NoticeAction, "rebase onto integration"))
+	sent := ft.sent[c.Window]
+	if len(sent) != 1 || !strings.Contains(sent[0], "rebase onto integration") || !strings.Contains(sent[0], "t3 landed") {
+		t.Fatalf("sent = %q", sent)
+	}
+	if n, _ := a.Store.PendingNotices(c.ID); n != 0 {
+		t.Errorf("%d notices still pending after typing them", n)
+	}
+}
+
+// Claims are advisory for hookless agents: done goes through, and the
+// orchestrator hears about files that belong to another task.
+func TestDoneFlagsHooklessWritesToClaimedFiles(t *testing.T) {
+	a, _ := setup(t)
+	owner, err := a.Spawn(SpawnReq{Title: "meter", Claims: []string{"billing/meter.go"}})
+	must(t, err)
+	c, err := a.Spawn(SpawnReq{Title: "codex work", Adapter: "codex"})
+	must(t, err)
+	write(t, c.Worktree, "billing/meter.go", "package billing\n\nfunc Meter() int { return 2 }\n")
+	write(t, c.Worktree, "docs/new.md", "new\n")
+	commitAll(t, c.Worktree, "codex edits")
+	_, _ = a.Store.TakeNotices(OrchestratorID, false)
+	must(t, a.Done(c.ID, "did it"))
+	ns, err := a.Store.TakeNotices(OrchestratorID, false)
+	must(t, err)
+	text := store.FormatNotices(ns)
+	if !strings.Contains(text, "billing/meter.go") || !strings.Contains(text, owner.ID) || strings.Contains(text, "docs/new.md") {
+		t.Errorf("orchestrator notices:\n%s", text)
+	}
+}
+
+func TestUsageMeterReadsCodexRollout(t *testing.T) {
+	a, m := meterApp(t)
+	wt := filepath.Join(a.Root, ".saddle", "worktrees", "t5-codex")
+	must(t, a.Store.CreateTask(store.Task{ID: "t5", Title: "codex", Role: store.RoleWorker, Worktree: wt, Status: store.Running}))
+	write(t, a.stateDir("run", "t5"), "adapter", "codex\n")
+	m.CodexHome = filepath.Join(a.Root, "codex")
+	b, err := os.ReadFile(filepath.Join("..", "usage", "testdata", "codex-rollout.jsonl"))
+	must(t, err)
+	write(t, m.CodexHome, "sessions/2026/10/02/rollout-1.jsonl", strings.ReplaceAll(string(b), `"/repo/wt"`, `"`+wt+`"`))
+	must(t, m.Sync())
+	must(t, m.Sync())
+	if got := modelTotals(t, a)[usage.CodexModel]; got != (usage.Tokens{Input: 800, CacheRead: 2900, Output: 130}) {
+		t.Errorf("codex usage = %+v", got)
+	}
+	u, err := a.Usage(time.Now())
+	must(t, err)
+	if len(u.Tasks) != 1 || u.Tasks[0].Key != "t5" {
+		t.Errorf("task totals %+v", u.Tasks)
+	}
+}

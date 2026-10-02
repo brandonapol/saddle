@@ -18,6 +18,7 @@ import (
 	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/tmux"
+	"github.com/brandonapol/saddle/internal/usage"
 )
 
 const OrchestratorID = "t0"
@@ -133,7 +134,9 @@ type SpawnReq struct {
 	Parent string
 	Base   string // defaults to the integration branch
 	Issue  int    // GitHub issue the task implements; its PR will close it
-	Force  bool   // ignore claim conflicts, the concurrency cap and paused launches
+	// Adapter is the agent to launch: claude (the default), codex or grok.
+	Adapter string
+	Force   bool // ignore claim conflicts, the concurrency cap and paused launches
 	// Confirm goes ahead when every claim covers work landed or queued tasks
 	// already changed. Without it such a spawn returns ErrNeedsConfirm.
 	Confirm bool
@@ -177,6 +180,10 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if strings.TrimSpace(r.Title) == "" {
 		return t, errors.New("spawn: title is required")
 	}
+	ad, err := agent.ByName(r.Adapter)
+	if err != nil {
+		return t, err
+	}
 	if !r.Force {
 		n, err := a.activeWorkers()
 		if err != nil {
@@ -186,6 +193,9 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 			return t, fmt.Errorf("at concurrency cap (%d running); wait for a task to finish or raise concurrency in .saddle/config.toml", n)
 		}
 		if err := a.checkLaunch(); err != nil {
+			return t, err
+		}
+		if err := a.checkSpawnCaps(r.Parent); err != nil {
 			return t, err
 		}
 	}
@@ -229,7 +239,7 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 		base = a.Cfg.Integration
 	}
 	model := r.Model
-	if model == "" {
+	if model == "" && ad.Name() == usage.Claude {
 		model = a.Cfg.Claude.Model
 	}
 	hint := a.retryHint(r.Title)
@@ -256,12 +266,12 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if err := gitx.WorktreeAdd(a.Root, t.Worktree, t.Branch, base); err != nil {
 		return t, a.spawnFailed(t, false, hadBranch, fmt.Errorf("worktree add: %w", err))
 	}
-	win, err := a.launch(t, r.Claims)
+	win, err := a.launch(t, r.Claims, ad)
 	if err != nil {
 		return t, a.spawnFailed(t, true, hadBranch, fmt.Errorf("launch: %w", err))
 	}
 	t.Window = win
-	a.Store.Event(id, "spawn", fmt.Sprintf("parent=%s model=%s claims=%s%s", r.Parent, model, strings.Join(r.Claims, ","), hint))
+	a.Store.Event(id, "spawn", fmt.Sprintf("parent=%s adapter=%s model=%s claims=%s%s", r.Parent, ad.Name(), model, strings.Join(r.Claims, ","), hint))
 	if r.Parent != "" && r.Parent != OrchestratorID {
 		if err := a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf("%s spawned sub-task %s %q.", r.Parent, id, r.Title)); err != nil {
 			return t, err
@@ -331,13 +341,14 @@ func conflictErr(c map[string]string) error {
 	return fmt.Errorf("claim conflict: %s", strings.Join(lines, "; "))
 }
 
-func (a *App) launch(t store.Task, cl []string) (string, error) {
+func (a *App) launch(t store.Task, cl []string, ad agent.Adapter) (string, error) {
+	cmd, args := a.adapterCmd(ad.Name())
 	l := agent.Launch{
 		Root: a.Root, Bin: a.Bin, Task: t.ID, Title: t.Title, Dir: t.Worktree, Model: t.Model,
-		Mode: a.Cfg.Claude.PermissionMode, Cmd: a.Cfg.Claude.Cmd, RunDir: a.stateDir("run", t.ID),
+		Mode: a.Cfg.Claude.PermissionMode, Cmd: cmd, Args: args, RunDir: a.stateDir("run", t.ID),
 		Brief: a.workerBrief(t, cl), Prompt: t.Prompt,
 	}
-	cmd, err := l.Write()
+	cmd, err := ad.Launch(l)
 	if err != nil {
 		return "", err
 	}
@@ -548,9 +559,12 @@ func (a *App) Notify(task, kind, text string) error {
 	if err != nil || t.Window == "" || !t.Active() {
 		return nil
 	}
+	if ad := a.taskAdapter(t); !ad.Hooks() {
+		return a.injectNotices(t, ad)
+	}
 	if t.Status == store.Idle || t.Status == store.Done || t.Status == store.Conflict {
 		if a.ownWindow(t) {
-			tmux.SendWhenIdle(a.Tmux, t.Window, "[saddle] You have new notices. Read them and act on them.", func() bool {
+			tmux.SendWhenIdle(a.Tmux, t.Window, agent.Claude{}.Inject(""), func() bool {
 				n, err := a.Store.PendingNotices(task)
 				return err != nil || n > 0
 			})
@@ -594,8 +608,12 @@ func (a *App) Done(task, summary string) error {
 		return err
 	}
 	a.Store.Event(task, "done", summary)
+	advisory := ""
+	if !a.taskAdapter(t).Hooks() {
+		advisory = a.advisoryClaims(t)
+	}
 	return a.Notify(OrchestratorID, store.NoticeAction,
-		fmt.Sprintf("%s %q is done and queued in the merge train: %s\nRun the saddle land tool when you're ready.", task, t.Title, summary))
+		fmt.Sprintf("%s %q is done and queued in the merge train: %s\nRun the saddle land tool when you're ready.%s", task, t.Title, summary, advisory))
 }
 
 // Kill stops a task's window and releases its claims. Unless keep is set it
