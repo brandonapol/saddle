@@ -108,6 +108,15 @@ type model struct {
 	cost      float64
 	flash     string
 	flashAt   time.Time
+
+	quitArmedAt time.Time // first ctrl+c of a pending quit; zero when disarmed
+}
+
+// quitWindow is how long a first ctrl+c keeps quitting armed.
+const quitWindow = 2 * time.Second
+
+func (m *model) quitArmed() bool {
+	return !m.quitArmedAt.IsZero() && time.Since(m.quitArmedAt) < quitWindow
 }
 
 // screenState tracks how long a worker's screen has been unchanged.
@@ -127,6 +136,8 @@ type (
 		screens map[string]string
 	}
 	flashMsg   string
+	quitExpiry time.Time // the arming a timer was set for
+
 	triagedMsg struct {
 		att attention
 		d   triage.Decision
@@ -315,6 +326,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case closedMsg:
 		// The process is gone; ctrl+r restarts it.
 
+	case quitExpiry:
+		// Only the latest arming may clear the hint.
+		if time.Time(msg).Equal(m.quitArmedAt) {
+			m.quitArmedAt = time.Time{}
+		}
+
 	case flashMsg:
 		m.flash, m.flashAt = string(msg), time.Now()
 
@@ -340,9 +357,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 	keys := m.keys
+	if !key.Matches(k, keys.Quit) {
+		m.quitArmedAt = time.Time{}
+	}
 	switch {
 	case key.Matches(k, keys.Quit):
-		return tea.Quit, true
+		if m.quitArmed() {
+			return tea.Quit, true
+		}
+		m.quitArmedAt = time.Now()
+		at := m.quitArmedAt
+		return tea.Tick(quitWindow, func(time.Time) tea.Msg { return quitExpiry(at) }), true
 	case key.Matches(k, keys.Focus):
 		if m.focus == focusChat && key.Matches(k, keys.Complete) {
 			if c, ok := m.completeInput(); ok {
@@ -875,6 +900,9 @@ func (m *model) viewFooter() string {
 	line := m.viewKeys(m.width)
 	if m.flash != "" && time.Since(m.flashAt) < 6*time.Second {
 		line = " " + lipgloss.NewStyle().Foreground(cAccent).Render(m.flash)
+	}
+	if m.quitArmed() {
+		line = " " + lipgloss.NewStyle().Foreground(cAccent).Render("Press Ctrl+C again to quit")
 	}
 	return lipgloss.NewStyle().Width(m.width).MaxWidth(m.width).Render(line)
 }
