@@ -14,29 +14,35 @@ Issues: epics #1 #6 #12 #19 #24 #32 #38 #44; milestone `M0: dogfood`.
 
 ## Processes
 
+Saddle runs in-process. There is no `saddled` daemon in the MVP (decision #5):
+every `saddle` command, hook and MCP server opens the repo's SQLite database
+(`.saddle/state.db`, WAL mode with a busy timeout) and works on it directly.
+tmux keeps the agents alive between commands.
+
 ```
-tmux session saddle-<repo>
-├── 0:control   saddle tui ───────────┐
-├── 1:T3-meter  claude ── saddle mcp ─┤
-│               └ hooks → saddle hook ┤   JSON-RPC over
-├── 2:T4-invoice claude …             ├── .saddle/saddled.sock
-├── 3:T5-stripe codex …               │
-└── …                                 │
-                                      ▼
-                               saddled (daemon)
-             ┌──────────┬───────────┼───────────┬───────────┐
-          reactor   git watcher  merge train  narrator    state.db
-         (event loop) (fsnotify)  (serial)    (haiku)     (sqlite)
+tmux session saddle-<repo>             (agents; survive saddle up exiting)
+├── 1:T3-meter  claude ── saddle mcp ─┐
+│               └ hooks → saddle hook ┤
+├── 2:T4-invoice claude …             ├── .saddle/state.db (sqlite)
+├── 3:T5-stripe codex …               │   tasks, claims, events, train,
+└── …                                 │   usage, notices
+                                      │
+saddle up  (TUI + orchestrator chat) ─┤   while it runs: stack sentinel,
+saddle land | prs | sync | …         ─┘   CI watcher
 ```
 
-- **`saddled`** owns all state and all decisions. Everything else is a client.
-- **`saddle tui`** is window 0. It subscribes to daemon events and renders.
-- **`saddle hook <event>`** is the Claude Code hook entrypoint. It forwards the
-  hook JSON to the daemon and returns its verdict. It must be fast, and it
-  fails open if the daemon is down.
+- **`saddle up`** is the TUI. It polls the store, and while it runs it also
+  hosts the long-lived loops: the stack sentinel and the CI watcher.
+- **`saddle hook <event>`** is the Claude Code hook entrypoint. It opens the
+  store, returns a verdict, and must be fast. It fails open if it can't.
 - **`saddle mcp`** is a stdio MCP server, one per agent. Each knows its task
   id from env. Through it, agents can `spawn`, `claim`, `release`, `status`,
   `brief`, `ask_owner` and call `done`.
+- **`saddle doctor`** checks that a repo is ready for all of the above.
+
+Concurrent processes coordinate through SQLite transactions, not a socket.
+The reactor, git watcher and dispatcher described below are the target design;
+today their decisions are made inline in `internal/app`.
 
 ## The reactor (event loop)
 
@@ -157,19 +163,18 @@ estimates against caps you configure.
 <repo>/.saddle/
   config.toml        per-repo config (merged over ~/.config/saddle/config.toml)
   state.db           sqlite: epics, tasks, deps, claims, events, usage, train, renames
-  saddled.sock
   worktrees/<task>/  one per agent, branch saddle/<task>
 ```
 
 ## Code layout
 
 ```
-cmd/saddle/          single binary; `saddle daemon` runs saddled
+cmd/saddle/          single binary
+internal/app/        core: spawn, claims, merge train, stacks, notices
 internal/cli/        cobra commands
 internal/config/     TOML loading and merging
 internal/store/      sqlite schema and migrations
-internal/daemon/     socket RPC, pub/sub
-internal/reactor/    event loop, holds, decisions
+internal/doctor/     saddle doctor preflight checks
 internal/gitx/       worktrees, watcher, rename detection, train, stacks
 internal/claims/     glob claims and overlap
 internal/planner/    epic → DAG, static checker
@@ -183,7 +188,7 @@ internal/tui/        bubble tea views
 
 ## Dogfooding order (M0)
 
-1. Scaffold, config, store, daemon (#2–#5).
+1. Scaffold, config, store (#2–#4). No daemon: Saddle runs in-process (#5).
 2. Worktrees and tmux, then the Claude adapter with hooks and MCP (#13 #14 #15
    #21 #22). At this point Saddle can open agents and you can watch them.
 3. Claims and PreToolUse enforcement (#20). This removes the
