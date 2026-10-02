@@ -25,6 +25,9 @@ type keyMap struct {
 	// Chat.
 	Send, Newline, Complete, Untarget key.Binding
 
+	// Narrator questions.
+	Ask, AskScreen key.Binding
+
 	// Task list.
 	Up, Down, Open, Skill, Spawn, Pause, Kill, Land, Back key.Binding
 }
@@ -58,6 +61,9 @@ func newKeyMap() keyMap {
 		Complete: b("/skill tab", "complete", "tab"),
 		Untarget: b("esc", "back to orchestrator", "esc"),
 
+		Ask:       b("alt+a", "ask narrator", "alt+a"),
+		AskScreen: b("alt+s", "send agent's screen", "alt+s"),
+
 		Up:    b("k", "up", "k", "up"),
 		Down:  b("j/k", "select", "j", "down"),
 		Open:  b("enter", "open window", "enter", "a"),
@@ -81,7 +87,7 @@ type keyGroup struct {
 func (k keyMap) groups() []keyGroup {
 	return []keyGroup{
 		{"Anywhere", []key.Binding{k.ViewControl, k.ViewPlan, k.ViewMerge, k.Help, k.NextAgent, k.PrevAgent, k.Focus, k.PageUp, k.PageDown, k.Restart, k.Quit}},
-		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget}},
+		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget, k.Ask, k.AskScreen}},
 		{"Agents", []key.Binding{k.Down, k.Up, k.Open, k.Skill, k.Spawn, k.Pause, k.Kill, k.Land, k.Back}},
 		{"Terminal", []key.Binding{k.Terminal, k.TermBack, k.TermScrollUp, k.TermScrollDown}},
 	}
@@ -102,14 +108,17 @@ func (m *model) help() []key.Binding {
 	}
 	if m.focus == focusChat {
 		hs := []key.Binding{k.Send, k.Newline}
-		if m.target != "" {
+		switch {
+		case m.asking():
+			hs = append(hs, k.AskScreen, k.Untarget)
+		case m.target != "":
 			hs = append(hs, k.Untarget)
-		} else {
-			hs = append(hs, k.Complete)
+		default:
+			hs = append(hs, k.Complete, k.Ask)
 		}
 		return append(hs, k.NextAgent, withHelp(k.Focus, "tab", "agents"), k.ViewControl, k.Terminal, withHelp(k.Help, "f1", "keys"), k.PageUp, k.Restart, k.Quit)
 	}
-	return []key.Binding{k.Down, k.NextAgent, k.Open, k.ViewControl, m.detachHelp(), k.Skill, k.Spawn, k.Pause, k.Back, k.Kill, k.Land, k.Help, k.Restart, k.Quit}
+	return []key.Binding{k.Down, k.NextAgent, k.Open, k.ViewControl, m.detachHelp(), k.Skill, k.Spawn, k.Pause, k.Ask, k.Back, k.Kill, k.Land, k.Help, k.Restart, k.Quit}
 }
 
 func withHelp(b key.Binding, h, desc string) key.Binding {

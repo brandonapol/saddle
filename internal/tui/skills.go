@@ -176,7 +176,7 @@ func (m *model) aimAtAgent() tea.Cmd {
 
 // unaim sends the chat input back to the orchestrator.
 func (m *model) unaim() {
-	m.target = ""
+	m.target, m.askScreen = "", false
 	m.input.Prompt = "› "
 	m.input.Placeholder = "Message the orchestrator…"
 }
@@ -184,6 +184,9 @@ func (m *model) unaim() {
 // submitTargeted handles enter while the input is aimed at an agent. Only
 // slash commands go to agents; anything else stays in the input.
 func (m *model) submitTargeted(text string) tea.Cmd {
+	if m.asking() {
+		return m.submitAsk(text)
+	}
 	id, a := m.target, m.app
 	c, ok := parseSlash(text)
 	if !ok {

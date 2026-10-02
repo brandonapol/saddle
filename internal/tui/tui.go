@@ -128,9 +128,12 @@ type model struct {
 	jev       *triage.Client
 	eventTurn bool // the current orchestrator turn answers saddle events
 	cost      float64
-	limits    *usage.LimitEstimate // plan-limit estimate from the last refresh
-	graph     *usageGraph          // the last hour of usage by model
-	narr      narrSink             // narrator lines; nil when the narrator is off
+	limits    *usage.LimitEstimate                         // plan-limit estimate from the last refresh
+	graph     *usageGraph                                  // the last hour of usage by model
+	narr      narrSink                                     // narrator lines; nil when the narrator is off
+	asker     asker                                        // answers questions; nil when the narrator is off
+	askScreen bool                                         // the next question carries the selected agent's screen
+	capture   func(task string, lines int) (string, error) // a task's screen; nil means app.Peek
 	flash     string
 	flashAt   time.Time
 
@@ -207,7 +210,7 @@ func Run(a *app.App, first string) error {
 	go a.NewUsageMeter().Run(ctx, nil)
 	sink := make(narrSink, 256)
 	if n := a.NarratorFromEnv(sink); n != nil {
-		m.narr = sink
+		m.narr, m.asker = sink, n
 		go a.RunNarrator(ctx, n)
 	}
 	defer func() {
@@ -405,6 +408,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case triagedMsg:
 		m.applyTriage(msg)
 
+	case askedMsg:
+		m.answered(msg)
+
 	case salienceMsg:
 		if msg.idx < len(m.chat) {
 			if msg.needs {
@@ -479,6 +485,10 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		return tea.Tick(quitWindow, func(time.Time) tea.Msg { return quitExpiry(at) }), true
 	case key.Matches(k, keys.Terminal):
 		return m.toggleTerm(), true
+	case key.Matches(k, keys.Ask):
+		return m.aimAtNarrator(), true
+	case key.Matches(k, keys.AskScreen) && m.asking():
+		return m.toggleAskScreen(), true
 	case key.Matches(k, keys.Focus):
 		if m.focus == focusChat && key.Matches(k, keys.Complete) {
 			if c, ok := m.completeInput(); ok {
@@ -970,10 +980,7 @@ func renderLine(c chatLine, w int, wrap lipgloss.Style) string {
 	case store.ChatTool:
 		return sFaint.Render("  ⚙ " + truncate(c.text, w-6))
 	case store.ChatNarrator:
-		if narratorNeedsYou(c) {
-			return renderUrgent(c.text, w-2)
-		}
-		return renderMarkdown("· "+c.text, w-2, sDim)
+		return renderNarrator(c, w)
 	default:
 		return renderMarkdown("◇ "+c.text, w-2, lipgloss.NewStyle().Foreground(lipgloss.Color("#C9A26B")))
 	}
@@ -1093,7 +1100,7 @@ func (m *model) viewChat(w, h int) string {
 	m.setChatHeight(h)
 	in := lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(cBorder).Width(w - 2).Render(m.input.View())
 	body := lipgloss.JoinVertical(lipgloss.Left, m.vp.View(), in)
-	return box("ORCHESTRATOR · "+m.launch.Model, w, h, m.focus == focusChat, body)
+	return box(m.chatTitle(), w, h, m.focus == focusChat, body)
 }
 
 func statusLabel(s string) string {
