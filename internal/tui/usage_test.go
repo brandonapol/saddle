@@ -115,3 +115,22 @@ func TestNarratorSinkNeverBlocks(t *testing.T) {
 		t.Fatalf("got %+v", l)
 	}
 }
+
+// On a narrow terminal the footer stays two lines, usage over shortcuts, and
+// the agent-switch keys survive the cut.
+func TestFooterNarrowKeepsSwitchKeys(t *testing.T) {
+	e := estimate(500, 900, usage.Limits{FiveHour: usage.Cap{Tokens: 1000}})
+	for _, w := range []int{40, 60} {
+		m := &model{app: &app.App{Cfg: config.Default()}, width: w, keys: newKeyMap(), prefix: "C-b", focus: focusTasks, limits: &e}
+		f := m.viewFooter()
+		lines := strings.Split(f, "\n")
+		if len(lines) != 2 || !strings.Contains(lines[0], "5h") || !strings.Contains(lines[1], "alt+n/p") {
+			t.Errorf("width %d: footer = %q", w, f)
+		}
+		for _, l := range lines {
+			if lipgloss.Width(l) > w {
+				t.Errorf("width %d: footer line %q too wide", w, l)
+			}
+		}
+	}
+}

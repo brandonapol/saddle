@@ -1026,7 +1026,7 @@ func box(title string, w, h int, focused bool, body string) string {
 	// Put the title into the top border.
 	lines := strings.SplitN(b, "\n", 2)
 	if len(lines) == 2 && title != "" {
-		t := " " + title + " "
+		t := " " + truncate(title, w-6) + " "
 		top := lipgloss.NewStyle().Foreground(bc).Render("╭─") + sSection.Render(t)
 		rest := w - lipgloss.Width(top) - 1
 		if rest < 0 {
@@ -1110,7 +1110,15 @@ func (m *model) viewLeft(w, h int) string {
 	title := "PEEK"
 	body := sDim.Render(" Select an agent to see its terminal.")
 	if t, ok := m.selected(); ok {
-		title = "PEEK · " + t.ID + " " + truncate(t.Title, w-20)
+		title = "PEEK · " + t.ID + " " + t.Title
+		if i, n := m.livePos(); n > 1 {
+			// Make switching discoverable where the user is looking.
+			pos := fmt.Sprintf("%d/%d", i, n)
+			if i == 0 {
+				pos = fmt.Sprintf("%d live", n)
+			}
+			title = fmt.Sprintf("PEEK %s %s · %s %s", pos, m.keys.NextAgent.Help().Key, t.ID, t.Title)
+		}
 		if m.peek != "" {
 			lines := strings.Split(m.peek, "\n")
 			if n := peekH - 2; len(lines) > n && n > 0 {

@@ -73,3 +73,38 @@ func TestViewKeysFitsWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestPeekTitleShowsAgentPosition(t *testing.T) {
+	m := &model{keys: newKeyMap(), tasks: []mcpserver.TaskView{
+		{ID: "t1", Title: "first", Status: store.Running, Window: "@1"},
+		{ID: "t2", Title: "landed", Status: store.Landed},
+		{ID: "t3", Title: "a fairly long task title here", Status: store.NeedsYou, Window: "@3"},
+	}, sel: 2}
+	for _, w := range []int{30, 40, 80} {
+		out := m.viewLeft(w, 20)
+		for _, l := range strings.Split(out, "\n") {
+			if lw := lipgloss.Width(l); lw > w {
+				t.Errorf("width %d: line %q is %d wide", w, l, lw)
+			}
+		}
+		if !strings.Contains(out, "2/2") || !strings.Contains(out, "alt+n/p") {
+			t.Errorf("width %d: peek should show position 2/2 and the switch keys:\n%s", w, out)
+		}
+	}
+	m.tasks = m.tasks[:1]
+	m.sel = 0
+	if out := m.viewLeft(80, 20); strings.Contains(out, "alt+n/p") {
+		t.Errorf("with one live agent there is nothing to switch to:\n%s", out)
+	}
+}
+
+func TestPeekTitleOnDeadSelection(t *testing.T) {
+	m := &model{keys: newKeyMap(), tasks: []mcpserver.TaskView{
+		{ID: "t1", Status: store.Running, Window: "@1"},
+		{ID: "t2", Status: store.Landed},
+		{ID: "t3", Status: store.Running, Window: "@3"},
+	}, sel: 1}
+	if out := m.viewLeft(80, 20); !strings.Contains(out, "2 live alt+n/p") || strings.Contains(out, "0/2") {
+		t.Errorf("a landed selection should count live agents, not a position:\n%s", out)
+	}
+}
