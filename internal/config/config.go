@@ -30,6 +30,9 @@ type Config struct {
 	Serial []string `toml:"serial"`
 	// CloseOnLand kills a task's tmux window and removes its worktree once it lands.
 	CloseOnLand bool `toml:"close_on_land"`
+	// Regen lists derived files (go.sum, lockfiles, generated code) the merge
+	// train regenerates instead of text-merging when they conflict.
+	Regen []Regen `toml:"regen"`
 
 	Test   Test   `toml:"test"`
 	Claude Claude `toml:"claude"`
@@ -45,6 +48,15 @@ type Config struct {
 	Sweeper Sweeper `toml:"sweeper"`
 	// CI watches saddle PRs' checks while saddle up runs.
 	CI CI `toml:"ci"`
+}
+
+// Regen is a set of derived files and the command that rebuilds them. When a
+// rebase in the train conflicts only in files matching Paths (claim globs),
+// the train takes integration's copy, runs Cmd in the task's worktree and
+// commits what it changed.
+type Regen struct {
+	Paths []string `toml:"paths"`
+	Cmd   string   `toml:"cmd"`
 }
 
 // CI configures the CI watcher, which tells the owning task and the
@@ -192,6 +204,11 @@ func Load(root string) (Config, error) {
 	if cfg.Narrator.DailyCapUSD < 0 {
 		return cfg, fmt.Errorf("narrator.daily_cap_usd %v: must not be negative", cfg.Narrator.DailyCapUSD)
 	}
+	for i, r := range cfg.Regen {
+		if len(r.Paths) == 0 || strings.TrimSpace(r.Cmd) == "" {
+			return cfg, fmt.Errorf("regen[%d]: needs both paths and cmd", i)
+		}
+	}
 	if cfg.CI.Interval <= 0 {
 		cfg.CI.Interval = Default().CI.Interval
 	}
@@ -228,6 +245,13 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 
 [test]
 # cmd = "go test ./..."
+
+# Derived files the merge train regenerates instead of merging. On a rebase
+# conflict only in these paths, it takes integration's copy, runs cmd in the
+# task's worktree and commits the result.
+# [[regen]]
+# paths = ["go.sum"]
+# cmd = "go mod tidy"
 
 [triage]
 # Uses TypeSafe Jev (set JEV_TOKEN; make setup asks for it) to decide which agent events reach

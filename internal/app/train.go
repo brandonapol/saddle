@@ -9,10 +9,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 
 	"github.com/brandonapol/saddle/internal/claims"
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -252,7 +254,7 @@ func (a *App) landOne(id string) LandResult {
 		res.State, res.Note = store.TrainError, err.Error()
 		return res
 	}
-	rr, err := trainRebase(t.Worktree, a.Cfg.Integration)
+	rr, taken, err := trainRebase(t.Worktree, a.Cfg.Integration, a.Cfg.Regen)
 	if err != nil {
 		return fail(store.TrainError, "rebase failed", "Rebasing your branch onto "+a.Cfg.Integration+" failed:\n"+rr.Output+"\nFix it and call done again.")
 	}
@@ -263,6 +265,17 @@ func (a *App) landOne(id string) LandResult {
 				"1. Run `saddle sync`. It starts the rebase and stops at the conflicts.\n"+
 				"2. Resolve them, keeping both sides' intent, then `git add` and `git rebase --continue`.\n"+
 				"3. Run the tests, then call the saddle done tool again.", a.Cfg.Integration, files))
+	}
+	regenerated := ""
+	if len(taken) > 0 {
+		if out, err := regenerate(t.Worktree, a.Cfg.Regen, taken); err != nil {
+			// The branch stays rebased, with the failed output in the worktree to look at.
+			return fail(store.TrainError, "regen failed", fmt.Sprintf(
+				"Your branch rebased onto %s, keeping %s's copy of the derived files %s, but regenerating them failed:\n%s\n%s\nFix it, commit, and call the saddle done tool again.",
+				a.Cfg.Integration, a.Cfg.Integration, strings.Join(taken, ", "), out, err))
+		}
+		regenerated = " (regenerated " + strings.Join(taken, ", ") + ")"
+		a.Store.Event(id, "train_regen", strings.Join(taken, "\n"))
 	}
 	if cmd := a.Cfg.Test.Cmd; cmd != NoTestCmd {
 		if out, err := runShell(t.Worktree, cmd); err != nil {
@@ -280,7 +293,7 @@ func (a *App) landOne(id string) LandResult {
 		res.State, res.Note = store.TrainError, "integration moved during land; will retry: "+err.Error()
 		return res
 	}
-	res.State, res.Note = store.TrainOK, head[:12]
+	res.State, res.Note = store.TrainOK, head[:12]+regenerated
 	a.Store.Event(id, "landed", head)
 	if cl, err := a.Store.Claims(); err == nil && len(cl[id]) > 0 {
 		// Claims are released with the landing; keep them for the stack check.
@@ -901,21 +914,62 @@ func trainGit(dir string, args ...string) (string, error) {
 
 // trainRebase is gitx.Rebase run as the train: it rebases the branch checked
 // out in dir onto onto and aborts on conflict, leaving the worktree as it was.
-func trainRebase(dir, onto string) (gitx.RebaseResult, error) {
+// Conflicts only in derived files regen covers are not merged: the rebase
+// takes onto's copy and goes on, and the files are returned in regen so the
+// caller can regenerate them (#28).
+func trainRebase(dir, onto string, regen []config.Regen) (res gitx.RebaseResult, taken []string, err error) {
 	out, err := trainGit(dir, "-c", "merge.directoryRenames=true", "-c", "merge.renames=true",
 		"-c", "rerere.enabled=true", "-c", "core.editor=true", "rebase", onto)
-	if err == nil {
-		return gitx.RebaseResult{OK: true, Output: out}, nil
+	for err != nil {
+		conf, _ := gitx.Run(dir, "diff", "--name-only", "--diff-filter=U")
+		if conf == "" {
+			if gitx.RebaseInProgress(dir) {
+				_, _ = trainGit(dir, "rebase", "--abort")
+			}
+			return gitx.RebaseResult{Output: err.Error()}, nil, err
+		}
+		files := strings.Split(conf, "\n")
+		if !allRegen(regen, files) {
+			res := gitx.RebaseResult{Conflicts: files, Output: err.Error()}
+			if _, err := trainGit(dir, "rebase", "--abort"); err != nil {
+				return res, nil, err
+			}
+			return res, nil, nil
+		}
+		for _, f := range files {
+			if !slices.Contains(taken, f) {
+				taken = append(taken, f)
+			}
+		}
+		// During a rebase "ours" is onto plus the commits replayed so far.
+		if _, err := trainGit(dir, append([]string{"checkout", "--ours", "--"}, files...)...); err != nil {
+			_, _ = trainGit(dir, "rebase", "--abort")
+			return gitx.RebaseResult{Output: err.Error()}, nil, err
+		}
+		if _, err := trainGit(dir, append([]string{"add", "--"}, files...)...); err != nil {
+			_, _ = trainGit(dir, "rebase", "--abort")
+			return gitx.RebaseResult{Output: err.Error()}, nil, err
+		}
+		step := "--continue"
+		if _, e := gitx.Run(dir, "diff", "--cached", "--quiet", "HEAD"); e == nil {
+			step = "--skip" // the commit only changed derived files
+		}
+		out, err = trainGit(dir, "-c", "core.editor=true", "-c", "rerere.enabled=true", "rebase", step)
 	}
-	conf, _ := gitx.Run(dir, "diff", "--name-only", "--diff-filter=U")
-	if conf == "" {
-		return gitx.RebaseResult{Output: err.Error()}, err
+	return gitx.RebaseResult{OK: true, Output: out}, taken, nil
+}
+
+// allRegen reports whether regen covers every one of files.
+func allRegen(regen []config.Regen, files []string) bool {
+	if len(regen) == 0 {
+		return false
 	}
-	res := gitx.RebaseResult{Conflicts: strings.Split(conf, "\n"), Output: err.Error()}
-	if _, err := trainGit(dir, "rebase", "--abort"); err != nil {
-		return res, err
+	for _, f := range files {
+		if !regenMatch(regen, f) {
+			return false
+		}
 	}
-	return res, nil
+	return true
 }
 
 func gh(dir string, args ...string) (string, error) {
