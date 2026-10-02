@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/brandonapol/saddle/internal/claims"
 )
 
 // Task is one planned unit of work. The order of tasks passed to Check is the
@@ -158,12 +160,12 @@ func Check(tasks []Task, serial []string, limit int) (Plan, error) {
 	return p, nil
 }
 
-// matching returns the serial globs that any of claims overlaps.
-func matching(claims, serial []string) []string {
+// matching returns the serial globs that any of mine overlaps.
+func matching(mine, serial []string) []string {
 	var hit []string
 	for _, s := range serial {
-		for _, c := range claims {
-			if overlap(c, s) {
+		for _, c := range mine {
+			if claims.Overlap(c, s) {
 				hit = append(hit, s)
 				break
 			}
@@ -175,7 +177,7 @@ func matching(claims, serial []string) []string {
 func firstOverlap(as, bs []string) (string, string, bool) {
 	for _, a := range as {
 		for _, b := range bs {
-			if overlap(a, b) {
+			if claims.Overlap(a, b) {
 				return a, b, true
 			}
 		}
