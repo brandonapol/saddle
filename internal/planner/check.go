@@ -19,12 +19,16 @@ import (
 // planner's intent: when two tasks collide and nothing else orders them, the
 // earlier one goes first.
 type Task struct {
-	ID     string
-	Title  string
-	Plan   string
-	Claims []string // path globs the task may write
-	After  []string // IDs of tasks the planner says must finish first
-	Issues []string // optional issue or epic refs, "#54" or "owner/repo#54"
+	ID       string
+	Title    string
+	Plan     string
+	Claims   []string // path globs the task may write
+	After    []string // IDs of tasks the planner says must finish first
+	Issues   []string // optional issue or epic refs, "#54" or "owner/repo#54"
+	Model    string   // optional model for the task's agent
+	Adapter  string   // optional agent adapter, "claude" by default
+	Barrier  bool     // the planner says the task restructures paths
+	DoneWhen []string // checks that say the task is finished
 }
 
 // Edge says task To can't start until task From has finished.
@@ -62,8 +66,9 @@ var barrierWords = regexp.MustCompile(`(?i)\b(mov(e|es|ed|ing)|renam(e|es|ed|ing
 // Edges come from three sources, all ordered by planner intent:
 //   - explicit After dependencies;
 //   - claims that overlap: the task that comes first in planner intent runs first;
-//   - barriers: a task whose title or plan mentions move, rename or restructure
-//     is ordered against every other task, so it runs alone in its own wave.
+//   - barriers: a task marked Barrier, or whose title or plan mentions move,
+//     rename or restructure, is ordered against every other task, so it runs
+//     alone in its own wave.
 //
 // Planner intent is a topological order of the After graph, with ties going
 // to list order. Every implicit edge follows it, so only After dependencies
@@ -93,7 +98,10 @@ func Check(tasks []Task, serial []string, limit int) (Plan, error) {
 	var p Plan
 	var barriers, train []int
 	for i, t := range tasks {
-		if w := barrierWords.FindString(t.Title + "\n" + t.Plan); w != "" {
+		if t.Barrier {
+			barriers = append(barriers, i)
+			p.Barriers = append(p.Barriers, Flag{t.ID, "barrier: the planner marked it, so it runs alone"})
+		} else if w := barrierWords.FindString(t.Title + "\n" + t.Plan); w != "" {
 			barriers = append(barriers, i)
 			p.Barriers = append(p.Barriers, Flag{t.ID, fmt.Sprintf("barrier: plan mentions %q, so it runs alone", strings.ToLower(w))})
 		}
