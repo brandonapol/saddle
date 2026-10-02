@@ -26,7 +26,7 @@ type keyMap struct {
 	Send, Newline, Complete, Untarget key.Binding
 
 	// Task list.
-	Up, Down, Open, Skill, Kill, Land, Back key.Binding
+	Up, Down, Open, Skill, Spawn, Pause, Kill, Land, Back key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -62,6 +62,8 @@ func newKeyMap() keyMap {
 		Down:  b("j/k", "select", "j", "down"),
 		Open:  b("enter", "open window", "enter", "a"),
 		Skill: b("/", "skill in agent", "/"),
+		Spawn: b("s", "spawn", "s"),
+		Pause: b("p", "pause (esc)", "p"),
 		Kill:  b("x", "kill", "x"),
 		Land:  b("L", "land", "L"),
 		Back:  b("esc/tab", "orchestrator", "esc"),
@@ -80,7 +82,7 @@ func (k keyMap) groups() []keyGroup {
 	return []keyGroup{
 		{"Anywhere", []key.Binding{k.ViewControl, k.ViewPlan, k.ViewMerge, k.Help, k.NextAgent, k.PrevAgent, k.Focus, k.PageUp, k.PageDown, k.Restart, k.Quit}},
 		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget}},
-		{"Agents", []key.Binding{k.Down, k.Up, k.Open, k.Skill, k.Kill, k.Land, k.Back}},
+		{"Agents", []key.Binding{k.Down, k.Up, k.Open, k.Skill, k.Spawn, k.Pause, k.Kill, k.Land, k.Back}},
 		{"Terminal", []key.Binding{k.Terminal, k.TermBack, k.TermScrollUp, k.TermScrollDown}},
 	}
 }
@@ -107,7 +109,7 @@ func (m *model) help() []key.Binding {
 		}
 		return append(hs, k.NextAgent, withHelp(k.Focus, "tab", "agents"), k.ViewControl, k.Terminal, withHelp(k.Help, "f1", "keys"), k.PageUp, k.Restart, k.Quit)
 	}
-	return []key.Binding{k.Down, k.NextAgent, k.Open, k.ViewControl, m.detachHelp(), k.Skill, k.Back, k.Kill, k.Land, k.Help, k.Restart, k.Quit}
+	return []key.Binding{k.Down, k.NextAgent, k.Open, k.ViewControl, m.detachHelp(), k.Skill, k.Spawn, k.Pause, k.Back, k.Kill, k.Land, k.Help, k.Restart, k.Quit}
 }
 
 func withHelp(b key.Binding, h, desc string) key.Binding {

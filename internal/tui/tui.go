@@ -101,6 +101,7 @@ type model struct {
 	helpOpen      bool // the key help overlay covers the body
 
 	tasks []mcpserver.TaskView
+	stats map[string]agentStats // tokens, context and activity per task
 	sel   int
 	peek  string
 	prev  map[string]string // last seen status per task, for attention events
@@ -165,6 +166,7 @@ type (
 		peek    string
 		screens map[string]string
 		limits  *usage.LimitEstimate
+		stats   map[string]agentStats
 	}
 	flashMsg   string
 	quitExpiry time.Time // the arming a timer was set for
@@ -312,7 +314,7 @@ func (m *model) refresh() tea.Cmd {
 				}
 			}
 		}
-		msg := refreshMsg{tasks: ts, peek: peek, screens: screens}
+		msg := refreshMsg{tasks: ts, peek: peek, screens: screens, stats: readStats(a, time.Now())}
 		if e, err := a.Limits(time.Now()); err == nil {
 			msg.limits = &e
 		}
@@ -381,7 +383,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sel < len(m.tasks) {
 			selID = m.tasks[m.sel].ID
 		}
-		m.tasks, m.peek = msg.tasks, msg.peek
+		m.tasks, m.peek, m.stats = msg.tasks, msg.peek, msg.stats
 		m.sel = 0
 		for i, t := range m.tasks {
 			if t.ID == selID {
@@ -556,6 +558,10 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		return m.attach(), true
 	case key.Matches(k, keys.Skill):
 		return m.aimAtAgent(), true
+	case key.Matches(k, keys.Spawn):
+		m.startSpawn()
+	case key.Matches(k, keys.Pause):
+		return m.pause(), true
 	case key.Matches(k, keys.Kill):
 		if t, ok := m.selected(); ok {
 			id := t.ID
@@ -1070,76 +1076,6 @@ func modelColor(model string) lipgloss.Color {
 	return cDim
 }
 
-func (m *model) viewLeft(w, h int) string {
-	listH := len(m.tasks) + 2
-	if listH < 5 {
-		listH = 5
-	}
-	if listH > h/2 {
-		listH = h / 2
-	}
-	var rows []string
-	if len(m.tasks) == 0 {
-		rows = append(rows, sDim.Render(" No agents yet. Ask the orchestrator to start some."))
-	}
-	for i, t := range m.tasks {
-		g, gc := glyph(t.Status)
-		train := ""
-		if t.Train != "" {
-			train = firstWord(t.Train)
-		}
-		meta := lipgloss.NewStyle().Foreground(modelColor(t.Model)).Render(fmt.Sprintf("%-6s", t.Model)) + " " + sDim.Render(fmt.Sprintf("%-9s", statusLabel(t.Status)))
-		if train != "" && train != "landed" {
-			meta += " " + sDim.Render(train)
-		}
-		titleW := w - 4 - 3 - 6 - lipgloss.Width(meta) - 2
-		row := lipgloss.NewStyle().Foreground(gc).Render(g) + " " + sDim.Render(fmt.Sprintf("%-5s", t.ID)) + " " +
-			sText.Render(fmt.Sprintf("%-*s", maxInt(titleW, 4), truncate(t.Title, maxInt(titleW, 4)))) + " " + meta
-		if i == m.sel {
-			marker := "›"
-			row = lipgloss.NewStyle().Foreground(cAccent).Render(marker) + row
-			if m.focus == focusTasks {
-				row = lipgloss.NewStyle().Background(cSelBg).Width(w - 2).Render(row)
-			}
-		} else {
-			row = " " + row
-		}
-		rows = append(rows, row)
-	}
-	list := box("AGENTS", w, listH, m.focus == focusTasks, strings.Join(rows, "\n"))
-
-	peekH := h - listH
-	title := "PEEK"
-	body := sDim.Render(" Select an agent to see its terminal.")
-	if t, ok := m.selected(); ok {
-		title = "PEEK · " + t.ID + " " + t.Title
-		if i, n := m.livePos(); n > 1 {
-			// Make switching discoverable where the user is looking.
-			pos := fmt.Sprintf("%d/%d", i, n)
-			if i == 0 {
-				pos = fmt.Sprintf("%d live", n)
-			}
-			title = fmt.Sprintf("PEEK %s %s · %s %s", pos, m.keys.NextAgent.Help().Key, t.ID, t.Title)
-		}
-		if m.peek != "" {
-			lines := strings.Split(m.peek, "\n")
-			if n := peekH - 2; len(lines) > n && n > 0 {
-				lines = lines[len(lines)-n:]
-			}
-			for i, l := range lines {
-				lines[i] = truncate(l, w-3)
-			}
-			body = sText.Render(strings.Join(lines, "\n"))
-		} else if t.Window == "" || t.Status == store.Landed || t.Status == store.Killed {
-			body = sDim.Render(" Window closed (" + statusLabel(t.Status) + ").")
-			if t.PR != "" {
-				body += "\n " + sDim.Render(t.PR)
-			}
-		}
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, list, box(title, w, peekH, false, body))
-}
-
 // setChatHeight fits the chat viewport into a body of height h: the box
 // border, the input and its top rule take the rest.
 func (m *model) setChatHeight(h int) {
@@ -1172,11 +1108,4 @@ func firstWord(s string) string {
 		return s[:i]
 	}
 	return s
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
