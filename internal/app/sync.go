@@ -24,7 +24,7 @@ func (a *App) Sync(task string) (gitx.RebaseResult, error) {
 	if dirty, _ := gitx.Dirty(t.Worktree); len(dirty) > 0 {
 		return gitx.RebaseResult{}, fmt.Errorf("commit your changes before syncing:\n%s", strings.Join(dirty, "\n"))
 	}
-	from, skipped, err := gitx.LandedPrefix(t.Worktree, a.Cfg.Integration)
+	from, skipped, err := a.replayFrom(t, a.Cfg.Integration)
 	if err != nil {
 		return gitx.RebaseResult{}, err
 	}
@@ -32,6 +32,33 @@ func (a *App) Sync(task string) (gitx.RebaseResult, error) {
 	rr.Skipped = skipped
 	a.Store.Event(task, "sync", fmt.Sprintf("ok=%v skipped=%d conflicts=%s", rr.OK, skipped, strings.Join(rr.Conflicts, ",")))
 	return rr, err
+}
+
+// replayFrom is where rebasing t's branch onto onto (integration or its
+// head) starts replaying: past the commits integration already holds under
+// other SHAs, squash-landed or rewritten by restack, so only t's own work is
+// replayed (#147). "" means a plain rebase. A task that has landed before
+// doesn't use integration's fork point, which may be its own landed head.
+func (a *App) replayFrom(t store.Task, onto string) (string, int, error) {
+	track := a.Cfg.Integration
+	if a.everLanded(t.ID) {
+		track = ""
+	}
+	return gitx.ReplayFrom(t.Worktree, onto, track)
+}
+
+// everLanded reports whether the train ever landed task.
+func (a *App) everLanded(task string) bool {
+	es, err := a.Store.Events(-1)
+	if err != nil {
+		return true // can't tell: don't trust the fork point
+	}
+	for _, e := range es {
+		if e.Task == task && e.Kind == "landed" {
+			return true
+		}
+	}
+	return false
 }
 
 // autoRebased is what autoRebase did to a live task's branch.
@@ -68,7 +95,7 @@ func (a *App) autoRebase(t store.Task) autoRebased {
 	if mb, _ := gitx.Run(t.Worktree, "merge-base", "HEAD", integ); mb == integ {
 		return autoRebased{Skipped: "it is already on " + a.Cfg.Integration}
 	}
-	from, _, err := gitx.LandedPrefix(t.Worktree, integ)
+	from, _, err := a.replayFrom(t, integ)
 	if err != nil {
 		return autoRebased{Skipped: err.Error()}
 	}

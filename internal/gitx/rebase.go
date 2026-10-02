@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -107,4 +108,53 @@ func LandedPrefix(dir, onto string) (string, int, error) {
 		}
 	}
 	return held, n, nil
+}
+
+// ForkPoint is the newest commit in HEAD's history that ref has ever pointed
+// at, read from ref's reflog, or "" when the reflog doesn't know one (a fresh
+// clone, an expired or deleted reflog).
+func ForkPoint(dir, ref string) string {
+	fp, err := Run(dir, "merge-base", "--fork-point", ref, "HEAD")
+	if err != nil {
+		return ""
+	}
+	return fp
+}
+
+// ReplayFrom is where a rebase of HEAD onto onto should start replaying, for
+// `rebase --onto onto <from>`, and how many first-parent commits since the
+// merge-base it leaves out; "" means a plain rebase. It skips the commits
+// LandedPrefix finds onto already holds and, when track is set, every commit
+// up to track's fork point: commits track once held (HEAD was cut from or
+// synced onto them) that it later rewrote, as restack does after a squash
+// merge. Commits track still holds are left to the merge-base as before.
+func ReplayFrom(dir, onto, track string) (string, int, error) {
+	from, n, err := LandedPrefix(dir, onto)
+	if err != nil || track == "" {
+		return from, n, err
+	}
+	fp := ForkPoint(dir, track)
+	if fp == "" || fp == from || isAncestor(dir, fp, onto) {
+		return from, n, nil
+	}
+	if from != "" && !isAncestor(dir, from, fp) {
+		return from, n, nil
+	}
+	mb, err := Run(dir, "merge-base", "HEAD", onto)
+	if err != nil {
+		return "", 0, err
+	}
+	c, err := Run(dir, "rev-list", "--count", "--first-parent", mb+".."+fp)
+	if err != nil {
+		return "", 0, err
+	}
+	if n, err = strconv.Atoi(c); err != nil {
+		return "", 0, err
+	}
+	return fp, n, nil
+}
+
+func isAncestor(dir, a, b string) bool {
+	_, err := Run(dir, "merge-base", "--is-ancestor", a, b)
+	return err == nil
 }
