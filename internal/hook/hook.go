@@ -54,8 +54,9 @@ func Handle(a *app.App, task string, in Input) *Output {
 		if d.Allow {
 			return nil
 		}
-		return &Output{Specific: &specific{HookEventName: "PreToolUse", PermissionDecision: "deny",
-			PermissionDecisionReason: "[saddle] " + d.Reason}}
+		return &Output{Decision: "deny", Reason: "[saddle] " + d.Reason,
+			Specific: &specific{HookEventName: "PreToolUse", PermissionDecision: "deny",
+				PermissionDecisionReason: "[saddle] " + d.Reason}}
 
 	case "PostToolUse":
 		markActive(st, task) // a tool ran, so any prompt it was waiting on was answered
@@ -110,9 +111,15 @@ func HandleOrchestrator(a *app.App, in Input) *Output {
 }
 
 // Run reads hook JSON from r and writes the response to w.
+// Claude Code sends snake_case fields; the Grok CLI sends camelCase (and
+// sometimes both). Either shape is accepted.
 func Run(a *app.App, task string, r io.Reader, w io.Writer) error {
-	var in Input
-	if err := json.NewDecoder(r).Decode(&in); err != nil {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	in, err := decodeInput(b)
+	if err != nil {
 		return err
 	}
 	out := Handle(a, task, in)
@@ -122,8 +129,86 @@ func Run(a *app.App, task string, r io.Reader, w io.Writer) error {
 	return json.NewEncoder(w).Encode(out)
 }
 
+type inputWire struct {
+	SessionIDSnake string         `json:"session_id"`
+	SessionIDCamel string         `json:"sessionId"`
+	EventSnake     string         `json:"hook_event_name"`
+	EventCamel     string         `json:"hookEventName"`
+	ToolSnake      string         `json:"tool_name"`
+	ToolCamel      string         `json:"toolName"`
+	InputSnake     map[string]any `json:"tool_input"`
+	InputCamel     map[string]any `json:"toolInput"`
+	Message        string         `json:"message"`
+	NoticeType     string         `json:"notificationType"`
+	StopSnake      bool           `json:"stop_hook_active"`
+	StopCamel      bool           `json:"stopHookActive"`
+}
+
+func decodeInput(b []byte) (Input, error) {
+	var w inputWire
+	if err := json.Unmarshal(b, &w); err != nil {
+		return Input{}, err
+	}
+	in := Input{
+		SessionID:      first(w.SessionIDSnake, w.SessionIDCamel),
+		Event:          hookEvent(w.EventSnake, w.EventCamel),
+		ToolName:       first(w.ToolSnake, w.ToolCamel),
+		ToolInput:      w.InputSnake,
+		Message:        w.Message,
+		StopHookActive: w.StopSnake || w.StopCamel,
+	}
+	if in.ToolInput == nil {
+		in.ToolInput = w.InputCamel
+	}
+	if in.Message == "" {
+		in.Message = w.NoticeType
+	}
+	return in, nil
+}
+
+func first(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// hookEvent prefers Claude's PascalCase name. Grok sends that in
+// hook_event_name and a snake_case alias in hookEventName.
+func hookEvent(snake, camel string) string {
+	if looksPascal(snake) {
+		return snake
+	}
+	if looksPascal(camel) {
+		return camel
+	}
+	if ev, ok := eventAlias[snake]; ok {
+		return ev
+	}
+	if ev, ok := eventAlias[camel]; ok {
+		return ev
+	}
+	return first(snake, camel)
+}
+
+func looksPascal(s string) bool {
+	return s != "" && s[0] >= 'A' && s[0] <= 'Z'
+}
+
+var eventAlias = map[string]string{
+	"session_start":      "SessionStart",
+	"pre_tool_use":       "PreToolUse",
+	"post_tool_use":      "PostToolUse",
+	"user_prompt_submit": "UserPromptSubmit",
+	"notification":       "Notification",
+	"stop":               "Stop",
+}
+
 func filePath(in map[string]any) string {
-	for _, k := range []string{"file_path", "notebook_path"} {
+	if in == nil {
+		return ""
+	}
+	for _, k := range []string{"file_path", "filePath", "path", "target_file", "notebook_path"} {
 		if s, ok := in[k].(string); ok && s != "" {
 			return s
 		}

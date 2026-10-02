@@ -140,13 +140,23 @@ func TestStubsAndUnknownAgent(t *testing.T) {
 	if c.Track(Session{ID: "x", Agent: "nope"}) {
 		t.Error("unknown agent tracked")
 	}
-	for _, a := range []string{Codex, Grok} {
-		if !c.Track(Session{ID: a, Task: "t", Agent: a, Path: fixture(t)}) {
-			t.Errorf("%s not tracked", a)
-		}
+	if !c.Track(Session{ID: Codex, Task: "t", Agent: Codex, Path: fixture(t)}) {
+		t.Error("codex not tracked")
 	}
 	if got, _ := c.Poll(); len(got) != 0 {
-		t.Errorf("stubs produced %+v", got)
+		t.Errorf("codex stub produced %+v", got)
+	}
+}
+
+func TestParseGrokUsageEvent(t *testing.T) {
+	rec, ok, err := ParseGrok([]byte(`{"type":"usage","messageId":"resp_1","usage":{"input_tokens":3,"output_tokens":4,"cache_read_input_tokens":5}}`))
+	if err != nil || !ok || rec.ID != "resp_1" || rec.Tokens.Input != 3 || rec.Tokens.Output != 4 || rec.Tokens.CacheRead != 5 {
+		t.Fatalf("usage event: %+v ok=%v err=%v", rec, ok, err)
+	}
+	// streaming-messages-json assistant lines match Claude's transcript shape.
+	rec, ok, err = ParseGrok([]byte(`{"type":"assistant","message":{"id":"m","model":"grok-4.5","usage":{"input_tokens":1,"output_tokens":2}}}`))
+	if err != nil || !ok || rec.Model != "grok-4.5" || rec.Tokens.Input != 1 {
+		t.Fatalf("assistant line: %+v ok=%v err=%v", rec, ok, err)
 	}
 }
 

@@ -34,11 +34,15 @@ type Config struct {
 	// train regenerates instead of text-merging when they conflict.
 	Regen []Regen `toml:"regen"`
 
-	Test   Test   `toml:"test"`
-	Train  Train  `toml:"train"`
-	Claude Claude `toml:"claude"`
-	Triage Triage `toml:"triage"`
-	Usage  Usage  `toml:"usage"`
+	Test  Test  `toml:"test"`
+	Train Train `toml:"train"`
+	// Harness is which coding CLI workers and the orchestrator run.
+	// "claude" (default) or "grok".
+	Harness string `toml:"harness"`
+	Claude  Claude `toml:"claude"`
+	Grok    Grok   `toml:"grok"`
+	Triage  Triage `toml:"triage"`
+	Usage   Usage  `toml:"usage"`
 	// Limits are the plan caps behind the usage strip's ok/warn/over states,
 	// and, with pause_launches, a hold on new spawns once a window is over.
 	Limits usage.Limits `toml:"limits"`
@@ -181,17 +185,36 @@ type Claude struct {
 	PermissionMode    string `toml:"permission_mode"`
 }
 
+// Grok configures the Grok CLI (`grok`), used when Harness is HarnessGrok.
+// An empty model leaves the choice to grok's own default.
+type Grok struct {
+	Cmd               string `toml:"cmd"`
+	Model             string `toml:"model"`
+	OrchestratorModel string `toml:"orchestrator_model"`
+	PermissionMode    string `toml:"permission_mode"`
+}
+
+const (
+	HarnessClaude = "claude"
+	HarnessGrok   = "grok"
+)
+
 func Default() Config {
 	return Config{
 		Base:        "main",
 		Integration: "saddle/integration",
 		Concurrency: 5,
 		CloseOnLand: true,
+		Harness:     HarnessClaude,
 		Claude: Claude{
 			Cmd:               "claude",
 			Model:             "opus",
 			OrchestratorModel: "sonnet",
 			PermissionMode:    "auto",
+		},
+		Grok: Grok{
+			Cmd:            "grok",
+			PermissionMode: "bypassPermissions",
 		},
 		Sweeper: Sweeper{
 			Method:      "squash",
@@ -232,6 +255,18 @@ func Load(root string) (Config, error) {
 	}
 	if cfg.Session == "" {
 		cfg.Session = "saddle-" + filepath.Base(root)
+	}
+	if cfg.Harness == "" {
+		cfg.Harness = HarnessClaude
+	}
+	if cfg.Harness != HarnessClaude && cfg.Harness != HarnessGrok {
+		return cfg, fmt.Errorf("harness %q: want %q or %q", cfg.Harness, HarnessClaude, HarnessGrok)
+	}
+	if cfg.Grok.Cmd == "" {
+		cfg.Grok.Cmd = "grok"
+	}
+	if cfg.Grok.PermissionMode == "" {
+		cfg.Grok.PermissionMode = Default().Grok.PermissionMode
 	}
 	if cfg.Concurrency < 1 {
 		cfg.Concurrency = 1
@@ -301,6 +336,7 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # integration = "saddle/integration"
 # concurrency = 5
 # close_on_land = true
+# harness = "claude"          # claude | grok
 # serial = ["go.sum", "db/migrations/**"]
 
 [test]
@@ -352,6 +388,16 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # model = "opus"                 # workers
 # orchestrator_model = "sonnet"  # the chat agent in the TUI
 # permission_mode = "auto"
+
+[grok]
+# Used when harness = "grok". Workers run the grok CLI in tmux; the
+# orchestrator chat is one headless grok turn per message, resumed across
+# the session. Empty model means grok's own default. bypassPermissions lets
+# workers edit without a prompt; the PreToolUse hook still denies claimed files.
+# cmd = "grok"
+# model = ""
+# orchestrator_model = ""
+# permission_mode = "bypassPermissions"
 
 [ci]
 # Polls saddle PRs' checks while saddle up runs; a failure goes to the owning

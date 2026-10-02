@@ -212,6 +212,36 @@ func TestLimitsRejectBadValues(t *testing.T) {
 	}
 }
 
+func TestHarnessGrok(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	writeConfig(t, root, `
+harness = "grok"
+[grok]
+model = "grok-4.5"
+orchestrator_model = "grok-4.5"
+`)
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Harness != HarnessGrok || cfg.Grok.Model != "grok-4.5" || cfg.Grok.Cmd != "grok" || cfg.Grok.PermissionMode != "bypassPermissions" {
+		t.Fatalf("grok config: %+v harness=%s", cfg.Grok, cfg.Harness)
+	}
+	if cfg.Claude.Model != "opus" {
+		t.Fatalf("claude defaults should stay: %+v", cfg.Claude)
+	}
+}
+
+func TestHarnessUnknown(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	writeConfig(t, root, "harness = \"codex\"\n")
+	if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "harness") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func writeConfig(t *testing.T, root, body string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(root, ".saddle"), 0o755); err != nil {

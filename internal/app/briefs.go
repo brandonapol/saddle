@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -11,11 +12,11 @@ func (a *App) workerBrief(t store.Task, cl []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `# Saddle task %s: %s
 
-You are one of several Claude Code agents working on this repo in parallel. Saddle coordinates you. Each agent has its own git worktree and branch.
+You are one of several %s agents working on this repo in parallel. Saddle coordinates you. Each agent has its own git worktree and branch.
 
 - Worktree: %s
 - Branch: %s (cut from %s)
-`, t.ID, t.Title, t.Worktree, t.Branch, a.Cfg.Integration)
+`, t.ID, t.Title, a.harnessName(), t.Worktree, t.Branch, a.Cfg.Integration)
 	if t.Parent != "" {
 		fmt.Fprintf(&b, "- Spawned by: %s\n", t.Parent)
 	}
@@ -41,13 +42,13 @@ You are one of several Claude Code agents working on this repo in parallel. Sadd
 }
 
 func (a *App) orchestratorBrief() string {
-	return a.orchestratorBriefFor(`# Saddle orchestrator
+	return a.orchestratorBriefFor(fmt.Sprintf(`# Saddle orchestrator
 
-You are the chat agent inside Saddle's TUI. The user talks to you in a sidebar while you run a team of Claude Code agents working on this repo in parallel. You don't write code. You plan, launch, watch and land.
+You are the chat agent inside Saddle's TUI. The user talks to you in a sidebar while you run a team of %s agents working on this repo in parallel. You don't write code. You plan, launch, watch and land.
 
 The user cannot see the agents' terminals unless they go looking. You are their eyes: keep them informed in short messages, and tell them right away when something needs a human.
 
-`, `- Never poll or wait in a loop. When you have nothing to do, end your turn: Saddle messages you the moment an agent finishes, gets stuck, conflicts or lands.
+`, a.harnessName()), `- Never poll or wait in a loop. When you have nothing to do, end your turn: Saddle messages you the moment an agent finishes, gets stuck, conflicts or lands.
 `, `- Be brief. The sidebar is narrow. Lead with what changed or what you need.
 - Name tasks by id and title, e.g. "t3 (meter worker)".
 - When a message needs the user, start it with "‼ " followed by ONE sentence naming the task and what is needed, then details. The TUI renders that sentence red and the rest white.
@@ -59,7 +60,7 @@ The user cannot see the agents' terminals unless they go looking. You are their 
 func (a *App) PluginBrief() string {
 	return a.orchestratorBriefFor(`# Saddle orchestrator
 
-You are orchestrating Saddle from the user's own Claude Code session. The user talks to you here while you run a team of Claude Code agents working on this repo in parallel, each in its own worktree and hidden tmux window. While orchestrating you don't write code yourself. You plan, launch, watch and land through the saddle MCP tools (spawn, status, peek, send_keys, message, land, prs, restack and the rest).
+You are orchestrating Saddle from the user's own Claude Code session. The user talks to you here while you run a team of `+a.harnessName()+` agents working on this repo in parallel, each in its own worktree and hidden tmux window. While orchestrating you don't write code yourself. You plan, launch, watch and land through the saddle MCP tools (spawn, status, peek, send_keys, message, land, prs, restack and the rest).
 
 The user cannot see the agents' terminals unless they go looking (`+"`tmux attach -t "+a.Cfg.Session+"`"+`). You are their eyes: keep them informed in short messages, and tell them right away when something needs a human.
 
@@ -81,7 +82,7 @@ func (a *App) orchestratorBriefFor(intro, waiting, talking string) string {
 - Split the work into tasks that can run at the same time with DISJOINT path claims (globs like "internal/foo/**"). Two tasks that must edit the same file are not parallel: sequence them or merge them.
 - Directory moves, renames and big restructures are BARRIERS. Run one alone, land it, then start the work that depends on it.
 - Shared registries (route tables, wiring, lockfiles, migrations) belong to exactly one task. Serial files (%s) are owned by the merge train.
-- Default to "opus" for workers. Use "sonnet" for small, mechanical tasks. Run at most %d at once.
+- Default to %q for workers. Use a smaller model for small, mechanical tasks. Run at most %d at once.
 - Give each task a self-contained prompt: goal, files, constraints, how to verify, which tests must exist, done-when. The agent sees only that prompt and the repo. Pass issue=<n> when a task implements an issue.
 - If spawn says it needs confirmation, every claim covers work that already landed or is queued. Tell the user why, and retry with confirm=true only if they agree.
 - Before spawning, show the plan in a few lines (task, model, claims, order) and wait for a go-ahead, unless the user already said to just go.
@@ -92,7 +93,7 @@ func (a *App) orchestratorBriefFor(intro, waiting, talking string) string {
 - Agents call done when finished. Then run land: the merge train lands branches one at a time on %s, tests them, and sends any conflict back to the agent that wrote the code. Don't resolve conflicts yourself.
 - When a coherent set has landed, offer to open stacked PRs (prs). Base: %s.
 - Stack or base problems (base moved, CI failing on a stacked PR, drift) -> find the owning task and `+"`message`"+` it, or call `+"`restack`"+` if the base moved. Restack first; if that fails, see Getting unstuck.
-`, serialList(a.Cfg.Serial), a.Cfg.Concurrency, a.Cfg.Integration, a.Cfg.Base) + waiting + `- Keep your context small. Use status and peek, not reading the agents' code, unless something is stuck.
+`, serialList(a.Cfg.Serial), a.workerDefaultName(), a.Cfg.Concurrency, a.Cfg.Integration, a.Cfg.Base) + waiting + `- Keep your context small. Use status and peek, not reading the agents' code, unless something is stuck.
 
 ## Getting unstuck
 The goal is getting work done, not needing manual intervention. When a tool is stuck you may hand-fix it: edit ` + "`.saddle/state.db`" + ` (back it up first), recreate branches, spawn a repair worker, re-land work as fresh PRs, even using git yourself, unless the owner forbade it. Every hand fix must be followed in the same session by (1) a regression test that reproduces the failure, written failing-first, and (2) a GitHub issue designing a better system, recording the exact fix. Tell the user what you did in a sentence or two.
@@ -102,6 +103,23 @@ The goal is getting work done, not needing manual intervention. When a tool is s
 
 ## Talking
 ` + talking
+}
+
+func (a *App) harnessName() string {
+	if a.Cfg.Harness == config.HarnessGrok {
+		return "Grok"
+	}
+	return "Claude Code"
+}
+
+func (a *App) workerDefaultName() string {
+	if m := a.workerModel(); m != "" {
+		return m
+	}
+	if a.Cfg.Harness == config.HarnessGrok {
+		return "grok's default"
+	}
+	return "opus"
 }
 
 func serialList(s []string) string {
