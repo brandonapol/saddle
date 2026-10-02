@@ -47,19 +47,74 @@ func underOrEqual(a, b string) bool {
 }
 
 // Overlap conservatively reports whether two claims could cover a common path.
+// It compares the globs segment by segment, so sibling filename globs such as
+// "sync*.go" and "briefs_test.go" do not overlap. A plain path also covers
+// everything under it.
 func Overlap(a, b string) bool {
 	a, b = Clean(a), Clean(b)
-	switch {
-	case !hasMeta(a) && !hasMeta(b):
-		return underOrEqual(a, b) || underOrEqual(b, a)
-	case !hasMeta(a):
-		// a may be a directory, so anything under it could match b.
-		return Match(b, a) || underOrEqual(prefix(b), a) || underOrEqual(a, prefix(b))
-	case !hasMeta(b):
-		return Overlap(b, a)
+	if strings.Contains(a, "{") || strings.Contains(b, "{") {
+		// Brace alternatives can span segments; fall back to the literal prefixes.
+		pa, pb := prefix(a), prefix(b)
+		return underOrEqual(pa, pb) || underOrEqual(pb, pa)
 	}
-	pa, pb := prefix(a), prefix(b)
-	return underOrEqual(pa, pb) || underOrEqual(pb, pa)
+	return overlapSegs(claimSegs(a), claimSegs(b))
+}
+
+// claimSegs splits a claim into path segments. A plain path covers its
+// directory contents, so it gains a trailing "**".
+func claimSegs(g string) []string {
+	if !hasMeta(g) {
+		g += "/**"
+	}
+	return strings.Split(g, "/")
+}
+
+func overlapSegs(a, b []string) bool {
+	switch {
+	case len(a) == 0 && len(b) == 0:
+		return true
+	case len(a) == 0:
+		return allGlobstar(b)
+	case len(b) == 0:
+		return allGlobstar(a)
+	}
+	if a[0] == "**" || b[0] == "**" {
+		if a[0] == "**" && (overlapSegs(a[1:], b) || overlapSegs(a, b[1:])) {
+			return true
+		}
+		return b[0] == "**" && (overlapSegs(a, b[1:]) || overlapSegs(a[1:], b))
+	}
+	return segOverlap(a[0], b[0]) && overlapSegs(a[1:], b[1:])
+}
+
+func allGlobstar(s []string) bool {
+	for _, x := range s {
+		if x != "**" {
+			return false
+		}
+	}
+	return true
+}
+
+// segOverlap reports whether two single path segments could match a common
+// name. Two wildcard segments overlap only if their literal prefixes and
+// suffixes are compatible, which over-reports but never under-reports.
+func segOverlap(a, b string) bool {
+	ma, mb := hasMeta(a), hasMeta(b)
+	switch {
+	case !ma && !mb:
+		return a == b
+	case !ma:
+		ok, _ := doublestar.Match(b, a)
+		return ok
+	case !mb:
+		ok, _ := doublestar.Match(a, b)
+		return ok
+	}
+	pa, sa := a[:strings.IndexAny(a, "*?[{")], a[strings.LastIndexAny(a, "*?[]{}")+1:]
+	pb, sb := b[:strings.IndexAny(b, "*?[{")], b[strings.LastIndexAny(b, "*?[]{}")+1:]
+	return (strings.HasPrefix(pa, pb) || strings.HasPrefix(pb, pa)) &&
+		(strings.HasSuffix(sa, sb) || strings.HasSuffix(sb, sa))
 }
 
 // Owner returns the first task other than self whose claims cover p.
