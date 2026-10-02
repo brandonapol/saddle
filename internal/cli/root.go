@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -42,7 +41,7 @@ func Root() *cobra.Command {
 			Run:   func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), Version) },
 		},
 		initCmd(), upCmd(), downCmd(), spawnCmd(), statusCmd(), claimCmd(), releaseCmd(), doneCmd(),
-		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(),
+		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(), pluginCmd(),
 	)
 	return root
 }
@@ -119,14 +118,11 @@ needs you. Quitting leaves the agents running; run saddle up again to come back.
 			if err := a.Init(); err != nil {
 				return err
 			}
-			lock, err := os.OpenFile(filepath.Join(a.Root, ".saddle", "tui.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+			release, err := a.AcquireLock(app.LockUp)
 			if err != nil {
 				return err
 			}
-			defer lock.Close()
-			if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-				return errors.New("saddle up is already running for this repo in another terminal")
-			}
+			defer release()
 			if warn := a.LocalBaseBehind(); warn != "" {
 				fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+warn)
 			}

@@ -1,0 +1,11 @@
+{
+  "name": "saddle",
+  "description": "Orchestrate saddle's parallel Claude Code agents from your own Claude Code session: plan from issues, spawn workers in worktrees, answer their prompts, land them through the merge train and open stacked PRs. Needs the saddle binary on PATH.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Brandon Apol"
+  },
+  "homepage": "https://github.com/brandonapol/saddle",
+  "repository": "https://github.com/brandonapol/saddle",
+  "keywords": ["agents", "parallel", "orchestration", "worktrees", "merge-train"]
+}

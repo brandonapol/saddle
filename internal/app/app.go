@@ -364,23 +364,30 @@ func (a *App) launch(t store.Task, cl []string, ad agent.Adapter) (string, error
 	return win, a.Store.SetField(t.ID, "window", win)
 }
 
-// Orchestrator ensures the orchestrator task exists and returns the launch
-// for its headless Claude Code process, plus the session to resume (if any).
-func (a *App) Orchestrator() (agent.Launch, string, error) {
+// EnsureOrchestrator makes sure saddle is initialized, the integration branch
+// exists and the orchestrator task exists, and returns that task. It starts
+// no process: the TUI launches one, the Claude Code plugin is one.
+func (a *App) EnsureOrchestrator() (store.Task, error) {
 	if err := a.Init(); err != nil {
-		return agent.Launch{}, "", err
+		return store.Task{}, err
 	}
 	if err := a.ensureIntegration(); err != nil {
-		return agent.Launch{}, "", err
+		return store.Task{}, err
 	}
 	t, err := a.Store.Task(OrchestratorID)
 	if errors.Is(err, store.ErrNotFound) {
 		t = store.Task{ID: OrchestratorID, Title: "orchestrator", Role: store.RoleOrchestrator,
 			Model: a.Cfg.Claude.OrchestratorModel, Worktree: a.Root, Status: store.Running}
-		if err := a.Store.CreateTask(t); err != nil {
-			return agent.Launch{}, "", err
-		}
-	} else if err != nil {
+		err = a.Store.CreateTask(t)
+	}
+	return t, err
+}
+
+// Orchestrator ensures the orchestrator task exists and returns the launch
+// for its headless Claude Code process, plus the session to resume (if any).
+func (a *App) Orchestrator() (agent.Launch, string, error) {
+	t, err := a.EnsureOrchestrator()
+	if err != nil {
 		return agent.Launch{}, "", err
 	}
 	// It runs headless; a window left from an old tmux-based run is not its own.

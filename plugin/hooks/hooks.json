@@ -1,0 +1,9 @@
+{
+  "description": "Delivers saddle's agent events (prompts, stalls, conflicts, landings) into the session orchestrating this repo. Does nothing unless `saddle plugin engine` is running for the repo.",
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "saddle plugin hook", "timeout": 10 }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "saddle plugin hook", "timeout": 10 }] }],
+    "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "saddle plugin hook", "timeout": 10 }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "saddle plugin hook", "timeout": 10 }] }]
+  }
+}

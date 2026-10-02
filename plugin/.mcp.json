@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "saddle": {
+      "command": "saddle",
+      "args": ["plugin", "mcp"]
+    }
+  }
+}

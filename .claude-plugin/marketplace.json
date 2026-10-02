@@ -1,0 +1,16 @@
+{
+  "name": "saddle",
+  "owner": {
+    "name": "Brandon Apol"
+  },
+  "metadata": {
+    "description": "Saddle: run a team of parallel Claude Code agents from one session."
+  },
+  "plugins": [
+    {
+      "name": "saddle",
+      "source": "./plugin",
+      "description": "Orchestrate saddle's parallel Claude Code agents from your own Claude Code session."
+    }
+  ]
+}

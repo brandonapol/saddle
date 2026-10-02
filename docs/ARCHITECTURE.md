@@ -39,6 +39,17 @@ saddle land | prs | sync | …         ─┘   CI watcher
   id from env. Through it, agents can `spawn`, `claim`, `release`, `status`,
   `brief`, `ask_owner` and call `done`.
 - **`saddle doctor`** checks that a repo is ready for all of the above.
+- **The Claude Code plugin** (`plugin/`, listed by `.claude-plugin/marketplace.json`)
+  makes the user's own Claude Code session the orchestrator instead of the
+  TUI's. Its MCP server is `saddle plugin mcp` acting as task `t0`.
+  `saddle plugin engine` (`internal/engine`) runs the TUI's background work
+  headless: the watchers above, plus noticing prompts and stalls, which it
+  queues as `t0` notices. `saddle plugin wait`, run in the background,
+  exits when one needs the session, and `saddle plugin hook` delivers them
+  on the session's prompts and tool calls. The engine and `saddle up` share
+  `.saddle/tui.lock`, which records its holder, so only one of them drives
+  `t0`. The plugin's hook and MCP server do nothing outside a repo that ran
+  `saddle init` or inside saddle's own agents (`SADDLE_TASK` set).
 
 Concurrent processes coordinate through SQLite transactions, not a socket.
 The reactor, git watcher and dispatcher described below are the target design;
@@ -184,6 +195,8 @@ internal/mcp/        stdio MCP server
 internal/hook/       hook entrypoint
 internal/narrator/   haiku narrator, usage
 internal/tui/        bubble tea views
+internal/engine/     headless watcher for the plugin orchestrator
+plugin/              Claude Code plugin (MCP, hooks, /saddle:* commands)
 ```
 
 ## Dogfooding order (M0)

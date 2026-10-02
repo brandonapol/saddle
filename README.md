@@ -67,6 +67,30 @@ Config lives in `.saddle/config.toml` (`saddle init` writes a template):
 worker and orchestrator models, concurrency, the test command the merge train
 runs, and serial files only the train may touch.
 
+### Orchestrate from Claude Code instead
+
+Saddle also ships as a Claude Code plugin, so your own Claude Code session can
+be the orchestrator in place of the TUI's headless Sonnet. With `saddle` on
+your PATH:
+
+```
+/plugin marketplace add brandonapol/saddle
+/plugin install saddle@saddle
+```
+
+Then, in a repo where you ran `saddle init`:
+
+> /saddle:orchestrate do #46 and #47 in parallel
+
+The session reads its brief (`saddle plugin brief`), starts
+`saddle plugin engine` in the background (the TUI's watchers without the
+TUI), plans, spawns workers through the plugin's MCP tools, and keeps a
+background `saddle plugin wait` running, which wakes it when an agent needs
+something. `/saddle:status` summarizes the agents and the train. The engine
+and `saddle up` exclude each other; agents keep running when either stops.
+Outside a saddle repo, and inside saddle's own agents, the plugin does
+nothing.
+
 ### Under the hood
 
 The TUI uses the same building blocks you can call yourself:
