@@ -6,10 +6,10 @@ import "strings"
 // plans are not billed per token; Price only turns usage into a comparable
 // $-equivalent.
 type Price struct {
-	Input      float64 `json:"input"`
-	Output     float64 `json:"output"`
-	CacheRead  float64 `json:"cache_read"`
-	CacheWrite float64 `json:"cache_write"` // 5-minute TTL write rate
+	Input      float64 `json:"input" toml:"input"`
+	Output     float64 `json:"output" toml:"output"`
+	CacheRead  float64 `json:"cache_read" toml:"cache_read"`
+	CacheWrite float64 `json:"cache_write" toml:"cache_write"` // 5-minute TTL write rate
 }
 
 // Cost is the USD price of t at p. Transcripts do not split cache writes by

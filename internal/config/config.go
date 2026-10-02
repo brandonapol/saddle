@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/brandonapol/saddle/internal/usage"
 )
 
 type Config struct {
@@ -33,6 +35,12 @@ type Config struct {
 	Claude Claude `toml:"claude"`
 	Triage Triage `toml:"triage"`
 	Usage  Usage  `toml:"usage"`
+	// Limits are the plan caps behind the usage strip's ok/warn/over states,
+	// and, with pause_launches, a hold on new spawns once a window is over.
+	Limits usage.Limits `toml:"limits"`
+	// Narrator summarizes agent events into the chat thread with a cheap
+	// model. Off unless ANTHROPIC_API_KEY and daily_cap_usd are both set.
+	Narrator Narrator `toml:"narrator"`
 	// Sweeper merges ready saddle PRs. Off unless enabled.
 	Sweeper Sweeper `toml:"sweeper"`
 	// CI watches saddle PRs' checks while saddle up runs.
@@ -83,6 +91,15 @@ type Window struct {
 	Span time.Duration `toml:"span"`
 	// Cap is the token cap for the window; 0 means no cap, so no bar, only a total.
 	Cap int64 `toml:"cap"`
+}
+
+// Narrator configures the event narrator.
+type Narrator struct {
+	// DailyCapUSD stops API calls once a day's spend reaches it. 0 turns the
+	// narrator off.
+	DailyCapUSD float64 `toml:"daily_cap_usd"`
+	// Model overrides the narrator's default model (Claude Haiku).
+	Model string `toml:"model"`
 }
 
 // Triage gates attention with TypeSafe's Jev when TYPESAFE_API_KEY is set.
@@ -169,6 +186,12 @@ func Load(root string) (Config, error) {
 		}
 	}
 	cfg.Usage.Windows = ws
+	if err := checkLimits(cfg.Limits); err != nil {
+		return cfg, err
+	}
+	if cfg.Narrator.DailyCapUSD < 0 {
+		return cfg, fmt.Errorf("narrator.daily_cap_usd %v: must not be negative", cfg.Narrator.DailyCapUSD)
+	}
 	if cfg.CI.Interval <= 0 {
 		cfg.CI.Interval = Default().CI.Interval
 	}
@@ -182,6 +205,18 @@ func Load(root string) (Config, error) {
 		cfg.Sweeper.ReviewLabel = Default().Sweeper.ReviewLabel
 	}
 	return cfg, nil
+}
+
+func checkLimits(l usage.Limits) error {
+	if l.WarnAt < 0 || l.WarnAt > 1 {
+		return fmt.Errorf("limits.warn_at %v: want a fraction between 0 and 1", l.WarnAt)
+	}
+	for name, c := range map[string]usage.Cap{"five_hour": l.FiveHour, "weekly": l.Weekly} {
+		if c.Tokens < 0 || c.USD < 0 {
+			return fmt.Errorf("limits.%s: caps must not be negative", name)
+		}
+	}
+	return nil
 }
 
 const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
@@ -224,6 +259,32 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # name = "7d"
 # span = "168h"
 # cap = 0
+
+[limits]
+# Plan-limit estimates for the usage strip. Each window is ok, warn (past
+# warn_at of its cap) or over. A cap of 0 is unlimited; with both tokens and
+# usd set, the fuller one counts. usd is the $-equivalent at API list prices.
+# warn_at = 0.8
+# pause_launches = false   # refuse new spawns while a window is over (spawn --force still works)
+# weekly_reset = 2026-09-29T08:00:00Z  # any past weekly reset; unset means a rolling 7 days
+# [limits.five_hour]
+# tokens = 0
+# usd = 0.0
+# [limits.weekly]
+# tokens = 0
+# usd = 0.0
+# [limits.prices.claude-opus]  # override list prices, USD per million tokens
+# input = 5.0
+# output = 25.0
+# cache_read = 0.5
+# cache_write = 6.25
+
+[narrator]
+# Narrates agent events into the chat thread with Claude Haiku. Needs
+# ANTHROPIC_API_KEY in the environment and a daily cap; off otherwise. Past
+# the cap, salient events still get a plain line without an API call.
+# daily_cap_usd = 0.0
+# model = "claude-haiku-4-5"
 
 [sweeper]
 # saddle sweep merges open saddle/ PRs that are green, mergeable, carry tests

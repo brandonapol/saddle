@@ -25,6 +25,7 @@ import (
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/termpane"
 	"github.com/brandonapol/saddle/internal/triage"
+	"github.com/brandonapol/saddle/internal/usage"
 )
 
 // Palette from the design canvas.
@@ -113,6 +114,8 @@ type model struct {
 	jev       *triage.Client
 	eventTurn bool // the current orchestrator turn answers saddle events
 	cost      float64
+	limits    *usage.LimitEstimate // plan-limit estimate from the last refresh
+	narr      narrSink             // narrator lines; nil when the narrator is off
 	flash     string
 	flashAt   time.Time
 
@@ -146,6 +149,7 @@ type (
 		tasks   []mcpserver.TaskView
 		peek    string
 		screens map[string]string
+		limits  *usage.LimitEstimate
 	}
 	flashMsg   string
 	quitExpiry time.Time // the arming a timer was set for
@@ -176,6 +180,17 @@ func Run(a *app.App, first string) error {
 		return err
 	}
 	defer func() { m.proc.Close() }()
+
+	// saddle up holds the repo's TUI lock, so this is the one process that
+	// meters usage and narrates.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.NewUsageMeter().Run(ctx, nil)
+	sink := make(narrSink, 256)
+	if n := a.NarratorFromEnv(sink); n != nil {
+		m.narr = sink
+		go a.RunNarrator(ctx, n)
+	}
 	defer func() {
 		if m.term != nil {
 			m.term.Close()
@@ -223,7 +238,7 @@ func (m *model) startProc(resume string) error {
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.waitEvent(), m.refresh(), tick(), textarea.Blink)
+	return tea.Batch(m.waitEvent(), m.waitNarr(), m.refresh(), tick(), textarea.Blink)
 }
 
 func tick() tea.Cmd {
@@ -282,7 +297,11 @@ func (m *model) refresh() tea.Cmd {
 				}
 			}
 		}
-		return refreshMsg{tasks: ts, peek: peek, screens: screens}
+		msg := refreshMsg{tasks: ts, peek: peek, screens: screens}
+		if e, err := a.Limits(time.Now()); err == nil {
+			msg.limits = &e
+		}
+		return msg
 	}
 }
 
@@ -334,6 +353,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flash, m.flashAt = "status: "+msg.err.Error(), time.Now()
 			break
 		}
+		if msg.limits != nil {
+			before := m.limits != nil && hasUsage(*m.limits)
+			m.limits = msg.limits
+			if hasUsage(*m.limits) != before && m.width > 0 {
+				m.layout() // the strip changes the footer's height
+			}
+		}
 		m.watchScreens(msg.tasks, msg.screens)
 		cmds = append(cmds, m.noticeTransitions(msg.tasks)...)
 		selID := ""
@@ -351,6 +377,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case evMsg:
 		cmds = append(cmds, m.handleEvent(msg.e), m.waitEvent())
+
+	case narrMsg:
+		m.addChat(store.ChatNarrator, msg.line.String())
+		cmds = append(cmds, m.waitNarr())
 
 	case triagedMsg:
 		m.applyTriage(msg)
@@ -890,6 +920,11 @@ func renderLine(c chatLine, w int, wrap lipgloss.Style) string {
 		return lipgloss.NewStyle().Foreground(cRun).Bold(true).Render("saddle") + "\n" + renderMarkdown(c.text, w-2, sText) + "\n"
 	case store.ChatTool:
 		return sFaint.Render("  ⚙ " + truncate(c.text, w-6))
+	case store.ChatNarrator:
+		if narratorNeedsYou(c) {
+			return lipgloss.NewStyle().Foreground(cAlert).Bold(true).Render(wrap.Render(c.text))
+		}
+		return sDim.Render(wrap.Render("· " + c.text))
 	default:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("#C9A26B")).Render(wrap.Render("◇ " + c.text))
 	}
@@ -954,6 +989,9 @@ func (m *model) viewHeader() string {
 	if m.jev != nil {
 		jev = " · jev triage"
 	}
+	if m.narr != nil {
+		jev += " · narrator"
+	}
 	right := sDim.Render(fmt.Sprintf("orchestrator %s · %s%s · $%.2f ", m.launch.Model, state, jev, m.cost))
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
@@ -971,6 +1009,9 @@ func (m *model) viewFooter() string {
 	}
 	if m.quitArmed() {
 		line = " " + lipgloss.NewStyle().Foreground(cAccent).Render("Press Ctrl+C again to quit")
+	}
+	if m.limits != nil && hasUsage(*m.limits) {
+		line = usageStrip(*m.limits, m.width) + "\n" + line
 	}
 	return lipgloss.NewStyle().Width(m.width).MaxWidth(m.width).Render(line)
 }

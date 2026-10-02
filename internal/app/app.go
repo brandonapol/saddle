@@ -133,7 +133,7 @@ type SpawnReq struct {
 	Parent string
 	Base   string // defaults to the integration branch
 	Issue  int    // GitHub issue the task implements; its PR will close it
-	Force  bool   // ignore claim conflicts and the concurrency cap
+	Force  bool   // ignore claim conflicts, the concurrency cap and paused launches
 	// Confirm goes ahead when every claim covers work landed or queued tasks
 	// already changed. Without it such a spawn returns ErrNeedsConfirm.
 	Confirm bool
@@ -184,6 +184,9 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 		}
 		if n >= a.Cfg.Concurrency {
 			return t, fmt.Errorf("at concurrency cap (%d running); wait for a task to finish or raise concurrency in .saddle/config.toml", n)
+		}
+		if err := a.checkLaunch(); err != nil {
+			return t, err
 		}
 	}
 	for i, c := range r.Claims {

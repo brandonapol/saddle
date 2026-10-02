@@ -18,8 +18,8 @@ const DefaultWarnAt = 0.8
 // Cap bounds usage in one window. A zero field is unlimited; when both are
 // set, the window is as full as the fuller of the two.
 type Cap struct {
-	Tokens int64   `json:"tokens,omitempty"` // all token kinds, cache included
-	USD    float64 `json:"usd,omitempty"`    // $-equivalent at list prices
+	Tokens int64   `json:"tokens,omitempty" toml:"tokens"` // all token kinds, cache included
+	USD    float64 `json:"usd,omitempty" toml:"usd"`       // $-equivalent at list prices
 }
 
 func (c Cap) unlimited() bool { return c.Tokens <= 0 && c.USD <= 0 }
@@ -27,20 +27,20 @@ func (c Cap) unlimited() bool { return c.Tokens <= 0 && c.USD <= 0 }
 // Limits is the user's plan-limit configuration. The zero value tracks usage
 // with no caps.
 type Limits struct {
-	FiveHour Cap `json:"five_hour"`
-	Weekly   Cap `json:"weekly"`
+	FiveHour Cap `json:"five_hour" toml:"five_hour"`
+	Weekly   Cap `json:"weekly" toml:"weekly"`
 	// WeeklyReset is any instant at which the weekly window resets (e.g. the
 	// last reset shown by the plan). Windows are WeeklyReset + k weeks. Zero
 	// means a rolling 7-day window.
-	WeeklyReset time.Time `json:"weekly_reset,omitzero"`
+	WeeklyReset time.Time `json:"weekly_reset,omitzero" toml:"weekly_reset"`
 	// WarnAt is the fraction of a cap (0 < WarnAt <= 1) at which a window
 	// turns Warn. Zero means DefaultWarnAt.
-	WarnAt float64 `json:"warn_at,omitempty"`
+	WarnAt float64 `json:"warn_at,omitempty" toml:"warn_at"`
 	// PauseLaunches asks callers to hold new launches while any window is
 	// Over. See Estimate.ShouldPauseLaunches.
-	PauseLaunches bool `json:"pause_launches,omitempty"`
+	PauseLaunches bool `json:"pause_launches,omitempty" toml:"pause_launches"`
 	// Prices overrides DefaultPrices by model id prefix.
-	Prices map[string]Price `json:"prices,omitempty"`
+	Prices map[string]Price `json:"prices,omitempty" toml:"prices"`
 }
 
 func (l Limits) warnAt() float64 {

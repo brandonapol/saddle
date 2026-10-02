@@ -68,6 +68,29 @@ func (s *Store) UsageSince(since time.Time) (usage.Tokens, error) {
 	return t, err
 }
 
+// UsageBuckets returns stored usage from minutes at or after since, summed
+// over sessions into one bucket per minute, task and model, oldest first.
+// usage.EstimateBuckets turns them into plan-limit estimates.
+func (s *Store) UsageBuckets(since time.Time) ([]usage.Bucket, error) {
+	rows, err := s.db.Query(`SELECT minute, task, model, SUM(input), SUM(output), SUM(cache_read), SUM(cache_creation), SUM(messages)
+		FROM usage WHERE minute >= ? GROUP BY minute, task, model ORDER BY minute, task, model`, minuteFloor(since))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []usage.Bucket
+	for rows.Next() {
+		var b usage.Bucket
+		var minute int64
+		if err := rows.Scan(&minute, &b.Task, &b.Model, &b.Input, &b.Output, &b.CacheRead, &b.CacheCreation, &b.Messages); err != nil {
+			return nil, err
+		}
+		b.Minute = time.Unix(minute, 0).UTC()
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
 // usageBy groups by col, which must be a trusted column name.
 func (s *Store) usageBy(col string, since, until time.Time) ([]UsageTotal, error) {
 	hi := int64(1<<63 - 1)
