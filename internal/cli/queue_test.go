@@ -79,3 +79,9 @@ func TestQueueCommands(t *testing.T) {
 		t.Fatalf("queue after release:\n%s", out)
 	}
 }
+
+func TestQueueRegistered(t *testing.T) {
+	if c, _, err := Root().Find([]string{"queue", "hold"}); err != nil || c.Name() != "hold" {
+		t.Fatalf("saddle queue hold not registered: %v", err)
+	}
+}
