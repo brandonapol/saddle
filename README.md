@@ -61,6 +61,13 @@ Config lives in `.saddle/config.toml` (`saddle init` writes a template):
 worker and orchestrator models, concurrency, the test command the merge train
 runs, and serial files only the train may touch.
 
+Set `harness = "grok"` to run workers and the orchestrator on the [Grok CLI](https://x.ai/cli)
+instead of Claude Code. `grok` must be on `PATH` and signed in (`grok login`,
+or `XAI_API_KEY`). Workers come up in a tmux window with saddle's hooks and
+MCP server installed in that worktree (gitignored). The chat on the right is
+one headless grok turn per message, resumed for the rest of the session.
+Leave the key unset, or set `harness = "claude"`, to keep Claude Code.
+
 ### Under the hood
 
 The TUI uses the same building blocks you can call yourself:

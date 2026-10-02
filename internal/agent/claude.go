@@ -1,4 +1,5 @@
 // Package agent launches coding agents through adapters (see Adapter).
+// KindGrok launches the Grok CLI harness instead of Claude Code.
 package agent
 
 import (
@@ -10,10 +11,17 @@ import (
 	"strings"
 )
 
+// Kind selects which CLI a launch drives. Empty means Claude Code.
+const (
+	KindClaude = "claude"
+	KindGrok   = "grok"
+)
+
 // Launch describes one agent session to start in a tmux window.
 type Launch struct {
 	Root     string // main checkout
 	Bin      string // absolute path to the saddle binary
+	Kind     string // KindClaude or KindGrok; empty means Claude
 	Task     string
 	Title    string
 	Dir      string // working directory (the task worktree, or root for the orchestrator)
@@ -107,8 +115,27 @@ func (l Launch) writeFiles() error {
 }
 
 // Write creates the launch files and returns the shell command that runs an
-// interactive Claude Code session in a tmux window.
+// interactive agent session in a tmux window.
 func (l Launch) Write() (string, error) {
+	if l.Kind == KindGrok {
+		return l.writeGrok()
+	}
+	return l.writeClaude()
+}
+
+// Headless builds the process the TUI talks to. Claude speaks stream-json on
+// stdin and stdout. Grok has no persistent stdin protocol, so the process is
+// saddle's grok-bridge, which runs one headless grok turn per user message.
+func (l Launch) Headless(resume string) (*exec.Cmd, error) {
+	if l.Kind == KindGrok {
+		return l.headlessGrok(resume)
+	}
+	return l.headlessClaude(resume)
+}
+
+// writeClaude creates the launch files and returns the shell command that runs an
+// interactive Claude Code session in a tmux window.
+func (l Launch) writeClaude() (string, error) {
 	if err := l.writeFiles(); err != nil {
 		return "", err
 	}
@@ -156,10 +183,10 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// Headless builds a Claude Code process that speaks stream-json on stdin and
+// headlessClaude builds a Claude Code process that speaks stream-json on stdin and
 // stdout, for an agent whose conversation saddle renders itself. resume, if
 // set, continues an earlier session.
-func (l Launch) Headless(resume string) (*exec.Cmd, error) {
+func (l Launch) headlessClaude(resume string) (*exec.Cmd, error) {
 	if err := l.writeFiles(); err != nil {
 		return nil, err
 	}

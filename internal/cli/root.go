@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"text/tabwriter"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/ciwatch"
 	"github.com/brandonapol/saddle/internal/hook"
@@ -41,7 +42,7 @@ func Root() *cobra.Command {
 			Run:   func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), Version) },
 		},
 		initCmd(), upCmd(), downCmd(), spawnCmd(), statusCmd(), claimCmd(), releaseCmd(), doneCmd(),
-		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(),
+		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), grokBridgeCmd(),
 	)
 	return root
 }
@@ -100,8 +101,9 @@ func upCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "up [epic-file|-]",
 		Short: "Open the Saddle TUI: chat with the orchestrator, watch your agents",
-		Long: `Opens Saddle's TUI. The orchestrator (a headless Claude Code session) lives in
-the chat on the right. Tell it what to work on, e.g. "do #46 and #47 in parallel".
+		Long: `Opens Saddle's TUI. The orchestrator lives in
+the chat on the right (Claude Code, or the Grok CLI when harness = "grok").
+Tell it what to work on, e.g. "do #46 and #47 in parallel".
 It starts agents in a hidden tmux session, watches them, and tells you when one
 needs you. Quitting leaves the agents running; run saddle up again to come back.`,
 		Args: cobra.MaximumNArgs(1),
@@ -457,6 +459,18 @@ func checkCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&task, "task", "", "task id")
 	return cmd
+}
+
+func grokBridgeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:    "grok-bridge <run-dir>",
+		Short:  "Headless Grok session that speaks Claude stream-json on stdin",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return agent.RunGrokBridge(args[0], cmd.InOrStdin(), cmd.OutOrStdout())
+		},
+	}
 }
 
 func hookCmd() *cobra.Command {
