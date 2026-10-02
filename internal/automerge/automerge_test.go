@@ -199,10 +199,10 @@ func TestMergeMethodFromRepo(t *testing.T) {
 
 func TestRefusals(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		edit  func(r *rig, p *PR)
-		kind  string
-		why   string
+		name string
+		edit func(r *rig, p *PR)
+		kind string
+		why  string
 	}{
 		{"pending CI", func(_ *rig, p *PR) { p.Checks = ChecksPending }, EventWaiting, "pending"},
 		{"red CI", func(_ *rig, p *PR) { p.Checks = ChecksFail }, EventRefused, "red"},

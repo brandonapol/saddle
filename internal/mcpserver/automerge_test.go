@@ -118,7 +118,7 @@ func TestQueueToolsErrors(t *testing.T) {
 		args map[string]any
 	}{
 		{"queue_move", map[string]any{"task": "t9", "position": 1}},
-		{"queue_hold", map[string]any{"task": "t1"}}, // landed, not waiting
+		{"queue_hold", map[string]any{"task": "t1"}},    // landed, not waiting
 		{"queue_release", map[string]any{"task": "t2"}}, // not held
 	} {
 		if res := callTool(t, a, app.OrchestratorID, c.name, c.args, nil); !res.IsError {

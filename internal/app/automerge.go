@@ -55,8 +55,8 @@ type noGitHub struct{}
 
 var errNoGitHub = errors.New("GitHub isn't asked here")
 
-func (noGitHub) PR(string) (automerge.PR, error)  { return automerge.PR{}, errNoGitHub }
-func (noGitHub) MergeMethod() (string, error)      { return "", errNoGitHub }
+func (noGitHub) PR(string) (automerge.PR, error)    { return automerge.PR{}, errNoGitHub }
+func (noGitHub) MergeMethod() (string, error)       { return "", errNoGitHub }
 func (noGitHub) Merge(string, string, string) error { return errNoGitHub }
 
 // AutomergeHold holds the stack of ref (stack name, task id, PR URL or
