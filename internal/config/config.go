@@ -130,6 +130,9 @@ type Train struct {
 	// gets before the train escalates it to you instead of returning it to
 	// its producer again.
 	MaxAttempts int `toml:"max_attempts"`
+	// NoAutoRebase stops the train rebasing live agents' clean worktrees onto
+	// integration after each landing; they are only told to sync.
+	NoAutoRebase bool `toml:"no_auto_rebase"`
 }
 
 type Test struct {
@@ -270,6 +273,9 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # Failed lands (conflicts, red tests) before the train stops returning a
 # branch to its agent and escalates it to you as needs-you.
 # max_attempts = 2
+# After each landing the train rebases every live agent's clean worktree onto
+# integration; set this to only tell them to run saddle sync.
+# no_auto_rebase = false
 
 [triage]
 # Uses TypeSafe Jev (set JEV_TOKEN; make setup asks for it) to decide which agent events reach

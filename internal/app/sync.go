@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/store"
 )
 
 // Sync rebases a task's branch onto the integration branch. Commits whose
@@ -31,4 +32,65 @@ func (a *App) Sync(task string) (gitx.RebaseResult, error) {
 	rr.Skipped = skipped
 	a.Store.Event(task, "sync", fmt.Sprintf("ok=%v skipped=%d conflicts=%s", rr.OK, skipped, strings.Join(rr.Conflicts, ",")))
 	return rr, err
+}
+
+// autoRebased is what autoRebase did to a live task's branch.
+type autoRebased struct {
+	From, To  string   // HEAD before and after, when it moved
+	Conflicts []string // files a rebase would conflict in; nothing moved
+	Skipped   string   // why it wasn't tried, or ""
+}
+
+// autoRebase rebases a live task's branch onto integration as the train,
+// right after a landing, the way Sync would (#26). It only touches a clean
+// worktree with the task's branch checked out; on conflict it aborts and
+// leaves the branch as it was, so the agent resolves it with saddle sync.
+func (a *App) autoRebase(t store.Task) autoRebased {
+	switch {
+	case a.Cfg.Train.NoAutoRebase:
+		return autoRebased{Skipped: "auto-rebase is off"}
+	case !a.checkedOut(t):
+		return autoRebased{Skipped: "its worktree is gone or has another branch checked out"}
+	case gitx.RebaseInProgress(t.Worktree):
+		return autoRebased{Skipped: "a rebase is already in progress"}
+	}
+	if dirty, _ := gitx.Dirty(t.Worktree); len(dirty) > 0 {
+		return autoRebased{Skipped: "it has uncommitted changes"}
+	}
+	head, err := gitx.RevParse(t.Worktree, "HEAD")
+	if err != nil {
+		return autoRebased{Skipped: err.Error()}
+	}
+	integ, err := gitx.RevParse(a.Root, a.Cfg.Integration)
+	if err != nil {
+		return autoRebased{Skipped: err.Error()}
+	}
+	if mb, _ := gitx.Run(t.Worktree, "merge-base", "HEAD", integ); mb == integ {
+		return autoRebased{Skipped: "it is already on " + a.Cfg.Integration}
+	}
+	from, _, err := gitx.LandedPrefix(t.Worktree, integ)
+	if err != nil {
+		return autoRebased{Skipped: err.Error()}
+	}
+	args := []string{"-c", "merge.directoryRenames=true", "-c", "merge.renames=true",
+		"-c", "rerere.enabled=true", "-c", "core.editor=true", "rebase"}
+	if from != "" {
+		args = append(args, "--onto", integ, from)
+	} else {
+		args = append(args, integ)
+	}
+	if _, err := trainGit(t.Worktree, args...); err != nil {
+		conf, _ := gitx.Run(t.Worktree, "diff", "--name-only", "--diff-filter=U")
+		if gitx.RebaseInProgress(t.Worktree) {
+			_, _ = trainGit(t.Worktree, "rebase", "--abort")
+		}
+		if conf == "" {
+			return autoRebased{Skipped: "the rebase failed: " + err.Error()}
+		}
+		a.Store.Event(t.ID, "auto_rebase", "conflicts="+strings.ReplaceAll(conf, "\n", ","))
+		return autoRebased{Conflicts: strings.Split(conf, "\n")}
+	}
+	to, _ := gitx.RevParse(t.Worktree, "HEAD")
+	a.Store.Event(t.ID, "auto_rebase", short(head)+" → "+short(to))
+	return autoRebased{From: head, To: to}
 }

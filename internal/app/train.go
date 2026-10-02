@@ -385,7 +385,8 @@ func (a *App) escalate(res LandResult, n int, state, msg string) LandResult {
 }
 
 // broadcastLanding records renames, remaps the other tasks' claims through
-// them, and tells every live agent what moved under it.
+// them, rebases every live agent's clean worktree onto the new head, and
+// tells each agent what moved under it.
 func (a *App) broadcastLanding(landed store.Task, old, head string) error {
 	grs, _ := gitx.Renames(a.Root, old, head)
 	changed, _ := gitx.ChangedFiles(a.Root, old, head)
@@ -435,11 +436,20 @@ func (a *App) broadcastLanding(landed store.Task, old, head string) error {
 			msg.WriteString("\nYour claims were remapped: " + strings.Join(remapped, ", ") + ".")
 		}
 		kind := store.NoticeInfo
-		if overlaps(t.Worktree, old, changed) {
+		shared := overlaps(t.Worktree, old, changed)
+		switch rb := a.autoRebase(t); {
+		case rb.To != "":
+			fmt.Fprintf(&msg, "\nSaddle rebased your branch onto it (%s → %s), following directory moves. Files may have changed under you: re-read them before editing.", short(rb.From), short(rb.To))
+		case len(rb.Conflicts) > 0:
 			kind = store.NoticeAction
-			msg.WriteString("\nIt touched files you changed too, so sync now to avoid a conflict later.")
+			fmt.Fprintf(&msg, "\nRebasing your branch onto it conflicts in %s, so saddle left your branch as it was. At your next clean point run `saddle sync` and resolve them, keeping both sides' intent.", strings.Join(rb.Conflicts, ", "))
+		default:
+			if shared {
+				kind = store.NoticeAction
+				msg.WriteString("\nIt touched files you changed too, so sync now to avoid a conflict later.")
+			}
+			msg.WriteString("\nAt your next clean point (commit first), run `saddle sync` to rebase onto it. Directory moves are followed automatically.")
 		}
-		msg.WriteString("\nAt your next clean point (commit first), run `saddle sync` to rebase onto it. Directory moves are followed automatically.")
 		errs = append(errs, a.Notify(t.ID, kind, msg.String()))
 	}
 	return errors.Join(errs...)
