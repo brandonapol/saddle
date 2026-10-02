@@ -48,6 +48,13 @@ type Doer interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
+// Ledger persists the daily spend so a restart does not reset the cap.
+// *store.Store satisfies it.
+type Ledger interface {
+	NarratorSpend(day string) (float64, error)
+	SetNarratorSpend(day string, usd float64) error
+}
+
 // Sink receives narrator lines.
 type Sink interface {
 	Emit(Line)
@@ -128,6 +135,7 @@ type Deps struct {
 	Clock  Clock
 	HTTP   Doer
 	Sink   Sink
+	Ledger Ledger // optional; without it spend is kept in memory only
 }
 
 type realClock struct{}
@@ -191,6 +199,10 @@ func (n *Narrator) CapReached() bool { return n.SpentToday() >= n.cfg.DailyCapUS
 func (n *Narrator) rollDay() {
 	if d := n.deps.Clock.Now().Format(time.DateOnly); d != n.day {
 		n.day, n.spent = d, 0
+		if n.deps.Ledger != nil {
+			// On a read error, assume nothing spent: the cap is a soft budget.
+			n.spent, _ = n.deps.Ledger.NarratorSpend(d)
+		}
 	}
 }
 
@@ -534,6 +546,9 @@ func (n *Narrator) call(ctx context.Context, tasks []store.Task, deltas []TaskDe
 		CacheRead:     out.Usage.CacheReadInputTokens,
 		CacheCreation: out.Usage.CacheCreationInputTokens,
 	}, n.cfg.Prices)
+	if n.deps.Ledger != nil {
+		_ = n.deps.Ledger.SetNarratorSpend(n.day, n.spent)
+	}
 	var text []string
 	for _, c := range out.Content {
 		if c.Type == "text" {

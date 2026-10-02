@@ -381,3 +381,39 @@ func TestPendingIsBounded(t *testing.T) {
 		t.Errorf("trimming must keep salient events: %s", d)
 	}
 }
+
+type memLedger map[string]float64
+
+func (m memLedger) NarratorSpend(day string) (float64, error) { return m[day], nil }
+func (m memLedger) SetNarratorSpend(day string, usd float64) error {
+	m[day] = usd
+	return nil
+}
+
+// Spend is saved to the ledger after each call, so a narrator built after a
+// restart picks up today's total and stays under the cap.
+func TestLedgerKeepsCapAcrossRestart(t *testing.T) {
+	led := memLedger{}
+	r := newRig(t, Config{DailyCapUSD: 0.01})
+	r.n.deps.Ledger = led
+	r.doer.replies = []reply{{status: 200, text: "t1: started", usage: apiUsage{OutputTokens: 10000}}}
+	r.src.push(ev("t1", "spawn", ""))
+	r.step(t)
+	if got := led["2026-10-02"]; got < 0.05 {
+		t.Fatalf("ledger = %v, want today's spend saved", led)
+	}
+
+	r2 := newRig(t, Config{DailyCapUSD: 0.01})
+	r2.n.deps.Ledger = led
+	if !r2.n.CapReached() {
+		t.Fatalf("restarted narrator forgot today's spend: %v", r2.n.SpentToday())
+	}
+	r2.src.push(ev("t1", "landed", "abc"))
+	r2.step(t)
+	if len(r2.doer.reqs) != 0 {
+		t.Fatalf("API called past the persisted cap")
+	}
+	if len(r2.out.lines) != 1 || !strings.Contains(r2.out.lines[0].Text, "landed") {
+		t.Fatalf("local line = %+v", r2.out.lines)
+	}
+}
