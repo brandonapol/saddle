@@ -148,7 +148,11 @@ func (m *model) viewMerge(w, h int) string {
 	if len(rows) == 0 {
 		rows = append(rows, sDim.Render("The train is empty. Tasks join it when they call done."))
 	}
-	return box("MERGE TRAIN", w, h, false, clip(strings.Join(rows, "\n"), w-2))
+	title := "MERGE TRAIN"
+	if m.graph != nil {
+		title += " · opus on merges " + humanTokens(m.graph.MergeOpus)
+	}
+	return box(title, w, h, false, clip(strings.Join(rows, "\n"), w-2))
 }
 
 // clip truncates every line of s to w columns.

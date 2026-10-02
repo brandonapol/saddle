@@ -129,6 +129,7 @@ type model struct {
 	eventTurn bool // the current orchestrator turn answers saddle events
 	cost      float64
 	limits    *usage.LimitEstimate // plan-limit estimate from the last refresh
+	graph     *usageGraph          // the last hour of usage by model
 	narr      narrSink             // narrator lines; nil when the narrator is off
 	flash     string
 	flashAt   time.Time
@@ -167,6 +168,7 @@ type (
 		screens map[string]string
 		limits  *usage.LimitEstimate
 		stats   map[string]agentStats
+		graph   *usageGraph
 	}
 	flashMsg   string
 	quitExpiry time.Time // the arming a timer was set for
@@ -315,9 +317,7 @@ func (m *model) refresh() tea.Cmd {
 			}
 		}
 		msg := refreshMsg{tasks: ts, peek: peek, screens: screens, stats: readStats(a, time.Now())}
-		if e, err := a.Limits(time.Now()); err == nil {
-			msg.limits = &e
-		}
+		msg.limits, msg.graph = readUsage(a, time.Now())
 		return msg
 	}
 }
@@ -384,6 +384,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			selID = m.tasks[m.sel].ID
 		}
 		m.tasks, m.peek, m.stats = msg.tasks, msg.peek, msg.stats
+		if msg.graph != nil {
+			m.graph = msg.graph
+		}
 		m.sel = 0
 		for i, t := range m.tasks {
 			if t.ID == selID {

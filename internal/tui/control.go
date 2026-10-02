@@ -241,7 +241,11 @@ func (m *model) viewLeft(w, h int) string {
 		}
 	}
 
-	peekH := h - listH - claimsH
+	usageH := 0
+	if m.graph != nil && h-listH-claimsH-(graphH+2) >= 6 {
+		usageH = graphH + 2
+	}
+	peekH := h - listH - claimsH - usageH
 	title := "PEEK"
 	body := sDim.Render(" Select an agent to see its terminal.")
 	if t, ok := m.selected(); ok {
@@ -270,7 +274,11 @@ func (m *model) viewLeft(w, h int) string {
 			}
 		}
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, append(parts, box(title, w, peekH, false, body))...)
+	parts = append(parts, box(title, w, peekH, false, body))
+	if usageH > 0 {
+		parts = append(parts, box("USAGE · 60m", w, usageH, false, m.graph.render(w-2, graphH)))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 // startSpawn moves to the chat with a spawn request to finish: the
