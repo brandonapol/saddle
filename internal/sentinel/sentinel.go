@@ -5,7 +5,8 @@
 // records one stack_at_risk event, tells the orchestrator (and so the TUI) to
 // run restack, and flags the stack so prs and land refuse to build on it. It
 // never restacks itself. Once the stack checks clean it lifts the labels and
-// the flag.
+// the flag. Each labeled PR also gets one comment saying why, kept current as
+// the cause changes and turned into a resolution note when the label lifts.
 package sentinel
 
 import (
@@ -48,6 +49,15 @@ type GitHub interface {
 	PR(url string) (PR, error)
 	AddLabel(url, label string) error
 	RemoveLabel(url, label string) error
+	Comments(url string) ([]Comment, error)
+	AddComment(url, body string) error
+	EditComment(id, body string) error
+}
+
+// Comment is a PR comment; ID is its GraphQL node ID.
+type Comment struct {
+	ID   string `json:"id"`
+	Body string `json:"body"`
 }
 
 // GH talks to GitHub through the gh CLI, run in Dir.
@@ -97,12 +107,41 @@ func (g *GH) RemoveLabel(url, label string) error {
 	return err
 }
 
+func (g *GH) Comments(url string) ([]Comment, error) {
+	out, err := g.gh("pr", "view", url, "--json", "comments")
+	if err != nil {
+		return nil, err
+	}
+	var v struct {
+		Comments []Comment `json:"comments"`
+	}
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		return nil, fmt.Errorf("gh pr view %s: %w", url, err)
+	}
+	return v.Comments, nil
+}
+
+func (g *GH) AddComment(url, body string) error {
+	_, err := g.gh("pr", "comment", url, "--body", body)
+	return err
+}
+
+func (g *GH) EditComment(id, body string) error {
+	_, err := g.gh("api", "graphql",
+		"-f", "query=mutation($id: ID!, $body: String!) { updateIssueComment(input: {id: $id, body: $body}) { issueComment { id } } }",
+		"-f", "id="+id, "-f", "body="+body)
+	return err
+}
+
 // Sentinel checks one repo's PR stack.
 type Sentinel struct {
 	App      *app.App
 	GH       GitHub
 	Interval time.Duration
 	lastErr  string
+	// posted is the sentinel comment last seen or written on each PR, so a
+	// quiet tick costs no GitHub calls.
+	posted map[string]Comment
 }
 
 // New returns a sentinel for a's stack that talks to GitHub through gh.
@@ -197,7 +236,7 @@ func (s *Sentinel) Check() (Report, error) {
 		case pr.State == "OPEN" && pr.Mergeable == "CONFLICTING":
 			hits = append(hits, hit{i, i, fmt.Sprintf("GitHub reports its PR %s conflicts with its base", l.Task.PR)})
 		}
-		if l.Problem != "" {
+		if l.Problem != "" && !merged[i] { // a merged PR's branch no longer matters
 			hits = append(hits, hit{i, i, l.Problem})
 		}
 	}
@@ -257,6 +296,13 @@ func (s *Sentinel) Check() (Report, error) {
 		next.PRs = append(next.PRs, pr)
 	}
 	rep.PRs = next.PRs
+	for _, pr := range next.PRs {
+		if i := slices.IndexFunc(open, func(l app.StackLayer) bool { return l.Task.PR == pr }); i >= 0 {
+			if err := s.comment(pr, flagComment(open, hits, i, rep, a.Cfg.Base)); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
 	if err := a.SetFlag(next); err != nil {
 		return rep, errors.Join(append(errs, err)...)
 	}
@@ -292,6 +338,10 @@ func (s *Sentinel) clear(flag app.StackFlag) error {
 		if err := s.GH.RemoveLabel(pr, Label); err != nil {
 			errs = append(errs, err.Error())
 			left = append(left, pr)
+			continue
+		}
+		if err := s.comment(pr, clearComment(flag)); err != nil {
+			errs = append(errs, err.Error())
 		}
 	}
 	if len(left) > 0 {
@@ -306,8 +356,13 @@ func (s *Sentinel) clear(flag app.StackFlag) error {
 		return err
 	}
 	a.Store.Event(flag.Task, EventClear, flag.Cause)
-	return a.Notify(app.OrchestratorID, store.NoticeInfo,
+	err := a.Notify(app.OrchestratorID, store.NoticeInfo,
 		fmt.Sprintf("The PR stack checks clean again; the %s flag on %s is lifted and prs and land work again.", Label, flag.Task))
+	if len(errs) > 0 {
+		// Only resolution notes failed. The labels are off, so the flag goes anyway.
+		err = errors.Join(errors.New(strings.Join(errs, "; ")), err)
+	}
+	return err
 }
 
 // baseAhead fetches origin/<base> and counts the commits it has that
@@ -323,4 +378,82 @@ func (s *Sentinel) baseAhead() int {
 		return 0
 	}
 	return n
+}
+
+// commentMarker tags the sentinel's comment on a PR, so it finds the comment
+// again after a restart instead of posting another.
+const commentMarker = "<!-- saddle-sentinel:needs-human -->"
+
+// comment makes the sentinel's comment on pr read body: it posts one if the PR
+// has none and edits it if it says something else.
+func (s *Sentinel) comment(pr, body string) error {
+	body = commentMarker + "\n" + body
+	c, ok := s.posted[pr]
+	if !ok {
+		cs, err := s.GH.Comments(pr)
+		if err != nil {
+			return err
+		}
+		for _, x := range cs {
+			if strings.Contains(x.Body, commentMarker) {
+				c, ok = x, true
+			}
+		}
+	}
+	switch {
+	case ok && c.Body == body:
+	case ok:
+		if err := s.GH.EditComment(c.ID, body); err != nil {
+			return err
+		}
+		c.Body = body
+	default:
+		if err := s.GH.AddComment(pr, body); err != nil {
+			return err
+		}
+		// Look the new comment up next time; gh pr comment doesn't print its ID.
+		return nil
+	}
+	if s.posted == nil {
+		s.posted = map[string]Comment{}
+	}
+	s.posted[pr] = c
+	return nil
+}
+
+// flagComment explains why open[i]'s PR is labeled: its own findings, and
+// those below it that put it at risk.
+func flagComment(open []app.StackLayer, hits []hit, i int, rep Report, base string) string {
+	var why []string
+	for _, h := range hits {
+		if h.at == i {
+			why = append(why, fmt.Sprintf("This PR's branch `%s` (%s): %s.", open[i].Task.Branch, open[i].Task.ID, h.cause))
+		}
+	}
+	for _, h := range hits {
+		if h.at < i && h.from <= i {
+			below := open[h.at].Task
+			why = append(why, fmt.Sprintf("It is stacked on %s (`%s`, %s), where: %s.", below.ID, below.Branch, below.PR, h.cause))
+		}
+	}
+	if len(why) == 0 {
+		// Labeled on an earlier tick, below what is wrong now.
+		why = append(why, fmt.Sprintf("Saddle flagged the stack from %s up: %s.", rep.Task, rep.Cause))
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "**Saddle labeled this PR `%s`.** Don't merge it until the label is gone.\n\n**Why:**\n", Label)
+	for _, w := range why {
+		b.WriteString("- " + w + "\n")
+	}
+	fmt.Fprintf(&b, "\n**What's needed:** run `saddle restack` (or have the orchestrator run it) to rebuild the stack on origin/%s. "+
+		"Don't fix the branch by hand with git or a worker. If restack stops on a conflict, a human has to decide how to resolve it. "+
+		"Until then `saddle prs` and `saddle land` refuse to build on the stack.\n\n"+
+		"**What clears it:** nothing to do on this PR. Once the stack checks clean after the restack, the sentinel removes the label and updates this comment.\n", base)
+	return b.String()
+}
+
+// clearComment replaces a flag comment once the label is lifted.
+func clearComment(flag app.StackFlag) string {
+	return fmt.Sprintf("**Cleared:** the PR stack checks clean again, so Saddle removed the `%s` label. "+
+		"It had been flagged from %s up: %s.\n", Label, flag.Task, flag.Cause)
 }

@@ -380,3 +380,159 @@ func TestSentinelSkipsWhileTrainBusy(t *testing.T) {
 		t.Fatalf("check with the train busy: %+v, %v", rep, err)
 	}
 }
+
+// commentGH is GitHub through the fake gh, except PR comments, which it keeps
+// in memory so tests can read them back.
+type commentGH struct {
+	*GH
+	comments     map[string][]Comment
+	n            int
+	posts, edits int
+}
+
+func newCommentGH(a *app.App) *commentGH {
+	return &commentGH{GH: &GH{Dir: a.Root}, comments: map[string][]Comment{}}
+}
+
+func (g *commentGH) Comments(url string) ([]Comment, error) {
+	return append([]Comment(nil), g.comments[url]...), nil
+}
+
+func (g *commentGH) AddComment(url, body string) error {
+	g.n++
+	g.posts++
+	g.comments[url] = append(g.comments[url], Comment{ID: fmt.Sprintf("IC_%d", g.n), Body: body})
+	return nil
+}
+
+func (g *commentGH) EditComment(id, body string) error {
+	g.edits++
+	for url, cs := range g.comments {
+		for i := range cs {
+			if cs[i].ID == id {
+				g.comments[url][i].Body = body
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("no comment %s", id)
+}
+
+// only returns the one comment on url, failing on none or several.
+func (g *commentGH) only(t *testing.T, url string) string {
+	t.Helper()
+	cs := g.comments[url]
+	if len(cs) != 1 {
+		t.Fatalf("%s has %d comments, want 1: %+v", url, len(cs), cs)
+	}
+	return cs[0].Body
+}
+
+// Each PR the sentinel labels gets one comment saying why, what a human must
+// do, and what clears it. Repeat ticks, even from a restarted sentinel, leave
+// it alone; a new cause edits it; clearing the stack turns it into a
+// resolution note.
+func TestSentinelExplainsNeedsHumanInPRComment(t *testing.T) {
+	a, origin := setup(t)
+	fake := newFakeGH(t)
+	t1 := landTask(t, a, "t1", "one")
+	t2 := landTask(t, a, "t2", "two")
+	t3 := landTask(t, a, "t3", "three")
+	if _, err := a.PRs(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tk := range []*store.Task{&t1, &t2, &t3} {
+		*tk, _ = a.Store.Task(tk.ID)
+	}
+	other := filepath.Join(t.TempDir(), "other")
+	git(t, a.Root, "clone", "-q", origin, other)
+	git(t, other, "merge", "-q", "--squash", "origin/"+t1.Branch)
+	git(t, other, "commit", "-qm", "one (#1)")
+	git(t, other, "push", "-q", "origin", "main")
+	fake.setPR(t1.PR, "MERGED", "UNKNOWN")
+
+	gh := newCommentGH(a)
+	s := New(a)
+	s.GH = gh
+	if _, err := s.Check(); err != nil {
+		t.Fatal(err)
+	}
+	if len(gh.comments[t1.PR]) != 0 {
+		t.Fatalf("merged PR commented on: %+v", gh.comments[t1.PR])
+	}
+	for _, tk := range []store.Task{t2, t3} {
+		body := gh.only(t, tk.PR)
+		for _, want := range []string{commentMarker, Label, t1.PR, "merged", "restack", "clear"} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s's comment lacks %q:\n%s", tk.ID, want, body)
+			}
+		}
+	}
+	first := gh.only(t, t3.PR)
+
+	// Repeat ticks, and a restarted sentinel, neither post nor edit.
+	if _, err := s.Check(); err != nil {
+		t.Fatal(err)
+	}
+	s2 := New(a)
+	s2.GH = gh
+	if _, err := s2.Check(); err != nil {
+		t.Fatal(err)
+	}
+	if gh.posts != 2 || gh.edits != 0 {
+		t.Fatalf("repeat ticks: %d posts, %d edits; want 2, 0", gh.posts, gh.edits)
+	}
+
+	// A new finding on t3 changes its cause: its comment is edited, not doubled.
+	fake.setPR(t3.PR, "OPEN", "CONFLICTING")
+	if _, err := s2.Check(); err != nil {
+		t.Fatal(err)
+	}
+	if body := gh.only(t, t3.PR); body == first || !strings.Contains(body, "conflicts") {
+		t.Fatalf("t3's comment not updated with the new cause:\n%s", body)
+	}
+	if gh.posts != 2 {
+		t.Fatalf("changed cause posted a new comment: %d posts", gh.posts)
+	}
+
+	// Restacked and clean: each comment becomes a resolution note.
+	if _, err := a.Restack(); err != nil {
+		t.Fatal(err)
+	}
+	fake.setPR(t3.PR, "OPEN", "MERGEABLE")
+	if rep, err := s2.Check(); err != nil || rep.AtRisk {
+		t.Fatalf("after restack: %+v, %v", rep, err)
+	}
+	for _, tk := range []store.Task{t2, t3} {
+		body := gh.only(t, tk.PR)
+		if !strings.Contains(body, commentMarker) || !strings.Contains(body, "Cleared") {
+			t.Fatalf("%s's comment not resolved:\n%s", tk.ID, body)
+		}
+	}
+	if gh.posts != 2 {
+		t.Fatalf("clearing posted new comments: %d posts", gh.posts)
+	}
+}
+
+// GH reads, posts and edits PR comments through gh.
+func TestGHComments(t *testing.T) {
+	fake := newFakeGH(t)
+	g := &GH{Dir: t.TempDir()}
+	url := "https://github.com/o/r/pull/7"
+	must(t, os.WriteFile(filepath.Join(fake.dir, "view-7"),
+		[]byte(`{"comments":[{"id":"IC_1","body":"hi"},{"id":"IC_2","body":"`+commentMarker+` x"}]}`), 0o644))
+	cs, err := g.Comments(url)
+	must(t, err)
+	if len(cs) != 2 || cs[1].ID != "IC_2" || !strings.Contains(cs[1].Body, commentMarker) {
+		t.Fatalf("comments = %+v", cs)
+	}
+	must(t, g.AddComment(url, "posted"))
+	must(t, g.EditComment("IC_2", "edited"))
+	log := strings.Join(fake.log(), "\n")
+	for _, want := range []string{"pr view " + url + " --json comments", "pr comment " + url + " --body posted",
+		"updateIssueComment", "id=IC_2", "body=edited"} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("gh log lacks %q:\n%s", want, log)
+		}
+	}
+}
