@@ -47,3 +47,25 @@ func TestSpawnFanOutCap(t *testing.T) {
 		t.Fatalf("slot not freed: %v", err)
 	}
 }
+
+// #142: spawn.max_depth and spawn.max_children come from config.
+func TestSpawnCapsFromConfig(t *testing.T) {
+	a, _ := setup(t)
+	a.Cfg.Spawn.MaxDepth, a.Cfg.Spawn.MaxChildren = 1, 1
+	p, err := a.Spawn(SpawnReq{Title: "parent"})
+	must(t, err)
+	if d, c := a.spawnCaps(); d != 1 || c != 1 {
+		t.Fatalf("spawnCaps = %d, %d", d, c)
+	}
+	_, err = a.Spawn(SpawnReq{Title: "kid", Parent: p.ID})
+	if err == nil || !strings.Contains(err.Error(), "depth") {
+		t.Fatalf("depth 2 with max_depth 1: err = %v", err)
+	}
+	a.Cfg.Spawn.MaxDepth = 0 // no cap
+	_, err = a.Spawn(SpawnReq{Title: "kid", Parent: p.ID})
+	must(t, err)
+	_, err = a.Spawn(SpawnReq{Title: "kid 2", Parent: p.ID})
+	if err == nil || !strings.Contains(err.Error(), "children") {
+		t.Fatalf("second child with max_children 1: err = %v", err)
+	}
+}

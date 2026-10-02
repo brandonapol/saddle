@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -273,5 +274,73 @@ func TestTrainDefaultsAndParse(t *testing.T) {
 	writeConfig(t, root, "[train]\noutput = \"linear\"\n")
 	if _, err := Load(root); err == nil {
 		t.Fatal("bad train.output: want error")
+	}
+}
+
+// #142: adapter commands and spawn caps come from config.
+func TestAdaptersAndSpawnCaps(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Spawn.MaxDepth != 3 || cfg.Spawn.MaxChildren != 8 || len(cfg.Adapters) != 0 {
+		t.Fatalf("defaults: spawn %+v, adapters %+v", cfg.Spawn, cfg.Adapters)
+	}
+	root := t.TempDir()
+	writeConfig(t, root, "[adapters.codex]\ncmd = \"/opt/codex\"\nargs = [\"--sandbox\", \"x\"]\n[spawn]\nmax_depth = 5\nmax_children = 2\n")
+	if cfg, err = Load(root); err != nil {
+		t.Fatal(err)
+	}
+	if c := cfg.Adapters["codex"]; c.Cmd != "/opt/codex" || len(c.Args) != 2 || c.Args[1] != "x" {
+		t.Fatalf("adapters.codex = %+v", c)
+	}
+	if cfg.Spawn.MaxDepth != 5 || cfg.Spawn.MaxChildren != 2 {
+		t.Fatalf("spawn = %+v", cfg.Spawn)
+	}
+	writeConfig(t, root, "[spawn]\nmax_depth = -1\n")
+	if _, err := Load(root); err == nil {
+		t.Fatal("negative spawn.max_depth: want error")
+	}
+}
+
+// #152: auto-merge is off unless the config turns it on.
+func TestAutoMergeDefaultOff(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Train.AutoMerge {
+		t.Fatal("train.auto_merge defaults on")
+	}
+	root := t.TempDir()
+	writeConfig(t, root, "[train]\nauto_merge = true\n")
+	if cfg, err = Load(root); err != nil || !cfg.Train.AutoMerge {
+		t.Fatalf("train = %+v, %v", cfg.Train, err)
+	}
+}
+
+// The template documents the new keys, uncommented they still parse.
+func TestTemplateDocumentsNewKeys(t *testing.T) {
+	for _, k := range []string{"auto_merge", "[adapters.codex]", "[spawn]", "max_depth", "max_children"} {
+		if !strings.Contains(Template, k) {
+			t.Errorf("template lacks %s", k)
+		}
+	}
+	var lines []string
+	for _, l := range strings.Split(Template, "\n") {
+		if s, ok := strings.CutPrefix(l, "# "); ok && (strings.HasPrefix(s, "[adapters") || strings.HasPrefix(s, "[spawn]") ||
+			strings.HasPrefix(s, "cmd = \"codex\"") || strings.HasPrefix(s, "max_")) {
+			l = s
+		}
+		lines = append(lines, l)
+	}
+	var cfg Config
+	if _, err := toml.Decode(strings.Join(lines, "\n"), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Spawn.MaxDepth != 3 || cfg.Adapters["codex"].Cmd != "codex" {
+		t.Fatalf("uncommented template: spawn %+v adapters %+v", cfg.Spawn, cfg.Adapters)
 	}
 }

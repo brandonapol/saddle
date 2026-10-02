@@ -49,6 +49,28 @@ type Config struct {
 	Sweeper Sweeper `toml:"sweeper"`
 	// CI watches saddle PRs' checks while saddle up runs.
 	CI CI `toml:"ci"`
+	// Adapters sets the command and extra arguments of agent CLIs other than
+	// Claude, by adapter name (codex, grok).
+	Adapters map[string]Adapter `toml:"adapters"`
+	// Spawn caps how deep and wide spawn chains below the orchestrator go.
+	Spawn Spawn `toml:"spawn"`
+}
+
+// Adapter is how saddle launches an agent CLI. An empty Cmd means the
+// adapter's default binary.
+type Adapter struct {
+	Cmd  string   `toml:"cmd"`
+	Args []string `toml:"args"`
+}
+
+// Spawn caps sub-task spawning. 0 means no cap.
+type Spawn struct {
+	// MaxDepth is how deep spawn chains go: the orchestrator's tasks are
+	// depth 1, their sub-tasks depth 2, and so on.
+	MaxDepth int `toml:"max_depth"`
+	// MaxChildren caps a task's working children. The orchestrator's are
+	// capped by concurrency instead.
+	MaxChildren int `toml:"max_children"`
 }
 
 // Regen is a set of derived files and the command that rebuilds them. When a
@@ -138,6 +160,10 @@ type Train struct {
 	// linear stack in train order; "per-task" puts every task on base unless
 	// its work only applies on top of an earlier task's.
 	Output string `toml:"output"`
+	// AutoMerge lets saddle merge the bottom PR of a ready stack itself, then
+	// restack, until the stack is empty. Off by default; `saddle automerge
+	// on|off` overrides it at runtime and holds keep single stacks out.
+	AutoMerge bool `toml:"auto_merge"`
 }
 
 // Outputs are the PR layouts prs supports.
@@ -172,6 +198,7 @@ func Default() Config {
 			ReviewLabel: "requires review",
 		},
 		CI:    CI{Interval: 10 * time.Minute},
+		Spawn: Spawn{MaxDepth: 3, MaxChildren: 8},
 		Train: Train{MaxAttempts: 2, Output: "stack"},
 		Usage: Usage{
 			Poll: 15 * time.Second,
@@ -239,6 +266,9 @@ func Load(root string) (Config, error) {
 	if !slices.Contains(Outputs, cfg.Train.Output) {
 		return cfg, fmt.Errorf("train.output %q: want one of %s", cfg.Train.Output, strings.Join(Outputs, ", "))
 	}
+	if cfg.Spawn.MaxDepth < 0 || cfg.Spawn.MaxChildren < 0 {
+		return cfg, fmt.Errorf("spawn: max_depth and max_children must not be negative (0 means no cap)")
+	}
 	if cfg.CI.Interval <= 0 {
 		cfg.CI.Interval = Default().CI.Interval
 	}
@@ -293,6 +323,24 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # PR layout: "stack" stacks dependent or same-topic tasks and puts unrelated
 # ones on base; "single" is one linear stack; "per-task" stacks only when it must.
 # output = "stack"
+# Merge the bottom PR of a ready stack (green, mergeable, not a draft, not
+# needs-human) and restack, until the stack is empty. Off by default;
+# saddle automerge on|off|hold|release steers it at runtime.
+# auto_merge = false
+
+[spawn]
+# How deep spawn chains go below the orchestrator, and how many working
+# children one task may have. 0 means no cap.
+# max_depth = 3
+# max_children = 8
+
+# Agent CLIs other than claude: the command and extra arguments.
+# [adapters.codex]
+# cmd = "codex"
+# args = []   # e.g. sandbox/approval flags
+# [adapters.grok]
+# cmd = "grok"
+# args = []
 
 [triage]
 # Uses TypeSafe Jev (set JEV_TOKEN; make setup asks for it) to decide which agent events reach
