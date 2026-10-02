@@ -28,6 +28,9 @@ type keyMap struct {
 	// Narrator questions.
 	Ask, AskScreen key.Binding
 
+	// Merge view.
+	AutoMerge, Hold, Rebase key.Binding
+
 	// Task list.
 	Up, Down, Open, Skill, Spawn, Pause, Kill, Land, Back key.Binding
 }
@@ -64,6 +67,10 @@ func newKeyMap() keyMap {
 		Ask:       b("alt+a", "ask narrator", "alt+a"),
 		AskScreen: b("alt+s", "send agent's screen", "alt+s"),
 
+		AutoMerge: b("M", "auto-merge on/off", "M"),
+		Hold:      b("h", "hold/release", "h"),
+		Rebase:    b("r", "rebase stack", "r"),
+
 		Up:    b("k", "up", "k", "up"),
 		Down:  b("j/k", "select", "j", "down"),
 		Open:  b("enter", "open window", "enter", "a"),
@@ -89,6 +96,7 @@ func (k keyMap) groups() []keyGroup {
 		{"Anywhere", []key.Binding{k.ViewControl, k.ViewPlan, k.ViewMerge, k.Help, k.NextAgent, k.PrevAgent, k.Focus, k.PageUp, k.PageDown, k.Restart, k.Quit}},
 		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget, k.Ask, k.AskScreen}},
 		{"Agents", []key.Binding{k.Down, k.Up, k.Open, k.Skill, k.Spawn, k.Pause, k.Kill, k.Land, k.Back}},
+		{"Merge view", []key.Binding{k.AutoMerge, k.Hold, k.Rebase}},
 		{"Terminal", []key.Binding{k.Terminal, k.TermBack, k.TermScrollUp, k.TermScrollDown}},
 	}
 }
@@ -102,6 +110,9 @@ func (m *model) help() []key.Binding {
 	}
 	if m.focus == focusTerm {
 		return []key.Binding{withHelp(k.Terminal, "ctrl+`", "hide"), k.TermBack, k.TermScrollUp}
+	}
+	if m.view == viewMerge {
+		return []key.Binding{withHelp(k.Down, "j/k", "stack"), k.AutoMerge, k.Hold, k.Rebase, k.ViewControl, k.Help, k.Terminal, k.Quit}
 	}
 	if m.view != viewControl {
 		return []key.Binding{k.ViewControl, k.Help, k.Terminal, k.Quit}

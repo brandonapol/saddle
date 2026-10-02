@@ -20,6 +20,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/automerge"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/orch"
 	"github.com/brandonapol/saddle/internal/store"
@@ -130,6 +131,10 @@ type model struct {
 	cost      float64
 	limits    *usage.LimitEstimate                         // plan-limit estimate from the last refresh
 	graph     *usageGraph                                  // the last hour of usage by model
+	am        *automerge.Status                            // auto-merge as last saved; nil until read
+	amer      automerger                                   // the merge view's actions; nil means the app's
+	amBusy    string                                       // the auto-merge action running, if any
+	stackSel  string                                       // the merge view's selected stack
 	narr      narrSink                                     // narrator lines; nil when the narrator is off
 	asker     asker                                        // answers questions; nil when the narrator is off
 	askScreen bool                                         // the next question carries the selected agent's screen
@@ -172,6 +177,7 @@ type (
 		limits  *usage.LimitEstimate
 		stats   map[string]agentStats
 		graph   *usageGraph
+		am      *automerge.Status
 	}
 	flashMsg   string
 	quitExpiry time.Time // the arming a timer was set for
@@ -321,6 +327,9 @@ func (m *model) refresh() tea.Cmd {
 		}
 		msg := refreshMsg{tasks: ts, peek: peek, screens: screens, stats: readStats(a, time.Now())}
 		msg.limits, msg.graph = readUsage(a, time.Now())
+		if st, err := a.AutomergeState(); err == nil {
+			msg.am = &st
+		}
 		return msg
 	}
 }
@@ -390,6 +399,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.graph != nil {
 			m.graph = msg.graph
 		}
+		if msg.am != nil {
+			m.am = msg.am
+		}
 		m.sel = 0
 		for i, t := range m.tasks {
 			if t.ID == selID {
@@ -435,6 +447,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case flashMsg:
 		m.flash, m.flashAt = string(msg), time.Now()
+
+	case amDoneMsg:
+		m.amBusy = ""
+		m.flash, m.flashAt = string(msg), time.Now()
+		cmds = append(cmds, m.refresh())
 
 	case tea.MouseMsg:
 		m.scrub = mouseScrub{}
