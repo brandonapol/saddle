@@ -551,6 +551,7 @@ const (
 	ChatAssistant = "assistant"
 	ChatTool      = "tool"
 	ChatEvent     = "event"
+	ChatNarrator  = "narrator" // a line from the event narrator
 )
 
 type ChatLine struct {

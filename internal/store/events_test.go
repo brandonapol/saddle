@@ -71,7 +71,7 @@ func TestNarratorSpendPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if v, err := s.NarratorSpend("2026-10-02"); err != nil || v != 0.4 {
 		t.Fatalf("after reopen = %v, %v", v, err)
 	}
