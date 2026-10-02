@@ -70,6 +70,17 @@ type chatLine struct {
 	role string
 	text string
 	attn int
+	// out caches the line rendered at width outW. Clear it when the line
+	// changes; setAttn does.
+	out  string
+	outW int
+}
+
+// setAttn changes a chat line's attention level and drops its cached
+// rendering.
+func (m *model) setAttn(i, attn int) {
+	m.chat[i].attn = attn
+	m.chat[i].out = ""
 }
 
 // attention is a worker event that may need the orchestrator or the user.
@@ -120,6 +131,8 @@ type model struct {
 	flashAt   time.Time
 
 	quitArmedAt time.Time // first ctrl+c of a pending quit; zero when disarmed
+
+	scrub mouseScrub // drops pieces of mouse reports split across reads
 
 	term      *termpane.Term // the shell in the bottom pane; nil until opened or after it exits
 	termOpen  bool           // the pane is shown
@@ -388,10 +401,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case salienceMsg:
 		if msg.idx < len(m.chat) {
 			if msg.needs {
-				m.chat[msg.idx].attn = attnUrgent
+				m.setAttn(msg.idx, attnUrgent)
 				bell()
 			} else {
-				m.chat[msg.idx].attn = attnQuiet
+				m.setAttn(msg.idx, attnQuiet)
 			}
 		}
 
@@ -411,15 +424,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flash, m.flashAt = string(msg), time.Now()
 
 	case tea.MouseMsg:
+		m.scrub = mouseScrub{}
 		if m.termMouse(msg) {
 			break
 		}
+		// Scrolling moves the viewport over content it already has.
 		var c tea.Cmd
 		m.vp, c = m.vp.Update(msg)
 		m.follow = m.vp.AtBottom()
-		cmds = append(cmds, c)
+		return m, c
 
 	case tea.KeyMsg:
+		if m.scrub.drop(msg) {
+			return m, nil
+		}
 		if c, handled := m.key(msg); handled {
 			return m, c
 		}
@@ -623,7 +641,7 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 		m.addChat(store.ChatAssistant, strings.TrimSpace(e.Text))
 		if _, ok := urgentMark(e.Text); ok {
 			// The orchestrator flagged it itself; no need to ask Jev.
-			m.chat[len(m.chat)-1].attn = attnUrgent
+			m.setAttn(len(m.chat)-1, attnUrgent)
 			bell()
 			return nil
 		}
@@ -896,8 +914,12 @@ func (m *model) renderChat() {
 	}
 	var b strings.Builder
 	wrap := lipgloss.NewStyle().Width(w - 2)
-	for _, c := range m.chat {
-		b.WriteString(renderLine(c, w, wrap))
+	for i := range m.chat {
+		c := &m.chat[i]
+		if c.out == "" || c.outW != w {
+			c.out, c.outW = renderLine(*c, w, wrap), w
+		}
+		b.WriteString(c.out)
 		b.WriteString("\n")
 	}
 	if m.streaming.Len() > 0 {
