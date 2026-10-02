@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -62,6 +63,14 @@ func TestFooterHelpMatchesBindings(t *testing.T) {
 					t.Errorf("view %d focus %d: footer lacks the view keys", v, focus)
 				}
 			}
+		}
+	}
+	// The merge view's footer names its auto-merge keys.
+	m.view, m.focus, m.helpOpen = viewMerge, focusTasks, false
+	hs := m.help()
+	for _, want := range []key.Binding{m.keys.AutoMerge, m.keys.Hold, m.keys.Rebase} {
+		if !slices.ContainsFunc(hs, func(b key.Binding) bool { return b.Help().Key == want.Help().Key }) {
+			t.Errorf("merge footer lacks %q", want.Help().Key)
 		}
 	}
 	// The real keys reach their bindings.

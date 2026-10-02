@@ -38,6 +38,10 @@ func (m *model) viewHeader() string {
 	}
 	current := lipgloss.NewStyle().Foreground(cAccent).Bold(true).Render(viewNames[m.view])
 
+	// Auto-merge that is on, stopped or holding stacks leads; off trails.
+	amLong, amShort, amColor := m.amHeader()
+	amFirst := amLong != "" && amColor != cDim
+
 	var parts []string
 	opt := func(n int, c lipgloss.Color, s string) {
 		if n > 0 {
@@ -75,11 +79,29 @@ func (m *model) viewHeader() string {
 	} else {
 		line += " " + current
 	}
+	fits := func(s string) bool { return lipgloss.Width(line+"  "+s) < m.width }
+	addAM := func() {
+		room := m.width - lipgloss.Width(line) - 3
+		switch {
+		case fits(amLong):
+			line += "  " + color(amColor, "%s", amLong)
+		case m.am.Stopped != "" && room >= 24:
+			line += "  " + color(amColor, "%s", truncate(amLong, room))
+		case fits(amShort):
+			line += "  " + color(amColor, "%s", amShort)
+		}
+	}
+	if amFirst {
+		addAM()
+	}
 	for _, p := range parts {
-		if lipgloss.Width(line+"  "+p) >= m.width {
+		if !fits(p) {
 			break
 		}
 		line += "  " + p
+	}
+	if amLong != "" && !amFirst {
+		addAM()
 	}
 	if gap := m.width - lipgloss.Width(line) - lipgloss.Width(right); gap >= 1 {
 		line += strings.Repeat(" ", gap) + right

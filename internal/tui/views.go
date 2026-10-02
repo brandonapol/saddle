@@ -57,6 +57,11 @@ func (m *model) routeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 		m.helpOpen = true
 		return nil, true
 	}
+	if m.view == viewMerge {
+		if c, ok := m.mergeKey(k); ok {
+			return c, true
+		}
+	}
 	return nil, m.view != viewControl
 }
 
@@ -132,7 +137,8 @@ func (m *model) viewPlan(w, h int) string {
 
 // viewMerge lists the tasks in the merge train with their train state.
 func (m *model) viewMerge(w, h int) string {
-	var rows []string
+	rows := append(m.viewStacks(w-2), "", sBright.Render("Train"))
+	train := len(rows)
 	for _, t := range m.tasks {
 		if t.Train == "" {
 			continue
@@ -145,7 +151,7 @@ func (m *model) viewMerge(w, h int) string {
 		rows = append(rows, lipgloss.NewStyle().Foreground(gc).Render(g)+" "+sDim.Render(fmt.Sprintf("%-5s", t.ID))+" "+
 			sText.Render(t.Title)+"  "+state)
 	}
-	if len(rows) == 0 {
+	if len(rows) == train {
 		rows = append(rows, sDim.Render("The train is empty. Tasks join it when they call done."))
 	}
 	title := "MERGE TRAIN"
