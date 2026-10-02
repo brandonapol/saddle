@@ -32,8 +32,29 @@ func TestOverlap(t *testing.T) {
 		{"pkg/billing/meter/**", "pkg/billing/invoice/**", false},
 		{"pkg/billing/meter", "pkg/billing/meter/x.go", true},
 		{"internal/stripe/**", "web/**", false},
-		{"**/*.go", "web/x.ts", true}, // conservative
+		{"**/*.go", "web/x.ts", true}, // conservative: x.ts could be a directory
+		{"**/*.go", "web/*.ts", false},
 		{"go.sum", "go.mod", false},
+		{"internal/app/automerge*.go", "internal/app/lifecycle.go", false},
+		{"automerge*.go", "lifecycle.go", false},
+		{"sync*.go", "briefs_test.go", false},
+		{"sync*.go", "*_test.go", true},
+		{"a*.go", "ab*.go", true},
+		{"a*.go", "b*.go", false},
+		{"*.go", "*.ts", false},
+		{"**/x.go", "a/b/x.go", true},
+		{"**/x.go", "a/b/y.go", true}, // y.go could be a directory
+		{"**/x.go", "a/b/*.go", true},
+		{"internal/**", "internal/app/x.go", true},
+		{"internal/**", "cmd/**", false},
+		{"internal/*/x.go", "internal/app/y.go", false},
+		{"web/**/*.tsx", "web/a/*.ts", false},
+		{"foo/*.go", "foo/bar.go", true},
+		{"foo/*.go", "foo", true},
+		{"a/{b,c}.go", "a/b.go", true},
+		{"internal/{a,b}/**", "internal/c/x.go", true}, // conservative
+		{"a/*.go", "a/*.go", true},
+		{"internal/app/x.go", "internal/app/x.go", true},
 	}
 	for _, c := range cases {
 		if got := Overlap(c.a, c.b); got != c.want {
