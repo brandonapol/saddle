@@ -125,19 +125,40 @@ type RebaseResult struct {
 	OK        bool
 	Conflicts []string
 	Output    string
+	// Skipped counts commits left out because onto already held their work.
+	Skipped int
 }
 
 // Rebase rebases the current branch of dir onto onto, with directory rename
 // detection on so files added under a moved directory follow the move. On
 // conflict it aborts when abort is true, leaving the worktree as it was.
 func Rebase(dir, onto string, abort bool) (RebaseResult, error) {
-	out, err := Run(dir, "-c", "merge.directoryRenames=true", "-c", "merge.renames=true",
-		"-c", "rerere.enabled=true", "-c", "core.editor=true", "rebase", onto)
+	return RebaseOnto(dir, onto, "", abort)
+}
+
+// RebaseOnto is Rebase replaying only the commits after from (`git rebase
+// --onto onto from`); an empty from replays everything onto lacks. A rebase
+// that fails without conflicts is always aborted, so it never leaves the
+// worktree mid-rebase with nothing for anyone to resolve.
+func RebaseOnto(dir, onto, from string, abort bool) (RebaseResult, error) {
+	args := []string{"-c", "merge.directoryRenames=true", "-c", "merge.renames=true",
+		"-c", "rerere.enabled=true", "-c", "core.editor=true", "rebase"}
+	if from != "" {
+		args = append(args, "--onto", onto, from)
+	} else {
+		args = append(args, onto)
+	}
+	out, err := Run(dir, args...)
 	if err == nil {
 		return RebaseResult{OK: true, Output: out}, nil
 	}
 	conf, _ := Run(dir, "diff", "--name-only", "--diff-filter=U")
 	if conf == "" {
+		if RebaseInProgress(dir) {
+			if _, aerr := Run(dir, "rebase", "--abort"); aerr != nil {
+				return RebaseResult{Output: err.Error()}, fmt.Errorf("%w; and git rebase --abort failed: %v", err, aerr)
+			}
+		}
 		return RebaseResult{Output: err.Error()}, err
 	}
 	res := RebaseResult{Conflicts: strings.Split(conf, "\n"), Output: err.Error()}
