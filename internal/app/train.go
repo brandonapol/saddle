@@ -33,9 +33,6 @@ func (a *App) Land() ([]LandResult, error) {
 	if strings.TrimSpace(a.Cfg.Test.Cmd) == "" {
 		return nil, errNoTestCmd
 	}
-	if err := a.checkFlag(); err != nil {
-		return nil, err
-	}
 	unlock, err := a.lockTrain()
 	if err != nil {
 		return nil, err
@@ -49,15 +46,77 @@ func (a *App) Land() ([]LandResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A flagged stack holds back only work that touches its broken layers.
+	frozen, err := a.frozenFiles()
+	if err != nil {
+		return nil, err
+	}
 	var out []LandResult
+	held := 0
 	for _, e := range entries {
 		if e.State != store.Queued {
+			continue
+		}
+		if f := a.touches(e.Task, frozen); f != "" {
+			held++
+			out = append(out, LandResult{Task: e.Task, State: TrainHeld,
+				Note: "held: it changes " + f + ", which the at-risk part of the stack changed; it lands once the stack checks clean"})
 			continue
 		}
 		r := a.landOne(e.Task)
 		out = append(out, r)
 	}
+	if held > 0 && held == len(out) {
+		return out, a.checkFlag()
+	}
 	return out, nil
+}
+
+// frozenFiles maps each file the at-risk layers of a flagged stack changed to
+// the layer; nil when the stack isn't frozen.
+func (a *App) frozenFiles() (map[string]string, error) {
+	f, ok, err := a.Flag()
+	if err != nil || !ok || f.Acked {
+		return nil, err
+	}
+	stack, err := a.landedStack()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	at := false
+	for _, l := range stack {
+		at = at || l.ID == f.Task
+		if !at || l.From == "" || l.Lost != "" {
+			continue
+		}
+		files, _ := gitx.ChangedFiles(a.Root, l.From, l.To)
+		for _, file := range files {
+			out[file] = l.ID
+		}
+	}
+	return out, nil
+}
+
+// touches names a file the queued task changed that frozen holds, or "".
+func (a *App) touches(task string, frozen map[string]string) string {
+	if len(frozen) == 0 {
+		return ""
+	}
+	t, err := a.Store.Task(task)
+	if err != nil {
+		return ""
+	}
+	out, err := gitx.Run(a.Root, "diff", "--name-only", a.Cfg.Integration+"..."+t.Branch)
+	if err != nil || out == "" {
+		return ""
+	}
+	for _, f := range strings.Split(out, "\n") {
+		if owner, ok := frozen[f]; ok {
+			return f + " (" + owner + ")"
+		}
+	}
+	return ""
 }
 
 // lockTrain takes the train lock, which serialises everything that moves the
@@ -105,6 +164,9 @@ type StackFlag struct {
 	Task  string   `json:"task"`  // the first broken task
 	Cause string   `json:"cause"` // why the stack is at risk
 	PRs   []string `json:"prs"`   // PRs labeled for it
+	// Acked means someone acknowledged the flag (sentinel ack): it freezes
+	// nothing and carries no labels until the first broken task changes.
+	Acked bool `json:"acked,omitempty"`
 }
 
 func (a *App) flagPath() string { return a.stateDir("stack-at-risk.json") }
@@ -146,14 +208,20 @@ func (a *App) ClearFlag() error {
 	return nil
 }
 
-// checkFlag refuses while the stack is flagged at risk.
+// checkFlag refuses while the stack is flagged at risk and not acked.
 func (a *App) checkFlag() error {
 	f, ok, err := a.Flag()
-	if err != nil || !ok {
+	if err != nil || !ok || f.Acked {
 		return err
 	}
-	return fmt.Errorf("the PR stack is flagged at risk from %s up (%s), so nothing was pushed, landed or opened. "+
-		"Run restack to rebuild it; the flag clears once the stack checks clean", f.Task, f.Cause)
+	return flagErr(f)
+}
+
+func flagErr(f StackFlag) error {
+	return fmt.Errorf("the PR stack is flagged at risk from %s up (%s), so nothing from there up was pushed, landed or opened. "+
+		"Run restack to rebuild it; the flag clears once the stack checks clean. "+
+		"If it can't be fixed that way, `saddle unstack %s` drops the task from the stack and `saddle sentinel ack` acknowledges the flag",
+		f.Task, f.Cause, f.Task)
 }
 
 func (a *App) landOne(id string) LandResult {
@@ -336,39 +404,59 @@ func (a *App) Sync(task string) (gitx.RebaseResult, error) {
 	return rr, err
 }
 
-// PRs pushes every landed branch and opens or updates a stack of PRs: the
-// first targets base, each later one targets the branch landed before it.
-// It pushes the commits the train landed, never whatever the branches point
-// at, and refuses when a branch has drifted from its landed commit.
+// PRs pushes every landed branch in the stack and opens or updates a stack
+// of PRs: the first targets base, each later one targets the branch landed
+// before it. It pushes the commits the train landed, never whatever the
+// branches point at. Tasks GitHub says are done leave the stack first (see
+// ReconcileStack). Layers below the first broken or flagged one are
+// published; from there up nothing is pushed or changed, and the error says
+// why.
 func (a *App) PRs() ([]string, error) {
-	if err := a.checkFlag(); err != nil {
+	unlock, err := a.lockTrain()
+	if err != nil {
 		return nil, err
 	}
-	all, err := a.landedStack()
+	defer unlock()
+	if _, err := a.ReconcileStack(a.ghLookup); err != nil {
+		return nil, err
+	}
+	all, err := a.landedAll()
 	if err != nil {
 		return nil, err
 	}
 	if len(all) == 0 {
 		return nil, fmt.Errorf("nothing has landed yet")
 	}
-	if err := a.checkDrift(all); err != nil {
+	landed := stacked(all)
+	a.healBranches(landed)
+	flag, flagged, err := a.Flag()
+	if err != nil {
 		return nil, err
 	}
-	if err := a.checkStack(all); err != nil {
-		return nil, err
-	}
+	var stop error
 	var stack []store.Task
-	base := a.Cfg.Base
-	for _, l := range all {
-		if l.merged() {
-			continue
+	base, baseName := a.baseRef(), a.Cfg.Base
+	for _, l := range landed {
+		if flagged && !flag.Acked && l.ID == flag.Task {
+			stop = flagErr(flag)
+			break
 		}
+		prob, err := a.layerProblem(l, base, baseName)
+		if err != nil {
+			return nil, err
+		}
+		if prob != "" {
+			stop = fmt.Errorf("the PR stack doesn't match what the train landed, so nothing from %s up was pushed and no PR there changed. "+
+				"Run restack to rebuild it; don't fix it with git:\n  %s: %s", l.ID, l.ID, prob)
+			break
+		}
+		a.warnOutsideClaims(l, base)
 		t := l.Task
-		if _, err := trainGit(a.Root, "push", "--force-with-lease=refs/heads/"+t.Branch, "origin", l.To+":refs/heads/"+t.Branch); err != nil {
+		if err := a.pushLanded(t.Branch, l.To); err != nil {
 			return nil, err
 		}
 		if t.PR == "" {
-			url, err := gh(a.Root, "pr", "create", "--base", base, "--head", t.Branch, "--title", t.Title, "--body", t.Summary)
+			url, err := gh(a.Root, "pr", "create", "--base", baseBranch(a.Cfg.Base, stack), "--head", t.Branch, "--title", t.Title, "--body", t.Summary)
 			if err != nil {
 				return nil, err
 			}
@@ -376,10 +464,10 @@ func (a *App) PRs() ([]string, error) {
 			if err := a.Store.SetField(t.ID, "pr", t.PR); err != nil {
 				return nil, err
 			}
-		} else if _, err := gh(a.Root, "pr", "edit", t.PR, "--base", base); err != nil {
+		} else if _, err := gh(a.Root, "pr", "edit", t.PR, "--base", baseBranch(a.Cfg.Base, stack)); err != nil {
 			return nil, err
 		}
-		base = t.Branch
+		base, baseName = l.To, l.ID+"'s branch"
 		stack = append(stack, t)
 	}
 	var urls []string
@@ -403,24 +491,69 @@ func (a *App) PRs() ([]string, error) {
 		}
 		urls = append(urls, t.PR)
 	}
-	return urls, nil
+	return urls, stop
+}
+
+// baseBranch is the branch a new layer's PR targets: base for the bottom one,
+// else the branch of the layer below.
+func baseBranch(base string, below []store.Task) string {
+	if len(below) == 0 {
+		return base
+	}
+	return below[len(below)-1].Branch
 }
 
 // landedTask is a task the train landed, with the range of commits it landed:
-// From..To on the integration branch. From is empty for entries recorded
-// before the train kept ranges.
+// From..To on the integration branch, and the train state it is in.
 type landedTask struct {
 	store.Task
 	From, To string
+	State    string
+	// Recovered marks a range rebuilt from the task's landing because its
+	// train note recorded none (notes written before the train kept ranges, or
+	// emptied by an old restack, #123).
+	Recovered bool
+	// Lost says why the task's landed work can't be told apart; "" if it can.
+	Lost string
 }
 
-// merged reports whether none of the task's commits are left on top of base,
-// i.e. restack found all of them already merged.
-func (l landedTask) merged() bool { return l.From != "" && l.From == l.To }
+// stacked reports whether the task is part of the PR stack: it landed, and
+// nothing (a merge, a close, a kill, unstack) has taken it out since.
+func (l landedTask) stacked() bool { return l.State == store.TrainOK && l.Status != store.Killed }
 
-// landedStack returns the landed tasks in train order. It resolves every
-// landed range in one git process, however many tasks have landed.
+// rangeNote is the train note for l's landed range.
+func (l landedTask) rangeNote() string {
+	if l.From == "" {
+		return l.To
+	}
+	return l.From + ".." + l.To
+}
+
+func stacked(all []landedTask) []landedTask {
+	var out []landedTask
+	for _, l := range all {
+		if l.stacked() {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// landedStack returns the tasks in the PR stack in train order.
 func (a *App) landedStack() ([]landedTask, error) {
+	all, err := a.landedAll()
+	if err != nil {
+		return nil, err
+	}
+	return stacked(all), nil
+}
+
+// landedAll returns every task the train landed, in train order, whether or
+// not it is still in the stack. It resolves the landed ranges in one git
+// process, however many tasks have landed. A note without a usable range is
+// rebuilt from the task's landing event; one that can't be is marked Lost
+// rather than read as "merged".
+func (a *App) landedAll() ([]landedTask, error) {
 	entries, err := a.Store.Train()
 	if err != nil {
 		return nil, err
@@ -434,24 +567,25 @@ func (a *App) landedStack() ([]landedTask, error) {
 		byID[t.ID] = t
 	}
 	type span struct {
-		task           store.Task
+		landedTask
 		note, from, to string
+		ranged         bool
 	}
 	var spans []span
 	var refs []string
 	for _, e := range entries {
-		if e.State != store.TrainOK {
+		if e.State != store.TrainOK && e.State != TrainMerged && e.State != TrainSuperseded {
 			continue
 		}
 		t, ok := byID[e.Task]
-		if !ok {
-			return nil, fmt.Errorf("task %s: %w", e.Task, store.ErrNotFound)
+		if !ok || e.Note == "" {
+			continue
 		}
-		from, to, ok := strings.Cut(e.Note, "..")
-		if !ok {
+		from, to, ranged := strings.Cut(e.Note, "..")
+		if !ranged {
 			to, from = e.Note, ""
 		}
-		spans = append(spans, span{t, e.Note, from, to})
+		spans = append(spans, span{landedTask{Task: t, State: e.State}, e.Note, from, to, ranged})
 		refs = append(refs, to)
 		if from != "" {
 			refs = append(refs, from)
@@ -461,23 +595,89 @@ func (a *App) landedStack() ([]landedTask, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]landedTask, 0, len(spans))
-	for _, sp := range spans {
-		l := landedTask{Task: sp.task}
-		if l.To = commits[sp.to]; l.To == "" {
-			return nil, fmt.Errorf("%s: landed commit %q is gone", sp.task.ID, sp.to)
-		}
-		if sp.from != "" {
-			if l.From = commits[sp.from]; l.From == "" {
-				return nil, fmt.Errorf("%s: landed range %q is gone", sp.task.ID, sp.note)
+	var landings []store.Event // read only if a note needs it
+	readLandings := func() []store.Event {
+		if landings == nil {
+			evs, _ := a.Store.Events(-1)
+			landings = []store.Event{}
+			for _, e := range evs {
+				if e.Kind == "landed" {
+					landings = append(landings, e)
+				}
 			}
+		}
+		return landings
+	}
+	out := make([]landedTask, 0, len(spans))
+	prev := ""
+	for _, sp := range spans {
+		l := sp.landedTask
+		l.To = commits[sp.to]
+		if sp.from != "" {
+			l.From = commits[sp.from]
+		}
+		if !sp.ranged || l.From == "" || l.From == l.To {
+			// No usable range: take it from the task's landing if one says.
+			if from, to, ok := a.landingRange(l.ID, readLandings()); ok {
+				l.From, l.To, l.Recovered = from, to, true
+			} else if !sp.ranged && l.To != "" {
+				if l.From = prev; l.From == "" || l.From == l.To {
+					l.From, _ = gitx.Run(a.Root, "merge-base", a.Cfg.Base, l.To)
+				}
+			}
+		}
+		switch {
+		case l.To == "":
+			l.Lost = fmt.Sprintf("its landed commit %q is gone", sp.to)
+		case l.From == "" || l.From == l.To:
+			l.From = ""
+			l.Lost = fmt.Sprintf("its train note %q records none of its commits and no landing says which", sp.note)
+		}
+		if l.Lost != "" && l.stacked() {
+			l.Lost += fmt.Sprintf("; run `saddle requeue %s` to land it again, or `saddle unstack %s` if its work is elsewhere", l.ID, l.ID)
+		}
+		if l.To != "" {
+			prev = l.To
 		}
 		out = append(out, l)
 	}
 	return out, nil
 }
 
-// Drift lists landed tasks whose branch no longer points at the commit the
+// landingRange is the range task's last landing put on integration, from the
+// landing events: from the head the landing before it left to its own head.
+func (a *App) landingRange(task string, landings []store.Event) (from, to string, ok bool) {
+	at := -1
+	for i, e := range landings {
+		if e.Task == task {
+			at = i
+		}
+	}
+	if at < 0 {
+		return "", "", false
+	}
+	to, err := gitx.RevParse(a.Root, landings[at].Data)
+	if err != nil {
+		return "", "", false
+	}
+	for i := at - 1; i >= 0 && from == ""; i-- {
+		if landings[i].Task != task {
+			from, _ = gitx.RevParse(a.Root, landings[i].Data)
+		}
+	}
+	if from == "" {
+		from, _ = gitx.Run(a.Root, "merge-base", a.Cfg.Base, to)
+	}
+	if from == "" || from == to {
+		return "", "", false
+	}
+	if _, err := gitx.Run(a.Root, "merge-base", "--is-ancestor", from, to); err != nil {
+		return "", "", false
+	}
+	return from, to, true
+}
+
+// Drift lists stacked tasks whose branch no longer points at the commit the
 // train landed, as "task: landed X, branch Y".
 func (a *App) Drift() ([]string, error) {
 	stack, err := a.landedStack()
@@ -490,9 +690,7 @@ func (a *App) Drift() ([]string, error) {
 func (a *App) drift(stack []landedTask) []string {
 	var refs []string
 	for _, l := range stack {
-		if !l.merged() {
-			refs = append(refs, "refs/heads/"+l.Branch)
-		}
+		refs = append(refs, "refs/heads/"+l.Branch)
 	}
 	tips, err := gitx.ResolveCommits(a.Root, refs)
 	if err != nil {
@@ -500,8 +698,8 @@ func (a *App) drift(stack []landedTask) []string {
 	}
 	var out []string
 	for _, l := range stack {
-		if l.merged() {
-			continue
+		if l.Lost != "" || l.Recovered {
+			continue // nothing reliable to compare with
 		}
 		tip, ok := tips["refs/heads/"+l.Branch]
 		switch {
@@ -524,39 +722,34 @@ func (a *App) checkDrift(stack []landedTask) error {
 		"Put each branch back on its landed commit, or land the task again:\n  %s", strings.Join(d, "\n  "))
 }
 
-// StackLayer is one landed task in the PR stack, bottom first.
+// StackLayer is one task in the PR stack, bottom first.
 type StackLayer struct {
-	Task   store.Task
-	Merged bool // base already has all of its work
+	Task store.Task
 	// Problem says why the layer's PR wouldn't show exactly its task's landed
-	// work (its branch drifted, or base..head holds other work); "" if sound.
+	// work (its branch drifted, base..head holds other work, its work isn't
+	// on integration); "" if sound.
 	Problem string
 }
 
-// StackLayers checks every landed task's layer of the PR stack the way prs
-// does, without pushing or warning anyone.
+// StackLayers checks every layer of the PR stack the way prs does, without
+// pushing or warning anyone. Deleted local branches are restored first.
 func (a *App) StackLayers() ([]StackLayer, error) {
 	stack, err := a.landedStack()
 	if err != nil {
 		return nil, err
 	}
+	a.healBranches(stack)
 	var out []StackLayer
 	base, baseName := a.baseRef(), a.Cfg.Base
 	for _, l := range stack {
-		sl := StackLayer{Task: l.Task, Merged: l.merged()}
-		if !sl.Merged {
-			if d := a.drift([]landedTask{l}); len(d) > 0 {
-				_, sl.Problem, _ = strings.Cut(d[0], ": ")
-			} else {
-				probs, err := a.stackProblems(l, base, baseName)
-				if err != nil {
-					return nil, err
-				}
-				sl.Problem = strings.Join(probs, "; ")
-			}
+		prob, err := a.layerProblem(l, base, baseName)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, StackLayer{Task: l.Task, Problem: prob})
+		if l.Lost == "" {
 			base, baseName = l.To, l.ID+"'s branch"
 		}
-		out = append(out, sl)
 	}
 	return out, nil
 }
@@ -573,33 +766,25 @@ func (a *App) baseRef() string {
 	return a.Cfg.Base
 }
 
-// checkStack verifies that every PR in the stack shows exactly its task's
-// work: its head descends from its base's head, base..head holds the task's
-// own landed commits (same count, same patch-ids) and no merge commits. Files
-// changed outside the task's claims only warn the orchestrator.
-func (a *App) checkStack(stack []landedTask) error {
-	var bad []string
-	base, baseName := a.baseRef(), a.Cfg.Base
-	for _, l := range stack {
-		if l.merged() {
-			continue
-		}
-		probs, err := a.stackProblems(l, base, baseName)
-		if err != nil {
-			return err
-		}
-		if len(probs) > 0 {
-			bad = append(bad, fmt.Sprintf("%s (%s): %s", l.ID, l.Branch, strings.Join(probs, "; ")))
-		} else {
-			a.warnOutsideClaims(l, base)
-		}
-		base, baseName = l.To, l.ID+"'s branch"
+// layerProblem says why l's PR, on top of base, wouldn't show exactly its
+// task's work: its range is lost, its branch drifted, its recovered work
+// isn't on integration, or base..head holds other work or merges. Files
+// changed outside the task's claims are not a problem; prs only warns.
+func (a *App) layerProblem(l landedTask, base, baseName string) (string, error) {
+	if l.Lost != "" {
+		return l.Lost, nil
 	}
-	if len(bad) == 0 {
-		return nil
+	if d := a.drift([]landedTask{l}); len(d) > 0 {
+		_, p, _ := strings.Cut(d[0], ": ")
+		return p, nil
 	}
-	return fmt.Errorf("the PR stack doesn't match what the train landed, so nothing was pushed and no PR changed. "+
-		"Run restack to rebuild it; don't fix it with git:\n  %s", strings.Join(bad, "\n  "))
+	if l.Recovered {
+		if _, err := gitx.Run(a.Root, "merge-base", "--is-ancestor", l.To, a.Cfg.Integration); err != nil {
+			return fmt.Sprintf("its landed work (%s) is not on %s; restack puts it back", short(l.To), a.Cfg.Integration), nil
+		}
+	}
+	probs, err := a.stackProblems(l, base, baseName)
+	return strings.Join(probs, "; "), err
 }
 
 func (a *App) stackProblems(l landedTask, base, baseName string) ([]string, error) {

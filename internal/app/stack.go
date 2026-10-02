@@ -22,8 +22,9 @@ type RestackMove struct {
 type RestackResult struct {
 	Base       string        `json:"base"` // the origin/<base> commit the stack now sits on
 	Moves      []RestackMove `json:"moves,omitempty"`
-	Merged     []string      `json:"merged,omitempty"`  // tasks whose work base already has
-	Dropped    int           `json:"dropped,omitempty"` // landed commits base already has
+	Merged     []string      `json:"merged,omitempty"`     // tasks whose work base already has
+	Superseded []string      `json:"superseded,omitempty"` // tasks out of the stack whose commits left integration
+	Dropped    int           `json:"dropped,omitempty"`    // landed commits base already has
 	Retargeted []string      `json:"retargeted,omitempty"`
 }
 
@@ -48,14 +49,17 @@ func (c *RestackConflict) Error() string {
 }
 
 // Restack rebuilds the landed stack on origin/<base> after the base moved or a
-// bottom PR merged. Under the train lock it replays each task's own landed
-// commits in train order, dropping those base already has (same patch-id, or
-// the task's files already match, as after a squash merge). Only once every
-// task replays cleanly does it move refs, each one compare-and-swap: the task
-// branches, then integration. It then force-with-lease pushes the moved
-// branches and retargets the PRs; a merged task's PR is skipped and the next
-// one targets base. A conflict stops it before any ref moves and goes back to
-// the task that owns the commit. Restack never resolves one itself.
+// bottom PR merged. Under the train lock it first takes the tasks GitHub says
+// are done out of the stack (merged, closed, killed; see ReconcileStack), then
+// replays each stacked task's own landed commits in train order, dropping
+// those base already has (same patch-id, or the task's files already match,
+// as after a squash merge). Commits of superseded tasks are not replayed, so
+// they leave integration. Only once every task replays cleanly does it move
+// refs, each one compare-and-swap: the task branches, then integration. It
+// then force-with-lease pushes the moved branches and retargets the open PRs,
+// each onto the nearest stacked branch below it or base; a closed or merged
+// PR is never retargeted. A conflict stops it before any ref moves and goes
+// back to the task that owns the commit. Restack never resolves one itself.
 func (a *App) Restack() (RestackResult, error) {
 	var res RestackResult
 	unlock, err := a.lockTrain()
@@ -73,13 +77,23 @@ func (a *App) Restack() (RestackResult, error) {
 	if res.Base, err = gitx.RevParse(a.Root, remote); err != nil {
 		return res, err
 	}
-	stack, err := a.landedStack()
+	if _, err := a.ReconcileStack(a.ghLookup); err != nil {
+		return res, err
+	}
+	all, err := a.landedAll()
 	if err != nil {
 		return res, err
 	}
-	if len(stack) == 0 {
+	if len(all) == 0 {
 		return res, errors.New("nothing has landed yet")
 	}
+	stack := stacked(all)
+	for _, l := range stack {
+		if l.Lost != "" {
+			return res, fmt.Errorf("restack can't rebuild %s: %s. Nothing was moved", l.ID, l.Lost)
+		}
+	}
+	a.healBranches(stack)
 	if err := a.checkDrift(stack); err != nil {
 		return res, err
 	}
@@ -99,9 +113,12 @@ func (a *App) Restack() (RestackResult, error) {
 	for _, id := range ids {
 		inBase[id] = true
 	}
-	if err := a.checkIntegration(stack[len(stack)-1], integ, inBase); err != nil {
-		return res, err
+	if last, ok := a.lastOn(all, integ); ok {
+		if err := a.checkIntegration(last, integ, inBase); err != nil {
+			return res, err
+		}
 	}
+	res.Superseded = a.leaving(all, integ, inBase)
 
 	plan, dropped, err := a.replay(stack, res.Base, inBase)
 	var conflict *RestackConflict
@@ -113,7 +130,7 @@ func (a *App) Restack() (RestackResult, error) {
 	}
 	res.Dropped = dropped
 
-	if err := a.moveStack(plan, integ, &res); err != nil {
+	if err := a.moveStack(plan, integ, res.Base, &res); err != nil {
 		return res, err
 	}
 	if err := a.republish(plan, &res); err != nil {
@@ -124,10 +141,49 @@ func (a *App) Restack() (RestackResult, error) {
 	if len(res.Merged) > 0 {
 		msg += " Merged, so skipped: " + strings.Join(res.Merged, ", ") + "."
 	}
+	if len(res.Superseded) > 0 {
+		msg += " Out of the stack, so their commits left " + a.Cfg.Integration + ": " + strings.Join(res.Superseded, ", ") + "."
+	}
 	if err := a.Notify(OrchestratorID, store.NoticeInfo, msg); err != nil {
 		return res, err
 	}
 	return res, nil
+}
+
+// lastOn is the last landed task whose landed commit integration contains.
+func (a *App) lastOn(all []landedTask, integ string) (landedTask, bool) {
+	for i := len(all) - 1; i >= 0; i-- {
+		l := all[i]
+		if l.To == "" || l.Recovered {
+			continue
+		}
+		if _, err := gitx.Run(a.Root, "merge-base", "--is-ancestor", l.To, integ); err == nil {
+			return l, true
+		}
+	}
+	return landedTask{}, false
+}
+
+// leaving lists the tasks out of the stack, not merged, whose commits are on
+// integration and not in base: restack drops them.
+func (a *App) leaving(all []landedTask, integ string, inBase map[string]bool) []string {
+	var out []string
+	for _, l := range all {
+		if l.stacked() || l.State == TrainMerged || l.From == "" || l.To == "" {
+			continue
+		}
+		if _, err := gitx.Run(a.Root, "merge-base", "--is-ancestor", l.To, integ); err != nil {
+			continue
+		}
+		ids, _ := patchIDs(a.Root, l.From+".."+l.To)
+		for _, id := range ids {
+			if !inBase[id] {
+				out = append(out, l.ID)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // checkIntegration refuses when integration holds work restack would lose:
@@ -179,7 +235,7 @@ func (a *App) replay(stack []landedTask, base string, inBase map[string]bool) ([
 			}
 		}
 		prev = l.To
-		if l.merged() || a.alreadyApplied(from, l.To, tip) {
+		if a.alreadyApplied(from, l.To, tip) {
 			plan = append(plan, r)
 			continue
 		}
@@ -257,8 +313,10 @@ func (a *App) returnConflict(c *RestackConflict) {
 }
 
 // moveStack moves every task branch to its rebuilt commit, then integration
-// to the new tip. Each move is compare-and-swap and recorded in events.
-func (a *App) moveStack(plan []restacked, integ string, res *RestackResult) error {
+// to the new tip (base when nothing is left in the stack). Each move is
+// compare-and-swap and recorded in events. A task base already has all of
+// leaves the stack as merged, keeping its landed range.
+func (a *App) moveStack(plan []restacked, integ, base string, res *RestackResult) error {
 	// Refuse before moving anything if a branch to move is checked out dirty.
 	for _, r := range plan {
 		if !r.gone() && r.NewTo != r.To && a.checkedOut(r.Task) {
@@ -279,9 +337,11 @@ func (a *App) moveStack(plan []restacked, integ string, res *RestackResult) erro
 		switch {
 		case r.gone():
 			res.Merged = append(res.Merged, r.ID)
-			if !r.merged() {
-				a.Store.Event(r.ID, "restack_merged", "base already has "+r.ID+"'s work")
+			a.Store.Event(r.ID, "restack_merged", "base already has "+r.ID+"'s work")
+			if err := a.Store.SetTrain(r.ID, TrainMerged, r.rangeNote(), false); err != nil {
+				return err
 			}
+			continue
 		case r.NewTo != r.To:
 			if err := move(r.ID, "refs/heads/"+r.Branch, r.To, r.NewTo); err != nil {
 				return err
@@ -296,7 +356,11 @@ func (a *App) moveStack(plan []restacked, integ string, res *RestackResult) erro
 			return err
 		}
 	}
-	if tip := plan[len(plan)-1].NewTo; tip != integ {
+	tip := base
+	if len(plan) > 0 {
+		tip = plan[len(plan)-1].NewTo
+	}
+	if tip != integ {
 		return move("", "refs/heads/"+a.Cfg.Integration, integ, tip)
 	}
 	return nil
@@ -316,7 +380,8 @@ func (a *App) checkedOut(t store.Task) bool {
 
 // republish force-with-lease pushes the moved branches that have PRs and
 // retargets those PRs: each targets the nearest unmerged branch below it, or
-// base. A merged task's PR is left alone.
+// base. A merged task's PR is left alone, and a PR GitHub refuses to retarget
+// because it is closed takes its task out of the stack instead of failing.
 func (a *App) republish(plan []restacked, res *RestackResult) error {
 	base := a.Cfg.Base
 	for _, r := range plan {
@@ -325,13 +390,21 @@ func (a *App) republish(plan []restacked, res *RestackResult) error {
 		}
 		if r.PR != "" {
 			if r.NewTo != r.To {
-				if _, err := trainGit(a.Root, "push", "--force-with-lease=refs/heads/"+r.Branch, "origin", r.NewTo+":refs/heads/"+r.Branch); err != nil {
+				if err := a.pushLanded(r.Branch, r.NewTo); err != nil {
 					return err
 				}
 				a.Store.Event(r.ID, "restack_push", r.Branch+" "+short(r.NewTo))
 			}
 			if _, err := gh(a.Root, "pr", "edit", r.PR, "--base", base); err != nil {
-				return err
+				if !strings.Contains(err.Error(), "closed pull request") {
+					return err
+				}
+				r.From, r.To = r.NewFrom, r.NewTo
+				if err := a.leaveStack(r.landedTask, TrainSuperseded, "its PR "+r.PR+" is closed"); err != nil {
+					return err
+				}
+				base = r.Branch
+				continue
 			}
 			res.Retargeted = append(res.Retargeted, r.ID)
 			a.Store.Event(r.ID, "restack_retarget", r.PR+" → "+base)

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/sentinel"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -91,15 +92,21 @@ type StatusOut struct {
 
 // StackRisk is the stack sentinel's flag: the stack is at risk from Task up.
 type StackRisk struct {
-	Task  string   `json:"task"`          // the first broken task
-	Cause string   `json:"cause"`         // why it broke
-	PRs   []string `json:"prs,omitempty"` // PRs labeled needs-human
+	Task  string   `json:"task"`            // the first broken task
+	Cause string   `json:"cause"`           // why it broke
+	PRs   []string `json:"prs,omitempty"`   // PRs labeled needs-human
+	Acked bool     `json:"acked,omitempty"` // acknowledged: it freezes nothing
 	Fix   string   `json:"fix"`
 }
 
 // StackFix is what to do about a flagged stack.
 const StackFix = "run restack to rebuild the stack; don't fix it with git or a worker. " +
-	"prs and land refuse until it checks clean, then the flag and labels clear by themselves"
+	"prs and land hold back only what depends on the broken layers until it checks clean, then the flag and labels clear by themselves. " +
+	"If restack can't fix it, unstack drops a task from the stack and sentinel_ack acknowledges the flag; never edit state.db"
+
+type UnstackIn struct {
+	Task string `json:"task" jsonschema:"task id (t3), PR URL, or PR number (#12)"`
+}
 
 type OK struct {
 	Message string `json:"message"`
@@ -121,6 +128,7 @@ type RestackOut struct {
 	Base       string            `json:"base,omitempty"`
 	Moves      []app.RestackMove `json:"moves,omitempty"`
 	Skipped    []string          `json:"skipped,omitempty" jsonschema:"tasks whose work base already has; their PRs were left alone"`
+	Superseded []string          `json:"superseded,omitempty" jsonschema:"tasks out of the stack (killed, PR closed, unstacked) whose commits left integration"`
 	Retargeted []string          `json:"retargeted,omitempty"`
 	Dropped    int               `json:"dropped,omitempty"`
 	Conflict   *RestackConflict  `json:"conflict,omitempty"`
@@ -138,7 +146,7 @@ func Status(a *app.App) (StatusOut, error) {
 		return out, err
 	}
 	if flagged {
-		out.StackAtRisk = &StackRisk{Task: f.Task, Cause: f.Cause, PRs: f.PRs, Fix: StackFix}
+		out.StackAtRisk = &StackRisk{Task: f.Task, Cause: f.Cause, PRs: f.PRs, Acked: f.Acked, Fix: StackFix}
 	}
 	out.Tasks, err = Tasks(a)
 	return out, err
@@ -281,8 +289,36 @@ func New(a *app.App, task string) *mcp.Server {
 			}
 			return nil, RestackOut{
 				Message: fmt.Sprintf("Restacked onto %s: %d refs moved, %d PRs retargeted.", res.Base, len(res.Moves), len(res.Retargeted)),
-				Base:    res.Base, Moves: res.Moves, Skipped: res.Merged, Retargeted: res.Retargeted, Dropped: res.Dropped,
+				Base:    res.Base, Moves: res.Moves, Skipped: res.Merged, Superseded: res.Superseded, Retargeted: res.Retargeted, Dropped: res.Dropped,
 			}, nil
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "unstack", Description: "Take a landed task out of the PR stack for good, by task id, PR URL or PR number: for work that should not ship as its own PR (superseded, re-landed elsewhere, abandoned). Its commits leave integration on the next restack and Saddle never touches its PR again. Merged and closed PRs and killed tasks leave the stack by themselves; this is the escape hatch for the rest. Never edit state.db instead."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in UnstackIn) (*mcp.CallToolResult, OK, error) {
+			t, err := a.Unstack(in.Task)
+			if err != nil {
+				return nil, OK{}, err
+			}
+			_, _ = sentinel.New(a).Check() // update the flag now rather than in two minutes
+			return nil, OK{Message: fmt.Sprintf("%s is out of the PR stack; run restack to drop its commits from integration.", t.ID)}, nil
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "sentinel_ack", Description: "Acknowledge the stack sentinel's current at-risk flag when restack can't fix it: prs and land stop holding work back and the needs-human labels come off, until a different layer breaks or the stack checks clean. Never edit state.db instead."},
+		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, OK, error) {
+			f, err := a.AckFlag()
+			if err != nil {
+				return nil, OK{}, err
+			}
+			_, _ = sentinel.New(a).Check() // take the labels off now
+			return nil, OK{Message: fmt.Sprintf("Acknowledged the flag from %s up (%s).", f.Task, f.Cause)}, nil
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "requeue", Description: "Put a landed task whose work is missing from integration back in the merge train, recreating its branch and worktree if needed; run land afterwards. Never edit state.db instead."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in TaskIn) (*mcp.CallToolResult, OK, error) {
+			if err := a.Requeue(in.Task); err != nil {
+				return nil, OK{}, err
+			}
+			return nil, OK{Message: in.Task + " is queued again; run land."}, nil
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "peek", Description: "Read the last lines of a task's Claude Code terminal, e.g. to see what it is stuck on or what a prompt is asking."},

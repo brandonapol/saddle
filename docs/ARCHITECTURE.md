@@ -95,6 +95,40 @@ the planner clusters as the same topic, form a stack (DAG order, barriers at
 the bottom). Unrelated work gets separate stacks. Saddle restacks a stack when
 a lower layer changes and retargets it when a lower layer merges.
 
+### Stack upkeep when people use GitHub (#119, #123)
+
+The stack is only the landed tasks whose train entry is `landed` and that
+are not killed. Saddle expects people to merge in the GitHub UI, squash,
+close PRs and delete branches, and it handles those without anyone editing
+`state.db`:
+
+- **Leaving the stack.** Before `prs`, `restack` or a sentinel check reads
+  the stack, `ReconcileStack` asks GitHub about each PR. A PR merged into base
+  (merge, squash or rebase) moves its train entry to `merged`. A closed PR or
+  a killed task moves it to `superseded`. Neither comes back, gets labeled, or
+  is retargeted. Restack doesn't replay a superseded task's commits, so they
+  leave integration and are never bundled into the next task's PR.
+- **Merged into a stacked base.** A PR merged into the branch below it instead
+  of base is merged if base has its work anyway (by patch-id or file content).
+  Otherwise its task loses that PR, the next `prs` opens a fresh one, and the
+  orchestrator is told once.
+- **Self-healing refs.** A stacked task's deleted local branch is recreated at
+  its landed commit. A push to a branch GitHub deleted drops the stale lease.
+  A train note with no usable range (older binaries, #123) is rebuilt from the
+  task's `landed` event. An empty range never counts as "merged": only restack
+  proving base has the work does that.
+- **Freezing only what is affected.** The sentinel flag makes `prs` publish
+  the layers below the first broken one and stop there. `land` holds back only
+  queued work that changes files the broken layers changed.
+- **needs-human means a decision.** Only a conflict labels PRs, and the comment
+  names the conflict. Base moving, a merged bottom PR or a drifted branch just
+  flag the stack for `restack`.
+- **Escape hatches.** `saddle unstack <task|pr>` takes a task out of the stack.
+  `saddle sentinel ack` acknowledges the current flag, which lifts its freeze
+  and labels until a different layer breaks. `saddle requeue <task>` puts back
+  a landed task whose work integration lacks. Each has an MCP tool:
+  `unstack`, `sentinel_ack`, `requeue`.
+
 ## Agents
 
 `Adapter{Launch, Inject, Usage}`.

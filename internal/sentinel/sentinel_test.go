@@ -161,6 +161,18 @@ func events(t *testing.T, a *app.App, kind string) []store.Event {
 	return out
 }
 
+func trainState(t *testing.T, a *app.App, task string) string {
+	t.Helper()
+	es, err := a.Store.Train()
+	must(t, err)
+	for _, e := range es {
+		if e.Task == task {
+			return e.State
+		}
+	}
+	return ""
+}
+
 func hasCall(calls []string, want string) bool {
 	for _, c := range calls {
 		if c == want {
@@ -277,17 +289,18 @@ func TestSentinelFlagsForkedStackUntilRestack(t *testing.T) {
 		}
 	}
 
-	// While flagged, prs and land push and open nothing.
+	// While flagged, prs publishes only the layers below t4 (#119.4).
 	before = len(gh.log())
 	_, err = a.PRs()
 	if err == nil || !strings.Contains(err.Error(), "restack") || !strings.Contains(err.Error(), t4.ID) {
 		t.Fatalf("PRs while flagged: err = %v", err)
 	}
-	if _, err := a.Land(); err == nil || !strings.Contains(err.Error(), "restack") {
-		t.Fatalf("Land while flagged: err = %v", err)
-	}
-	if l := gh.log()[before:]; len(l) > 0 {
-		t.Fatalf("gh called while flagged: %v", l)
+	for _, c := range gh.log()[before:] {
+		for _, tk := range []store.Task{t4, t6} {
+			if strings.HasPrefix(c, "pr edit "+tk.PR) || strings.HasPrefix(c, "pr create") {
+				t.Fatalf("prs touched %s while it is flagged: %s", tk.ID, c)
+			}
+		}
 	}
 
 	// The orchestrator restacks; GitHub sees t4's PR as mergeable again.
@@ -336,23 +349,25 @@ func TestSentinelFlagsAboveSquashMergedBottom(t *testing.T) {
 	gh.setPR(t1.PR, "MERGED", "UNKNOWN")
 	before := len(gh.log())
 
+	// A PR merged into main is not an incident (#119.2): t1 leaves the stack,
+	// and the PRs above it only need a restack, which needs no human, so
+	// nothing is labeled needs-human (#119.7).
 	s := New(a)
 	rep, err := s.Check()
 	must(t, err)
-	if !rep.AtRisk || rep.Task != t2.ID || !strings.Contains(rep.Cause, "merged") {
-		t.Fatalf("report = %+v, want t2 at risk after t1 merged", rep)
+	if !rep.AtRisk || rep.Task != t2.ID || !strings.Contains(strings.Join(rep.Hits, "\n"), "origin/main has") {
+		t.Fatalf("report = %+v, want t2 needing a restack after t1 merged", rep)
 	}
-	if len(rep.Hits) < 2 {
-		t.Fatalf("base moving ahead not reported: %+v", rep.Hits)
+	if len(rep.PRs) != 0 {
+		t.Fatalf("labeled %v for a routine restack", rep.PRs)
 	}
-	calls := gh.log()[before:]
-	if hasCall(calls, "pr edit "+t1.PR+" --add-label "+Label) {
-		t.Fatal("merged PR labeled")
-	}
-	for _, tk := range []store.Task{t2, t3} {
-		if !hasCall(calls, "pr edit "+tk.PR+" --add-label "+Label) {
-			t.Fatalf("%s's PR not labeled: %v", tk.ID, calls)
+	for _, c := range gh.log()[before:] {
+		if strings.Contains(c, "--add-label") {
+			t.Fatalf("labeled without a conflict: %s", c)
 		}
+	}
+	if st := trainState(t, a, t1.ID); st != app.TrainMerged {
+		t.Fatalf("t1's train row = %q, want merged", st)
 	}
 
 	if _, err := a.Restack(); err != nil {
@@ -428,12 +443,12 @@ func (g *commentGH) only(t *testing.T, url string) string {
 	return cs[0].Body
 }
 
-// Each PR the sentinel labels gets one comment saying why, what a human must
-// do, and what clears it. Repeat ticks, even from a restarted sentinel, leave
-// it alone; a new cause edits it; clearing the stack turns it into a
-// resolution note.
+// Each PR the sentinel labels gets one comment saying which conflict needs a
+// human, what to do, and what clears it (#118, #119.7). Repeat ticks, even
+// from a restarted sentinel, leave it alone; a new cause edits it; clearing
+// the stack turns it into a resolution note.
 func TestSentinelExplainsNeedsHumanInPRComment(t *testing.T) {
-	a, origin := setup(t)
+	a, _ := setup(t)
 	fake := newFakeGH(t)
 	t1 := landTask(t, a, "t1", "one")
 	t2 := landTask(t, a, "t2", "two")
@@ -444,12 +459,7 @@ func TestSentinelExplainsNeedsHumanInPRComment(t *testing.T) {
 	for _, tk := range []*store.Task{&t1, &t2, &t3} {
 		*tk, _ = a.Store.Task(tk.ID)
 	}
-	other := filepath.Join(t.TempDir(), "other")
-	git(t, a.Root, "clone", "-q", origin, other)
-	git(t, other, "merge", "-q", "--squash", "origin/"+t1.Branch)
-	git(t, other, "commit", "-qm", "one (#1)")
-	git(t, other, "push", "-q", "origin", "main")
-	fake.setPR(t1.PR, "MERGED", "UNKNOWN")
+	fake.setPR(t2.PR, "OPEN", "CONFLICTING")
 
 	gh := newCommentGH(a)
 	s := New(a)
@@ -458,11 +468,11 @@ func TestSentinelExplainsNeedsHumanInPRComment(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(gh.comments[t1.PR]) != 0 {
-		t.Fatalf("merged PR commented on: %+v", gh.comments[t1.PR])
+		t.Fatalf("healthy PR below the conflict commented on: %+v", gh.comments[t1.PR])
 	}
 	for _, tk := range []store.Task{t2, t3} {
 		body := gh.only(t, tk.PR)
-		for _, want := range []string{commentMarker, Label, t1.PR, "merged", "restack", "clear"} {
+		for _, want := range []string{commentMarker, Label, t2.PR, "conflict", "restack", "clear"} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("%s's comment lacks %q:\n%s", tk.ID, want, body)
 			}
@@ -483,25 +493,23 @@ func TestSentinelExplainsNeedsHumanInPRComment(t *testing.T) {
 		t.Fatalf("repeat ticks: %d posts, %d edits; want 2, 0", gh.posts, gh.edits)
 	}
 
-	// A new finding on t3 changes its cause: its comment is edited, not doubled.
+	// t3 conflicts too: its comment is edited, not doubled.
 	fake.setPR(t3.PR, "OPEN", "CONFLICTING")
 	if _, err := s2.Check(); err != nil {
 		t.Fatal(err)
 	}
-	if body := gh.only(t, t3.PR); body == first || !strings.Contains(body, "conflicts") {
+	if body := gh.only(t, t3.PR); body == first || !strings.Contains(body, "This PR") {
 		t.Fatalf("t3's comment not updated with the new cause:\n%s", body)
 	}
 	if gh.posts != 2 {
 		t.Fatalf("changed cause posted a new comment: %d posts", gh.posts)
 	}
 
-	// Restacked and clean: each comment becomes a resolution note.
-	if _, err := a.Restack(); err != nil {
-		t.Fatal(err)
-	}
+	// Resolved: each comment becomes a resolution note.
+	fake.setPR(t2.PR, "OPEN", "MERGEABLE")
 	fake.setPR(t3.PR, "OPEN", "MERGEABLE")
 	if rep, err := s2.Check(); err != nil || rep.AtRisk {
-		t.Fatalf("after restack: %+v, %v", rep, err)
+		t.Fatalf("after the conflicts resolved: %+v, %v", rep, err)
 	}
 	for _, tk := range []store.Task{t2, t3} {
 		body := gh.only(t, tk.PR)

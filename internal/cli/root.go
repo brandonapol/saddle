@@ -41,7 +41,7 @@ func Root() *cobra.Command {
 			Run:   func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), Version) },
 		},
 		initCmd(), upCmd(), downCmd(), spawnCmd(), statusCmd(), claimCmd(), releaseCmd(), doneCmd(),
-		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(),
+		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(),
 	)
 	return root
 }
@@ -257,7 +257,11 @@ func statusCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "warning: "+warn)
 			}
 			if r := st.StackAtRisk; r != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "stack at risk from %s up: %s\n", r.Task, r.Cause)
+				ack := ""
+				if r.Acked {
+					ack = " (acknowledged)"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "stack at risk from %s up%s: %s\n", r.Task, ack, r.Cause)
 				if len(r.PRs) > 0 {
 					fmt.Fprintln(cmd.OutOrStdout(), "  labeled needs-human: "+strings.Join(r.PRs, ", "))
 				}

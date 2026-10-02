@@ -65,6 +65,9 @@ func TestRestackAfterSquashMerge(t *testing.T) {
 
 	calls := ghLog()[before:]
 	for _, c := range calls {
+		if strings.HasPrefix(c, "pr view ") {
+			continue // reading its state is how restack knows it merged
+		}
 		if strings.Contains(c, t1.PR+" ") || strings.HasSuffix(c, t1.PR) {
 			t.Fatalf("merged t1 PR touched: %s", c)
 		}
