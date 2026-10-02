@@ -17,6 +17,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/ciwatch"
+	"github.com/brandonapol/saddle/internal/doctor"
 	"github.com/brandonapol/saddle/internal/hook"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/refguard"
@@ -97,7 +98,8 @@ func initCmd() *cobra.Command {
 }
 
 func upCmd() *cobra.Command {
-	return &cobra.Command{
+	var skipDoctor bool
+	cmd := &cobra.Command{
 		Use:   "up [epic-file|-]",
 		Short: "Open the Saddle TUI: chat with the orchestrator, watch your agents",
 		Long: `Opens Saddle's TUI. The orchestrator (a headless Claude Code session) lives in
@@ -106,6 +108,11 @@ It starts agents in a hidden tmux session, watches them, and tells you when one
 needs you. Quitting leaves the agents running; run saddle up again to come back.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, args []string) error {
+			if err := upDoctor(cmd.OutOrStdout(), skipDoctor, upDoctorTimeout, func() []doctor.Result {
+				return doctor.Run(doctor.System(a.Root))
+			}); err != nil {
+				return err
+			}
 			if err := a.CheckMergeSettings(cmd.ErrOrStderr()); err != nil {
 				return err
 			}
@@ -141,6 +148,8 @@ needs you. Quitting leaves the agents running; run saddle up again to come back.
 			return nil
 		}),
 	}
+	cmd.Flags().BoolVar(&skipDoctor, "skip-doctor", false, "start without running the doctor checks")
+	return cmd
 }
 
 // startWatchers starts the background loops that live as long as saddle up:
