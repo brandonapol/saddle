@@ -389,21 +389,6 @@ func overlaps(wt, base string, files []string) bool {
 	return false
 }
 
-// Sync rebases a task's branch onto the integration branch. Conflicts are left
-// in place for the agent to resolve.
-func (a *App) Sync(task string) (gitx.RebaseResult, error) {
-	t, err := a.Store.Task(task)
-	if err != nil {
-		return gitx.RebaseResult{}, err
-	}
-	if dirty, _ := gitx.Dirty(t.Worktree); len(dirty) > 0 {
-		return gitx.RebaseResult{}, fmt.Errorf("commit your changes before syncing:\n%s", strings.Join(dirty, "\n"))
-	}
-	rr, err := gitx.Rebase(t.Worktree, a.Cfg.Integration, false)
-	a.Store.Event(task, "sync", fmt.Sprintf("ok=%v conflicts=%s", rr.OK, strings.Join(rr.Conflicts, ",")))
-	return rr, err
-}
-
 // PRs pushes every landed branch in the stack and opens or updates a stack
 // of PRs: the first targets base, each later one targets the branch landed
 // before it. It pushes the commits the train landed, never whatever the
@@ -880,33 +865,7 @@ func (a *App) warnOutsideClaims(l landedTask, base string) {
 
 // patchIDs returns the stable patch-id of each non-merge commit in rng,
 // oldest first.
-func patchIDs(dir, rng string) ([]string, error) {
-	log, err := gitx.Run(dir, "log", "-p", "--reverse", "--no-merges", "--no-color", "--no-ext-diff", rng)
-	if err != nil {
-		return nil, err
-	}
-	out, err := patchID(dir, log)
-	if err != nil || out == "" {
-		return nil, err
-	}
-	var ids []string
-	for _, line := range strings.Split(out, "\n") {
-		id, _, _ := strings.Cut(line, " ")
-		ids = append(ids, id)
-	}
-	return ids, nil
-}
-
-// patchID runs `git patch-id --stable` over a diff or log.
-func patchID(dir, diff string) (string, error) {
-	cmd := exec.Command("git", "-C", dir, "patch-id", "--stable")
-	cmd.Stdin = strings.NewReader(diff + "\n")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git patch-id: %w", err)
-	}
-	return strings.TrimSpace(string(out)), nil
-}
+func patchIDs(dir, rng string) ([]string, error) { return gitx.PatchIDs(dir, rng) }
 
 func plural(n int, noun string) string {
 	if n == 1 {
