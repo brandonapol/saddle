@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/usage"
@@ -109,14 +110,7 @@ func (m *UsageMeter) Sync() error {
 }
 
 func (m *UsageMeter) transcript(cwd, session string) string {
-	p := usage.ClaudeTranscriptPath(m.ClaudeDir, cwd, session)
-	if _, err := os.Stat(p); err == nil {
-		return p
-	}
-	if f := usage.FindClaudeTranscript(m.ClaudeDir, session); f != "" {
-		return f
-	}
-	return p
+	return agent.Claude{ConfigDir: m.ClaudeDir}.Usage().Transcript(cwd, session)
 }
 
 // UsageSummary is what the TUI shows: totals per model and per task over all

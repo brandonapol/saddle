@@ -1,4 +1,4 @@
-// Package agent launches coding agents. Claude Code is the only adapter in M0.
+// Package agent launches coding agents through adapters (see Adapter).
 package agent
 
 import (

@@ -337,7 +337,7 @@ func (a *App) launch(t store.Task, cl []string) (string, error) {
 		Mode: a.Cfg.Claude.PermissionMode, Cmd: a.Cfg.Claude.Cmd, RunDir: a.stateDir("run", t.ID),
 		Brief: a.workerBrief(t, cl), Prompt: t.Prompt,
 	}
-	cmd, err := l.Write()
+	cmd, err := agent.Claude{}.Launch(l)
 	if err != nil {
 		return "", err
 	}
@@ -550,7 +550,7 @@ func (a *App) Notify(task, kind, text string) error {
 	}
 	if t.Status == store.Idle || t.Status == store.Done || t.Status == store.Conflict {
 		if a.ownWindow(t) {
-			tmux.SendWhenIdle(a.Tmux, t.Window, "[saddle] You have new notices. Read them and act on them.", func() bool {
+			tmux.SendWhenIdle(a.Tmux, t.Window, agent.Claude{}.Inject(""), func() bool {
 				n, err := a.Store.PendingNotices(task)
 				return err != nil || n > 0
 			})
