@@ -161,3 +161,30 @@ func must(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
+
+// An older binary, which knows fewer migrations, must not lower user_version
+// on a database a newer binary already migrated. Otherwise the newer binary
+// re-runs its migrations and fails with "table already exists".
+func TestOlderBinaryDoesNotDowngradeSchemaVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+
+	all := migrations
+	migrations = all[:len(all)-1]
+	s, err = Open(path)
+	migrations = all
+	if err != nil {
+		t.Fatalf("older binary open: %v", err)
+	}
+	_ = s.Close()
+
+	s, err = Open(path)
+	if err != nil {
+		t.Fatalf("newer binary reopen: %v", err)
+	}
+	_ = s.Close()
+}

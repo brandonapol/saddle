@@ -157,6 +157,11 @@ func (s *Store) migrate() error {
 		if err := tx.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
 			return err
 		}
+		// A newer binary already migrated this database. Leave user_version
+		// alone: lowering it would make that binary re-run its migrations.
+		if v >= len(migrations) {
+			return nil
+		}
 		for i := v; i < len(migrations); i++ {
 			if _, err := tx.Exec(migrations[i]); err != nil {
 				return fmt.Errorf("migration %d: %w", i+1, err)
