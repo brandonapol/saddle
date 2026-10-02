@@ -40,3 +40,14 @@ func TestOrchestratorBriefAsksForTests(t *testing.T) {
 		t.Error("orchestrator brief should tell spawn prompts to name required tests")
 	}
 }
+
+// #146, #152: the orchestrator brief names the queue and automerge tools.
+func TestOrchestratorBriefQueueAndAutomergeTools(t *testing.T) {
+	a, _ := setup(t)
+	brief := a.orchestratorBrief()
+	for _, want := range []string{"`queue_move`", "`queue_hold`", "`queue_release`", "`automerge`", "saddle stack rebase"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("orchestrator brief lacks %s", want)
+		}
+	}
+}

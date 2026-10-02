@@ -14,13 +14,14 @@ import (
 )
 
 // adapterCmd is the command and extra arguments an adapter launches with.
-// Empty means the adapter's default binary. Codex and Grok have no config
-// keys yet (#142).
+// Empty means the adapter's default binary. Claude's comes from [claude],
+// the others' from [adapters.<name>] (#142).
 func (a *App) adapterCmd(name string) (string, []string) {
 	if name == usage.Claude {
 		return a.Cfg.Claude.Cmd, nil
 	}
-	return "", nil
+	c := a.Cfg.Adapters[name]
+	return c.Cmd, c.Args
 }
 
 // taskAdapter is the adapter a task was launched with.

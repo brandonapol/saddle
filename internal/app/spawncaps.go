@@ -6,7 +6,7 @@ import (
 	"github.com/brandonapol/saddle/internal/store"
 )
 
-// Spawn caps until they get config keys (#142).
+// Default spawn caps; [spawn] in config overrides them (#142).
 const (
 	// DefaultMaxDepth is how deep spawn chains go: the orchestrator's tasks
 	// are depth 1, their sub-tasks depth 2, and so on.
@@ -16,9 +16,10 @@ const (
 	DefaultMaxChildren = 8
 )
 
-// spawnCaps returns the max spawn depth and the max working children per task.
+// spawnCaps returns the max spawn depth and the max working children per
+// task, from [spawn]; 0 means no cap.
 func (a *App) spawnCaps() (maxDepth, maxChildren int) {
-	return DefaultMaxDepth, DefaultMaxChildren
+	return a.Cfg.Spawn.MaxDepth, a.Cfg.Spawn.MaxChildren
 }
 
 // depth is how far below the orchestrator a task sits; the orchestrator and

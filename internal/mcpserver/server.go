@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/automerge"
 	"github.com/brandonapol/saddle/internal/sentinel"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -105,6 +106,22 @@ type StackRisk struct {
 const StackFix = "run restack to rebuild the stack; don't fix it with git or a worker. " +
 	"prs and land hold back only what depends on the broken layers until it checks clean, then the flag and labels clear by themselves. " +
 	"If restack can't fix it, unstack drops a task from the stack and sentinel_ack acknowledges the flag; never edit state.db"
+
+// AutomergeIn steers the auto-merge watcher.
+type AutomergeIn struct {
+	Action string `json:"action" jsonschema:"on, off, status, hold or release"`
+	Stack  string `json:"stack,omitempty" jsonschema:"for hold and release: the stack's name (its bottom task), a task id, PR URL or PR number"`
+}
+
+type QueueMoveIn struct {
+	Task     string `json:"task" jsonschema:"task id waiting in the merge train"`
+	Position int    `json:"position" jsonschema:"1 lands next; past the end means the back"`
+}
+
+type QueueHoldIn struct {
+	Task   string `json:"task" jsonschema:"task id waiting in the merge train"`
+	Reason string `json:"reason,omitempty" jsonschema:"why it is held"`
+}
 
 type UnstackIn struct {
 	Task string `json:"task" jsonschema:"task id (t3), PR URL, or PR number (#12)"`
@@ -271,7 +288,7 @@ func New(a *app.App, task string) *mcp.Server {
 		return nil
 	}
 
-	mcp.AddTool(s, &mcp.Tool{Name: "spawn", Description: fmt.Sprintf("Start a new parallel agent on its own branch and worktree in a new tmux window. Give it disjoint claims. Sub-tasks are capped in depth (%d below the orchestrator) and in working children per task (%d).", app.DefaultMaxDepth, app.DefaultMaxChildren)},
+	mcp.AddTool(s, &mcp.Tool{Name: "spawn", Description: fmt.Sprintf("Start a new parallel agent on its own branch and worktree in a new tmux window. Give it disjoint claims. Sub-tasks are capped in depth below the orchestrator (spawn.max_depth, default %d) and in working children per task (spawn.max_children, default %d).", app.DefaultMaxDepth, app.DefaultMaxChildren)},
 		func(_ context.Context, _ *mcp.CallToolRequest, in SpawnIn) (*mcp.CallToolResult, SpawnOut, error) {
 			if err := self(); err != nil {
 				return nil, SpawnOut{}, err
@@ -402,6 +419,60 @@ func New(a *app.App, task string) *mcp.Server {
 				return nil, OK{}, err
 			}
 			return nil, OK{Message: in.Task + " is queued again; run land."}, nil
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "automerge", Description: "Auto-merge of ready PR stacks (off by default): on merges the bottom PR of a ready stack (green CI, mergeable and CLEAN, not a draft, not needs-human, not at risk), restacks and repeats; off leaves PRs to the owner; status shows the stacks as a graph and what each waits on; hold <stack> keeps one stack from merging while it stays tracked and restacked; release lets it merge. A failed merge stops it until on is called again. Only turn it on or release a hold when the owner asked."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in AutomergeIn) (*mcp.CallToolResult, automerge.Status, error) {
+			w := a.NewAutomerge(nil)
+			var err error
+			switch in.Action {
+			case "on", "off":
+				err = w.SetEnabled(in.Action == "on")
+			case "hold", "release":
+				if strings.TrimSpace(in.Stack) == "" {
+					return nil, automerge.Status{}, fmt.Errorf("%s needs a stack, task or PR", in.Action)
+				}
+				if in.Action == "hold" {
+					_, err = a.AutomergeHold(in.Stack)
+				} else {
+					_, err = a.AutomergeRelease(in.Stack)
+				}
+			case "status", "":
+				if st, err := w.Plan(); err == nil {
+					return nil, st, nil
+				}
+			default:
+				return nil, automerge.Status{}, fmt.Errorf("unknown action %q: want on, off, status, hold or release", in.Action)
+			}
+			if err != nil {
+				return nil, automerge.Status{}, err
+			}
+			st, err := w.Status()
+			return nil, st, err
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "queue_move", Description: "Move a branch waiting in the merge train to a position in the queue (1 lands next), e.g. to land a fix before the work that needs it."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in QueueMoveIn) (*mcp.CallToolResult, OK, error) {
+			if err := a.MoveInQueue(in.Task, in.Position); err != nil {
+				return nil, OK{}, err
+			}
+			return nil, OK{Message: fmt.Sprintf("moved %s", in.Task)}, nil
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "queue_hold", Description: "Keep a branch waiting in the merge train from landing, without losing its place, until queue_release. Calling done again doesn't release it."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in QueueHoldIn) (*mcp.CallToolResult, OK, error) {
+			if err := a.Hold(in.Task, in.Reason); err != nil {
+				return nil, OK{}, err
+			}
+			return nil, OK{Message: in.Task + " is on hold; queue_release lets it land."}, nil
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "queue_release", Description: "Let a branch held with queue_hold land again, from its place in the queue; run land afterwards."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in TaskIn) (*mcp.CallToolResult, OK, error) {
+			if err := a.Unhold(in.Task); err != nil {
+				return nil, OK{}, err
+			}
+			return nil, OK{Message: in.Task + " is back in line; run land."}, nil
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "peek", Description: "Read the last lines of a task's Claude Code terminal, e.g. to see what it is stuck on or what a prompt is asking."},

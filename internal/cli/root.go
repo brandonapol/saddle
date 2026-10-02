@@ -41,7 +41,7 @@ func Root() *cobra.Command {
 			Run:   func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), Version) },
 		},
 		initCmd(), upCmd(), downCmd(), spawnCmd(), statusCmd(), claimCmd(), releaseCmd(), doneCmd(),
-		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(),
+		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(),
 	)
 	return root
 }
@@ -144,15 +144,16 @@ needs you. Quitting leaves the agents running; run saddle up again to come back.
 }
 
 // startWatchers starts the background loops that live as long as saddle up:
-// the stack sentinel and, unless ci.disabled, the CI watcher. Short-lived
-// commands never start them. The returned func stops them and waits until
-// they have.
+// the stack sentinel, the auto-merge watcher (which merges nothing unless
+// on) and, unless ci.disabled, the CI watcher. Short-lived commands never
+// start them. The returned func stops them and waits until they have.
 func startWatchers(ctx context.Context, a *app.App) (stop func()) {
 	ctx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		_ = sentinel.New(a).Run(ctx) // Run records failed checks as events
 	})
+	wg.Go(func() { _ = a.NewAutomerge(nil).Run(ctx) }) // merges only when on; failures are events
 	if !a.Cfg.CI.Disabled {
 		if ci, err := a.NewCIWatcher(ciwatch.ExecRunner(a.Root)); err == nil {
 			wg.Go(func() { ci.Run(ctx) }) // gh errors are recorded as events

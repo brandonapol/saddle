@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/agent"
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/usage"
 )
@@ -100,5 +101,27 @@ func TestUsageMeterReadsCodexRollout(t *testing.T) {
 	must(t, err)
 	if len(u.Tasks) != 1 || u.Tasks[0].Key != "t5" {
 		t.Errorf("task totals %+v", u.Tasks)
+	}
+}
+
+// #142: [adapters.<name>] sets the command and arguments of non-Claude agents.
+func TestAdapterCmdFromConfig(t *testing.T) {
+	a, _ := setup(t)
+	if cmd, args := a.adapterCmd("codex"); cmd != "" || args != nil {
+		t.Fatalf("codex without config = %q %v, want the default binary", cmd, args)
+	}
+	a.Cfg.Adapters = map[string]config.Adapter{"codex": {Cmd: "/opt/codex", Args: []string{"--full-auto"}}}
+	if cmd, args := a.adapterCmd("codex"); cmd != "/opt/codex" || len(args) != 1 || args[0] != "--full-auto" {
+		t.Fatalf("codex = %q %v", cmd, args)
+	}
+	if cmd, _ := a.adapterCmd(usage.Claude); cmd != a.Cfg.Claude.Cmd {
+		t.Fatalf("claude = %q", cmd)
+	}
+	c, err := a.Spawn(SpawnReq{Title: "codex work", Adapter: "codex"})
+	must(t, err)
+	script, err := os.ReadFile(filepath.Join(a.stateDir("run", c.ID), "launch.sh"))
+	must(t, err)
+	if !strings.Contains(string(script), "/opt/codex") || !strings.Contains(string(script), "--full-auto") {
+		t.Errorf("launch ignores adapters.codex:\n%s", script)
 	}
 }
