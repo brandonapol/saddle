@@ -9,19 +9,22 @@
 // calls once reached; past the cap, salient changes still get a plain local
 // line.
 //
-// The package is a library: the source, roster, clock, HTTP client and output
-// sink are injected, so nothing here touches SQLite, tmux or the TUI.
+// Ask answers the user's questions from the same roster and recent lines,
+// plus an agent's screen when the user opts in, under the same daily cap.
+//
+// The package is a library: the source, roster, clock, model (or HTTP
+// client) and output sink are injected, so nothing here touches SQLite, tmux
+// or the TUI.
 package narrator
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/brandonapol/saddle/internal/store"
@@ -100,6 +103,7 @@ const (
 	apiVersion      = "2023-06-01"
 	maxNote         = 120
 	maxLines        = 20
+	maxRecent       = 30
 )
 
 func (c Config) withDefaults() Config {
@@ -128,12 +132,14 @@ func (c Config) withDefaults() Config {
 }
 
 // Deps are the Narrator's collaborators. Clock and HTTP default to the real
-// clock and an http.Client with a timeout.
+// clock and an http.Client with a timeout. Model defaults to the Messages API
+// over HTTP.
 type Deps struct {
 	Source Source
 	Roster Roster
 	Clock  Clock
 	HTTP   Doer
+	Model  Model
 	Sink   Sink
 	Ledger Ledger // optional; without it spend is kept in memory only
 }
@@ -142,8 +148,8 @@ type realClock struct{}
 
 func (realClock) Now() time.Time { return time.Now() }
 
-// Narrator batches events and narrates them. It is not safe for concurrent
-// use; drive it from one goroutine with Run or Step.
+// Narrator batches events and narrates them. Drive it from one goroutine
+// with Run or Step; Ask may be called from any other.
 type Narrator struct {
 	cfg  Config
 	deps Deps
@@ -152,8 +158,10 @@ type Narrator struct {
 	batchStart time.Time
 	retryAt    time.Time
 
-	day   string
-	spent float64
+	mu     sync.Mutex // guards the fields below, shared with Ask
+	day    string
+	spent  float64
+	recent []Line // the latest lines emitted, for answering questions
 }
 
 // New returns a Narrator.
@@ -164,7 +172,11 @@ func New(cfg Config, deps Deps) *Narrator {
 	if deps.HTTP == nil {
 		deps.HTTP = &http.Client{Timeout: 30 * time.Second}
 	}
-	return &Narrator{cfg: cfg.withDefaults(), deps: deps}
+	cfg = cfg.withDefaults()
+	if deps.Model == nil {
+		deps.Model = apiModel{endpoint: cfg.Endpoint, key: cfg.APIKey, http: deps.HTTP}
+	}
+	return &Narrator{cfg: cfg, deps: deps}
 }
 
 // Run calls Step every PollInterval until ctx is done. Step errors go to
@@ -189,6 +201,8 @@ func (n *Narrator) Pending() int { return len(n.pending) }
 
 // SpentToday is the estimated API spend in USD for the current day.
 func (n *Narrator) SpentToday() float64 {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	n.rollDay()
 	return n.spent
 }
@@ -196,6 +210,7 @@ func (n *Narrator) SpentToday() float64 {
 // CapReached reports whether today's spend has hit DailyCapUSD.
 func (n *Narrator) CapReached() bool { return n.SpentToday() >= n.cfg.DailyCapUSD }
 
+// rollDay resets spend at a day boundary. Hold mu.
 func (n *Narrator) rollDay() {
 	if d := n.deps.Clock.Now().Format(time.DateOnly); d != n.day {
 		n.day, n.spent = d, 0
@@ -268,7 +283,7 @@ func (n *Narrator) flush(ctx context.Context, now time.Time) error {
 	if n.CapReached() {
 		for _, d := range deltas {
 			for _, c := range d.Changes {
-				n.deps.Sink.Emit(Line{Time: now, Task: d.Task, Text: c.String(), NeedsYou: c.Kind == ChangeNeedsYou})
+				n.out(Line{Time: now, Task: d.Task, Text: c.String(), NeedsYou: c.Kind == ChangeNeedsYou})
 			}
 		}
 		n.pending = nil
@@ -283,6 +298,17 @@ func (n *Narrator) flush(ctx context.Context, now time.Time) error {
 	n.pending = nil
 	n.emit(now, text, deltas)
 	return nil
+}
+
+// out emits a line and keeps it for answering questions.
+func (n *Narrator) out(l Line) {
+	n.mu.Lock()
+	n.recent = append(n.recent, l)
+	if len(n.recent) > maxRecent {
+		n.recent = n.recent[len(n.recent)-maxRecent:]
+	}
+	n.mu.Unlock()
+	n.deps.Sink.Emit(l)
 }
 
 // emit writes the model's lines, then a local line for any needs-you task the
@@ -312,7 +338,7 @@ func (n *Narrator) emit(now time.Time, text string, deltas []TaskDelta) {
 		_, nu := needs[task]
 		covered[task] = true
 		count++
-		n.deps.Sink.Emit(Line{Time: now, Task: task, Text: s, NeedsYou: nu})
+		n.out(Line{Time: now, Task: task, Text: s, NeedsYou: nu})
 	}
 	var missing []string
 	for task := range needs {
@@ -322,7 +348,7 @@ func (n *Narrator) emit(now time.Time, text string, deltas []TaskDelta) {
 	}
 	sort.Strings(missing)
 	for _, task := range missing {
-		n.deps.Sink.Emit(Line{Time: now, Task: task, Text: needs[task].String(), NeedsYou: true})
+		n.out(Line{Time: now, Task: task, Text: needs[task].String(), NeedsYou: true})
 	}
 }
 
@@ -446,117 +472,31 @@ Each request gives you the task roster, then a JSON array of per-task deltas fro
 
 Write one line per salient change, and at most one line per task otherwise. Format each line exactly as "<task id>: <sentence>". Keep each sentence under 15 words, plain English, present tense, no markdown. Lead with needs_you items: say what the agent is waiting on so the human can act. Skip tasks whose only activity is routine tool use unless nothing else happened. Never invent changes that are not in the deltas.`
 
-// Messages API wire types (only the fields the narrator uses).
-
-type cacheControl struct {
-	Type string `json:"type"`
-}
-
-type textBlock struct {
-	Type         string        `json:"type"`
-	Text         string        `json:"text"`
-	CacheControl *cacheControl `json:"cache_control,omitempty"`
-}
-
-type message struct {
-	Role    string      `json:"role"`
-	Content []textBlock `json:"content"`
-}
-
-type messagesRequest struct {
-	Model     string      `json:"model"`
-	MaxTokens int         `json:"max_tokens"`
-	System    []textBlock `json:"system"`
-	Messages  []message   `json:"messages"`
-}
-
-type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-}
-
-type apiUsage struct {
-	InputTokens              int64 `json:"input_tokens"`
-	OutputTokens             int64 `json:"output_tokens"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-}
-
-type messagesResponse struct {
-	Content []contentBlock `json:"content"`
-	Usage   apiUsage       `json:"usage"`
-}
-
-// APIError is a non-2xx response from the Messages API.
-type APIError struct {
-	Status int
-	Body   string
-}
-
-func (e *APIError) Error() string {
-	return fmt.Sprintf("narrator: messages API returned %d: %s", e.Status, e.Body)
-}
-
 func (n *Narrator) call(ctx context.Context, tasks []store.Task, deltas []TaskDelta) (string, error) {
 	delta, err := json.Marshal(deltas)
 	if err != nil {
 		return "", err
 	}
-	ephemeral := &cacheControl{Type: "ephemeral"}
-	body, err := json.Marshal(messagesRequest{
-		Model:     n.cfg.Model,
+	return n.complete(ctx, Request{
 		MaxTokens: n.cfg.MaxTokens,
-		System:    []textBlock{{Type: "text", Text: systemPrompt, CacheControl: ephemeral}},
-		Messages: []message{{Role: "user", Content: []textBlock{
-			{Type: "text", Text: rosterText(tasks), CacheControl: ephemeral},
-			{Type: "text", Text: string(delta)},
-		}}},
+		System:    systemPrompt,
+		Blocks:    []Block{{Text: rosterText(tasks), Cache: true}, {Text: string(delta)}},
 	})
-	if err != nil {
-		return "", err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.cfg.Endpoint, strings.NewReader(string(body)))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("content-type", "application/json")
-	req.Header.Set("x-api-key", n.cfg.APIKey)
-	req.Header.Set("anthropic-version", apiVersion)
+}
 
-	resp, err := n.deps.HTTP.Do(req)
+// complete sends r to the model and charges its tokens to today's spend.
+func (n *Narrator) complete(ctx context.Context, r Request) (string, error) {
+	r.Model = n.cfg.Model
+	resp, err := n.deps.Model.Complete(ctx, r)
 	if err != nil {
-		return "", fmt.Errorf("narrator: messages API: %w", err)
+		return "", err
 	}
-	defer func() { _ = resp.Body.Close() }()
-	var buf strings.Builder
-	if _, err := io.Copy(&buf, io.LimitReader(resp.Body, 1<<20)); err != nil {
-		return "", fmt.Errorf("narrator: read response: %w", err)
-	}
-	if resp.StatusCode/100 != 2 {
-		return "", &APIError{Status: resp.StatusCode, Body: truncate(buf.String(), 300)}
-	}
-	var out messagesResponse
-	if err := json.Unmarshal([]byte(buf.String()), &out); err != nil {
-		return "", fmt.Errorf("narrator: decode response: %w", err)
-	}
+	n.mu.Lock()
 	n.rollDay()
-	n.spent += usage.CostUSD(n.cfg.Model, usage.Tokens{
-		Input:         out.Usage.InputTokens,
-		Output:        out.Usage.OutputTokens,
-		CacheRead:     out.Usage.CacheReadInputTokens,
-		CacheCreation: out.Usage.CacheCreationInputTokens,
-	}, n.cfg.Prices)
+	n.spent += usage.CostUSD(n.cfg.Model, resp.Tokens, n.cfg.Prices)
 	if n.deps.Ledger != nil {
 		_ = n.deps.Ledger.SetNarratorSpend(n.day, n.spent)
 	}
-	var text []string
-	for _, c := range out.Content {
-		if c.Type == "text" {
-			text = append(text, c.Text)
-		}
-	}
-	if len(text) == 0 {
-		return "", errors.New("narrator: response had no text")
-	}
-	return strings.Join(text, "\n"), nil
+	n.mu.Unlock()
+	return resp.Text, nil
 }

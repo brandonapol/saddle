@@ -97,8 +97,11 @@ type model struct {
 
 	width, height int
 	focus         int
+	view          int  // viewControl, viewPlan or viewMerge
+	helpOpen      bool // the key help overlay covers the body
 
 	tasks []mcpserver.TaskView
+	stats map[string]agentStats // tokens, context and activity per task
 	sel   int
 	peek  string
 	prev  map[string]string // last seen status per task, for attention events
@@ -125,8 +128,12 @@ type model struct {
 	jev       *triage.Client
 	eventTurn bool // the current orchestrator turn answers saddle events
 	cost      float64
-	limits    *usage.LimitEstimate // plan-limit estimate from the last refresh
-	narr      narrSink             // narrator lines; nil when the narrator is off
+	limits    *usage.LimitEstimate                         // plan-limit estimate from the last refresh
+	graph     *usageGraph                                  // the last hour of usage by model
+	narr      narrSink                                     // narrator lines; nil when the narrator is off
+	asker     asker                                        // answers questions; nil when the narrator is off
+	askScreen bool                                         // the next question carries the selected agent's screen
+	capture   func(task string, lines int) (string, error) // a task's screen; nil means app.Peek
 	flash     string
 	flashAt   time.Time
 
@@ -163,6 +170,8 @@ type (
 		peek    string
 		screens map[string]string
 		limits  *usage.LimitEstimate
+		stats   map[string]agentStats
+		graph   *usageGraph
 	}
 	flashMsg   string
 	quitExpiry time.Time // the arming a timer was set for
@@ -201,7 +210,7 @@ func Run(a *app.App, first string) error {
 	go a.NewUsageMeter().Run(ctx, nil)
 	sink := make(narrSink, 256)
 	if n := a.NarratorFromEnv(sink); n != nil {
-		m.narr = sink
+		m.narr, m.asker = sink, n
 		go a.RunNarrator(ctx, n)
 	}
 	defer func() {
@@ -310,10 +319,8 @@ func (m *model) refresh() tea.Cmd {
 				}
 			}
 		}
-		msg := refreshMsg{tasks: ts, peek: peek, screens: screens}
-		if e, err := a.Limits(time.Now()); err == nil {
-			msg.limits = &e
-		}
+		msg := refreshMsg{tasks: ts, peek: peek, screens: screens, stats: readStats(a, time.Now())}
+		msg.limits, msg.graph = readUsage(a, time.Now())
 		return msg
 	}
 }
@@ -379,7 +386,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sel < len(m.tasks) {
 			selID = m.tasks[m.sel].ID
 		}
-		m.tasks, m.peek = msg.tasks, msg.peek
+		m.tasks, m.peek, m.stats = msg.tasks, msg.peek, msg.stats
+		if msg.graph != nil {
+			m.graph = msg.graph
+		}
 		m.sel = 0
 		for i, t := range m.tasks {
 			if t.ID == selID {
@@ -397,6 +407,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case triagedMsg:
 		m.applyTriage(msg)
+
+	case askedMsg:
+		m.answered(msg)
 
 	case salienceMsg:
 		if msg.idx < len(m.chat) {
@@ -459,6 +472,9 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 	if !key.Matches(k, keys.Quit) {
 		m.quitArmedAt = time.Time{}
 	}
+	if c, ok := m.routeKey(k); ok {
+		return c, true
+	}
 	switch {
 	case key.Matches(k, keys.Quit):
 		if m.quitArmed() {
@@ -469,6 +485,10 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		return tea.Tick(quitWindow, func(time.Time) tea.Msg { return quitExpiry(at) }), true
 	case key.Matches(k, keys.Terminal):
 		return m.toggleTerm(), true
+	case key.Matches(k, keys.Ask):
+		return m.aimAtNarrator(), true
+	case key.Matches(k, keys.AskScreen) && m.asking():
+		return m.toggleAskScreen(), true
 	case key.Matches(k, keys.Focus):
 		if m.focus == focusChat && key.Matches(k, keys.Complete) {
 			if c, ok := m.completeInput(); ok {
@@ -551,6 +571,10 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		return m.attach(), true
 	case key.Matches(k, keys.Skill):
 		return m.aimAtAgent(), true
+	case key.Matches(k, keys.Spawn):
+		m.startSpawn()
+	case key.Matches(k, keys.Pause):
+		return m.pause(), true
 	case key.Matches(k, keys.Kill):
 		if t, ok := m.selected(); ok {
 			id := t.ID
@@ -879,6 +903,9 @@ func lastLines(s string, n int) string {
 // Layout.
 
 func (m *model) chatWidth() int {
+	if m.narrow() {
+		return m.width
+	}
 	w := m.width * 42 / 100
 	if w < 44 {
 		w = 44
@@ -953,10 +980,7 @@ func renderLine(c chatLine, w int, wrap lipgloss.Style) string {
 	case store.ChatTool:
 		return sFaint.Render("  ⚙ " + truncate(c.text, w-6))
 	case store.ChatNarrator:
-		if narratorNeedsYou(c) {
-			return renderUrgent(c.text, w-2)
-		}
-		return renderMarkdown("· "+c.text, w-2, sDim)
+		return renderNarrator(c, w)
 	default:
 		return renderMarkdown("◇ "+c.text, w-2, lipgloss.NewStyle().Foreground(lipgloss.Color("#C9A26B")))
 	}
@@ -987,49 +1011,11 @@ func (m *model) View() string {
 	if m.term == nil {
 		termH = 0
 	}
-	cw := m.chatWidth()
-	left := m.viewLeft(m.width-cw, bodyH-termH)
-	right := m.viewChat(cw, bodyH-termH)
-	parts := []string{header, lipgloss.JoinHorizontal(lipgloss.Top, left, right)}
+	parts := []string{header, m.viewBody(m.width, bodyH-termH)}
 	if termH > 0 {
 		parts = append(parts, m.viewTerm(termH))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, append(parts, footer)...)
-}
-
-func (m *model) viewHeader() string {
-	counts := map[string]int{}
-	for _, t := range m.tasks {
-		counts[t.Status]++
-	}
-	parts := []string{sLogo.Render("SADDLE"), sBright.Render(m.app.Cfg.Session), sDim.Render("→ " + m.app.Cfg.Integration)}
-	add := func(n int, s string, c lipgloss.Color) {
-		if n > 0 {
-			parts = append(parts, lipgloss.NewStyle().Foreground(c).Render(fmt.Sprintf(s, n)))
-		}
-	}
-	add(counts[store.Running], "● %d running", cRun)
-	add(counts[store.NeedsYou]+counts[store.Conflict]+counts[store.Idle], "▲ %d need attention", cAlert)
-	add(counts[store.Done], "◆ %d queued", cAccent)
-	add(counts[store.Landed], "✓ %d landed", cDone)
-	left := strings.Join(parts, "  ")
-	state := "idle"
-	if m.proc != nil && m.proc.Busy() {
-		state = "working"
-	}
-	jev := ""
-	if m.jev != nil {
-		jev = " · jev triage"
-	}
-	if m.narr != nil {
-		jev += " · narrator"
-	}
-	right := sDim.Render(fmt.Sprintf("orchestrator %s · %s%s · $%.2f ", m.launch.Model, state, jev, m.cost))
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
-	}
-	return lipgloss.NewStyle().Width(m.width).Render(left + strings.Repeat(" ", gap) + right)
 }
 
 // viewFooter is the bottom of the page: shortcuts on the last line. Other
@@ -1100,76 +1086,6 @@ func modelColor(model string) lipgloss.Color {
 	return cDim
 }
 
-func (m *model) viewLeft(w, h int) string {
-	listH := len(m.tasks) + 2
-	if listH < 5 {
-		listH = 5
-	}
-	if listH > h/2 {
-		listH = h / 2
-	}
-	var rows []string
-	if len(m.tasks) == 0 {
-		rows = append(rows, sDim.Render(" No agents yet. Ask the orchestrator to start some."))
-	}
-	for i, t := range m.tasks {
-		g, gc := glyph(t.Status)
-		train := ""
-		if t.Train != "" {
-			train = firstWord(t.Train)
-		}
-		meta := lipgloss.NewStyle().Foreground(modelColor(t.Model)).Render(fmt.Sprintf("%-6s", t.Model)) + " " + sDim.Render(fmt.Sprintf("%-9s", statusLabel(t.Status)))
-		if train != "" && train != "landed" {
-			meta += " " + sDim.Render(train)
-		}
-		titleW := w - 4 - 3 - 6 - lipgloss.Width(meta) - 2
-		row := lipgloss.NewStyle().Foreground(gc).Render(g) + " " + sDim.Render(fmt.Sprintf("%-5s", t.ID)) + " " +
-			sText.Render(fmt.Sprintf("%-*s", maxInt(titleW, 4), truncate(t.Title, maxInt(titleW, 4)))) + " " + meta
-		if i == m.sel {
-			marker := "›"
-			row = lipgloss.NewStyle().Foreground(cAccent).Render(marker) + row
-			if m.focus == focusTasks {
-				row = lipgloss.NewStyle().Background(cSelBg).Width(w - 2).Render(row)
-			}
-		} else {
-			row = " " + row
-		}
-		rows = append(rows, row)
-	}
-	list := box("AGENTS", w, listH, m.focus == focusTasks, strings.Join(rows, "\n"))
-
-	peekH := h - listH
-	title := "PEEK"
-	body := sDim.Render(" Select an agent to see its terminal.")
-	if t, ok := m.selected(); ok {
-		title = "PEEK · " + t.ID + " " + t.Title
-		if i, n := m.livePos(); n > 1 {
-			// Make switching discoverable where the user is looking.
-			pos := fmt.Sprintf("%d/%d", i, n)
-			if i == 0 {
-				pos = fmt.Sprintf("%d live", n)
-			}
-			title = fmt.Sprintf("PEEK %s %s · %s %s", pos, m.keys.NextAgent.Help().Key, t.ID, t.Title)
-		}
-		if m.peek != "" {
-			lines := strings.Split(m.peek, "\n")
-			if n := peekH - 2; len(lines) > n && n > 0 {
-				lines = lines[len(lines)-n:]
-			}
-			for i, l := range lines {
-				lines[i] = truncate(l, w-3)
-			}
-			body = sText.Render(strings.Join(lines, "\n"))
-		} else if t.Window == "" || t.Status == store.Landed || t.Status == store.Killed {
-			body = sDim.Render(" Window closed (" + statusLabel(t.Status) + ").")
-			if t.PR != "" {
-				body += "\n " + sDim.Render(t.PR)
-			}
-		}
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, list, box(title, w, peekH, false, body))
-}
-
 // setChatHeight fits the chat viewport into a body of height h: the box
 // border, the input and its top rule take the rest.
 func (m *model) setChatHeight(h int) {
@@ -1184,7 +1100,7 @@ func (m *model) viewChat(w, h int) string {
 	m.setChatHeight(h)
 	in := lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(cBorder).Width(w - 2).Render(m.input.View())
 	body := lipgloss.JoinVertical(lipgloss.Left, m.vp.View(), in)
-	return box("ORCHESTRATOR · "+m.launch.Model, w, h, m.focus == focusChat, body)
+	return box(m.chatTitle(), w, h, m.focus == focusChat, body)
 }
 
 func statusLabel(s string) string {
@@ -1202,11 +1118,4 @@ func firstWord(s string) string {
 		return s[:i]
 	}
 	return s
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

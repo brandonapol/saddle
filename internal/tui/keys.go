@@ -16,14 +16,20 @@ type keyMap struct {
 	Quit, Focus, PageUp, PageDown, Restart key.Binding
 	NextAgent, PrevAgent                   key.Binding
 
+	// Views and the help overlay.
+	ViewControl, ViewPlan, ViewMerge, Help key.Binding
+
 	// Terminal pane.
 	Terminal, TermBack, TermScrollUp, TermScrollDown key.Binding
 
 	// Chat.
 	Send, Newline, Complete, Untarget key.Binding
 
+	// Narrator questions.
+	Ask, AskScreen key.Binding
+
 	// Task list.
-	Up, Down, Open, Skill, Kill, Land, Back key.Binding
+	Up, Down, Open, Skill, Spawn, Pause, Kill, Land, Back key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -39,6 +45,11 @@ func newKeyMap() keyMap {
 		NextAgent: b("alt+n/p", "next/prev agent", "alt+n"),
 		PrevAgent: b("alt+p", "prev agent", "alt+p"),
 
+		ViewControl: b("alt+1/2/3", "views", "alt+1"),
+		ViewPlan:    b("alt+2", "plan view", "alt+2"),
+		ViewMerge:   b("alt+3", "merge view", "alt+3"),
+		Help:        b("?", "keys", "?", "f1"),
+
 		// Terminals send ctrl+` as NUL, which bubbletea names ctrl+@.
 		Terminal:       b("ctrl+`", "terminal", "ctrl+@"),
 		TermBack:       b("esc", "chat", "esc"),
@@ -50,13 +61,35 @@ func newKeyMap() keyMap {
 		Complete: b("/skill tab", "complete", "tab"),
 		Untarget: b("esc", "back to orchestrator", "esc"),
 
+		Ask:       b("alt+a", "ask narrator", "alt+a"),
+		AskScreen: b("alt+s", "send agent's screen", "alt+s"),
+
 		Up:    b("k", "up", "k", "up"),
 		Down:  b("j/k", "select", "j", "down"),
 		Open:  b("enter", "open window", "enter", "a"),
 		Skill: b("/", "skill in agent", "/"),
+		Spawn: b("s", "spawn", "s"),
+		Pause: b("p", "pause (esc)", "p"),
 		Kill:  b("x", "kill", "x"),
 		Land:  b("L", "land", "L"),
 		Back:  b("esc/tab", "orchestrator", "esc"),
+	}
+}
+
+// keyGroup is a titled section of the help overlay.
+type keyGroup struct {
+	title string
+	keys  []key.Binding
+}
+
+// groups is every binding, once, for the help overlay. TestHelpGroupsCoverKeyMap
+// fails if a binding is added to keyMap but not here.
+func (k keyMap) groups() []keyGroup {
+	return []keyGroup{
+		{"Anywhere", []key.Binding{k.ViewControl, k.ViewPlan, k.ViewMerge, k.Help, k.NextAgent, k.PrevAgent, k.Focus, k.PageUp, k.PageDown, k.Restart, k.Quit}},
+		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget, k.Ask, k.AskScreen}},
+		{"Agents", []key.Binding{k.Down, k.Up, k.Open, k.Skill, k.Spawn, k.Pause, k.Kill, k.Land, k.Back}},
+		{"Terminal", []key.Binding{k.Terminal, k.TermBack, k.TermScrollUp, k.TermScrollDown}},
 	}
 }
 
@@ -64,19 +97,28 @@ func newKeyMap() keyMap {
 // the footer drops whatever doesn't fit from the end.
 func (m *model) help() []key.Binding {
 	k := m.keys
+	if m.helpOpen {
+		return []key.Binding{withHelp(k.Help, "esc/?", "close"), k.ViewControl, k.Quit}
+	}
 	if m.focus == focusTerm {
 		return []key.Binding{withHelp(k.Terminal, "ctrl+`", "hide"), k.TermBack, k.TermScrollUp}
 	}
+	if m.view != viewControl {
+		return []key.Binding{k.ViewControl, k.Help, k.Terminal, k.Quit}
+	}
 	if m.focus == focusChat {
 		hs := []key.Binding{k.Send, k.Newline}
-		if m.target != "" {
+		switch {
+		case m.asking():
+			hs = append(hs, k.AskScreen, k.Untarget)
+		case m.target != "":
 			hs = append(hs, k.Untarget)
-		} else {
-			hs = append(hs, k.Complete)
+		default:
+			hs = append(hs, k.Complete, k.Ask)
 		}
-		return append(hs, k.NextAgent, withHelp(k.Focus, "tab", "agents"), k.Terminal, k.PageUp, k.Restart, k.Quit)
+		return append(hs, k.NextAgent, withHelp(k.Focus, "tab", "agents"), k.ViewControl, k.Terminal, withHelp(k.Help, "f1", "keys"), k.PageUp, k.Restart, k.Quit)
 	}
-	return []key.Binding{k.Down, k.NextAgent, k.Open, m.detachHelp(), k.Skill, k.Back, k.Kill, k.Land, k.Restart, k.Quit}
+	return []key.Binding{k.Down, k.NextAgent, k.Open, k.ViewControl, m.detachHelp(), k.Skill, k.Spawn, k.Pause, k.Ask, k.Back, k.Kill, k.Land, k.Help, k.Restart, k.Quit}
 }
 
 func withHelp(b key.Binding, h, desc string) key.Binding {
