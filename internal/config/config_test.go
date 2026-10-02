@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/brandonapol/saddle/internal/usage"
 )
 
 func TestUsageDefaults(t *testing.T) {
@@ -139,5 +141,82 @@ func TestCIConfig(t *testing.T) {
 	}
 	if cfg.CI != (CI{Interval: 3 * time.Minute, Disabled: true}) {
 		t.Fatalf("ci: %+v", cfg.CI)
+	}
+}
+
+func TestLimitsAndNarratorDefaults(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := cfg.Limits
+	if l.FiveHour != (usage.Cap{}) || l.Weekly != (usage.Cap{}) || l.PauseLaunches || l.WarnAt != 0 || !l.WeeklyReset.IsZero() {
+		t.Fatalf("limits default: %+v", l)
+	}
+	// No cap means the narrator is off: it never spends without opting in.
+	if cfg.Narrator.DailyCapUSD != 0 || cfg.Narrator.Model != "" {
+		t.Fatalf("narrator default: %+v", cfg.Narrator)
+	}
+}
+
+func TestLimitsAndNarratorParse(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	body := `
+[limits]
+warn_at = 0.7
+pause_launches = true
+weekly_reset = 2026-09-29T08:00:00Z
+[limits.five_hour]
+tokens = 2000000
+[limits.weekly]
+usd = 150.5
+[limits.prices.claude-opus]
+input = 9
+output = 45
+
+[narrator]
+daily_cap_usd = 0.5
+model = "claude-haiku-4-5"
+`
+	writeConfig(t, root, body)
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := cfg.Limits
+	want := time.Date(2026, 9, 29, 8, 0, 0, 0, time.UTC)
+	if l.FiveHour.Tokens != 2_000_000 || l.Weekly.USD != 150.5 || l.WarnAt != 0.7 || !l.PauseLaunches ||
+		!l.WeeklyReset.Equal(want) || l.Prices["claude-opus"].Input != 9 || l.Prices["claude-opus"].Output != 45 {
+		t.Fatalf("limits: %+v", l)
+	}
+	if cfg.Narrator.DailyCapUSD != 0.5 || cfg.Narrator.Model != "claude-haiku-4-5" {
+		t.Fatalf("narrator: %+v", cfg.Narrator)
+	}
+}
+
+func TestLimitsRejectBadValues(t *testing.T) {
+	for _, body := range []string{
+		"[limits]\nwarn_at = 1.5\n",
+		"[limits.five_hour]\ntokens = -1\n",
+		"[narrator]\ndaily_cap_usd = -2\n",
+	} {
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+		root := t.TempDir()
+		writeConfig(t, root, body)
+		if _, err := Load(root); err == nil {
+			t.Errorf("%q: want error", body)
+		}
+	}
+}
+
+func writeConfig(t *testing.T, root, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, ".saddle"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".saddle", "config.toml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
