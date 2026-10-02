@@ -69,7 +69,7 @@ func Actor(getenv func(string) string) string {
 // hook saddle didn't write is left alone and reported as an error, and then
 // neither hook is written.
 func Install(root, bin string) error {
-	hooks, err := gitx.Run(root, "rev-parse", "--path-format=absolute", "--git-path", "hooks")
+	hooks, err := hooksDir(root)
 	if err != nil {
 		return err
 	}
@@ -107,6 +107,51 @@ func Install(root, bin string) error {
 		}
 	}
 	return nil
+}
+
+func hooksDir(root string) (string, error) {
+	return gitx.Run(root, "rev-parse", "--path-format=absolute", "--git-path", "hooks")
+}
+
+// HookState is what is installed at one of the hooks Install writes.
+type HookState struct {
+	Name    string // reference-transaction or pre-push
+	Path    string
+	Present bool   // a file exists at Path
+	Saddle  bool   // saddle wrote it
+	Bin     string // the saddle binary it runs, when Saddle
+}
+
+// Installed reports the state of the reference-transaction and pre-push
+// hooks in the repo at root, in that order.
+func Installed(root string) ([]HookState, error) {
+	hooks, err := hooksDir(root)
+	if err != nil {
+		return nil, err
+	}
+	var out []HookState
+	for _, name := range []string{"reference-transaction", "pre-push"} {
+		h := HookState{Name: name, Path: filepath.Join(hooks, name)}
+		if b, err := os.ReadFile(h.Path); err == nil {
+			h.Present = true
+			h.Saddle = strings.Contains(string(b), marker)
+			if h.Saddle {
+				h.Bin = hookBin(string(b))
+			}
+		}
+		out = append(out, h)
+	}
+	return out, nil
+}
+
+// hookBin reads back the bin=<shellQuote(bin)> line Install writes.
+func hookBin(script string) string {
+	for _, line := range strings.Split(script, "\n") {
+		if q, ok := strings.CutPrefix(line, "bin="); ok && len(q) >= 2 {
+			return strings.ReplaceAll(q[1:len(q)-1], `'\''`, "'")
+		}
+	}
+	return ""
 }
 
 type update struct{ old, new, ref string }
