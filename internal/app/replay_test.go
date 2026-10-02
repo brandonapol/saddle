@@ -101,7 +101,13 @@ func (r *replay) ghLog() []string {
 // setPR makes the fake gh report state for the PR at url.
 func (r *replay) setPR(url, state, mergeable string) {
 	r.t.Helper()
-	b, _ := json.Marshal(sentinel.PR{State: state, Mergeable: mergeable})
+	r.setPRBase(url, state, mergeable, "")
+}
+
+// setPRBase is setPR for a PR that targets (or was merged into) base.
+func (r *replay) setPRBase(url, state, mergeable, base string) {
+	r.t.Helper()
+	b, _ := json.Marshal(sentinel.PR{State: state, Mergeable: mergeable, BaseRefName: base})
 	if err := os.WriteFile(filepath.Join(r.ghDir, "view-"+filepath.Base(url)), b, 0o644); err != nil {
 		r.t.Fatal(err)
 	}
@@ -132,6 +138,20 @@ func (r *replay) landedRange(task string) (string, string) {
 	return "", ""
 }
 
+func (r *replay) trainState(task string) string {
+	r.t.Helper()
+	es, err := r.a.Store.Train()
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	for _, e := range es {
+		if e.Task == task {
+			return e.State
+		}
+	}
+	return ""
+}
+
 func (r *replay) task(id string) store.Task {
 	r.t.Helper()
 	tk, err := r.a.Store.Task(id)
@@ -159,13 +179,11 @@ func (r *replay) land(want ...string) {
 	}
 }
 
-// TestReplayStackIncident replays the 2026-10-01 dogfood run (#83, #94)
-// against a temp repo, a bare origin, a fake tmux and a fake gh: a stale local
-// base, a squash-merged bottom PR, the orchestrator merging origin/main into
-// integration and a worker force-pushing another task's branch. Saddle must
-// refuse the out-of-train ref writes, flag the stack, restack it, and leave
-// one linear stack whose PRs each show exactly their own task's work.
-func TestReplayStackIncident(t *testing.T) {
+// newReplay starts saddle in a temp repo whose local main is one commit
+// behind origin/main (m0), with a fake tmux and a fake gh on PATH. other is a
+// clone of origin to act on GitHub's side from.
+func newReplay(t *testing.T) (r *replay, other, m0 string, ft *replayTmux) {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
@@ -177,7 +195,7 @@ func TestReplayStackIncident(t *testing.T) {
 	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
 	t.Setenv("GIT_COMMITTER_NAME", "t")
 	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
-	r := &replay{t: t}
+	r = &replay{t: t}
 
 	// The fake gh logs its calls, numbers created PRs, and answers `pr view`
 	// from a per-PR file, else as an open, mergeable PR.
@@ -192,6 +210,12 @@ case "$1 $2" in
 "pr view")
 	f="` + r.ghDir + `/view-$(basename "$3")"
 	if [ -f "$f" ]; then cat "$f"; else echo '{"state":"OPEN","mergeable":"MERGEABLE"}'; fi ;;
+"pr edit")
+	f="` + r.ghDir + `/view-$(basename "$3")"
+	if [ "$4" = "--base" ] && [ -f "$f" ] && grep -q '"CLOSED"\|"MERGED"' "$f"; then
+		echo "GraphQL: Cannot change the base branch of a closed pull request. (updatePullRequest)" >&2
+		exit 1
+	fi ;;
 esac
 `
 	if err := os.WriteFile(filepath.Join(r.ghDir, "gh"), []byte(script), 0o755); err != nil {
@@ -207,11 +231,11 @@ esac
 	r.git(r.origin, "", "init", "-q", "--bare", "-b", "main")
 	r.git(root, "", "remote", "add", "origin", r.origin)
 	r.git(root, "", "push", "-q", "origin", "main")
-	other := filepath.Join(t.TempDir(), "other")
+	other = filepath.Join(t.TempDir(), "other")
 	r.git(t.TempDir(), "", "clone", "-q", r.origin, other)
 	r.commit(other, "", "M0 (#55)", map[string]string{"m0.txt": "m0\n"})
 	r.git(other, "", "push", "-q", "origin", "main")
-	m0 := r.git(other, "", "rev-parse", "HEAD")
+	m0 = r.git(other, "", "rev-parse", "HEAD")
 
 	a, err := app.Open(root)
 	if err != nil {
@@ -219,7 +243,7 @@ esac
 	}
 	t.Cleanup(func() { _ = a.Close() })
 	r.a = a
-	ft := &replayTmux{windows: map[string]string{}}
+	ft = &replayTmux{windows: map[string]string{}}
 	a.Tmux = ft
 	a.Cfg.Test.Cmd = "true"
 	a.Cfg.CloseOnLand = true
@@ -232,6 +256,18 @@ esac
 	if got := r.git(root, "", "rev-parse", integ); got != m0 {
 		t.Fatalf("integration cut from %s, want origin/main %s", got, m0)
 	}
+	return r, other, m0, ft
+}
+
+// TestReplayStackIncident replays the 2026-10-01 dogfood run (#83, #94)
+// against a temp repo, a bare origin, a fake tmux and a fake gh: a stale local
+// base, a squash-merged bottom PR, the orchestrator merging origin/main into
+// integration and a worker force-pushing another task's branch. Saddle must
+// refuse the out-of-train ref writes, flag the stack, restack it, and leave
+// one linear stack whose PRs each show exactly their own task's work.
+func TestReplayStackIncident(t *testing.T) {
+	r, other, m0, ft := newReplay(t)
+	a, root, integ := r.a, r.a.Root, r.a.Cfg.Integration
 
 	type work struct {
 		id, title, claim, file string
@@ -323,8 +359,9 @@ esac
 	if err != nil {
 		t.Fatalf("Restack: %v", err)
 	}
-	if len(res.Merged) != 1 || res.Merged[0] != "t1" {
-		t.Fatalf("restack merged = %v, want [t1]", res.Merged)
+	// GitHub said t1's PR merged into main, so t1 already left the stack.
+	if len(res.Moves) == 0 || r.trainState("t1") != app.TrainMerged {
+		t.Fatalf("restack moved %v; t1's train row is %q, want merged", res.Moves, r.trainState("t1"))
 	}
 	if rep, err := s.Check(); err != nil || rep.AtRisk {
 		t.Fatalf("sentinel after restack: %+v, %v", rep, err)
@@ -466,11 +503,9 @@ esac
 			}
 		}
 	}
-	if len(added) == 0 || fmt.Sprint(added) != fmt.Sprint(removed) {
-		t.Errorf("%s labels added %v, removed %v", sentinel.Label, added, removed)
-	}
-	if added[t1.PR] {
-		t.Errorf("merged t1 PR labeled %s", sentinel.Label)
+	// Nothing here needed a human decision, so nothing was labeled (#119.7).
+	if len(added) != 0 || len(removed) != 0 {
+		t.Errorf("%s labels added %v, removed %v; want none", sentinel.Label, added, removed)
 	}
 
 	// No phantom tasks, no leftover worktrees.
@@ -495,4 +530,193 @@ esac
 	if len(ft.windows) != 0 {
 		t.Errorf("leftover windows: %v", ft.windows)
 	}
+}
+
+// TestReplayGitHubHumansIncident replays 2026-10-02 (#119, #123): the owner
+// used GitHub like a human. Stacked PRs were merged into each other and then
+// squash-merged into main, a PR was closed, merged branches were deleted on
+// GitHub and locally (plus one open layer's branch), a task with a PR and a
+// landed train row was killed, main moved, and two tasks landed in one batch
+// on an old binary that recorded the same single SHA for both. The stack has
+// to clear with nothing but restack, and no state.db edit: no needs-human
+// labels, no frozen land for independent work, no PR touched once it left the
+// stack, and every task that is still open gets exactly its own work in its PR.
+func TestReplayGitHubHumansIncident(t *testing.T) {
+	r, other, _, _ := newReplay(t)
+	a, root, integ := r.a, r.a.Root, r.a.Cfg.Integration
+	file := func(id string) string { return id + "/" + id + ".go" }
+	spawn := func(id string) {
+		t.Helper()
+		tk, err := a.Spawn(app.SpawnReq{ID: id, Title: "work " + id, Parent: app.OrchestratorID, Claims: []string{id + "/**"}})
+		if err != nil {
+			t.Fatalf("spawn %s: %v", id, err)
+		}
+		r.commit(tk.Worktree, id, "work "+id, map[string]string{file(id): "package " + id + "\n"})
+		if err := a.Done(id, "work "+id); err != nil {
+			t.Fatalf("done %s: %v", id, err)
+		}
+	}
+	for _, id := range []string{"t1", "t2", "t3", "t4", "t5", "t6"} {
+		spawn(id)
+		r.land(id)
+	}
+	// t7 and t8 land in one batch; the old binary noted the same SHA for both.
+	spawn("t7")
+	spawn("t8")
+	r.land("t7", "t8")
+	tip := r.git(root, "", "rev-parse", integ)
+	for _, id := range []string{"t7", "t8"} {
+		if err := a.Store.SetTrain(id, store.TrainOK, tip[:7], false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if urls, err := a.PRs(); err != nil || len(urls) != 8 {
+		t.Fatalf("PRs = %v, %v", urls, err)
+	}
+	t1, t2, t3, t5 := r.task("t1"), r.task("t2"), r.task("t3"), r.task("t5")
+	t4 := r.task("t4")
+
+	// On GitHub: t2's PR is merged into t1's branch, t1's PR is squash-merged
+	// into main, main gets a hotfix, and GitHub deletes both merged branches.
+	r.git(other, "", "fetch", "-q", "origin")
+	r.git(other, "", "checkout", "-q", "-B", "b1", "origin/"+t1.Branch)
+	r.git(other, "", "merge", "-q", "--no-ff", "-m", "Merge pull request #2", "origin/"+t2.Branch)
+	r.git(other, "", "push", "-q", "origin", "HEAD:refs/heads/"+t1.Branch)
+	r.git(other, "", "checkout", "-q", "main")
+	r.git(other, "", "merge", "-q", "--squash", "b1")
+	r.git(other, "", "commit", "-qm", "work t1 (#1)")
+	r.commit(other, "", "hotfix", map[string]string{"hotfix.txt": "fix\n"})
+	r.git(other, "", "push", "-q", "origin", "main")
+	r.git(other, "", "push", "-q", "origin", "--delete", t1.Branch, t2.Branch)
+	r.setPRBase(t1.PR, "MERGED", "UNKNOWN", "main")
+	r.setPRBase(t2.PR, "MERGED", "UNKNOWN", t1.Branch)
+	// The owner closes t3's PR; the orchestrator kills t4, leaving its PR url
+	// and its landed train row.
+	r.setPRBase(t3.PR, "CLOSED", "UNKNOWN", t2.Branch)
+	if err := a.Kill("t4", false); err != nil {
+		t.Fatal(err)
+	}
+	// Branches are deleted locally, one of them an open layer's.
+	for _, b := range []string{t1.Branch, t2.Branch, t5.Branch} {
+		cmd := exec.Command("git", "-C", root, "branch", "-D", b)
+		cmd.Env = append(os.Environ(), "SADDLE_TRAIN=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("delete %s: %v: %s", b, err, out)
+		}
+	}
+	ghBefore := len(r.ghLog())
+
+	// The sentinel asks for a restack but labels nothing, and t1..t4 leave
+	// the stack for good.
+	s := &sentinel.Sentinel{App: a, GH: &sentinel.GH{Dir: root}}
+	rep, err := s.Check()
+	if err != nil {
+		t.Fatalf("sentinel: %v", err)
+	}
+	if !rep.AtRisk || rep.Task != "t5" || len(rep.PRs) != 0 {
+		t.Fatalf("sentinel report = %+v, want t5 needing a restack and no labels", rep)
+	}
+	for id, want := range map[string]string{"t1": app.TrainMerged, "t2": app.TrainMerged, "t3": app.TrainSuperseded, "t4": app.TrainSuperseded} {
+		if got := r.trainState(id); got != want {
+			t.Errorf("%s's train row = %q, want %q", id, got, want)
+		}
+	}
+
+	// Work that doesn't touch the stack still lands while it is flagged.
+	spawn("t9")
+	r.land("t9")
+
+	// The orchestrator restacks. Nothing else is done by hand.
+	res, err := a.Restack()
+	if err != nil {
+		t.Fatalf("Restack: %v", err)
+	}
+	if got := strings.Join(res.Superseded, ","); got != "t3,t4" {
+		t.Errorf("restack superseded = %s, want t3,t4", got)
+	}
+	if rep, err := s.Check(); err != nil || rep.AtRisk {
+		t.Fatalf("sentinel after restack: %+v, %v", rep, err)
+	}
+	urls, err := a.PRs()
+	if err != nil {
+		t.Fatalf("PRs after restack: %v", err)
+	}
+	if len(urls) != 5 {
+		t.Errorf("PRs = %v, want t5..t9", urls)
+	}
+	if _, flagged, _ := a.Flag(); flagged {
+		t.Error("stack still flagged")
+	}
+
+	// Integration is origin/main plus t5..t9, one commit each, linear.
+	r.git(root, "", "fetch", "-q", "origin")
+	if b, m := r.git(root, "", "merge-base", "origin/main", integ), r.git(root, "", "rev-parse", "origin/main"); b != m {
+		t.Errorf("integration does not descend from origin/main")
+	}
+	if n := r.git(root, "", "rev-list", "--count", "origin/main.."+integ); n != "5" {
+		t.Errorf("integration has %s commits over origin/main, want 5", n)
+	}
+	for _, id := range []string{"t3", "t4"} {
+		if r.has(integ, file(id)) {
+			t.Errorf("%s left the stack but its work is still on integration", id)
+		}
+	}
+	for _, id := range []string{"t1", "t2"} {
+		if !r.has("origin/main", file(id)) {
+			t.Errorf("%s's merged work is not on origin/main", id)
+		}
+	}
+
+	// Each open PR shows exactly its own task's commit, stacked t5..t9 on main.
+	bases := map[string]string{}
+	created := 0
+	for _, c := range r.ghLog() {
+		f := strings.Fields(c)
+		switch {
+		case strings.HasPrefix(c, "pr create "):
+			created++
+			for i := 2; i+1 < len(f); i++ {
+				if f[i] == "--base" {
+					bases[fmt.Sprintf("https://github.com/o/r/pull/%d", created)] = f[i+1]
+				}
+			}
+		case strings.HasPrefix(c, "pr edit ") && len(f) >= 5 && f[3] == "--base":
+			bases[f[2]] = f[4]
+		}
+	}
+	want := a.Cfg.Base
+	for _, id := range []string{"t5", "t6", "t7", "t8", "t9"} {
+		tk := r.task(id)
+		if tk.PR == "" {
+			t.Errorf("%s has no PR", id)
+			continue
+		}
+		if bases[tk.PR] != want {
+			t.Errorf("%s's PR targets %q, want %q", id, bases[tk.PR], want)
+		}
+		if got := r.git(r.origin, "", "log", "--format=%s", bases[tk.PR]+".."+tk.Branch); got != "work "+id {
+			t.Errorf("%s's PR shows %q, want only %q", id, got, "work "+id)
+		}
+		want = tk.Branch
+	}
+
+	// Once out of the stack, no PR was edited or labeled, and no PR ever was.
+	for _, c := range r.ghLog()[ghBefore:] {
+		for _, tk := range []store.Task{t1, t2, t3, t4} {
+			if strings.HasPrefix(c, "pr edit "+tk.PR+" ") {
+				t.Errorf("%s left the stack but its PR was edited: %s", tk.ID, c)
+			}
+		}
+	}
+	for _, c := range r.ghLog() {
+		if strings.Contains(c, "--add-label") {
+			t.Errorf("labeled without a conflict: %s", c)
+		}
+	}
+}
+
+// has reports whether rev has path.
+func (r *replay) has(rev, path string) bool {
+	_, err := r.run(r.a.Root, "", "cat-file", "-e", rev+":"+path)
+	return err == nil
 }

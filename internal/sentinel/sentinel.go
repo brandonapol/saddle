@@ -1,12 +1,16 @@
 // Package sentinel watches the PR stack for the things that break it: a PR
-// GitHub can't merge, a bottom PR merged into base, base moving past
-// integration, and branches that drifted or no longer show only their task's
-// work. On a hit it labels the broken PR and every PR above it needs-human,
-// records one stack_at_risk event, tells the orchestrator (and so the TUI) to
-// run restack, and flags the stack so prs and land refuse to build on it. It
-// never restacks itself. Once the stack checks clean it lifts the labels and
-// the flag. Each labeled PR also gets one comment saying why, kept current as
-// the cause changes and turned into a resolution note when the label lifts.
+// GitHub can't merge, base moving past integration, and branches that drifted
+// or no longer show only their task's work. People use GitHub too (#119):
+// tasks whose PR was merged or closed, and killed tasks, leave the stack for
+// good before anything is checked, so they never flag it. On a hit the
+// sentinel records one stack_at_risk event, tells the orchestrator (and so
+// the TUI) to run restack, and flags the stack so prs and land hold back the
+// work that depends on the broken layers. Only a conflict, which needs a
+// human decision, labels PRs needs-human; each labeled PR gets one comment
+// saying which conflict, kept current as the cause changes and turned into a
+// note when the label lifts. It never restacks itself. Once the stack checks
+// clean it lifts the labels and the flag. `saddle sentinel ack` and
+// `saddle unstack` are the escape hatches when restack can't fix it.
 package sentinel
 
 import (
@@ -39,10 +43,7 @@ const (
 const DefaultInterval = 2 * time.Minute
 
 // PR is what GitHub says about a pull request.
-type PR struct {
-	State     string `json:"state"`     // OPEN, CLOSED or MERGED
-	Mergeable string `json:"mergeable"` // MERGEABLE, CONFLICTING or UNKNOWN
-}
+type PR = app.PRInfo
 
 // GitHub is the part of GitHub the sentinel uses.
 type GitHub interface {
@@ -79,7 +80,7 @@ func (g *GH) gh(args ...string) (string, error) {
 
 func (g *GH) PR(url string) (PR, error) {
 	var pr PR
-	out, err := g.gh("pr", "view", url, "--json", "state,mergeable")
+	out, err := g.gh("pr", "view", url, "--json", "state,mergeable,baseRefName")
 	if err != nil {
 		return pr, err
 	}
@@ -153,6 +154,7 @@ func New(a *app.App) *Sentinel {
 type Report struct {
 	Busy   bool     `json:"busy,omitempty"` // the train held its lock, so nothing was checked
 	AtRisk bool     `json:"at_risk"`
+	Acked  bool     `json:"acked,omitempty"` // someone acked this flag, so it freezes and labels nothing
 	Task   string   `json:"task,omitempty"`  // the first broken task
 	Cause  string   `json:"cause,omitempty"` // why it broke
 	Hits   []string `json:"hits,omitempty"`  // every problem found, "task: problem"
@@ -186,16 +188,18 @@ func (s *Sentinel) Run(ctx context.Context) error {
 	}
 }
 
-// hit is one problem, at index at of the open PRs; the PRs from from up are
-// at risk.
+// hit is one problem, at index at of the stack's layers; the layers from
+// from up are at risk. conflict marks a conflict, the one kind of hit that
+// needs a human.
 type hit struct {
 	at, from int
 	cause    string
+	conflict bool
 }
 
-// Check runs one cycle: it checks every open PR in the stack, then flags or
-// clears the stack. It skips the cycle when the train is busy, since a land or
-// restack in progress moves the refs it reads.
+// Check runs one cycle: it takes finished tasks out of the stack, checks every
+// layer left, then flags or clears the stack. It skips the cycle when the
+// train is busy, since a land or restack in progress moves the refs it reads.
 func (s *Sentinel) Check() (Report, error) {
 	a := s.App
 	unlock, ok, err := a.TryLockTrain()
@@ -207,57 +211,46 @@ func (s *Sentinel) Check() (Report, error) {
 	}
 	defer unlock()
 
-	layers, err := a.StackLayers()
+	ahead := s.baseAhead()
+	info, err := a.ReconcileStack(s.GH.PR)
 	if err != nil {
 		return Report{}, err
 	}
-	var open []app.StackLayer
-	for _, l := range layers {
-		if l.Task.PR != "" && !l.Merged {
-			open = append(open, l)
-		}
+	layers, err := a.StackLayers()
+	if err != nil {
+		return Report{}, err
 	}
 	flag, flagged, err := a.Flag()
 	if err != nil {
 		return Report{}, err
 	}
-
-	var hits []hit
-	merged := map[int]bool{}
-	for i, l := range open {
-		pr, err := s.GH.PR(l.Task.PR)
-		if err != nil {
-			return Report{}, err
-		}
-		switch {
-		case pr.State == "MERGED":
-			merged[i] = true
-			hits = append(hits, hit{i, i + 1, fmt.Sprintf("its PR %s was merged into %s, so the PRs above it need restacking", l.Task.PR, a.Cfg.Base)})
-		case pr.State == "OPEN" && pr.Mergeable == "CONFLICTING":
-			hits = append(hits, hit{i, i, fmt.Sprintf("GitHub reports its PR %s conflicts with its base", l.Task.PR)})
-		}
-		if l.Problem != "" && !merged[i] { // a merged PR's branch no longer matters
-			hits = append(hits, hit{i, i, l.Problem})
+	inStack := map[string]bool{}
+	for _, l := range layers {
+		if l.Task.PR != "" {
+			inStack[l.Task.PR] = true
 		}
 	}
-	if len(open) > 0 {
-		if n := s.baseAhead(); n > 0 {
-			// The bottom PR GitHub hasn't merged is the first one base moved under.
-			at := 0
-			for at < len(open)-1 && merged[at] {
-				at++
-			}
-			commits := "1 commit"
-			if n > 1 {
-				commits = fmt.Sprintf("%d commits", n)
-			}
-			hits = append(hits, hit{at, at, fmt.Sprintf("origin/%s has %s %s lacks", a.Cfg.Base, commits, a.Cfg.Integration)})
+
+	var hits []hit
+	for i, l := range layers {
+		if pr, ok := info[l.Task.PR]; ok && l.Task.PR != "" && pr.Mergeable == "CONFLICTING" {
+			hits = append(hits, hit{i, i, fmt.Sprintf("GitHub reports its PR %s conflicts with its base", l.Task.PR), true})
 		}
+		if l.Problem != "" {
+			hits = append(hits, hit{i, i, l.Problem, false})
+		}
+	}
+	if len(layers) > 0 && ahead > 0 {
+		commits := "1 commit"
+		if ahead > 1 {
+			commits = fmt.Sprintf("%d commits", ahead)
+		}
+		hits = append(hits, hit{0, 0, fmt.Sprintf("origin/%s has %s %s lacks", a.Cfg.Base, commits, a.Cfg.Integration), false})
 	}
 
 	if len(hits) == 0 {
 		if flagged {
-			return Report{}, s.clear(flag)
+			return Report{}, s.clear(flag, inStack)
 		}
 		return Report{}, nil
 	}
@@ -268,23 +261,54 @@ func (s *Sentinel) Check() (Report, error) {
 			first = h
 		}
 	}
-	firstAt := min(first.from, len(open)-1)
-	rep := Report{AtRisk: true, Task: open[firstAt].Task.ID, Cause: first.cause}
-	if firstAt != first.at {
-		rep.Cause = open[first.at].Task.ID + ": " + first.cause
+	rep := Report{AtRisk: true, Task: layers[first.from].Task.ID, Cause: first.cause}
+	if first.from != first.at {
+		rep.Cause = layers[first.at].Task.ID + ": " + first.cause
 	}
 	for _, h := range hits {
-		rep.Hits = append(rep.Hits, open[h.at].Task.ID+": "+h.cause)
+		rep.Hits = append(rep.Hits, layers[h.at].Task.ID+": "+h.cause)
 	}
+	// needs-human goes on the PRs from the lowest conflict up, unless acked.
+	rep.Acked = flagged && flag.Acked && flag.Task == rep.Task
 	var want []string
-	for i := first.from; i < len(open); i++ {
-		if !merged[i] {
-			want = append(want, open[i].Task.PR)
+	if !rep.Acked {
+		from := -1
+		for _, h := range hits {
+			if h.conflict && (from < 0 || h.from < from) {
+				from = h.from
+			}
+		}
+		for i := from; from >= 0 && i < len(layers); i++ {
+			if pr := layers[i].Task.PR; pr != "" {
+				want = append(want, pr)
+			}
 		}
 	}
 
-	next := app.StackFlag{Task: rep.Task, Cause: rep.Cause, PRs: append([]string(nil), flag.PRs...)}
+	next := app.StackFlag{Task: rep.Task, Cause: rep.Cause, Acked: rep.Acked}
 	var errs []error
+	for _, pr := range flag.PRs {
+		if slices.Contains(want, pr) {
+			next.PRs = append(next.PRs, pr)
+			continue
+		}
+		if err := s.GH.RemoveLabel(pr, Label); err != nil {
+			if inStack[pr] {
+				errs = append(errs, err)
+				next.PRs = append(next.PRs, pr) // retried next cycle
+			}
+			continue
+		}
+		if inStack[pr] {
+			why := "the conflict that needed a human is gone; what is left, restack fixes without one"
+			if rep.Acked {
+				why = "the stack's flag was acknowledged (`saddle sentinel ack`)"
+			}
+			if err := s.comment(pr, liftComment(why)); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
 	for _, pr := range want {
 		if slices.Contains(next.PRs, pr) {
 			continue
@@ -297,8 +321,8 @@ func (s *Sentinel) Check() (Report, error) {
 	}
 	rep.PRs = next.PRs
 	for _, pr := range next.PRs {
-		if i := slices.IndexFunc(open, func(l app.StackLayer) bool { return l.Task.PR == pr }); i >= 0 {
-			if err := s.comment(pr, flagComment(open, hits, i, rep, a.Cfg.Base)); err != nil {
+		if i := slices.IndexFunc(layers, func(l app.StackLayer) bool { return l.Task.PR == pr }); i >= 0 {
+			if err := s.comment(pr, flagComment(layers, hits, i, rep, a.Cfg.Base)); err != nil {
 				errs = append(errs, err)
 			}
 		}
@@ -306,7 +330,7 @@ func (s *Sentinel) Check() (Report, error) {
 	if err := a.SetFlag(next); err != nil {
 		return rep, errors.Join(append(errs, err)...)
 	}
-	if !flagged || flag.Task != next.Task || flag.Cause != next.Cause {
+	if !rep.Acked && (!flagged || flag.Acked || flag.Task != next.Task || flag.Cause != next.Cause) {
 		a.Store.Event(rep.Task, EventAtRisk, rep.Cause)
 		errs = append(errs, a.Notify(app.OrchestratorID, store.NoticeAction, notice(rep, a.Cfg.Base)))
 	}
@@ -323,21 +347,28 @@ func notice(rep Report, base string) string {
 		}
 	}
 	if len(rep.PRs) > 0 {
-		fmt.Fprintf(&b, "\nLabeled %s: %s.", Label, strings.Join(rep.PRs, ", "))
+		fmt.Fprintf(&b, "\nA conflict needs a human decision, so these PRs are labeled %s: %s.", Label, strings.Join(rep.PRs, ", "))
 	}
-	fmt.Fprintf(&b, "\nprs and land refuse to build on the stack until it checks clean. "+
-		"Run restack to rebuild it on origin/%s; don't fix it with git or a worker. The flag and labels clear by themselves once it is sound.", base)
+	fmt.Fprintf(&b, "\nprs publishes only the layers below %s, and land holds queued work that touches the layers from there up, until the stack checks clean. "+
+		"Run restack to rebuild it on origin/%s; don't fix it with git or a worker. The flag and labels clear by themselves once it is sound. "+
+		"If restack can't fix it, `saddle unstack <task|pr>` drops a task from the stack and `saddle sentinel ack` acknowledges the flag; never edit state.db.", rep.Task, base)
 	return b.String()
 }
 
-// clear lifts the flag and the labels it put on.
-func (s *Sentinel) clear(flag app.StackFlag) error {
+// clear lifts the flag and the labels it put on. A PR that has left the
+// stack keeps whatever label removal GitHub allows; it never holds the flag.
+func (s *Sentinel) clear(flag app.StackFlag, inStack map[string]bool) error {
 	a := s.App
 	var errs, left []string
 	for _, pr := range flag.PRs {
 		if err := s.GH.RemoveLabel(pr, Label); err != nil {
-			errs = append(errs, err.Error())
-			left = append(left, pr)
+			if inStack[pr] {
+				errs = append(errs, err.Error())
+				left = append(left, pr)
+			}
+			continue
+		}
+		if !inStack[pr] {
 			continue
 		}
 		if err := s.comment(pr, clearComment(flag)); err != nil {
@@ -421,18 +452,18 @@ func (s *Sentinel) comment(pr, body string) error {
 	return nil
 }
 
-// flagComment explains why open[i]'s PR is labeled: its own findings, and
-// those below it that put it at risk.
-func flagComment(open []app.StackLayer, hits []hit, i int, rep Report, base string) string {
+// flagComment explains why layers[i]'s PR is labeled: the conflicts at it
+// and below it that put it at risk, and what else the sentinel found there.
+func flagComment(layers []app.StackLayer, hits []hit, i int, rep Report, base string) string {
 	var why []string
 	for _, h := range hits {
 		if h.at == i {
-			why = append(why, fmt.Sprintf("This PR's branch `%s` (%s): %s.", open[i].Task.Branch, open[i].Task.ID, h.cause))
+			why = append(why, fmt.Sprintf("This PR's branch `%s` (%s): %s.", layers[i].Task.Branch, layers[i].Task.ID, h.cause))
 		}
 	}
 	for _, h := range hits {
-		if h.at < i && h.from <= i {
-			below := open[h.at].Task
+		if h.conflict && h.at < i && h.from <= i {
+			below := layers[h.at].Task
 			why = append(why, fmt.Sprintf("It is stacked on %s (`%s`, %s), where: %s.", below.ID, below.Branch, below.PR, h.cause))
 		}
 	}
@@ -441,14 +472,15 @@ func flagComment(open []app.StackLayer, hits []hit, i int, rep Report, base stri
 		why = append(why, fmt.Sprintf("Saddle flagged the stack from %s up: %s.", rep.Task, rep.Cause))
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "**Saddle labeled this PR `%s`.** Don't merge it until the label is gone.\n\n**Why:**\n", Label)
+	fmt.Fprintf(&b, "**Saddle labeled this PR `%s`.** Don't merge it until the label is gone.\n\n**Why:** a conflict needs someone to decide how to resolve it.\n", Label)
 	for _, w := range why {
 		b.WriteString("- " + w + "\n")
 	}
 	fmt.Fprintf(&b, "\n**What's needed:** run `saddle restack` (or have the orchestrator run it) to rebuild the stack on origin/%s. "+
-		"Don't fix the branch by hand with git or a worker. If restack stops on a conflict, a human has to decide how to resolve it. "+
-		"Until then `saddle prs` and `saddle land` refuse to build on the stack.\n\n"+
-		"**What clears it:** nothing to do on this PR. Once the stack checks clean after the restack, the sentinel removes the label and updates this comment.\n", base)
+		"If a commit still conflicts, restack moves nothing and hands the conflict to the task that owns it; a human has to decide how to resolve it. "+
+		"Don't fix the branch by hand with git or a worker. If the task's work should not ship after all, `saddle unstack <task|pr>` drops it from the stack; "+
+		"`saddle sentinel ack` acknowledges the flag and takes this label off.\n\n"+
+		"**What clears it:** nothing to do on this PR. Once the conflict is gone, the sentinel removes the label and updates this comment.\n", base)
 	return b.String()
 }
 
@@ -456,4 +488,10 @@ func flagComment(open []app.StackLayer, hits []hit, i int, rep Report, base stri
 func clearComment(flag app.StackFlag) string {
 	return fmt.Sprintf("**Cleared:** the PR stack checks clean again, so Saddle removed the `%s` label. "+
 		"It had been flagged from %s up: %s.\n", Label, flag.Task, flag.Cause)
+}
+
+// liftComment replaces a flag comment when the label comes off while the
+// stack is still flagged.
+func liftComment(why string) string {
+	return fmt.Sprintf("**Label removed:** Saddle took the `%s` label off this PR: %s.\n", Label, why)
 }

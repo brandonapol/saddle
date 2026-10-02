@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,15 +32,27 @@ func originWithGh(t *testing.T, a *App) (string, func() []string) {
 
 	bin := t.TempDir()
 	log := filepath.Join(bin, "gh.log")
+	// pr view answers from a per-PR file (see setPR), else as an open PR;
+	// pr edit --base fails on a closed or merged PR, as GitHub does.
 	script := `#!/bin/sh
 echo "$*" >> "` + log + `"
-if [ "$1 $2" = "pr create" ]; then
+f="` + bin + `/view-$(basename "$3")"
+case "$1 $2" in
+"pr create")
 	n=$(grep -c '^pr create' "` + log + `")
-	echo "https://github.com/o/r/pull/$n"
-fi
+	echo "https://github.com/o/r/pull/$n" ;;
+"pr view")
+	if [ -f "$f" ]; then cat "$f"; else echo '{"state":"OPEN","mergeable":"MERGEABLE","baseRefName":""}'; fi ;;
+"pr edit")
+	if [ "$4" = "--base" ] && [ -f "$f" ] && grep -q '"CLOSED"\|"MERGED"' "$f"; then
+		echo "GraphQL: Cannot change the base branch of a closed pull request. (updatePullRequest)" >&2
+		exit 1
+	fi ;;
+esac
 `
 	must(t, os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0o755))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv(fakeGHEnv, bin)
 	return origin, func() []string {
 		b, err := os.ReadFile(log)
 		if os.IsNotExist(err) {
@@ -48,6 +61,17 @@ fi
 		must(t, err)
 		return strings.Split(strings.TrimSpace(string(b)), "\n")
 	}
+}
+
+// fakeGHEnv names the fake gh's directory, so setPR can reach it.
+const fakeGHEnv = "SADDLE_TEST_FAKE_GH"
+
+// setPR makes the fake gh report the PR at url as state, merged into or
+// targeting baseRef.
+func setPR(t *testing.T, url, state, baseRef string) {
+	t.Helper()
+	b := fmt.Sprintf(`{"state":%q,"mergeable":"MERGEABLE","baseRefName":%q}`, state, baseRef)
+	must(t, os.WriteFile(filepath.Join(os.Getenv(fakeGHEnv), "view-"+filepath.Base(url)), []byte(b), 0o644))
 }
 
 // remoteRev is the commit a branch points at in the bare origin, or "".
@@ -59,6 +83,23 @@ func remoteRev(t *testing.T, origin, branch string) string {
 
 // landTask spawns a task, commits files on its branch and lands it.
 func landTask(t *testing.T, a *App, id, title string, commits ...map[string]string) store.Task {
+	t.Helper()
+	tk := queueTask(t, a, id, title, commits...)
+	rs, err := a.Land()
+	must(t, err)
+	for _, r := range rs {
+		if r.State != store.TrainOK {
+			t.Fatalf("land %s: %s %s", r.Task, r.State, r.Note)
+		}
+	}
+	got, err := a.Store.Task(tk.ID)
+	must(t, err)
+	return got
+}
+
+// queueTask spawns a task, commits files on its branch and calls done, so it
+// waits in the train.
+func queueTask(t *testing.T, a *App, id, title string, commits ...map[string]string) store.Task {
 	t.Helper()
 	tk, err := a.Spawn(SpawnReq{ID: id, Title: title})
 	must(t, err)
@@ -73,16 +114,7 @@ func landTask(t *testing.T, a *App, id, title string, commits ...map[string]stri
 		commitAll(t, tk.Worktree, msg)
 	}
 	must(t, a.Done(tk.ID, title+" summary"))
-	rs, err := a.Land()
-	must(t, err)
-	for _, r := range rs {
-		if r.State != store.TrainOK {
-			t.Fatalf("land %s: %s %s", r.Task, r.State, r.Note)
-		}
-	}
-	got, err := a.Store.Task(tk.ID)
-	must(t, err)
-	return got
+	return tk
 }
 
 func TestLandRefusesWithoutTestCmd(t *testing.T) {
@@ -249,24 +281,28 @@ func TestPRsRefusesForkedStack(t *testing.T) {
 	if strings.Contains(msg, "t1:") || strings.Contains(msg, "t2:") {
 		t.Fatalf("error blames healthy layers: %s", msg)
 	}
-	for _, tk := range []store.Task{t1, t2, t4} {
-		if got := remoteRev(t, origin, tk.Branch); got != "" {
-			t.Fatalf("%s pushed despite the refusal", tk.Branch)
+	// Only the broken layer is frozen (#119.4): t1 and t2 below it publish.
+	for tk, want := range map[store.Task]string{t1: n1, t2: n2, t4: ""} {
+		if got := remoteRev(t, origin, tk.Branch); got != want {
+			t.Fatalf("remote %s = %q, want %q", tk.Branch, got, want)
 		}
 	}
-	if l := ghLog(); len(l) > 0 {
-		t.Fatalf("gh called: %v", l)
+	for _, c := range ghLog() {
+		if strings.Contains(c, t4.Branch) {
+			t.Fatalf("gh touched t4: %s", c)
+		}
 	}
 }
 
-// While the stack is flagged at risk, prs and land push, open and land nothing.
+// While the stack is flagged at risk from its bottom, prs pushes and opens
+// nothing, and land holds work that touches the broken layer.
 func TestFlaggedStackFreezesPRsAndLand(t *testing.T) {
 	a := trainSetup(t)
 	origin, ghLog := originWithGh(t, a)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
 	tk, err := a.Spawn(SpawnReq{ID: "t2", Title: "two"})
 	must(t, err)
-	write(t, tk.Worktree, "two.txt", "two\n")
+	write(t, tk.Worktree, "one.txt", "one\ntwo\n")
 	commitAll(t, tk.Worktree, "two")
 	must(t, a.Done(tk.ID, "two"))
 	before := git(t, a.Root, "rev-parse", a.Cfg.Integration)
