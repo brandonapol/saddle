@@ -275,7 +275,11 @@ func (a *App) landOne(id string) LandResult {
 		res.State, res.Note = store.TrainError, err.Error()
 		return res
 	}
-	rr, taken, err := trainRebase(t.Worktree, a.Cfg.Integration, a.Cfg.Regen)
+	from, _, err := a.replayFrom(t, a.Cfg.Integration)
+	if err != nil {
+		return fail(store.TrainError, "rebase failed", "Finding your branch's own commits failed:\n"+err.Error()+"\nFix it and call done again.")
+	}
+	rr, taken, err := trainRebase(t.Worktree, a.Cfg.Integration, from, a.Cfg.Regen)
 	if err != nil {
 		return fail(store.TrainError, "rebase failed", "Rebasing your branch onto "+a.Cfg.Integration+" failed:\n"+rr.Output+"\nFix it and call done again.")
 	}
@@ -1007,12 +1011,21 @@ func trainGit(dir string, args ...string) (string, error) {
 
 // trainRebase is gitx.Rebase run as the train: it rebases the branch checked
 // out in dir onto onto and aborts on conflict, leaving the worktree as it was.
+// With from set it replays only from..HEAD, as `rebase --onto onto from`.
 // Conflicts only in derived files regen covers are not merged: the rebase
 // takes onto's copy and goes on, and the files are returned in regen so the
 // caller can regenerate them (#28).
-func trainRebase(dir, onto string, regen []config.Regen) (res gitx.RebaseResult, taken []string, err error) {
-	out, err := trainGit(dir, "-c", "merge.directoryRenames=true", "-c", "merge.renames=true",
-		"-c", "rerere.enabled=true", "-c", "core.editor=true", "rebase", onto)
+func trainRebase(dir, onto, from string, regen []config.Regen) (res gitx.RebaseResult, taken []string, err error) {
+	args := []string{"-c", "merge.directoryRenames=true", "-c", "merge.renames=true",
+		"-c", "rerere.enabled=true", "-c", "core.editor=true", "rebase"}
+	if from != "" {
+		args = append(args, "--onto")
+	}
+	args = append(args, onto)
+	if from != "" {
+		args = append(args, from)
+	}
+	out, err := trainGit(dir, args...)
 	for err != nil {
 		conf, _ := gitx.Run(dir, "diff", "--name-only", "--diff-filter=U")
 		if conf == "" {

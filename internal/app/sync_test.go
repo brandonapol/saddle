@@ -223,3 +223,85 @@ func TestAutoRebaseCanBeTurnedOff(t *testing.T) {
 		t.Fatal("rebased with auto-rebase off")
 	}
 }
+
+// #147: a task carries t1's landed commits, either because it was cut from
+// integration while they sat there or because it synced onto them. t1 is
+// then squash-merged into main (after unrelated main work when between is
+// set) and restack rewrites integration. The task must land with only its own
+// commit replayed, and is never sent a conflict for commits base already has.
+func TestLandSkipsCommitsSquashLandedAfterRestack(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		synced, between, noReflog bool
+	}{
+		{"cut from integration", false, false, false},
+		{"cut from integration, main moved", false, true, false},
+		{"synced onto them", true, false, false},
+		{"synced onto them, main moved", true, true, false},
+		// Without integration's reflog the squash is found by tree or patch-id.
+		{"no reflog", false, false, true},
+		{"no reflog, main moved", true, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := trainSetup(t)
+			a.Cfg.Train.Output = "single"
+			origin, _ := originWithGh(t, a)
+			var t2 store.Task
+			if tc.synced {
+				var err error
+				t2, err = a.Spawn(SpawnReq{ID: "t2", Title: "two"})
+				must(t, err)
+			}
+			landTask(t, a, "t1", "one", map[string]string{"one.txt": "a\n"}, map[string]string{"one.txt": "a\nb\n"})
+			if !tc.synced {
+				var err error
+				t2, err = a.Spawn(SpawnReq{ID: "t2", Title: "two"})
+				must(t, err)
+			}
+			if got := git(t, t2.Worktree, "log", "--format=%s", "origin/main..HEAD"); got != "one part 2\none" {
+				t.Fatalf("t2 does not carry t1's commits: %q", got)
+			}
+			write(t, t2.Worktree, "two.txt", "two\n")
+			commitAll(t, t2.Worktree, "two")
+			must(t, a.Done(t2.ID, "two"))
+			if _, err := a.PRs(); err != nil {
+				t.Fatal(err)
+			}
+
+			other := filepath.Join(t.TempDir(), "other")
+			git(t, a.Root, "clone", "-q", origin, other)
+			if tc.between {
+				write(t, other, "main.txt", "main\n")
+				commitAll(t, other, "unrelated main work")
+			}
+			git(t, other, "merge", "-q", "--squash", "origin/saddle/t1-one")
+			git(t, other, "commit", "-qm", "one (#1)")
+			git(t, other, "push", "-q", "origin", "main")
+			if _, err := a.Restack(); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = a.Store.TakeNotices(t2.ID, false)
+			if tc.noReflog {
+				git(t, a.Root, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "refs/heads/"+a.Cfg.Integration)
+				if fp := gitx.ForkPoint(t2.Worktree, a.Cfg.Integration); fp != "" {
+					t.Fatalf("fork point %s survived the reflog expiry", fp)
+				}
+			}
+
+			rs, err := a.Land()
+			must(t, err)
+			if len(rs) != 1 || rs[0].Task != t2.ID || rs[0].State != store.TrainOK {
+				t.Fatalf("land = %+v", rs)
+			}
+			if got := git(t, a.Root, "log", "--format=%s", "origin/main.."+a.Cfg.Integration); got != "two" {
+				t.Fatalf("origin/main..integration = %q, want only t2's own commit", got)
+			}
+			ns, _ := a.Store.TakeNotices(t2.ID, false)
+			for _, n := range ns {
+				if strings.Contains(n.Text, "conflict") {
+					t.Fatalf("t2 was sent a conflict: %s", n.Text)
+				}
+			}
+		})
+	}
+}

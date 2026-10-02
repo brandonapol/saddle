@@ -58,3 +58,49 @@ func TestLandedPrefix(t *testing.T) {
 		t.Fatalf("squashed onto: LandedPrefix = %q, %d, %v; want %s, 2", c, n, err, first)
 	}
 }
+
+// #147: the task was cut from integration holding a1 and a2, which later
+// landed on main as one squash a reviewer edited, so neither tree nor
+// patch-id matches. Integration's fork point still marks them as not the
+// task's own. Without the reflog ReplayFrom falls back to LandedPrefix.
+func TestReplayFrom(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	gitT(t, dir, "init", "-q", "-b", "main")
+	commitFile(t, dir, "base.txt", "base\n")
+	gitT(t, dir, "checkout", "-qb", "integ")
+	commitFile(t, dir, "a.txt", "1\n")
+	commitFile(t, dir, "a.txt", "1\n2\n")
+	cut := gitT(t, dir, "rev-parse", "HEAD")
+	gitT(t, dir, "checkout", "-qb", "task")
+	commitFile(t, dir, "b.txt", "b\n")
+	gitT(t, dir, "checkout", "-q", "main")
+	commitFile(t, dir, "a.txt", "1\n2\nreviewed\n") // the edited squash
+	gitT(t, dir, "update-ref", "refs/heads/integ", "main")
+	gitT(t, dir, "checkout", "-q", "task")
+
+	if c, n, err := LandedPrefix(dir, "integ"); err != nil || c != "" || n != 0 {
+		t.Fatalf("LandedPrefix = %q, %d, %v; want nothing (the squash was edited)", c, n, err)
+	}
+	if c, n, err := ReplayFrom(dir, "integ", ""); err != nil || c != "" || n != 0 {
+		t.Fatalf("untracked ReplayFrom = %q, %d, %v; want nothing", c, n, err)
+	}
+	if c, n, err := ReplayFrom(dir, "integ", "integ"); err != nil || c != cut || n != 2 {
+		t.Fatalf("ReplayFrom = %q, %d, %v; want %s, 2", c, n, err, cut)
+	}
+
+	// Still on integration: the fork point adds nothing to a plain rebase.
+	gitT(t, dir, "update-ref", "refs/heads/integ", cut)
+	if c, n, err := ReplayFrom(dir, "integ", "integ"); err != nil || c != "" || n != 0 {
+		t.Fatalf("on integ: ReplayFrom = %q, %d, %v; want nothing", c, n, err)
+	}
+
+	// A fresh clone or an expired reflog has no fork point.
+	gitT(t, dir, "update-ref", "refs/heads/integ", "main")
+	gitT(t, dir, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "refs/heads/integ")
+	if c, n, err := ReplayFrom(dir, "integ", "integ"); err != nil || c != "" || n != 0 {
+		t.Fatalf("no reflog: ReplayFrom = %q, %d, %v; want LandedPrefix's nothing", c, n, err)
+	}
+}
