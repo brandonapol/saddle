@@ -42,15 +42,25 @@ func TestCycleAgentSkipsDeadWindows(t *testing.T) {
 
 func TestFooterHelpMatchesBindings(t *testing.T) {
 	m := &model{keys: newKeyMap(), prefix: "C-a"}
-	for _, focus := range []int{focusChat, focusTasks} {
-		m.focus = focus
-		for _, b := range m.help() {
-			h := b.Help()
-			if h.Key == "" || h.Desc == "" {
-				t.Errorf("binding %v has no help", b.Keys())
-			}
-			if len(b.Keys()) == 0 && !strings.HasPrefix(h.Key, "C-a") {
-				t.Errorf("help %q has no key behind it", h.Key)
+	for _, v := range []int{viewControl, viewPlan, viewMerge} {
+		for _, focus := range []int{focusChat, focusTasks} {
+			for _, help := range []bool{false, true} {
+				m.view, m.focus, m.helpOpen = v, focus, help
+				hs := m.help()
+				views := false
+				for _, b := range hs {
+					h := b.Help()
+					if h.Key == "" || h.Desc == "" {
+						t.Errorf("binding %v has no help", b.Keys())
+					}
+					if len(b.Keys()) == 0 && !strings.HasPrefix(h.Key, "C-a") {
+						t.Errorf("help %q has no key behind it", h.Key)
+					}
+					views = views || h.Key == m.keys.ViewControl.Help().Key
+				}
+				if !views && !help {
+					t.Errorf("view %d focus %d: footer lacks the view keys", v, focus)
+				}
 			}
 		}
 	}
@@ -59,7 +69,7 @@ func TestFooterHelpMatchesBindings(t *testing.T) {
 	if !key.Matches(alt, m.keys.NextAgent) {
 		t.Error("alt+n should match NextAgent")
 	}
-	m.focus = focusTasks
+	m.view, m.focus, m.helpOpen = viewControl, focusTasks, false
 	if s := m.viewKeys(400); !strings.Contains(s, "C-a d") {
 		t.Errorf("task footer should show the tmux prefix: %q", s)
 	}

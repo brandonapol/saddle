@@ -97,6 +97,8 @@ type model struct {
 
 	width, height int
 	focus         int
+	view          int  // viewControl, viewPlan or viewMerge
+	helpOpen      bool // the key help overlay covers the body
 
 	tasks []mcpserver.TaskView
 	sel   int
@@ -458,6 +460,9 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 	keys := m.keys
 	if !key.Matches(k, keys.Quit) {
 		m.quitArmedAt = time.Time{}
+	}
+	if c, ok := m.routeKey(k); ok {
+		return c, true
 	}
 	switch {
 	case key.Matches(k, keys.Quit):
@@ -879,6 +884,9 @@ func lastLines(s string, n int) string {
 // Layout.
 
 func (m *model) chatWidth() int {
+	if m.narrow() {
+		return m.width
+	}
 	w := m.width * 42 / 100
 	if w < 44 {
 		w = 44
@@ -987,49 +995,11 @@ func (m *model) View() string {
 	if m.term == nil {
 		termH = 0
 	}
-	cw := m.chatWidth()
-	left := m.viewLeft(m.width-cw, bodyH-termH)
-	right := m.viewChat(cw, bodyH-termH)
-	parts := []string{header, lipgloss.JoinHorizontal(lipgloss.Top, left, right)}
+	parts := []string{header, m.viewBody(m.width, bodyH-termH)}
 	if termH > 0 {
 		parts = append(parts, m.viewTerm(termH))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, append(parts, footer)...)
-}
-
-func (m *model) viewHeader() string {
-	counts := map[string]int{}
-	for _, t := range m.tasks {
-		counts[t.Status]++
-	}
-	parts := []string{sLogo.Render("SADDLE"), sBright.Render(m.app.Cfg.Session), sDim.Render("→ " + m.app.Cfg.Integration)}
-	add := func(n int, s string, c lipgloss.Color) {
-		if n > 0 {
-			parts = append(parts, lipgloss.NewStyle().Foreground(c).Render(fmt.Sprintf(s, n)))
-		}
-	}
-	add(counts[store.Running], "● %d running", cRun)
-	add(counts[store.NeedsYou]+counts[store.Conflict]+counts[store.Idle], "▲ %d need attention", cAlert)
-	add(counts[store.Done], "◆ %d queued", cAccent)
-	add(counts[store.Landed], "✓ %d landed", cDone)
-	left := strings.Join(parts, "  ")
-	state := "idle"
-	if m.proc != nil && m.proc.Busy() {
-		state = "working"
-	}
-	jev := ""
-	if m.jev != nil {
-		jev = " · jev triage"
-	}
-	if m.narr != nil {
-		jev += " · narrator"
-	}
-	right := sDim.Render(fmt.Sprintf("orchestrator %s · %s%s · $%.2f ", m.launch.Model, state, jev, m.cost))
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
-	}
-	return lipgloss.NewStyle().Width(m.width).Render(left + strings.Repeat(" ", gap) + right)
 }
 
 // viewFooter is the bottom of the page: shortcuts on the last line. Other
