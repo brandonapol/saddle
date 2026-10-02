@@ -127,6 +127,8 @@ CREATE TABLE usage(
   PRIMARY KEY(minute, task, model, session)
 );
 CREATE INDEX usage_session ON usage(session);
+`, `
+CREATE TABLE narrator_spend(day TEXT PRIMARY KEY, usd REAL NOT NULL DEFAULT 0);
 `}
 
 // Open opens (creating if needed) the database at path and applies migrations.
@@ -330,30 +332,73 @@ func (s *Store) Event(task, kind, data string) {
 }
 
 type Event struct {
+	ID   int64 // increases with every event; a cursor for EventsSince
 	TS   time.Time
 	Task string
 	Kind string
 	Data string
 }
 
-// Events returns the newest n events, oldest first.
-func (s *Store) Events(n int) ([]Event, error) {
-	rows, err := s.db.Query(`SELECT ts, task, kind, data FROM (SELECT * FROM events ORDER BY id DESC LIMIT ?) ORDER BY id`, n)
-	if err != nil {
-		return nil, err
-	}
+const eventCols = `id, ts, task, kind, data`
+
+func scanEvents(rows *sql.Rows) ([]Event, error) {
 	defer rows.Close()
 	var out []Event
 	for rows.Next() {
 		var e Event
 		var ts int64
-		if err := rows.Scan(&ts, &e.Task, &e.Kind, &e.Data); err != nil {
+		if err := rows.Scan(&e.ID, &ts, &e.Task, &e.Kind, &e.Data); err != nil {
 			return nil, err
 		}
 		e.TS = time.Unix(ts, 0)
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// Events returns the newest n events, oldest first.
+func (s *Store) Events(n int) ([]Event, error) {
+	rows, err := s.db.Query(`SELECT `+eventCols+` FROM (SELECT * FROM events ORDER BY id DESC LIMIT ?) ORDER BY id`, n)
+	if err != nil {
+		return nil, err
+	}
+	return scanEvents(rows)
+}
+
+// EventsSince returns every event with an id above after, oldest first. Pass
+// the last ID seen to resume; LastEventID gives a cursor that skips history.
+func (s *Store) EventsSince(after int64) ([]Event, error) {
+	rows, err := s.db.Query(`SELECT `+eventCols+` FROM events WHERE id > ? ORDER BY id`, after)
+	if err != nil {
+		return nil, err
+	}
+	return scanEvents(rows)
+}
+
+// LastEventID is the id of the newest event, or 0 when there are none.
+func (s *Store) LastEventID() (int64, error) {
+	var id int64
+	err := s.db.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM events`).Scan(&id)
+	return id, err
+}
+
+// NarratorSpend is the narrator's recorded API spend in USD for day
+// (YYYY-MM-DD), or 0 if none.
+func (s *Store) NarratorSpend(day string) (float64, error) {
+	var usd float64
+	err := s.db.QueryRow(`SELECT usd FROM narrator_spend WHERE day = ?`, day).Scan(&usd)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return usd, err
+}
+
+// SetNarratorSpend records the narrator's total spend for day, so a restart
+// does not reset its daily cap.
+func (s *Store) SetNarratorSpend(day string, usd float64) error {
+	_, err := s.db.Exec(`INSERT INTO narrator_spend(day, usd) VALUES(?, ?)
+		ON CONFLICT(day) DO UPDATE SET usd = excluded.usd`, day, usd)
+	return err
 }
 
 // Enqueue puts a task at the back of the merge train (or back in line after a conflict).
@@ -441,7 +486,7 @@ func (s *Store) PendingNotices(task string) (int, error) {
 }
 
 // Tables lists the tables RowCounts reports, in schema order.
-var Tables = []string{"tasks", "claims", "events", "train", "notices", "renames", "chat", "usage"}
+var Tables = []string{"tasks", "claims", "events", "train", "notices", "renames", "chat", "usage", "narrator_spend"}
 
 // RowCounts returns how many rows each table in Tables holds.
 func (s *Store) RowCounts() (map[string]int, error) {
