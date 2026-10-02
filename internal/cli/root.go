@@ -175,12 +175,12 @@ func downCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "stopped %d agents\n", n)
-			ls, err := a.Leftovers()
+			left, _, err := a.GCCounts()
 			if err != nil {
 				return err
 			}
-			if len(ls) > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "%d leftover worktrees, branches or refs; run `saddle gc --dry-run` to list them, `saddle gc` to remove them\n", len(ls))
+			if left > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "%d leftover worktrees, branches or refs; run `saddle gc --dry-run` to list them, `saddle gc` to remove them\n", left)
 			}
 			return nil
 		}),

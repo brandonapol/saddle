@@ -231,3 +231,237 @@ func TestNoKeysIntoForeignWindow(t *testing.T) {
 		t.Fatal("own window was not woken")
 	}
 }
+
+// killedWithWork spawns a task, commits each file in files on it, and kills it,
+// leaving its branch (which holds work) behind.
+func killedWithWork(t *testing.T, a *App, title string, files ...string) store.Task {
+	t.Helper()
+	task, err := a.Spawn(SpawnReq{Title: title})
+	must(t, err)
+	for _, f := range files {
+		write(t, task.Worktree, f, f+"\n")
+		commitAll(t, task.Worktree, "add "+f)
+	}
+	must(t, a.Kill(task.ID, false))
+	return task
+}
+
+// leftover finds name among ls.
+func leftover(ls []Leftover, kind, name string) (Leftover, bool) {
+	for _, l := range ls {
+		if l.Kind == kind && l.Name == name {
+			return l, true
+		}
+	}
+	return Leftover{}, false
+}
+
+// #158: a branch whose PR was squash-merged into main has different SHAs than
+// main, but its work is there; gc removes it.
+func TestGCRemovesSquashMergedBranch(t *testing.T) {
+	a, _ := setup(t)
+	other := withOrigin(t, a)
+	task := killedWithWork(t, a, "squashed", "a.txt", "b.txt")
+	// The PR lands as one squash commit with the same content.
+	write(t, other, "a.txt", "a.txt\n")
+	write(t, other, "b.txt", "b.txt\n")
+	commitAll(t, other, "squashed (#1)")
+	git(t, other, "push", "-q", "origin", "main")
+	git(t, a.Root, "fetch", "-q", "origin")
+
+	ls, err := a.Leftovers()
+	must(t, err)
+	l, ok := leftover(ls, "branch", task.Branch)
+	if !ok || l.Keep != "" {
+		t.Fatalf("squash-merged branch: %+v (found %v), want removable", l, ok)
+	}
+	_, err = a.GC()
+	must(t, err)
+	if gitx.BranchExists(a.Root, task.Branch) {
+		t.Fatal("gc kept a squash-merged branch")
+	}
+}
+
+// #158: a stacked branch squash-merged after the branch below it is removed too.
+func TestGCRemovesStackedSquashMergedBranch(t *testing.T) {
+	a, _ := setup(t)
+	other := withOrigin(t, a)
+	task := killedWithWork(t, a, "stacked", "a.txt", "b.txt")
+	write(t, other, "a.txt", "a.txt\n")
+	commitAll(t, other, "lower (#1)")
+	write(t, other, "unrelated.txt", "x\n")
+	commitAll(t, other, "someone else (#2)")
+	write(t, other, "b.txt", "b.txt\n")
+	commitAll(t, other, "upper (#3)")
+	git(t, other, "push", "-q", "origin", "main")
+	git(t, a.Root, "fetch", "-q", "origin")
+
+	_, err := a.GC()
+	must(t, err)
+	if gitx.BranchExists(a.Root, task.Branch) {
+		t.Fatal("gc kept a branch whose commits all landed on main")
+	}
+}
+
+// #158: real unmerged work is kept, with the reason.
+func TestGCKeepsUnmergedWork(t *testing.T) {
+	a, _ := setup(t)
+	other := withOrigin(t, a)
+	task := killedWithWork(t, a, "partial", "a.txt", "b.txt")
+	write(t, other, "a.txt", "a.txt\n") // only the first commit landed
+	commitAll(t, other, "partial (#1)")
+	git(t, other, "push", "-q", "origin", "main")
+	git(t, a.Root, "fetch", "-q", "origin")
+
+	ls, err := a.GC()
+	must(t, err)
+	l, ok := leftover(ls, "branch", task.Branch)
+	if !ok || !strings.Contains(l.Keep, "1 commit(s)") {
+		t.Fatalf("partly landed branch: %+v (found %v), want kept with 1 commit unmerged", l, ok)
+	}
+	if !gitx.BranchExists(a.Root, task.Branch) {
+		t.Fatal("gc deleted a branch with unmerged work")
+	}
+}
+
+// #158: a worktree with uncommitted changes is never removed, and neither is
+// its branch.
+func TestGCKeepsDirtyWorktree(t *testing.T) {
+	a, _ := setup(t)
+	task, err := a.Spawn(SpawnReq{Title: "dirty"})
+	must(t, err)
+	must(t, a.Kill(task.ID, true))
+	write(t, task.Worktree, "wip.txt", "wip\n")
+
+	ls, err := a.GC()
+	must(t, err)
+	if l, ok := leftover(ls, "worktree", task.Worktree); !ok || l.Keep == "" {
+		t.Fatalf("dirty worktree: %+v (found %v), want kept", l, ok)
+	}
+	if !exists(filepath.Join(task.Worktree, "wip.txt")) || !gitx.BranchExists(a.Root, task.Branch) {
+		t.Fatal("gc removed a dirty worktree or its checked-out branch")
+	}
+}
+
+// #158: a killed task's clean worktree is removed; its branch goes too once
+// its work is merged.
+func TestGCRemovesKilledWorktree(t *testing.T) {
+	a, _ := setup(t)
+	other := withOrigin(t, a)
+	task, err := a.Spawn(SpawnReq{Title: "kept"})
+	must(t, err)
+	write(t, task.Worktree, "k.txt", "k.txt\n")
+	commitAll(t, task.Worktree, "k")
+	must(t, a.Kill(task.ID, true))
+	pushCommit(t, other, "k.txt")
+	git(t, a.Root, "fetch", "-q", "origin")
+
+	_, err = a.GC()
+	must(t, err)
+	if exists(task.Worktree) || gitx.BranchExists(a.Root, task.Branch) {
+		t.Fatal("gc left a killed task's worktree or merged branch")
+	}
+}
+
+// #158: gc never deletes the branch checked out in the main repo.
+func TestGCKeepsCheckedOutBranch(t *testing.T) {
+	a, _ := setup(t)
+	task := killedWithWork(t, a, "checked out", "c.txt")
+	git(t, a.Root, "checkout", "-q", task.Branch)
+	defer git(t, a.Root, "checkout", "-q", "main")
+	_, err := a.GC()
+	must(t, err)
+	if !gitx.BranchExists(a.Root, task.Branch) {
+		t.Fatal("gc deleted the checked-out branch")
+	}
+}
+
+// #158: the task's PR being merged into base, at the branch's tip, is enough.
+func TestGCRemovesBranchOfMergedPR(t *testing.T) {
+	a, _ := setup(t)
+	task := killedWithWork(t, a, "merged pr", "m.txt")
+	tip := git(t, a.Root, "rev-parse", task.Branch)
+	must(t, a.Store.SetField(task.ID, "pr", "https://github.com/o/r/pull/7"))
+	prev := prHead
+	defer func() { prHead = prev }()
+	prHead = func(_, url string) (PRHead, error) {
+		return PRHead{State: "MERGED", BaseRefName: "main", HeadRefOid: tip}, nil
+	}
+	_, err := a.GC()
+	must(t, err)
+	if gitx.BranchExists(a.Root, task.Branch) {
+		t.Fatal("gc kept the branch of a merged PR")
+	}
+
+	// A branch that moved past its merged PR keeps the extra work.
+	task2 := killedWithWork(t, a, "moved on", "n.txt", "n2.txt")
+	must(t, a.Store.SetField(task2.ID, "pr", "https://github.com/o/r/pull/8"))
+	head := git(t, a.Root, "rev-parse", task2.Branch+"~1")
+	prHead = func(_, url string) (PRHead, error) {
+		return PRHead{State: "MERGED", BaseRefName: "main", HeadRefOid: head}, nil
+	}
+	_, err = a.GC()
+	must(t, err)
+	if !gitx.BranchExists(a.Root, task2.Branch) {
+		t.Fatal("gc deleted commits made after the PR merged")
+	}
+}
+
+// #158: a merged branch's copy on origin is deleted too; an unmerged one stays.
+func TestGCRemovesMergedOriginBranch(t *testing.T) {
+	a, _ := setup(t)
+	other := withOrigin(t, a)
+	merged := killedWithWork(t, a, "merged", "a.txt")
+	open := killedWithWork(t, a, "open", "o.txt")
+	if _, err := trainGit(a.Root, "push", "-q", "origin", merged.Branch, open.Branch); err != nil {
+		t.Fatal(err)
+	}
+	git(t, a.Root, "branch", "-D", merged.Branch) // only origin has it now
+	pushCommit(t, other, "a.txt")
+	git(t, a.Root, "fetch", "-q", "origin")
+
+	ls, err := a.Leftovers()
+	must(t, err)
+	if l, ok := leftover(ls, "remote", "origin/"+merged.Branch); !ok || l.Keep != "" {
+		t.Fatalf("merged origin branch: %+v (found %v), want removable", l, ok)
+	}
+	_, err = a.GC()
+	must(t, err)
+	if out := git(t, a.Root, "ls-remote", "origin", "refs/heads/"+merged.Branch); out != "" {
+		t.Fatal("gc left the merged branch on origin")
+	}
+	if out := git(t, a.Root, "ls-remote", "origin", "refs/heads/"+open.Branch); out == "" {
+		t.Fatal("gc deleted an unmerged branch on origin")
+	}
+}
+
+// #158: doctor's count is what gc removes, so it clears after gc; kept work
+// is counted apart.
+func TestGCCountsMatchGC(t *testing.T) {
+	a, _ := setup(t)
+	other := withOrigin(t, a)
+	killedWithWork(t, a, "merged", "a.txt")
+	killedWithWork(t, a, "unmerged", "u.txt")
+	pushCommit(t, other, "a.txt")
+	git(t, a.Root, "fetch", "-q", "origin")
+
+	remove, kept, err := a.GCCounts()
+	must(t, err)
+	if remove != 1 || kept != 1 {
+		t.Fatalf("GCCounts = %d removable, %d kept; want 1, 1", remove, kept)
+	}
+	ls, err := a.GC()
+	must(t, err)
+	removed := 0
+	for _, l := range ls {
+		if l.Keep == "" {
+			removed++
+		}
+	}
+	if removed != remove {
+		t.Fatalf("gc removed %d, doctor counted %d", removed, remove)
+	}
+	if remove, kept, err = a.GCCounts(); err != nil || remove != 0 || kept != 1 {
+		t.Fatalf("after gc: %d removable, %d kept, %v; want 0, 1", remove, kept, err)
+	}
+}
