@@ -10,6 +10,7 @@ import (
 // drop it, lay t2 and t3 linearly on the new main and retarget t2's PR.
 func TestRestackAfterSquashMerge(t *testing.T) {
 	a := trainSetup(t)
+	a.Cfg.Train.Output = "single" // pins the one linear stack this test was written for (#52)
 	origin, ghLog := originWithGh(t, a)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "a\n"}, map[string]string{"one.txt": "a\nb\n"})
 	t2 := landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})

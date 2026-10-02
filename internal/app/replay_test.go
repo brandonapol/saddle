@@ -268,6 +268,7 @@ esac
 func TestReplayStackIncident(t *testing.T) {
 	r, other, m0, ft := newReplay(t)
 	a, root, integ := r.a, r.a.Root, r.a.Cfg.Integration
+	a.Cfg.Train.Output = "single" // pins the one linear stack this test was written for (#52)
 
 	type work struct {
 		id, title, claim, file string
@@ -544,6 +545,7 @@ func TestReplayStackIncident(t *testing.T) {
 func TestReplayGitHubHumansIncident(t *testing.T) {
 	r, other, _, _ := newReplay(t)
 	a, root, integ := r.a, r.a.Root, r.a.Cfg.Integration
+	a.Cfg.Train.Output = "single" // pins the one linear stack this test was written for (#52)
 	file := func(id string) string { return id + "/" + id + ".go" }
 	spawn := func(id string) {
 		t.Helper()

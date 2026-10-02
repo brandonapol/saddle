@@ -248,6 +248,7 @@ func TestHandSupersededRowLeavesStack(t *testing.T) {
 // a closed pull request", and retargets the open PRs above them.
 func TestRestackSkipsClosedAndMergedPRs(t *testing.T) {
 	a := trainSetup(t)
+	a.Cfg.Train.Output = "single" // pins the one linear stack this test was written for (#52)
 	origin, ghLog := originWithGh(t, a)
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
 	landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})

@@ -220,3 +220,58 @@ func writeConfig(t *testing.T, root, body string) {
 		t.Fatal(err)
 	}
 }
+
+func TestRegenParses(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	writeConfig(t, root, `
+[[regen]]
+paths = ["go.sum"]
+cmd = "go mod tidy"
+[[regen]]
+paths = ["internal/db/*.sql.go", "mocks/**"]
+cmd = "make generate"
+`)
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Regen) != 2 || cfg.Regen[0].Cmd != "go mod tidy" || cfg.Regen[0].Paths[0] != "go.sum" ||
+		len(cfg.Regen[1].Paths) != 2 || cfg.Regen[1].Cmd != "make generate" {
+		t.Fatalf("regen: %+v", cfg.Regen)
+	}
+}
+
+func TestRegenRejectsIncompleteEntries(t *testing.T) {
+	for _, body := range []string{
+		"[[regen]]\npaths = [\"go.sum\"]\n",
+		"[[regen]]\ncmd = \"go mod tidy\"\n",
+	} {
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+		root := t.TempDir()
+		writeConfig(t, root, body)
+		if _, err := Load(root); err == nil {
+			t.Errorf("%q: want error", body)
+		}
+	}
+}
+
+func TestTrainDefaultsAndParse(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Train.MaxAttempts != 2 || cfg.Train.Output != "stack" || cfg.Train.NoAutoRebase {
+		t.Fatalf("train defaults: %+v", cfg.Train)
+	}
+	root := t.TempDir()
+	writeConfig(t, root, "[train]\nmax_attempts = 4\noutput = \"single\"\nno_auto_rebase = true\n")
+	if cfg, err = Load(root); err != nil || cfg.Train.MaxAttempts != 4 || cfg.Train.Output != "single" || !cfg.Train.NoAutoRebase {
+		t.Fatalf("train = %+v, %v", cfg.Train, err)
+	}
+	writeConfig(t, root, "[train]\noutput = \"linear\"\n")
+	if _, err := Load(root); err == nil {
+		t.Fatal("bad train.output: want error")
+	}
+}

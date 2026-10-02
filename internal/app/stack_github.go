@@ -24,6 +24,11 @@ const (
 	TrainSuperseded = "superseded" // killed, PR closed, or unstacked: its work no longer ships on its own
 )
 
+// TrainEscalated is the train state of a branch that failed to land
+// max_attempts times: it went to the owner as needs-you instead of back to
+// its producer. Calling done again queues it once more (#30).
+const TrainEscalated = "escalated"
+
 // TrainHeld is the land result for a queued task the at-risk flag holds back
 // because it touches the broken layers. Its train entry stays queued.
 const TrainHeld = "held"

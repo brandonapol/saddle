@@ -9,10 +9,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/brandonapol/saddle/internal/claims"
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -54,7 +57,7 @@ func (a *App) Land() ([]LandResult, error) {
 	var out []LandResult
 	held := 0
 	for _, e := range entries {
-		if e.State != store.Queued {
+		if e.State != store.Queued || !a.stillQueued(e.Task) {
 			continue
 		}
 		if f := a.touches(e.Task, frozen); f != "" {
@@ -70,6 +73,21 @@ func (a *App) Land() ([]LandResult, error) {
 		return out, a.checkFlag()
 	}
 	return out, nil
+}
+
+// stillQueued reports whether task's entry is still queued: a hold or move
+// made while the train runs takes effect on the entries it hasn't reached.
+func (a *App) stillQueued(task string) bool {
+	es, err := a.Store.Train()
+	if err != nil {
+		return true
+	}
+	for _, e := range es {
+		if e.Task == task {
+			return e.State == store.Queued
+		}
+	}
+	return false
 }
 
 // frozenFiles maps each file the at-risk layers of a flagged stack changed to
@@ -229,8 +247,13 @@ func (a *App) landOne(id string) LandResult {
 	fail := func(state, note, msg string) LandResult {
 		res.State, res.Note = state, note
 		a.Store.Event(id, "train_"+state, note)
+		if err := a.Store.SetTrain(id, state, note, true); err != nil {
+			res.Note += " (could not record: " + err.Error() + ")"
+		}
+		if n := a.attempts(id); n >= a.Cfg.Train.MaxAttempts {
+			return a.escalate(res, n, state, msg)
+		}
 		if err := errors.Join(
-			a.Store.SetTrain(id, state, note, true),
 			a.Store.SetStatus(id, store.Conflict),
 			a.Notify(id, store.NoticeAction, msg),
 		); err != nil {
@@ -252,7 +275,7 @@ func (a *App) landOne(id string) LandResult {
 		res.State, res.Note = store.TrainError, err.Error()
 		return res
 	}
-	rr, err := trainRebase(t.Worktree, a.Cfg.Integration)
+	rr, taken, err := trainRebase(t.Worktree, a.Cfg.Integration, a.Cfg.Regen)
 	if err != nil {
 		return fail(store.TrainError, "rebase failed", "Rebasing your branch onto "+a.Cfg.Integration+" failed:\n"+rr.Output+"\nFix it and call done again.")
 	}
@@ -263,6 +286,17 @@ func (a *App) landOne(id string) LandResult {
 				"1. Run `saddle sync`. It starts the rebase and stops at the conflicts.\n"+
 				"2. Resolve them, keeping both sides' intent, then `git add` and `git rebase --continue`.\n"+
 				"3. Run the tests, then call the saddle done tool again.", a.Cfg.Integration, files))
+	}
+	regenerated := ""
+	if len(taken) > 0 {
+		if out, err := regenerate(t.Worktree, a.Cfg.Regen, taken); err != nil {
+			// The branch stays rebased, with the failed output in the worktree to look at.
+			return fail(store.TrainError, "regen failed", fmt.Sprintf(
+				"Your branch rebased onto %s, keeping %s's copy of the derived files %s, but regenerating them failed:\n%s\n%s\nFix it, commit, and call the saddle done tool again.",
+				a.Cfg.Integration, a.Cfg.Integration, strings.Join(taken, ", "), out, err))
+		}
+		regenerated = " (regenerated " + strings.Join(taken, ", ") + ")"
+		a.Store.Event(id, "train_regen", strings.Join(taken, "\n"))
 	}
 	if cmd := a.Cfg.Test.Cmd; cmd != NoTestCmd {
 		if out, err := runShell(t.Worktree, cmd); err != nil {
@@ -280,7 +314,7 @@ func (a *App) landOne(id string) LandResult {
 		res.State, res.Note = store.TrainError, "integration moved during land; will retry: "+err.Error()
 		return res
 	}
-	res.State, res.Note = store.TrainOK, head[:12]
+	res.State, res.Note = store.TrainOK, head[:12]+regenerated
 	a.Store.Event(id, "landed", head)
 	if cl, err := a.Store.Claims(); err == nil && len(cl[id]) > 0 {
 		// Claims are released with the landing; keep them for the stack check.
@@ -310,8 +344,49 @@ func (a *App) landOne(id string) LandResult {
 	return res
 }
 
+// attempts is how many times id has failed to land.
+func (a *App) attempts(id string) int {
+	es, err := a.Store.Train()
+	if err != nil {
+		return 0
+	}
+	for _, e := range es {
+		if e.Task == id {
+			return e.Attempts
+		}
+	}
+	return 0
+}
+
+// escalate hands a branch that failed to land n times to the owner instead of
+// its producer: its train entry becomes escalated, the task needs-you, and
+// the orchestrator gets the failure. The producer hears about it without
+// being woken, so it doesn't loop on the same failure (#30).
+func (a *App) escalate(res LandResult, n int, state, msg string) LandResult {
+	why := res.Note
+	res.State = TrainEscalated
+	res.Note = fmt.Sprintf("%s; escalated after %s", why, plural(n, "failed attempt"))
+	a.Store.Event(res.Task, "train_escalated", res.Note)
+	t, _ := a.Store.Task(res.Task)
+	if err := errors.Join(
+		a.Store.SetTrain(res.Task, TrainEscalated, why+" ("+state+")", false),
+		a.Store.SetStatus(res.Task, store.NeedsYou),
+		a.Notify(res.Task, store.NoticeInfo, fmt.Sprintf(
+			"Your branch failed to land %s times, so the train escalated it to the owner instead of handing it back again. "+
+				"Stop retrying; wait for instructions. The last failure:\n%s", strconv.Itoa(n), msg)),
+		a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
+			"▲ %s %q needs you: it failed to land %s (last: %s: %s), so the train stopped returning it. "+
+				"Fix it yourself, spawn a repair task, or tell %s what to do; done queues it again.\nLast failure:\n%s",
+			res.Task, t.Title, plural(n, "time"), state, why, res.Task, msg)),
+	); err != nil {
+		res.Note += " (could not record or notify: " + err.Error() + ")"
+	}
+	return res
+}
+
 // broadcastLanding records renames, remaps the other tasks' claims through
-// them, and tells every live agent what moved under it.
+// them, rebases every live agent's clean worktree onto the new head, and
+// tells each agent what moved under it.
 func (a *App) broadcastLanding(landed store.Task, old, head string) error {
 	grs, _ := gitx.Renames(a.Root, old, head)
 	changed, _ := gitx.ChangedFiles(a.Root, old, head)
@@ -361,11 +436,20 @@ func (a *App) broadcastLanding(landed store.Task, old, head string) error {
 			msg.WriteString("\nYour claims were remapped: " + strings.Join(remapped, ", ") + ".")
 		}
 		kind := store.NoticeInfo
-		if overlaps(t.Worktree, old, changed) {
+		shared := overlaps(t.Worktree, old, changed)
+		switch rb := a.autoRebase(t); {
+		case rb.To != "":
+			fmt.Fprintf(&msg, "\nSaddle rebased your branch onto it (%s → %s), following directory moves. Files may have changed under you: re-read them before editing.", short(rb.From), short(rb.To))
+		case len(rb.Conflicts) > 0:
 			kind = store.NoticeAction
-			msg.WriteString("\nIt touched files you changed too, so sync now to avoid a conflict later.")
+			fmt.Fprintf(&msg, "\nRebasing your branch onto it conflicts in %s, so saddle left your branch as it was. At your next clean point run `saddle sync` and resolve them, keeping both sides' intent.", strings.Join(rb.Conflicts, ", "))
+		default:
+			if shared {
+				kind = store.NoticeAction
+				msg.WriteString("\nIt touched files you changed too, so sync now to avoid a conflict later.")
+			}
+			msg.WriteString("\nAt your next clean point (commit first), run `saddle sync` to rebase onto it. Directory moves are followed automatically.")
 		}
-		msg.WriteString("\nAt your next clean point (commit first), run `saddle sync` to rebase onto it. Directory moves are followed automatically.")
 		errs = append(errs, a.Notify(t.ID, kind, msg.String()))
 	}
 	return errors.Join(errs...)
@@ -389,10 +473,12 @@ func overlaps(wt, base string, files []string) bool {
 	return false
 }
 
-// PRs pushes every landed branch in the stack and opens or updates a stack
-// of PRs: the first targets base, each later one targets the branch landed
-// before it. It pushes the commits the train landed, never whatever the
-// branches point at. Tasks GitHub says are done leave the stack first (see
+// PRs pushes every landed branch in the stack and opens or updates its PR,
+// laid out as stacks (see prLayout): dependent or same-topic tasks stack, each
+// PR on the one below it, and unrelated tasks' PRs target base (#52). A layer
+// on its train predecessor pushes the commit the train landed, never whatever
+// its branch points at; any other pushes those landed commits replayed onto
+// the PR below. Tasks GitHub says are done leave the stack first (see
 // ReconcileStack). Layers below the first broken or flagged one are
 // published; from there up nothing is pushed or changed, and the error says
 // why.
@@ -418,10 +504,15 @@ func (a *App) PRs() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	layout, err := a.prLayout(landed)
+	if err != nil {
+		return nil, err
+	}
 	var stop error
 	var stack []store.Task
+	var groups []int
 	base, baseName := a.baseRef(), a.Cfg.Base
-	for _, l := range landed {
+	for i, l := range landed {
 		if flagged && !flag.Acked && l.ID == flag.Task {
 			stop = flagErr(flag)
 			break
@@ -437,11 +528,15 @@ func (a *App) PRs() ([]string, error) {
 		}
 		a.warnOutsideClaims(l, base)
 		t := l.Task
-		if err := a.pushLanded(t.Branch, l.To); err != nil {
+		if err := a.pushLanded(t.Branch, layout[i].Head); err != nil {
 			return nil, err
 		}
+		if layout[i].Head != l.To {
+			a.Store.Event(t.ID, "pr_layout", fmt.Sprintf("%s published as %s on %s", short(l.To), short(layout[i].Head), a.prBase(landed, layout, i)))
+		}
+		prBase := a.prBase(landed, layout, i)
 		if t.PR == "" {
-			url, err := gh(a.Root, "pr", "create", "--base", baseBranch(a.Cfg.Base, stack), "--head", t.Branch, "--title", t.Title, "--body", t.Summary)
+			url, err := gh(a.Root, "pr", "create", "--base", prBase, "--head", t.Branch, "--title", t.Title, "--body", t.Summary)
 			if err != nil {
 				return nil, err
 			}
@@ -449,11 +544,12 @@ func (a *App) PRs() ([]string, error) {
 			if err := a.Store.SetField(t.ID, "pr", t.PR); err != nil {
 				return nil, err
 			}
-		} else if _, err := gh(a.Root, "pr", "edit", t.PR, "--base", baseBranch(a.Cfg.Base, stack)); err != nil {
+		} else if _, err := gh(a.Root, "pr", "edit", t.PR, "--base", prBase); err != nil {
 			return nil, err
 		}
 		base, baseName = l.To, l.ID+"'s branch"
 		stack = append(stack, t)
+		groups = append(groups, layout[i].Group)
 	}
 	var urls []string
 	for i, t := range stack {
@@ -462,13 +558,23 @@ func (a *App) PRs() ([]string, error) {
 		if t.Issue > 0 {
 			fmt.Fprintf(&b, "\n\nCloses #%d", t.Issue)
 		}
-		b.WriteString("\n\n---\n**Stack** (opened by saddle; merge bottom-up)\n\n")
-		for j := len(stack) - 1; j >= 0; j-- {
-			mark := ""
-			if j == i {
-				mark = " 👈"
+		var mine []store.Task
+		for j, u := range stack {
+			if groups[j] == groups[i] {
+				mine = append(mine, u)
 			}
-			fmt.Fprintf(&b, "%d. %s %s%s\n", j+1, stack[j].PR, stack[j].Title, mark)
+		}
+		if len(mine) > 1 {
+			b.WriteString("\n\n---\n**Stack** (opened by saddle; merge bottom-up)\n\n")
+			for j := len(mine) - 1; j >= 0; j-- {
+				mark := ""
+				if mine[j].ID == t.ID {
+					mark = " 👈"
+				}
+				fmt.Fprintf(&b, "%d. %s %s%s\n", j+1, mine[j].PR, mine[j].Title, mark)
+			}
+		} else {
+			b.WriteString("\n\n---\nOpened by saddle; it doesn't depend on another saddle PR.\n")
 		}
 		b.WriteString("\nBase: `" + a.Cfg.Base + "`\n")
 		if _, err := gh(a.Root, "pr", "edit", t.PR, "--body", b.String()); err != nil {
@@ -479,13 +585,13 @@ func (a *App) PRs() ([]string, error) {
 	return urls, stop
 }
 
-// baseBranch is the branch a new layer's PR targets: base for the bottom one,
-// else the branch of the layer below.
-func baseBranch(base string, below []store.Task) string {
-	if len(below) == 0 {
-		return base
+// prBase is the branch layer i's PR targets: base, or the branch of the
+// layer below it in its stack.
+func (a *App) prBase(stack []landedTask, layout []prLayer, i int) string {
+	if b := layout[i].Below; b >= 0 {
+		return stack[b].Branch
 	}
-	return below[len(below)-1].Branch
+	return a.Cfg.Base
 }
 
 // landedTask is a task the train landed, with the range of commits it landed:
@@ -901,21 +1007,62 @@ func trainGit(dir string, args ...string) (string, error) {
 
 // trainRebase is gitx.Rebase run as the train: it rebases the branch checked
 // out in dir onto onto and aborts on conflict, leaving the worktree as it was.
-func trainRebase(dir, onto string) (gitx.RebaseResult, error) {
+// Conflicts only in derived files regen covers are not merged: the rebase
+// takes onto's copy and goes on, and the files are returned in regen so the
+// caller can regenerate them (#28).
+func trainRebase(dir, onto string, regen []config.Regen) (res gitx.RebaseResult, taken []string, err error) {
 	out, err := trainGit(dir, "-c", "merge.directoryRenames=true", "-c", "merge.renames=true",
 		"-c", "rerere.enabled=true", "-c", "core.editor=true", "rebase", onto)
-	if err == nil {
-		return gitx.RebaseResult{OK: true, Output: out}, nil
+	for err != nil {
+		conf, _ := gitx.Run(dir, "diff", "--name-only", "--diff-filter=U")
+		if conf == "" {
+			if gitx.RebaseInProgress(dir) {
+				_, _ = trainGit(dir, "rebase", "--abort")
+			}
+			return gitx.RebaseResult{Output: err.Error()}, nil, err
+		}
+		files := strings.Split(conf, "\n")
+		if !allRegen(regen, files) {
+			res := gitx.RebaseResult{Conflicts: files, Output: err.Error()}
+			if _, err := trainGit(dir, "rebase", "--abort"); err != nil {
+				return res, nil, err
+			}
+			return res, nil, nil
+		}
+		for _, f := range files {
+			if !slices.Contains(taken, f) {
+				taken = append(taken, f)
+			}
+		}
+		// During a rebase "ours" is onto plus the commits replayed so far.
+		if _, err := trainGit(dir, append([]string{"checkout", "--ours", "--"}, files...)...); err != nil {
+			_, _ = trainGit(dir, "rebase", "--abort")
+			return gitx.RebaseResult{Output: err.Error()}, nil, err
+		}
+		if _, err := trainGit(dir, append([]string{"add", "--"}, files...)...); err != nil {
+			_, _ = trainGit(dir, "rebase", "--abort")
+			return gitx.RebaseResult{Output: err.Error()}, nil, err
+		}
+		step := "--continue"
+		if _, e := gitx.Run(dir, "diff", "--cached", "--quiet", "HEAD"); e == nil {
+			step = "--skip" // the commit only changed derived files
+		}
+		out, err = trainGit(dir, "-c", "core.editor=true", "-c", "rerere.enabled=true", "rebase", step)
 	}
-	conf, _ := gitx.Run(dir, "diff", "--name-only", "--diff-filter=U")
-	if conf == "" {
-		return gitx.RebaseResult{Output: err.Error()}, err
+	return gitx.RebaseResult{OK: true, Output: out}, taken, nil
+}
+
+// allRegen reports whether regen covers every one of files.
+func allRegen(regen []config.Regen, files []string) bool {
+	if len(regen) == 0 {
+		return false
 	}
-	res := gitx.RebaseResult{Conflicts: strings.Split(conf, "\n"), Output: err.Error()}
-	if _, err := trainGit(dir, "rebase", "--abort"); err != nil {
-		return res, err
+	for _, f := range files {
+		if !regenMatch(regen, f) {
+			return false
+		}
 	}
-	return res, nil
+	return true
 }
 
 func gh(dir string, args ...string) (string, error) {

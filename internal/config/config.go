@@ -30,8 +30,12 @@ type Config struct {
 	Serial []string `toml:"serial"`
 	// CloseOnLand kills a task's tmux window and removes its worktree once it lands.
 	CloseOnLand bool `toml:"close_on_land"`
+	// Regen lists derived files (go.sum, lockfiles, generated code) the merge
+	// train regenerates instead of text-merging when they conflict.
+	Regen []Regen `toml:"regen"`
 
 	Test   Test   `toml:"test"`
+	Train  Train  `toml:"train"`
 	Claude Claude `toml:"claude"`
 	Triage Triage `toml:"triage"`
 	Usage  Usage  `toml:"usage"`
@@ -45,6 +49,15 @@ type Config struct {
 	Sweeper Sweeper `toml:"sweeper"`
 	// CI watches saddle PRs' checks while saddle up runs.
 	CI CI `toml:"ci"`
+}
+
+// Regen is a set of derived files and the command that rebuilds them. When a
+// rebase in the train conflicts only in files matching Paths (claim globs),
+// the train takes integration's copy, runs Cmd in the task's worktree and
+// commits what it changed.
+type Regen struct {
+	Paths []string `toml:"paths"`
+	Cmd   string   `toml:"cmd"`
 }
 
 // CI configures the CI watcher, which tells the owning task and the
@@ -111,6 +124,25 @@ type Triage struct {
 	NoAutoApprove bool `toml:"no_auto_approve"`
 }
 
+// Train configures the merge train.
+type Train struct {
+	// MaxAttempts is how many failed lands (conflicts, red tests) a branch
+	// gets before the train escalates it to you instead of returning it to
+	// its producer again.
+	MaxAttempts int `toml:"max_attempts"`
+	// NoAutoRebase stops the train rebasing live agents' clean worktrees onto
+	// integration after each landing; they are only told to sync.
+	NoAutoRebase bool `toml:"no_auto_rebase"`
+	// Output is how prs lays out PRs: "stack" groups dependent or same-topic
+	// tasks into stacks and puts unrelated ones on base; "single" makes one
+	// linear stack in train order; "per-task" puts every task on base unless
+	// its work only applies on top of an earlier task's.
+	Output string `toml:"output"`
+}
+
+// Outputs are the PR layouts prs supports.
+var Outputs = []string{"stack", "single", "per-task"}
+
 type Test struct {
 	// Cmd runs in the task worktree after rebasing onto integration; non-zero blocks landing.
 	Cmd string `toml:"cmd"`
@@ -139,7 +171,8 @@ func Default() Config {
 			Method:      "squash",
 			ReviewLabel: "requires review",
 		},
-		CI: CI{Interval: 10 * time.Minute},
+		CI:    CI{Interval: 10 * time.Minute},
+		Train: Train{MaxAttempts: 2, Output: "stack"},
 		Usage: Usage{
 			Poll: 15 * time.Second,
 			Windows: []Window{
@@ -192,6 +225,20 @@ func Load(root string) (Config, error) {
 	if cfg.Narrator.DailyCapUSD < 0 {
 		return cfg, fmt.Errorf("narrator.daily_cap_usd %v: must not be negative", cfg.Narrator.DailyCapUSD)
 	}
+	for i, r := range cfg.Regen {
+		if len(r.Paths) == 0 || strings.TrimSpace(r.Cmd) == "" {
+			return cfg, fmt.Errorf("regen[%d]: needs both paths and cmd", i)
+		}
+	}
+	if cfg.Train.MaxAttempts < 1 {
+		cfg.Train.MaxAttempts = Default().Train.MaxAttempts
+	}
+	if cfg.Train.Output == "" {
+		cfg.Train.Output = Default().Train.Output
+	}
+	if !slices.Contains(Outputs, cfg.Train.Output) {
+		return cfg, fmt.Errorf("train.output %q: want one of %s", cfg.Train.Output, strings.Join(Outputs, ", "))
+	}
 	if cfg.CI.Interval <= 0 {
 		cfg.CI.Interval = Default().CI.Interval
 	}
@@ -228,6 +275,24 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 
 [test]
 # cmd = "go test ./..."
+
+# Derived files the merge train regenerates instead of merging. On a rebase
+# conflict only in these paths, it takes integration's copy, runs cmd in the
+# task's worktree and commits the result.
+# [[regen]]
+# paths = ["go.sum"]
+# cmd = "go mod tidy"
+
+[train]
+# Failed lands (conflicts, red tests) before the train stops returning a
+# branch to its agent and escalates it to you as needs-you.
+# max_attempts = 2
+# After each landing the train rebases every live agent's clean worktree onto
+# integration; set this to only tell them to run saddle sync.
+# no_auto_rebase = false
+# PR layout: "stack" stacks dependent or same-topic tasks and puts unrelated
+# ones on base; "single" is one linear stack; "per-task" stacks only when it must.
+# output = "stack"
 
 [triage]
 # Uses TypeSafe Jev (set JEV_TOKEN; make setup asks for it) to decide which agent events reach

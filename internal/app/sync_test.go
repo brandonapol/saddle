@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/store"
 )
 
 // commitOnIntegration commits files on top of integration from a scratch
@@ -125,5 +126,100 @@ func TestSyncNeverStacksOnARebaseInProgress(t *testing.T) {
 	_, err = a.Sync(tk.ID)
 	if err == nil || !strings.Contains(err.Error(), "rebase --abort") {
 		t.Fatalf("second sync err = %v, want a rebase-in-progress error naming the way out", err)
+	}
+}
+
+// #26: when a task lands, every live worker with a clean worktree is rebased
+// onto integration with rename detection, and told so. A dirty worktree is
+// left alone, and one whose rebase would conflict is put back as it was; both
+// are told to sync.
+func TestLandAutoRebasesLiveWorktrees(t *testing.T) {
+	a, _ := setup(t)
+	spawn := func(title string) store.Task {
+		tk, err := a.Spawn(SpawnReq{Title: title})
+		must(t, err)
+		return tk
+	}
+	mover, clean, dirty, clash := spawn("move"), spawn("clean"), spawn("dirty"), spawn("clash")
+
+	git(t, mover.Worktree, "mv", "billing", "pkg-tmp")
+	git(t, mover.Worktree, "mv", "pkg-tmp", "pkg")
+	write(t, mover.Worktree, "notes.txt", "mover\n")
+	commitAll(t, mover.Worktree, "move billing")
+
+	write(t, clean.Worktree, "billing/meter.go", "package billing\n\nfunc Meter() int { return 2 }\n")
+	commitAll(t, clean.Worktree, "meter")
+	cleanBefore := git(t, clean.Worktree, "rev-parse", "HEAD")
+
+	write(t, dirty.Worktree, "README.md", "unsaved\n")
+	dirtyBefore := git(t, dirty.Worktree, "rev-parse", "HEAD")
+
+	write(t, clash.Worktree, "notes.txt", "clash\n")
+	commitAll(t, clash.Worktree, "notes")
+	clashBefore := git(t, clash.Worktree, "rev-parse", "HEAD")
+
+	must(t, a.Done(mover.ID, "moved"))
+	rs, err := a.Land()
+	must(t, err)
+	if len(rs) != 1 || rs[0].State != "landed" {
+		t.Fatalf("land = %+v", rs)
+	}
+	integ := git(t, a.Root, "rev-parse", a.Cfg.Integration)
+
+	// The clean task now sits on integration, its edit followed the move.
+	if mb := git(t, clean.Worktree, "merge-base", "HEAD", integ); mb != integ {
+		t.Fatal("clean worktree was not rebased onto integration")
+	}
+	if got := git(t, clean.Worktree, "show", "HEAD:pkg/meter.go"); !strings.Contains(got, "return 2") {
+		t.Fatalf("pkg/meter.go = %q", got)
+	}
+	if git(t, clean.Worktree, "rev-parse", "HEAD") == cleanBefore {
+		t.Fatal("clean HEAD did not move")
+	}
+	ns, _ := a.Store.TakeNotices(clean.ID, false)
+	if len(ns) != 1 || !strings.Contains(ns[0].Text, "rebased your branch") || !strings.Contains(ns[0].Text, "billing/meter.go → pkg/meter.go") {
+		t.Fatalf("clean notice = %+v", ns)
+	}
+
+	// The dirty one is untouched and asked to sync.
+	if git(t, dirty.Worktree, "rev-parse", "HEAD") != dirtyBefore {
+		t.Fatal("dirty worktree was rebased")
+	}
+	if d, _ := gitx.Dirty(dirty.Worktree); len(d) != 1 {
+		t.Fatalf("dirty worktree changes = %v", d)
+	}
+	ns, _ = a.Store.TakeNotices(dirty.ID, false)
+	if len(ns) != 1 || !strings.Contains(ns[0].Text, "saddle sync") {
+		t.Fatalf("dirty notice = %+v", ns)
+	}
+
+	// The clashing one is back where it was, clean, and told about the conflict.
+	if git(t, clash.Worktree, "rev-parse", "HEAD") != clashBefore || gitx.RebaseInProgress(clash.Worktree) {
+		t.Fatal("conflicting rebase was not undone")
+	}
+	ns, _ = a.Store.TakeNotices(clash.ID, false)
+	if len(ns) != 1 || !strings.Contains(ns[0].Text, "notes.txt") || !strings.Contains(ns[0].Text, "saddle sync") {
+		t.Fatalf("clash notice = %+v", ns)
+	}
+}
+
+// With [train] no_auto_rebase = true the train only tells agents to sync.
+func TestAutoRebaseCanBeTurnedOff(t *testing.T) {
+	a, _ := setup(t)
+	a.Cfg.Train.NoAutoRebase = true
+	lander, err := a.Spawn(SpawnReq{Title: "lander"})
+	must(t, err)
+	other, err := a.Spawn(SpawnReq{Title: "other"})
+	must(t, err)
+	write(t, lander.Worktree, "a.txt", "a\n")
+	commitAll(t, lander.Worktree, "a")
+	write(t, other.Worktree, "b.txt", "b\n")
+	commitAll(t, other.Worktree, "b")
+	before := git(t, other.Worktree, "rev-parse", "HEAD")
+	must(t, a.Done(lander.ID, "a"))
+	_, err = a.Land()
+	must(t, err)
+	if git(t, other.Worktree, "rev-parse", "HEAD") != before {
+		t.Fatal("rebased with auto-rebase off")
 	}
 }
