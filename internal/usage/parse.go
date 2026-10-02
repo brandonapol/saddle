@@ -142,12 +142,43 @@ type grokLine struct {
 	} `json:"usage"`
 }
 
-// ParseGrok parses a line of Grok CLI output, which saddle tees to a file.
-// Best effort: lines that are OpenAI-style completions with usage count, and
-// everything else, including plain console text, is skipped.
+// ParseGrok reads Grok CLI output. Three shapes count:
+// streaming-messages-json assistant lines (same as Claude), a native
+// {"type":"usage",...} event, and an OpenAI-style completion tee'd from a
+// one-shot run. Plain console text is skipped.
 func ParseGrok(line []byte) (Record, bool, error) {
 	if len(line) == 0 || line[0] != '{' {
 		return Record{}, false, nil
+	}
+	rec, ok, err := ParseClaude(line)
+	if err != nil {
+		return Record{}, false, err
+	}
+	if ok {
+		return rec, true, nil
+	}
+	var ev struct {
+		Type      string `json:"type"`
+		MessageID string `json:"messageId"`
+		Usage     *struct {
+			Input         int64 `json:"input_tokens"`
+			Output        int64 `json:"output_tokens"`
+			CacheCreation int64 `json:"cache_creation_input_tokens"`
+			CacheRead     int64 `json:"cache_read_input_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(line, &ev); err != nil {
+		return Record{}, false, err
+	}
+	if ev.Type == "usage" && ev.Usage != nil {
+		u := ev.Usage
+		return Record{
+			ID: ev.MessageID,
+			Tokens: Tokens{
+				Input: u.Input, Output: u.Output,
+				CacheRead: u.CacheRead, CacheCreation: u.CacheCreation,
+			},
+		}, true, nil
 	}
 	var l grokLine
 	if err := json.Unmarshal(line, &l); err != nil {

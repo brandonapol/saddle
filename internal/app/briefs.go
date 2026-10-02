@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -11,11 +12,11 @@ func (a *App) workerBrief(t store.Task, cl []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `# Saddle task %s: %s
 
-You are one of several Claude Code agents working on this repo in parallel. Saddle coordinates you. Each agent has its own git worktree and branch.
+You are one of several %s agents working on this repo in parallel. Saddle coordinates you. Each agent has its own git worktree and branch.
 
 - Worktree: %s
 - Branch: %s (cut from %s)
-`, t.ID, t.Title, t.Worktree, t.Branch, a.Cfg.Integration)
+`, t.ID, t.Title, a.harnessName(), t.Worktree, t.Branch, a.Cfg.Integration)
 	if t.Parent != "" {
 		fmt.Fprintf(&b, "- Spawned by: %s\n", t.Parent)
 	}
@@ -43,7 +44,7 @@ You are one of several Claude Code agents working on this repo in parallel. Sadd
 func (a *App) orchestratorBrief() string {
 	return fmt.Sprintf(`# Saddle orchestrator
 
-You are the chat agent inside Saddle's TUI. The user talks to you in a sidebar while you run a team of Claude Code agents working on this repo in parallel. You don't write code. You plan, launch, watch and land.
+You are the chat agent inside Saddle's TUI. The user talks to you in a sidebar while you run a team of %s agents working on this repo in parallel. You don't write code. You plan, launch, watch and land.
 
 The user cannot see the agents' terminals unless they go looking. You are their eyes: keep them informed in short messages, and tell them right away when something needs a human.
 
@@ -52,7 +53,7 @@ The user cannot see the agents' terminals unless they go looking. You are their 
 - Split the work into tasks that can run at the same time with DISJOINT path claims (globs like "internal/foo/**"). Two tasks that must edit the same file are not parallel: sequence them or merge them.
 - Directory moves, renames and big restructures are BARRIERS. Run one alone, land it, then start the work that depends on it.
 - Shared registries (route tables, wiring, lockfiles, migrations) belong to exactly one task. Serial files (%s) are owned by the merge train.
-- Default to "opus" for workers. Use "sonnet" for small, mechanical tasks. Run at most %d at once.
+- Default to %q for workers. Use a smaller model for small, mechanical tasks. Run at most %d at once.
 - Give each task a self-contained prompt: goal, files, constraints, how to verify, which tests must exist, done-when. The agent sees only that prompt and the repo. Pass issue=<n> when a task implements an issue.
 - If spawn says it needs confirmation, every claim covers work that already landed or is queued. Tell the user why, and retry with confirm=true only if they agree.
 - Before spawning, show the plan in a few lines (task, model, claims, order) and wait for a go-ahead, unless the user already said to just go.
@@ -75,7 +76,24 @@ The goal is getting work done, not needing manual intervention. When a tool is s
 - Be brief. The sidebar is narrow. Lead with what changed or what you need.
 - Name tasks by id and title, e.g. "t3 (meter worker)".
 - When a message needs the user, start it with "‼ " followed by ONE sentence naming the task and what is needed, then details. The TUI renders that sentence red and the rest white.
-`, serialList(a.Cfg.Serial), a.Cfg.Concurrency, a.Cfg.Integration, a.Cfg.Base)
+`, a.harnessName(), serialList(a.Cfg.Serial), a.workerDefaultName(), a.Cfg.Concurrency, a.Cfg.Integration, a.Cfg.Base)
+}
+
+func (a *App) harnessName() string {
+	if a.Cfg.Harness == config.HarnessGrok {
+		return "Grok"
+	}
+	return "Claude Code"
+}
+
+func (a *App) workerDefaultName() string {
+	if m := a.workerModel(); m != "" {
+		return m
+	}
+	if a.Cfg.Harness == config.HarnessGrok {
+		return "grok's default"
+	}
+	return "opus"
 }
 
 func serialList(s []string) string {

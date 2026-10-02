@@ -180,6 +180,9 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if strings.TrimSpace(r.Title) == "" {
 		return t, errors.New("spawn: title is required")
 	}
+	if r.Adapter == "" && a.Cfg.Harness == config.HarnessGrok {
+		r.Adapter = usage.Grok
+	}
 	ad, err := agent.ByName(r.Adapter)
 	if err != nil {
 		return t, err
@@ -239,8 +242,12 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 		base = a.Cfg.Integration
 	}
 	model := r.Model
-	if model == "" && ad.Name() == usage.Claude {
-		model = a.Cfg.Claude.Model
+	if model == "" {
+		if a.Cfg.Harness == config.HarnessGrok && ad.Name() == usage.Grok {
+			model = a.Cfg.Grok.Model
+		} else if ad.Name() == usage.Claude {
+			model = a.Cfg.Claude.Model
+		}
 	}
 	hint := a.retryHint(r.Title)
 	t = store.Task{
@@ -342,11 +349,19 @@ func conflictErr(c map[string]string) error {
 }
 
 func (a *App) launch(t store.Task, cl []string, ad agent.Adapter) (string, error) {
-	cmd, args := a.adapterCmd(ad.Name())
+	cmdName, args := a.adapterCmd(ad.Name())
 	l := agent.Launch{
 		Root: a.Root, Bin: a.Bin, Task: t.ID, Title: t.Title, Dir: t.Worktree, Model: t.Model,
-		Mode: a.Cfg.Claude.PermissionMode, Cmd: cmd, Args: args, RunDir: a.stateDir("run", t.ID),
+		Mode: a.Cfg.Claude.PermissionMode, Cmd: cmdName, Args: args, RunDir: a.stateDir("run", t.ID),
 		Brief: a.workerBrief(t, cl), Prompt: t.Prompt,
+	}
+	// harness = "grok" runs the full Grok CLI (hooks, MCP, tmux), not the
+	// one-shot image adapter.
+	if a.Cfg.Harness == config.HarnessGrok && ad.Name() == usage.Grok {
+		l.Kind = agent.KindGrok
+		l.Cmd = a.Cfg.Grok.Cmd
+		l.Mode = a.Cfg.Grok.PermissionMode
+		l.Args = nil
 	}
 	cmd, err := ad.Launch(l)
 	if err != nil {
@@ -376,7 +391,7 @@ func (a *App) Orchestrator() (agent.Launch, string, error) {
 	t, err := a.Store.Task(OrchestratorID)
 	if errors.Is(err, store.ErrNotFound) {
 		t = store.Task{ID: OrchestratorID, Title: "orchestrator", Role: store.RoleOrchestrator,
-			Model: a.Cfg.Claude.OrchestratorModel, Worktree: a.Root, Status: store.Running}
+			Model: a.orchModel(), Worktree: a.Root, Status: store.Running}
 		if err := a.Store.CreateTask(t); err != nil {
 			return agent.Launch{}, "", err
 		}
@@ -387,13 +402,41 @@ func (a *App) Orchestrator() (agent.Launch, string, error) {
 	if err := errors.Join(a.Store.SetStatus(t.ID, store.Running), a.Store.SetField(t.ID, "window", "")); err != nil {
 		return agent.Launch{}, "", err
 	}
-	l := agent.Launch{
-		Root: a.Root, Bin: a.Bin, Task: t.ID, Title: "orchestrator", Dir: a.Root,
-		Model: a.Cfg.Claude.OrchestratorModel, Mode: a.Cfg.Claude.PermissionMode, Cmd: a.Cfg.Claude.Cmd,
-		RunDir: a.stateDir("run", t.ID), Brief: a.orchestratorBrief(), Allow: agent.OrchestratorAllow(),
-		Deny: agent.OrchestratorDeny(),
-	}
+	l := a.newLaunch(t, a.Root, a.orchModel(), a.orchestratorBrief(), "", agent.OrchestratorAllow(), agent.OrchestratorDeny())
 	return l, t.SessionID, nil
+}
+
+// newLaunch fills the CLI-specific fields from config. Workers pass nil allow
+// so the Claude adapter uses its edit allow-list; grok uses its permission mode.
+func (a *App) newLaunch(t store.Task, dir, model, brief, prompt string, allow, deny []string) agent.Launch {
+	l := agent.Launch{
+		Root: a.Root, Bin: a.Bin, Task: t.ID, Title: t.Title, Dir: dir, Model: model,
+		RunDir: a.stateDir("run", t.ID), Brief: brief, Prompt: prompt, Allow: allow, Deny: deny,
+	}
+	if a.Cfg.Harness == config.HarnessGrok {
+		l.Kind = agent.KindGrok
+		l.Cmd = a.Cfg.Grok.Cmd
+		l.Mode = a.Cfg.Grok.PermissionMode
+		return l
+	}
+	l.Kind = agent.KindClaude
+	l.Cmd = a.Cfg.Claude.Cmd
+	l.Mode = a.Cfg.Claude.PermissionMode
+	return l
+}
+
+func (a *App) workerModel() string {
+	if a.Cfg.Harness == config.HarnessGrok {
+		return a.Cfg.Grok.Model
+	}
+	return a.Cfg.Claude.Model
+}
+
+func (a *App) orchModel() string {
+	if a.Cfg.Harness == config.HarnessGrok {
+		return a.Cfg.Grok.OrchestratorModel
+	}
+	return a.Cfg.Claude.OrchestratorModel
 }
 
 // Down stops every agent (the tmux session) and releases their claims.
