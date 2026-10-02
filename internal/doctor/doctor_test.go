@@ -31,6 +31,7 @@ type fakeEnv struct {
 	hooksErr  error
 	storeErr  error
 	leftovers int
+	kept      int
 	leftErr   error
 	ghCalls   []string
 }
@@ -101,7 +102,7 @@ func (f *fakeEnv) LookPath(name string) (string, error) {
 func (f *fakeEnv) Exists(path string) bool              { return f.paths[path] }
 func (f *fakeEnv) Hooks() ([]refguard.HookState, error) { return f.hooks, f.hooksErr }
 func (f *fakeEnv) OpenStore(string) error               { return f.storeErr }
-func (f *fakeEnv) Leftovers() (int, error)              { return f.leftovers, f.leftErr }
+func (f *fakeEnv) Leftovers() (int, int, error)         { return f.leftovers, f.kept, f.leftErr }
 
 func find(t *testing.T, rs []Result, name string) Result {
 	t.Helper()
@@ -244,6 +245,7 @@ func TestChecks(t *testing.T) {
 		{"state.db broken", CheckStateDB, func(f *fakeEnv) { f.storeErr = errors.New("attempt to write a readonly database") }, Fail, "state.db"},
 
 		{"leftovers", CheckLeftovers, func(f *fakeEnv) { f.leftovers = 3 }, Warn, "saddle gc"},
+		{"leftovers with kept work", CheckLeftovers, func(f *fakeEnv) { f.leftovers, f.kept = 2, 5 }, Warn, "saddle gc"},
 		{"leftovers unreadable", CheckLeftovers, func(f *fakeEnv) { f.leftErr = errors.New("boom") }, Warn, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -329,5 +331,16 @@ func TestWriteTableAndJSON(t *testing.T) {
 	}
 	if statuses[CheckDefaultBranch] != "fail" || statuses[CheckLeftovers] != "warn" || statuses[CheckTmux] != "ok" {
 		t.Fatalf("statuses %v", statuses)
+	}
+}
+
+// #158: branches gc keeps because they hold unmerged work don't make doctor
+// warn, since gc can't clear them; they're noted in the detail.
+func TestLeftoversKeptOnlyIsOK(t *testing.T) {
+	f := healthy(t)
+	f.kept = 4
+	r := find(t, Run(f), CheckLeftovers)
+	if r.Status != OK || !strings.Contains(r.Detail, "4 kept") {
+		t.Fatalf("kept-only leftovers = %s %q, want ok noting 4 kept", r.Status, r.Detail)
 	}
 }

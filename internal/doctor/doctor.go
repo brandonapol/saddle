@@ -66,8 +66,9 @@ type Env interface {
 	Hooks() ([]refguard.HookState, error)
 	// OpenStore opens, migrates and closes the state database at path.
 	OpenStore(path string) error
-	// Leftovers counts worktrees, branches and refs saddle gc would remove.
-	Leftovers() (int, error)
+	// Leftovers counts the worktrees, branches and refs saddle gc would
+	// remove, and those it would keep because they hold unmerged work.
+	Leftovers() (remove, kept int, err error)
 }
 
 // Failed reports whether any check failed.
@@ -371,14 +372,18 @@ func (r *run) stateDB() Result {
 }
 
 func (r *run) leftovers() Result {
-	n, err := r.env.Leftovers()
+	n, kept, err := r.env.Leftovers()
 	if err != nil {
 		return warn(CheckLeftovers, "could not count: "+err.Error(), "saddle gc --dry-run")
 	}
-	if n > 0 {
-		return warn(CheckLeftovers, fmt.Sprintf("%d stale worktrees, branches or refs", n), "saddle gc --dry-run to list them, saddle gc to remove them")
+	note := ""
+	if kept > 0 {
+		note = fmt.Sprintf("; %d kept with unmerged work (saddle gc --dry-run says why)", kept)
 	}
-	return ok(CheckLeftovers, "none")
+	if n > 0 {
+		return warn(CheckLeftovers, fmt.Sprintf("%d stale worktrees, branches or refs%s", n, note), "saddle gc --dry-run to list them, saddle gc to remove them")
+	}
+	return ok(CheckLeftovers, "none"+note)
 }
 
 // WriteTable prints one row per check, then the fixes for every check that

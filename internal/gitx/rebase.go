@@ -61,11 +61,16 @@ func PatchID(dir, diff string) (string, error) {
 // the combined diff since the previous held commit has the patch-id of a
 // commit on onto. Rebasing with --onto onto from there replays only the rest.
 func LandedPrefix(dir, onto string) (string, int, error) {
-	mb, err := Run(dir, "merge-base", "HEAD", onto)
+	return LandedPrefixOf(dir, "HEAD", onto)
+}
+
+// LandedPrefixOf is LandedPrefix for head instead of HEAD.
+func LandedPrefixOf(dir, head, onto string) (string, int, error) {
+	mb, err := Run(dir, "merge-base", head, onto)
 	if err != nil {
 		return "", 0, err
 	}
-	own, err := Run(dir, "log", "--reverse", "--first-parent", "--format=%H %T", mb+"..HEAD")
+	own, err := Run(dir, "log", "--reverse", "--first-parent", "--format=%H %T", mb+".."+head)
 	if err != nil || own == "" {
 		return "", 0, err
 	}
