@@ -57,7 +57,7 @@ func (a *App) Land() ([]LandResult, error) {
 	var out []LandResult
 	held := 0
 	for _, e := range entries {
-		if e.State != store.Queued {
+		if e.State != store.Queued || !a.stillQueued(e.Task) {
 			continue
 		}
 		if f := a.touches(e.Task, frozen); f != "" {
@@ -73,6 +73,21 @@ func (a *App) Land() ([]LandResult, error) {
 		return out, a.checkFlag()
 	}
 	return out, nil
+}
+
+// stillQueued reports whether task's entry is still queued: a hold or move
+// made while the train runs takes effect on the entries it hasn't reached.
+func (a *App) stillQueued(task string) bool {
+	es, err := a.Store.Train()
+	if err != nil {
+		return true
+	}
+	for _, e := range es {
+		if e.Task == task {
+			return e.State == store.Queued
+		}
+	}
+	return false
 }
 
 // frozenFiles maps each file the at-risk layers of a flagged stack changed to

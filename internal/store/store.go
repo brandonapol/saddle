@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,6 +33,9 @@ const (
 	TrainOK    = "landed"
 	TrainError = "conflict"
 	TestFailed = "test_failed"
+	// OnHold is a queued entry the owner held back: land skips it, it keeps
+	// its place, and done doesn't release it.
+	OnHold = "on_hold"
 )
 
 const (
@@ -414,8 +418,34 @@ func (s *Store) Enqueue(task string) error {
 			return err
 		}
 		_, err := tx.Exec(`INSERT INTO train(task, seq, state) VALUES(?, ?, ?)
-			ON CONFLICT(task) DO UPDATE SET seq = excluded.seq, state = excluded.state, note = ''`, task, seq, Queued)
+			ON CONFLICT(task) DO UPDATE SET seq = excluded.seq, state = excluded.state, note = ''
+			WHERE train.state <> ?`, task, seq, Queued, OnHold)
 		return err
+	})
+}
+
+// SetTrainOrder puts the named entries in the given order, reusing the seqs
+// they already hold, so entries not named keep their places.
+func (s *Store) SetTrainOrder(tasks []string) error {
+	return s.tx(func(tx *sql.Tx) error {
+		var seqs []int64
+		for _, t := range tasks {
+			var seq int64
+			if err := tx.QueryRow(`SELECT seq FROM train WHERE task = ?`, t).Scan(&seq); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return fmt.Errorf("%s is not in the train: %w", t, ErrNotFound)
+				}
+				return err
+			}
+			seqs = append(seqs, seq)
+		}
+		slices.Sort(seqs)
+		for i, t := range tasks {
+			if _, err := tx.Exec(`UPDATE train SET seq = ? WHERE task = ?`, seqs[i], t); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
