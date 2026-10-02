@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -231,8 +232,13 @@ func (a *App) landOne(id string) LandResult {
 	fail := func(state, note, msg string) LandResult {
 		res.State, res.Note = state, note
 		a.Store.Event(id, "train_"+state, note)
+		if err := a.Store.SetTrain(id, state, note, true); err != nil {
+			res.Note += " (could not record: " + err.Error() + ")"
+		}
+		if n := a.attempts(id); n >= a.Cfg.Train.MaxAttempts {
+			return a.escalate(res, n, state, msg)
+		}
 		if err := errors.Join(
-			a.Store.SetTrain(id, state, note, true),
 			a.Store.SetStatus(id, store.Conflict),
 			a.Notify(id, store.NoticeAction, msg),
 		); err != nil {
@@ -319,6 +325,46 @@ func (a *App) landOne(id string) LandResult {
 	}
 	if err := a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf("%s %q landed on %s at %s.", id, t.Title, a.Cfg.Integration, head[:12])); err != nil {
 		res.Note += " (orchestrator not notified: " + err.Error() + ")"
+	}
+	return res
+}
+
+// attempts is how many times id has failed to land.
+func (a *App) attempts(id string) int {
+	es, err := a.Store.Train()
+	if err != nil {
+		return 0
+	}
+	for _, e := range es {
+		if e.Task == id {
+			return e.Attempts
+		}
+	}
+	return 0
+}
+
+// escalate hands a branch that failed to land n times to the owner instead of
+// its producer: its train entry becomes escalated, the task needs-you, and
+// the orchestrator gets the failure. The producer hears about it without
+// being woken, so it doesn't loop on the same failure (#30).
+func (a *App) escalate(res LandResult, n int, state, msg string) LandResult {
+	why := res.Note
+	res.State = TrainEscalated
+	res.Note = fmt.Sprintf("%s; escalated after %s", why, plural(n, "failed attempt"))
+	a.Store.Event(res.Task, "train_escalated", res.Note)
+	t, _ := a.Store.Task(res.Task)
+	if err := errors.Join(
+		a.Store.SetTrain(res.Task, TrainEscalated, why+" ("+state+")", false),
+		a.Store.SetStatus(res.Task, store.NeedsYou),
+		a.Notify(res.Task, store.NoticeInfo, fmt.Sprintf(
+			"Your branch failed to land %s times, so the train escalated it to the owner instead of handing it back again. "+
+				"Stop retrying; wait for instructions. The last failure:\n%s", strconv.Itoa(n), msg)),
+		a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
+			"▲ %s %q needs you: it failed to land %s (last: %s: %s), so the train stopped returning it. "+
+				"Fix it yourself, spawn a repair task, or tell %s what to do; done queues it again.\nLast failure:\n%s",
+			res.Task, t.Title, plural(n, "time"), state, why, res.Task, msg)),
+	); err != nil {
+		res.Note += " (could not record or notify: " + err.Error() + ")"
 	}
 	return res
 }

@@ -35,6 +35,7 @@ type Config struct {
 	Regen []Regen `toml:"regen"`
 
 	Test   Test   `toml:"test"`
+	Train  Train  `toml:"train"`
 	Claude Claude `toml:"claude"`
 	Triage Triage `toml:"triage"`
 	Usage  Usage  `toml:"usage"`
@@ -123,6 +124,14 @@ type Triage struct {
 	NoAutoApprove bool `toml:"no_auto_approve"`
 }
 
+// Train configures the merge train.
+type Train struct {
+	// MaxAttempts is how many failed lands (conflicts, red tests) a branch
+	// gets before the train escalates it to you instead of returning it to
+	// its producer again.
+	MaxAttempts int `toml:"max_attempts"`
+}
+
 type Test struct {
 	// Cmd runs in the task worktree after rebasing onto integration; non-zero blocks landing.
 	Cmd string `toml:"cmd"`
@@ -151,7 +160,8 @@ func Default() Config {
 			Method:      "squash",
 			ReviewLabel: "requires review",
 		},
-		CI: CI{Interval: 10 * time.Minute},
+		CI:    CI{Interval: 10 * time.Minute},
+		Train: Train{MaxAttempts: 2},
 		Usage: Usage{
 			Poll: 15 * time.Second,
 			Windows: []Window{
@@ -209,6 +219,9 @@ func Load(root string) (Config, error) {
 			return cfg, fmt.Errorf("regen[%d]: needs both paths and cmd", i)
 		}
 	}
+	if cfg.Train.MaxAttempts < 1 {
+		cfg.Train.MaxAttempts = Default().Train.MaxAttempts
+	}
 	if cfg.CI.Interval <= 0 {
 		cfg.CI.Interval = Default().CI.Interval
 	}
@@ -252,6 +265,11 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # [[regen]]
 # paths = ["go.sum"]
 # cmd = "go mod tidy"
+
+[train]
+# Failed lands (conflicts, red tests) before the train stops returning a
+# branch to its agent and escalates it to you as needs-you.
+# max_attempts = 2
 
 [triage]
 # Uses TypeSafe Jev (set JEV_TOKEN; make setup asks for it) to decide which agent events reach

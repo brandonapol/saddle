@@ -255,3 +255,19 @@ func TestRegenRejectsIncompleteEntries(t *testing.T) {
 		}
 	}
 }
+
+func TestTrainDefaultsAndParse(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Train.MaxAttempts != 2 {
+		t.Fatalf("default max_attempts = %d", cfg.Train.MaxAttempts)
+	}
+	root := t.TempDir()
+	writeConfig(t, root, "[train]\nmax_attempts = 4\n")
+	if cfg, err = Load(root); err != nil || cfg.Train.MaxAttempts != 4 {
+		t.Fatalf("max_attempts = %d, %v", cfg.Train.MaxAttempts, err)
+	}
+}
