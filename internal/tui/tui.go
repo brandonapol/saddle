@@ -23,6 +23,7 @@ import (
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/orch"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/termpane"
 	"github.com/brandonapol/saddle/internal/triage"
 )
 
@@ -54,6 +55,7 @@ var (
 const (
 	focusChat = iota
 	focusTasks
+	focusTerm
 )
 
 // Attention levels for orchestrator messages, set by Jev triage.
@@ -115,6 +117,10 @@ type model struct {
 	flashAt   time.Time
 
 	quitArmedAt time.Time // first ctrl+c of a pending quit; zero when disarmed
+
+	term      *termpane.Term // the shell in the bottom pane; nil until opened or after it exits
+	termOpen  bool           // the pane is shown
+	termShell string         // overrides $SHELL, for tests
 }
 
 // quitWindow is how long a first ctrl+c keeps quitting armed.
@@ -170,6 +176,11 @@ func Run(a *app.App, first string) error {
 		return err
 	}
 	defer func() { m.proc.Close() }()
+	defer func() {
+		if m.term != nil {
+			m.term.Close()
+		}
+	}()
 
 	hist, _ := a.Store.Chat(300)
 	for _, c := range hist {
@@ -354,6 +365,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case termOutMsg, termExitMsg:
+		cmds = append(cmds, m.termEvent(msg))
+
 	case closedMsg:
 		// The process is gone; ctrl+r restarts it.
 
@@ -367,6 +381,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flash, m.flashAt = string(msg), time.Now()
 
 	case tea.MouseMsg:
+		if m.termMouse(msg) {
+			break
+		}
 		var c tea.Cmd
 		m.vp, c = m.vp.Update(msg)
 		m.follow = m.vp.AtBottom()
@@ -387,6 +404,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
+	if m.focus == focusTerm && m.term != nil {
+		return m.termKey(k), true
+	}
 	keys := m.keys
 	if !key.Matches(k, keys.Quit) {
 		m.quitArmedAt = time.Time{}
@@ -399,6 +419,8 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		m.quitArmedAt = time.Now()
 		at := m.quitArmedAt
 		return tea.Tick(quitWindow, func(time.Time) tea.Msg { return quitExpiry(at) }), true
+	case key.Matches(k, keys.Terminal):
+		return m.toggleTerm(), true
 	case key.Matches(k, keys.Focus):
 		if m.focus == focusChat && key.Matches(k, keys.Complete) {
 			if c, ok := m.completeInput(); ok {
@@ -820,8 +842,15 @@ func (m *model) layout() {
 	cw := m.chatWidth()
 	m.input.SetWidth(cw - 4)
 	m.vp.Width = cw - 4
-	m.setChatHeight(m.height - lipgloss.Height(m.viewHeader()) - lipgloss.Height(m.viewFooter()))
+	h := m.bodyHeight()
+	m.setChatHeight(h - m.termHeight(h))
+	m.resizeTerm()
 	m.renderChat()
+}
+
+// bodyHeight is the screen between the header and the footer.
+func (m *model) bodyHeight() int {
+	return m.height - lipgloss.Height(m.viewHeader()) - lipgloss.Height(m.viewFooter())
 }
 
 func (m *model) renderChat() {
@@ -887,10 +916,18 @@ func (m *model) View() string {
 	header := m.viewHeader()
 	footer := m.viewFooter()
 	bodyH := m.height - lipgloss.Height(header) - lipgloss.Height(footer)
+	termH := m.termHeight(bodyH)
+	if m.term == nil {
+		termH = 0
+	}
 	cw := m.chatWidth()
-	left := m.viewLeft(m.width-cw, bodyH)
-	right := m.viewChat(cw, bodyH)
-	return lipgloss.JoinVertical(lipgloss.Left, header, lipgloss.JoinHorizontal(lipgloss.Top, left, right), footer)
+	left := m.viewLeft(m.width-cw, bodyH-termH)
+	right := m.viewChat(cw, bodyH-termH)
+	parts := []string{header, lipgloss.JoinHorizontal(lipgloss.Top, left, right)}
+	if termH > 0 {
+		parts = append(parts, m.viewTerm(termH))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, append(parts, footer)...)
 }
 
 func (m *model) viewHeader() string {

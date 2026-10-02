@@ -11,10 +11,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/ciwatch"
 	"github.com/brandonapol/saddle/internal/hook"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/refguard"
@@ -104,6 +106,9 @@ It starts agents in a hidden tmux session, watches them, and tells you when one
 needs you. Quitting leaves the agents running; run saddle up again to come back.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, args []string) error {
+			if err := a.CheckMergeSettings(cmd.ErrOrStderr()); err != nil {
+				return err
+			}
 			if err := a.Init(); err != nil {
 				return err
 			}
@@ -139,18 +144,23 @@ needs you. Quitting leaves the agents running; run saddle up again to come back.
 }
 
 // startWatchers starts the background loops that live as long as saddle up:
-// the stack sentinel. Short-lived commands never start them. The returned func
-// stops them and waits until they have.
+// the stack sentinel and, unless ci.disabled, the CI watcher. Short-lived
+// commands never start them. The returned func stops them and waits until
+// they have.
 func startWatchers(ctx context.Context, a *app.App) (stop func()) {
 	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
+	var wg sync.WaitGroup
+	wg.Go(func() {
 		_ = sentinel.New(a).Run(ctx) // Run records failed checks as events
-	}()
+	})
+	if !a.Cfg.CI.Disabled {
+		if ci, err := a.NewCIWatcher(ciwatch.ExecRunner(a.Root)); err == nil {
+			wg.Go(func() { ci.Run(ctx) }) // gh errors are recorded as events
+		}
+	}
 	return func() {
 		cancel()
-		<-done
+		wg.Wait()
 	}
 }
 
@@ -355,6 +365,9 @@ func landCmd() *cobra.Command {
 		Use:   "land",
 		Short: "Run the merge train: land queued branches one at a time",
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
+			if err := a.CheckMergeSettings(cmd.ErrOrStderr()); err != nil {
+				return err
+			}
 			rs, err := a.Land()
 			for _, r := range rs {
 				fmt.Fprintf(cmd.OutOrStdout(), "%-6s %-12s %s\n", r.Task, r.State, r.Note)
@@ -399,6 +412,9 @@ func prsCmd() *cobra.Command {
 		Use:   "prs",
 		Short: "Push landed branches and open or update a stack of PRs",
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
+			if err := a.CheckMergeSettings(cmd.ErrOrStderr()); err != nil {
+				return err
+			}
 			urls, err := a.PRs()
 			for _, u := range urls {
 				fmt.Fprintln(cmd.OutOrStdout(), u)

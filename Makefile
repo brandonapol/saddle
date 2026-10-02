@@ -76,6 +76,10 @@ install: ## Install saddle into $GOBIN (what spawned agents run)
 	    *) echo "Note: $(GOBIN) is not on your PATH. Add it to run 'saddle' directly." ;;
 	esac
 
+.PHONY: upgrade
+upgrade: ## Fast-forward main from origin and reinstall (refuses if not on a clean main)
+	./scripts/upgrade.sh
+
 .PHONY: run
 run: ## Run saddle from source (ARGS="status --json")
 	$(GO) run $(GO_LDFLAGS) $(ENTRYPOINT) $(ARGS)
@@ -89,6 +93,10 @@ clean: ## Remove build artifacts (never touches .saddle/ state)
 .PHONY: test
 test: ## Run unit and integration tests
 	$(GO) test ./...
+
+.PHONY: test/scripts
+test/scripts: ## Test the shell scripts (scripts/upgrade.sh)
+	bash scripts/upgrade_test.sh
 
 .PHONY: test/race
 test/race: ## Run tests with the race detector
@@ -112,7 +120,7 @@ test/cover: ## Run tests and write coverage.html
 ##@ Code quality
 
 .PHONY: check
-check: check/format check/tidy check/vet test check/lint ## Run every check CI runs
+check: check/format check/tidy check/vet test test/scripts check/lint ## Run every check CI runs
 
 .PHONY: check/format
 check/format: ## Fail if any Go file needs gofmt

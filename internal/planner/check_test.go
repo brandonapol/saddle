@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/brandonapol/saddle/internal/claims"
 )
 
 func task(id string, claims ...string) Task { return Task{ID: id, Title: id, Claims: claims} }
@@ -239,7 +241,7 @@ func TestCheckInvalidInput(t *testing.T) {
 	}
 }
 
-func TestOverlap(t *testing.T) {
+func TestClaimsOverlapAsPlannerUsesIt(t *testing.T) {
 	tests := []struct {
 		a, b string
 		want bool
@@ -253,12 +255,20 @@ func TestOverlap(t *testing.T) {
 		{"**/*.go", "cmd/main.go", true},
 		{"internal/*.go", "cmd/main.go", false},
 		{"internal/{a,b}/**", "internal/c/x.go", true}, // conservative
+		{"internal/**", "internal/a/**", true},         // nested globs
+		{"internal/a/**", "internal/**", true},
+		{"internal/a/b/**", "internal/a/**/*.go", true},
+		{"internal/**", "internal/a/x.go", true}, // ** vs exact file
+		{"**", "cmd/main.go", true},
+		{"docs/**", "internal/x.go", false},
+		{"docs/**", "internal/**", false}, // disjoint dirs
+		{"cmd/a", "cmd/ab", false},
 	}
 	for _, tt := range tests {
-		if got := overlap(tt.a, tt.b); got != tt.want {
+		if got := claims.Overlap(tt.a, tt.b); got != tt.want {
 			t.Errorf("overlap(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
 		}
-		if got := overlap(tt.b, tt.a); got != tt.want {
+		if got := claims.Overlap(tt.b, tt.a); got != tt.want {
 			t.Errorf("overlap(%q, %q) = %v, want %v", tt.b, tt.a, got, tt.want)
 		}
 	}
