@@ -15,6 +15,7 @@ landed), a live peek at t1's hidden Claude Code terminal, and the Sonnet
 orchestrator explaining a stale base and asking before it acts.*
 
 - Design: [TUI canvas](https://claude.ai/artifact/TKRvnLJoDLBonpdKDU19L4)
+- Quickstart for a new repo: [docs/QUICKSTART.md](docs/QUICKSTART.md)
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Roadmap: GitHub epics, milestone **M0: dogfood**
 
@@ -24,8 +25,13 @@ orchestrator explaining a stale base and asking before it acts.*
 make setup            # dev tools; asks for a Jev key / Claude login only if missing
 make install          # puts saddle on your PATH
 cd your-repo
+saddle init           # config, git exclude, ref guard hooks
+saddle doctor         # preflight checks, each with a fix
 saddle up             # opens the TUI
 ```
+
+New to Saddle? [docs/QUICKSTART.md](docs/QUICKSTART.md) walks through
+install, `make upgrade`, init, doctor, a first epic, holds and auto-merge.
 
 Then talk to the orchestrator in the right-hand chat:
 
