@@ -81,10 +81,7 @@ func (l Launch) headlessGrok(resume string) (*exec.Cmd, error) {
 	}
 	cmd := exec.Command(l.Bin, "grok-bridge", l.RunDir)
 	cmd.Dir = l.Dir
-	cmd.Env = os.Environ()
-	for _, e := range spec.Env {
-		cmd.Env = append(cmd.Env, e)
-	}
+	cmd.Env = append(os.Environ(), spec.Env...)
 	cmd.Env = append(cmd.Env, "PATH="+filepath.Dir(l.Bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return cmd, nil
 }
