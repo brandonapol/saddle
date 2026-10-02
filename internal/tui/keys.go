@@ -16,6 +16,9 @@ type keyMap struct {
 	Quit, Focus, PageUp, PageDown, Restart key.Binding
 	NextAgent, PrevAgent                   key.Binding
 
+	// Terminal pane.
+	Terminal, TermBack, TermScrollUp, TermScrollDown key.Binding
+
 	// Chat.
 	Send, Newline, Complete, Untarget key.Binding
 
@@ -36,6 +39,12 @@ func newKeyMap() keyMap {
 		NextAgent: b("alt+n/p", "next/prev agent", "alt+n"),
 		PrevAgent: b("alt+p", "prev agent", "alt+p"),
 
+		// Terminals send ctrl+` as NUL, which bubbletea names ctrl+@.
+		Terminal:       b("ctrl+`", "terminal", "ctrl+@"),
+		TermBack:       b("esc", "chat", "esc"),
+		TermScrollUp:   b("ctrl+pgup/dn", "history", "ctrl+pgup"),
+		TermScrollDown: b("ctrl+pgdn", "history", "ctrl+pgdown"),
+
 		Send:     b("enter", "send", "enter"),
 		Newline:  b("alt+enter", "newline", "alt+enter", "ctrl+j"),
 		Complete: b("/skill tab", "complete", "tab"),
@@ -55,6 +64,9 @@ func newKeyMap() keyMap {
 // the footer drops whatever doesn't fit from the end.
 func (m *model) help() []key.Binding {
 	k := m.keys
+	if m.focus == focusTerm {
+		return []key.Binding{withHelp(k.Terminal, "ctrl+`", "hide"), k.TermBack, k.TermScrollUp}
+	}
 	if m.focus == focusChat {
 		hs := []key.Binding{k.Send, k.Newline}
 		if m.target != "" {
@@ -62,7 +74,7 @@ func (m *model) help() []key.Binding {
 		} else {
 			hs = append(hs, k.Complete)
 		}
-		return append(hs, k.NextAgent, withHelp(k.Focus, "tab", "agents"), k.PageUp, k.Restart, k.Quit)
+		return append(hs, k.NextAgent, withHelp(k.Focus, "tab", "agents"), k.Terminal, k.PageUp, k.Restart, k.Quit)
 	}
 	return []key.Binding{k.Down, k.NextAgent, k.Open, m.detachHelp(), k.Skill, k.Back, k.Kill, k.Land, k.Restart, k.Quit}
 }
