@@ -216,3 +216,43 @@ esac
 		}
 	}
 }
+
+func TestPlanPushCreatesIssues(t *testing.T) {
+	root, _ := planRepo(t)
+	bin := t.TempDir()
+	log := filepath.Join(bin, "gh.log")
+	script := `#!/bin/sh
+echo "$*" >> "` + log + `"
+case "$1 $2" in
+"issue create") n=$(grep -c '^issue create' "` + log + `"); echo "https://github.com/o/r/issues/$((40+n))" ;;
+"api "*) case "$*" in *POST*|*sub_issues*) ;; *) echo 777 ;; esac ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	path := filepath.Join(root, ".saddle", "plans", "billing-rewrite.toml")
+	if _, err := runPlan(t, "", "plan", "epics/foo.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPlan(t, "", "plan", "push", path); !errors.Is(err, planner.ErrNotApproved) {
+		t.Fatalf("push before approve: %v", err)
+	}
+	if _, err := runPlan(t, "", "plan", "approve", path); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runPlan(t, "", "plan", "push", path)
+	if err != nil {
+		t.Fatalf("push: %v\n%s", err, out)
+	}
+	for _, want := range []string{"epic #41", "store #42", "cli #43"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("push output lacks %q:\n%s", want, out)
+		}
+	}
+	d, _ := planner.LoadDoc(path)
+	if d.Issue != 41 || d.Tasks[1].Issues[0] != "#43" {
+		t.Fatalf("doc = %+v", d)
+	}
+}

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -64,3 +65,6 @@ func (a *App) TicketIn(repo string, n int) (Ticket, error) {
 	}
 	return t, nil
 }
+
+// GH runs gh in the repo root and returns its trimmed stdout.
+func (a *App) GH(_ context.Context, args ...string) (string, error) { return gh(a.Root, args...) }

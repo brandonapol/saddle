@@ -65,7 +65,7 @@ base commit with approve.`,
 	cmd.Flags().StringVar(&model, "model", "", "planner model (default "+planner.DefaultModel+" with ANTHROPIC_API_KEY, else claude.model)")
 	cmd.Flags().IntVar(&depth, "depth", 3, "repo tree depth shown to the planner")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing plan file")
-	cmd.AddCommand(planShowCmd(), planEditCmd(), planReplanCmd(), planApproveCmd(), planReopenCmd())
+	cmd.AddCommand(planShowCmd(), planEditCmd(), planReplanCmd(), planApproveCmd(), planReopenCmd(), planPushCmd())
 	return cmd
 }
 
@@ -186,6 +186,30 @@ func planReopenCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "reopened %s\n", args[0])
+			return nil
+		}),
+	}
+}
+
+func planPushCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "push <plan.toml>",
+		Short: "Create an epic issue and a sub-issue per task for an approved plan",
+		Long: `Create the epic issue (or reuse the issue the epic came from) and one
+sub-issue per task, and record each task's issue in the plan so its PR
+closes it. Safe to re-run after a failure: it skips tasks that already have
+an issue and links any the epic is missing.`,
+		Args: cobra.ExactArgs(1),
+		RunE: withApp(func(cmd *cobra.Command, a *app.App, args []string) error {
+			d, err := planner.Push(cmd.Context(), a.GH, args[0], a.Cfg.Serial, a.Cfg.Concurrency)
+			if err != nil {
+				return err
+			}
+			w := cmd.OutOrStdout()
+			fmt.Fprintf(w, "epic #%d\n", d.Issue)
+			for _, t := range d.Tasks {
+				fmt.Fprintf(w, "  %s %s\n", t.ID, strings.Join(t.Issues, ", "))
+			}
 			return nil
 		}),
 	}
