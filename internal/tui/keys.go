@@ -141,3 +141,17 @@ func (m *model) cycleAgent(dir int) bool {
 	}
 	return false
 }
+
+// livePos reports the selected task's 1-based place among tasks with live
+// windows, and how many there are. pos is 0 if the selection isn't live.
+func (m *model) livePos() (pos, n int) {
+	for i, t := range m.tasks {
+		if live(t.Status, t.Window) {
+			n++
+			if i == m.sel {
+				pos = n
+			}
+		}
+	}
+	return pos, n
+}

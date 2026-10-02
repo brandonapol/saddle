@@ -621,6 +621,12 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 	case orch.Text:
 		m.streaming.Reset()
 		m.addChat(store.ChatAssistant, strings.TrimSpace(e.Text))
+		if _, ok := urgentMark(e.Text); ok {
+			// The orchestrator flagged it itself; no need to ask Jev.
+			m.chat[len(m.chat)-1].attn = attnUrgent
+			bell()
+			return nil
+		}
 		if m.eventTurn && m.jev != nil {
 			// Was this reply to a saddle event worth interrupting the user for?
 			idx, text, c := len(m.chat)-1, e.Text, m.jev
@@ -911,22 +917,26 @@ func renderLine(c chatLine, w int, wrap lipgloss.Style) string {
 	case store.ChatUser:
 		return lipgloss.NewStyle().Foreground(cAccent).Bold(true).Render("you") + "\n" + sBright.UnsetBold().Render(wrap.Render(c.text)) + "\n"
 	case store.ChatAssistant:
-		switch c.attn {
+		attn := c.attn
+		if text, ok := urgentMark(c.text); ok {
+			c.text, attn = text, attnUrgent
+		}
+		switch attn {
 		case attnQuiet:
 			return sFaint.Render("saddle ·") + "\n" + renderMarkdown(c.text, w-2, sDim) + "\n"
 		case attnUrgent:
-			return lipgloss.NewStyle().Foreground(cAlert).Bold(true).Render("saddle ▲ needs you") + "\n" + renderMarkdown(c.text, w-2, sBright.UnsetBold()) + "\n"
+			return sUrgent.Render("saddle ▲ needs you") + "\n" + renderUrgent(c.text, w-2) + "\n"
 		}
 		return lipgloss.NewStyle().Foreground(cRun).Bold(true).Render("saddle") + "\n" + renderMarkdown(c.text, w-2, sText) + "\n"
 	case store.ChatTool:
 		return sFaint.Render("  ⚙ " + truncate(c.text, w-6))
 	case store.ChatNarrator:
 		if narratorNeedsYou(c) {
-			return lipgloss.NewStyle().Foreground(cAlert).Bold(true).Render(wrap.Render(c.text))
+			return renderUrgent(c.text, w-2)
 		}
-		return sDim.Render(wrap.Render("· " + c.text))
+		return renderMarkdown("· "+c.text, w-2, sDim)
 	default:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#C9A26B")).Render(wrap.Render("◇ " + c.text))
+		return renderMarkdown("◇ "+c.text, w-2, lipgloss.NewStyle().Foreground(lipgloss.Color("#C9A26B")))
 	}
 }
 
@@ -1026,7 +1036,7 @@ func box(title string, w, h int, focused bool, body string) string {
 	// Put the title into the top border.
 	lines := strings.SplitN(b, "\n", 2)
 	if len(lines) == 2 && title != "" {
-		t := " " + title + " "
+		t := " " + truncate(title, w-6) + " "
 		top := lipgloss.NewStyle().Foreground(bc).Render("╭─") + sSection.Render(t)
 		rest := w - lipgloss.Width(top) - 1
 		if rest < 0 {
@@ -1110,7 +1120,15 @@ func (m *model) viewLeft(w, h int) string {
 	title := "PEEK"
 	body := sDim.Render(" Select an agent to see its terminal.")
 	if t, ok := m.selected(); ok {
-		title = "PEEK · " + t.ID + " " + truncate(t.Title, w-20)
+		title = "PEEK · " + t.ID + " " + t.Title
+		if i, n := m.livePos(); n > 1 {
+			// Make switching discoverable where the user is looking.
+			pos := fmt.Sprintf("%d/%d", i, n)
+			if i == 0 {
+				pos = fmt.Sprintf("%d live", n)
+			}
+			title = fmt.Sprintf("PEEK %s %s · %s %s", pos, m.keys.NextAgent.Help().Key, t.ID, t.Title)
+		}
 		if m.peek != "" {
 			lines := strings.Split(m.peek, "\n")
 			if n := peekH - 2; len(lines) > n && n > 0 {
