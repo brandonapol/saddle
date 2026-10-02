@@ -24,6 +24,7 @@ type Task struct {
 	Plan   string
 	Claims []string // path globs the task may write
 	After  []string // IDs of tasks the planner says must finish first
+	Issues []string // optional issue or epic refs, "#54" or "owner/repo#54"
 }
 
 // Edge says task To can't start until task From has finished.
@@ -73,31 +74,11 @@ var barrierWords = regexp.MustCompile(`(?i)\b(mov(e|es|ed|ing)|renam(e|es|ed|ing
 // At most limit tasks share a wave; limit <= 0 means no limit. If the edges
 // form a cycle, Check returns the plan without waves and a *CycleError.
 func Check(tasks []Task, serial []string, limit int) (Plan, error) {
-	idx := make(map[string]int, len(tasks))
-	for i, t := range tasks {
-		if t.ID == "" {
-			return Plan{}, fmt.Errorf("planner: task %d has no id", i)
-		}
-		if _, dup := idx[t.ID]; dup {
-			return Plan{}, fmt.Errorf("planner: duplicate task id %q", t.ID)
-		}
-		idx[t.ID] = i
+	g, err := afterGraph(tasks)
+	if err != nil {
+		return Plan{}, err
 	}
-	for _, t := range tasks {
-		for _, a := range t.After {
-			if _, ok := idx[a]; !ok {
-				return Plan{}, fmt.Errorf("planner: task %q is after unknown task %q", t.ID, a)
-			}
-		}
-	}
-
-	g := newGraph(tasks)
 	n := len(tasks)
-	for i, t := range tasks {
-		for _, a := range t.After {
-			g.add(idx[a], i, fmt.Sprintf("planner: %s runs after %s", t.ID, a))
-		}
-	}
 	rank := g.intent()
 	// before reports whether planner intent puts task i ahead of task j.
 	before := func(i, j int) bool { return rank[i] < rank[j] }
@@ -158,6 +139,35 @@ func Check(tasks []Task, serial []string, limit int) (Plan, error) {
 	}
 	p.Waves = waves
 	return p, nil
+}
+
+// afterGraph validates task IDs and After references and returns the graph of
+// explicit After edges.
+func afterGraph(tasks []Task) (*graph, error) {
+	idx := make(map[string]int, len(tasks))
+	for i, t := range tasks {
+		if t.ID == "" {
+			return nil, fmt.Errorf("planner: task %d has no id", i)
+		}
+		if _, dup := idx[t.ID]; dup {
+			return nil, fmt.Errorf("planner: duplicate task id %q", t.ID)
+		}
+		idx[t.ID] = i
+	}
+	for _, t := range tasks {
+		for _, a := range t.After {
+			if _, ok := idx[a]; !ok {
+				return nil, fmt.Errorf("planner: task %q is after unknown task %q", t.ID, a)
+			}
+		}
+	}
+	g := newGraph(tasks)
+	for i, t := range tasks {
+		for _, a := range t.After {
+			g.add(idx[a], i, fmt.Sprintf("planner: %s runs after %s", t.ID, a))
+		}
+	}
+	return g, nil
 }
 
 // matching returns the serial globs that any of mine overlaps.
