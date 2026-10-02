@@ -365,7 +365,7 @@ func TestBriefsCarryStackRules(t *testing.T) {
 	for _, want := range []string{
 		"Stack or base problems (base moved, CI failing on a stacked PR, drift)",
 		"find the owning task and `message` it, or call `restack` if the base moved",
-		"Never run git yourself and never spawn a worker to edit other tasks' branches.",
+		"Restack first; if that fails, see Getting unstuck.",
 	} {
 		if !strings.Contains(orch, want) {
 			t.Errorf("orchestrator brief lacks %q", want)

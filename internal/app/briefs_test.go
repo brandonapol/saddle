@@ -17,6 +17,23 @@ func TestWorkerBriefRequiresRegressionTests(t *testing.T) {
 	}
 }
 
+func TestOrchestratorBriefUrgentAndGettingUnstuck(t *testing.T) {
+	a, _ := setup(t)
+	brief := a.orchestratorBrief()
+	for _, want := range []string{
+		"‼ ", "ONE sentence",
+		"hand-fix", "back it up first", "failing-first", "GitHub issue",
+		"`unstack`", "`sentinel_ack`", "`requeue`",
+	} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("orchestrator brief missing %q", want)
+		}
+	}
+	if strings.Contains(brief, "never spawn a worker") {
+		t.Error("brief still forbids repair workers")
+	}
+}
+
 func TestOrchestratorBriefAsksForTests(t *testing.T) {
 	a, _ := setup(t)
 	if !strings.Contains(a.orchestratorBrief(), "which tests must exist") {
