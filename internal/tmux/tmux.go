@@ -23,7 +23,7 @@ type Driver interface {
 
 type Tmux struct{ Session string }
 
-func run(args ...string) (string, error) {
+var run = func(args ...string) (string, error) {
 	cmd := exec.Command("tmux", args...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -40,7 +40,48 @@ func (t Tmux) HasSession() bool {
 
 // NewSession creates the session detached, with its first window running cmd.
 func (t Tmux) NewSession(window, dir, cmd string) (string, error) {
-	return run("new-session", "-d", "-s", t.Session, "-n", window, "-c", dir, "-P", "-F", "#{window_id}", cmd)
+	id, err := run("new-session", "-d", "-s", t.Session, "-n", window, "-c", dir, "-P", "-F", "#{window_id}", cmd)
+	if err != nil {
+		return id, err
+	}
+	// Copy-on-select is a nicety; a failure here must not lose the session.
+	_ = t.configureSession(clipboardCommand())
+	return id, nil
+}
+
+// clipboardCommand returns the system clipboard tool, or "" to fall back to
+// tmux's own set-clipboard (OSC52).
+func clipboardCommand() string {
+	if p, err := exec.LookPath("wl-copy"); err == nil {
+		return p
+	}
+	return ""
+}
+
+// configureSession makes dragging with the mouse select text and copy it to
+// the system clipboard on release. Options are scoped to this session. Key
+// tables are server-wide in tmux, so the drag-end binding is guarded on the
+// session name and falls back to tmux's stock behaviour for every other session.
+func (t Tmux) configureSession(clip string) error {
+	target := "=" + t.Session
+	if _, err := run("set-option", "-t", target, "mouse", "on"); err != nil {
+		return err
+	}
+	copyCmd := "send-keys -X copy-pipe-and-cancel"
+	if clip != "" {
+		copyCmd += " " + clip
+	} else if _, err := run("set-option", "-s", "set-clipboard", "on"); err != nil {
+		// No wl-copy: tmux sets the clipboard itself via OSC52.
+		return err
+	}
+	guard := "#{==:#{session_name}," + t.Session + "}"
+	for _, table := range []string{"copy-mode", "copy-mode-vi"} {
+		if _, err := run("bind-key", "-T", table, "MouseDragEnd1Pane",
+			"if-shell", "-F", guard, copyCmd, "send-keys -X copy-pipe-and-cancel"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // NewWindow opens a background window at the end of the session and returns its id (@N).
