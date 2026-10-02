@@ -13,7 +13,9 @@ import (
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/narrator"
+	"github.com/brandonapol/saddle/internal/orch"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/triage"
 	"github.com/brandonapol/saddle/internal/usage"
 )
 
@@ -132,5 +134,30 @@ func TestFooterNarrowKeepsSwitchKeys(t *testing.T) {
 				t.Errorf("width %d: footer line %q too wide", w, l)
 			}
 		}
+	}
+}
+
+// An orchestrator reply that leads with the urgent marker is urgent at once,
+// without waiting on Jev, and keeps its marker in the store so it renders the
+// same after a restart.
+func TestOrchestratorUrgentMarker(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	m := &model{app: &app.App{Store: st, Cfg: config.Default()}, jev: &triage.Client{}, eventTurn: true}
+	if cmd := m.handleEvent(orch.Event{Kind: orch.Text, Text: "‼ t3 is blocked on a conflict. Details."}); cmd != nil {
+		t.Error("a marked reply should not wait on Jev triage")
+	}
+	if c := m.chat[len(m.chat)-1]; c.attn != attnUrgent {
+		t.Errorf("marked reply attn = %d, want urgent", c.attn)
+	}
+	if cmd := m.handleEvent(orch.Event{Kind: orch.Text, Text: "All good."}); cmd == nil {
+		t.Error("an unmarked event reply should still go to Jev")
+	}
+	hist, _ := st.Chat(10)
+	if len(hist) < 1 || !strings.HasPrefix(hist[0].Text, "‼ ") {
+		t.Errorf("stored history = %+v", hist)
 	}
 }

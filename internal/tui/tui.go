@@ -621,6 +621,12 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 	case orch.Text:
 		m.streaming.Reset()
 		m.addChat(store.ChatAssistant, strings.TrimSpace(e.Text))
+		if _, ok := urgentMark(e.Text); ok {
+			// The orchestrator flagged it itself; no need to ask Jev.
+			m.chat[len(m.chat)-1].attn = attnUrgent
+			bell()
+			return nil
+		}
 		if m.eventTurn && m.jev != nil {
 			// Was this reply to a saddle event worth interrupting the user for?
 			idx, text, c := len(m.chat)-1, e.Text, m.jev
@@ -911,18 +917,22 @@ func renderLine(c chatLine, w int, wrap lipgloss.Style) string {
 	case store.ChatUser:
 		return lipgloss.NewStyle().Foreground(cAccent).Bold(true).Render("you") + "\n" + sBright.UnsetBold().Render(wrap.Render(c.text)) + "\n"
 	case store.ChatAssistant:
-		switch c.attn {
+		attn := c.attn
+		if text, ok := urgentMark(c.text); ok {
+			c.text, attn = text, attnUrgent
+		}
+		switch attn {
 		case attnQuiet:
 			return sFaint.Render("saddle ·") + "\n" + renderMarkdown(c.text, w-2, sDim) + "\n"
 		case attnUrgent:
-			return lipgloss.NewStyle().Foreground(cAlert).Bold(true).Render("saddle ▲ needs you") + "\n" + renderMarkdown(c.text, w-2, sBright.UnsetBold()) + "\n"
+			return sUrgent.Render("saddle ▲ needs you") + "\n" + renderUrgent(c.text, w-2) + "\n"
 		}
 		return lipgloss.NewStyle().Foreground(cRun).Bold(true).Render("saddle") + "\n" + renderMarkdown(c.text, w-2, sText) + "\n"
 	case store.ChatTool:
 		return sFaint.Render("  ⚙ " + truncate(c.text, w-6))
 	case store.ChatNarrator:
 		if narratorNeedsYou(c) {
-			return renderMarkdown(c.text, w-2, lipgloss.NewStyle().Foreground(cAlert).Bold(true))
+			return renderUrgent(c.text, w-2)
 		}
 		return renderMarkdown("· "+c.text, w-2, sDim)
 	default:
