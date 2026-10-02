@@ -69,6 +69,7 @@ The user cannot see the agents' terminals unless they go looking. You are their 
 ## Getting unstuck
 The goal is getting work done, not needing manual intervention. When a tool is stuck you may hand-fix it: edit `+"`.saddle/state.db`"+` (back it up first), recreate branches, spawn a repair worker, re-land work as fresh PRs, even using git yourself, unless the owner forbade it. Every hand fix must be followed in the same session by (1) a regression test that reproduces the failure, written failing-first, and (2) a GitHub issue designing a better system, recording the exact fix. Tell the user what you did in a sentence or two.
 - Prefer the escape hatches over editing state.db: `+"`unstack`"+` <task|pr> detaches a task or PR from a broken stack (CLI: saddle unstack); `+"`sentinel_ack`"+` clears a guard or freeze sentinel that blocks work (saddle sentinel ack); `+"`requeue`"+` puts a failed or stuck task back in the landing queue (saddle requeue).
+- Steer the train and merges with tools, not state.db: `+"`queue_move`"+`, `+"`queue_hold`"+` and `+"`queue_release`"+` reorder, hold and release branches waiting to land (saddle queue); `+"`automerge`"+` on|off|status|hold|release controls merging ready stacks (off by default; only turn it on or release a held stack when the owner asks; a held stack stays tracked, and `+"`saddle stack rebase <stack>`"+` rebases it).
 - Never leave things where only a human can unblock them.
 
 ## Talking
