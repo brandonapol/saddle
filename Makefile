@@ -40,6 +40,16 @@ GO_LDFLAGS := -ldflags "-X github.com/brandonapol/saddle/internal/cli.Version=$(
 
 GOLANGCI_LINT_VERSION ?= v2.14.0
 
+# gotreesitter embeds every grammar (~30MB of blobs) unless built with
+# grammar_subset plus one grammar_subset_<lang> tag per language we use. Measured
+# on a binary importing internal/gitx/symbols: 21.9MB untagged, 4.8MB tagged.
+# Build tags beat lazy-loading: no code, and the tag list sits next to the
+# languages in symbols.Default. Adding a language there needs its tag here;
+# TestSupportedLanguagesLoad fails under `make test` if one is missing.
+# Used by every target that compiles, so vet/lint/test see the same build.
+GO_TAGS    := grammar_subset grammar_subset_go grammar_subset_python
+GO_TAGFLAG := -tags '$(GO_TAGS)'
+
 ##@ Setup
 
 .PHONY: setup
@@ -63,12 +73,12 @@ setup/golangci-lint: ## Install golangci-lint (pinned via GOLANGCI_LINT_VERSION)
 .PHONY: build
 build: ## Build ./build/saddle
 	mkdir -p $(BUILD_DIR)
-	$(GO) build $(GO_LDFLAGS) -o $(EXE) $(ENTRYPOINT)
+	$(GO) build $(GO_TAGFLAG) $(GO_LDFLAGS) -o $(EXE) $(ENTRYPOINT)
 	echo "Built $(EXE) ($(VERSION))"
 
 .PHONY: install
 install: ## Install saddle into $GOBIN (what spawned agents run)
-	$(GO) install $(GO_LDFLAGS) $(ENTRYPOINT)
+	$(GO) install $(GO_TAGFLAG) $(GO_LDFLAGS) $(ENTRYPOINT)
 	echo "Installed $(GOBIN)/$(BIN) ($(VERSION))"
 	# Agents run the binary by absolute path, but you will want it on PATH too.
 	case ":$$PATH:" in
@@ -82,7 +92,7 @@ upgrade: ## Fast-forward main from origin and reinstall (refuses if not on a cle
 
 .PHONY: run
 run: ## Run saddle from source (ARGS="status --json")
-	$(GO) run $(GO_LDFLAGS) $(ENTRYPOINT) $(ARGS)
+	$(GO) run $(GO_TAGFLAG) $(GO_LDFLAGS) $(ENTRYPOINT) $(ARGS)
 
 .PHONY: clean
 clean: ## Remove build artifacts (never touches .saddle/ state)
@@ -92,7 +102,7 @@ clean: ## Remove build artifacts (never touches .saddle/ state)
 
 .PHONY: test
 test: ## Run unit and integration tests
-	$(GO) test ./...
+	$(GO) test $(GO_TAGFLAG) ./...
 
 .PHONY: test/scripts
 test/scripts: ## Test the shell scripts (scripts/upgrade.sh)
@@ -102,17 +112,17 @@ test/scripts: ## Test the shell scripts (scripts/upgrade.sh)
 test/race: ## Run tests with the race detector
 	# The hook, MCP server and CLI share one SQLite file from separate processes,
 	# so races here are real bugs.
-	$(GO) test -race ./...
+	$(GO) test $(GO_TAGFLAG) -race ./...
 
 .PHONY: bench
 bench: ## Run benchmarks (BENCH=Status to pick some)
 	# Status and the TUI's task read run every second; their benchmarks seed 10
 	# and 100 landed tasks so cost that grows with history shows up.
-	$(GO) test -run '^$$' -bench '$(or $(BENCH),.)' -benchmem ./...
+	$(GO) test $(GO_TAGFLAG) -run '^$$' -bench '$(or $(BENCH),.)' -benchmem ./...
 
 .PHONY: test/cover
 test/cover: ## Run tests and write coverage.html
-	$(GO) test -coverprofile=coverage.out -covermode=atomic ./...
+	$(GO) test $(GO_TAGFLAG) -coverprofile=coverage.out -covermode=atomic ./...
 	$(GO) tool cover -html=coverage.out -o coverage.html
 	$(GO) tool cover -func=coverage.out | tail -1
 	echo "Wrote coverage.html"
@@ -141,7 +151,7 @@ check/tidy: ## Fail if go.mod or go.sum is not tidy
 
 .PHONY: check/vet
 check/vet: ## Run go vet
-	$(GO) vet ./...
+	$(GO) vet $(GO_TAGFLAG) ./...
 
 .PHONY: check/lint
 check/lint: ## Run golangci-lint
@@ -149,7 +159,7 @@ check/lint: ## Run golangci-lint
 	    echo "golangci-lint is not installed. Run 'make setup/golangci-lint' first."
 	    exit 1
 	fi
-	golangci-lint run ./...
+	golangci-lint run --build-tags "$(GO_TAGS)" ./...
 
 .PHONY: format
 format: ## Format Go code
@@ -161,7 +171,7 @@ tidy: ## Tidy go.mod and go.sum
 
 .PHONY: fix
 fix: tidy format ## Tidy modules and format code
-	golangci-lint run --fix ./... || true
+	golangci-lint run --build-tags "$(GO_TAGS)" --fix ./... || true
 
 ##@ Helpers
 
