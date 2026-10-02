@@ -12,8 +12,7 @@ import (
 	"github.com/brandonapol/saddle/internal/usage"
 )
 
-// UsageMeter tails the Claude Code transcript of every live task session
-// (session ids come from the SessionStart hook) and persists the usage to the
+// UsageMeter tails the transcript of every live task session and persists the usage to the
 // store as per-minute buckets. Only one process should run a meter. It is not
 // safe for concurrent use; App.Usage is, so a UI can read while Run writes.
 type UsageMeter struct {
@@ -21,6 +20,8 @@ type UsageMeter struct {
 	// ClaudeDir is Claude Code's config dir. Empty means $CLAUDE_CONFIG_DIR,
 	// then ~/.claude.
 	ClaudeDir string
+	// CodexHome is Codex's state dir. Empty means $CODEX_HOME, then ~/.codex.
+	CodexHome string
 	sessions  map[string]*meterSession
 }
 
@@ -31,6 +32,7 @@ type meterSession struct {
 	// whatever an earlier process stored for it.
 	synced  bool
 	pending []usage.Bucket // collected but not yet written
+	path    string         // a hookless agent's transcript, once found
 }
 
 // NewUsageMeter returns a meter with no sessions; Sync discovers them.
@@ -72,19 +74,37 @@ func (m *UsageMeter) Sync() error {
 	}
 	live := map[string]bool{}
 	for _, t := range ts {
-		if t.SessionID == "" || !t.Active() {
+		if !t.Active() {
 			continue
 		}
-		live[t.SessionID] = true
-		s := m.sessions[t.SessionID]
+		ad := m.adapter(t)
+		// Session ids come from the SessionStart hook. A hookless agent has
+		// none, so its session is the task.
+		key := t.SessionID
+		if !ad.Hooks() {
+			key = ad.Name() + ":" + t.ID
+		}
+		if key == "" {
+			continue
+		}
+		live[key] = true
+		s := m.sessions[key]
 		if s == nil {
 			s = &meterSession{col: usage.NewCollector()}
-			m.sessions[t.SessionID] = s
+			m.sessions[key] = s
 		}
 		s.task = t.ID
+		src := ad.Usage()
+		path := s.path
+		if path == "" {
+			path = src.Transcript(t.Worktree, m.app.stateDir("run", t.ID), t.SessionID)
+		}
+		if !ad.Hooks() {
+			s.path = path // finding a hookless transcript can mean a scan
+		}
 		// Re-tracking keeps the cursor, and lets a transcript that appeared
 		// somewhere other than the expected path be found later.
-		s.col.Track(usage.Session{ID: t.SessionID, Task: t.ID, Agent: usage.Claude, Path: m.transcript(t.Worktree, t.SessionID)})
+		s.col.Track(usage.Session{ID: key, Task: t.ID, Agent: src.Agent, Path: path})
 	}
 	var errs []error
 	for id, s := range m.sessions {
@@ -109,8 +129,16 @@ func (m *UsageMeter) Sync() error {
 	return errors.Join(errs...)
 }
 
-func (m *UsageMeter) transcript(cwd, session string) string {
-	return agent.Claude{ConfigDir: m.ClaudeDir}.Usage().Transcript(cwd, session)
+// adapter is the task's adapter, reading transcripts from the meter's dirs.
+func (m *UsageMeter) adapter(t store.Task) agent.Adapter {
+	switch ad := m.app.taskAdapter(t).(type) {
+	case agent.Claude:
+		return agent.Claude{ConfigDir: m.ClaudeDir}
+	case agent.Codex:
+		return agent.Codex{Home: m.CodexHome}
+	default:
+		return ad
+	}
 }
 
 // UsageSummary is what the TUI shows: totals per model and per task over all

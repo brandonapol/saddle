@@ -39,7 +39,7 @@ func TestClaudeTranscriptPath(t *testing.T) {
 	dir := t.TempDir()
 	c := Claude{ConfigDir: dir}
 	want := filepath.Join(dir, "projects", "-repo-wt", "s1.jsonl")
-	if got := c.Usage().Transcript("/repo/wt", "s1"); got != want {
+	if got := c.Usage().Transcript("/repo/wt", "", "s1"); got != want {
 		t.Errorf("missing transcript: got %q want %q", got, want)
 	}
 	// A transcript under another project dir is still found by session id.
@@ -50,15 +50,15 @@ func TestClaudeTranscriptPath(t *testing.T) {
 	if err := os.WriteFile(other, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Usage().Transcript("/repo/wt", "s1"); got != other {
+	if got := c.Usage().Transcript("/repo/wt", "", "s1"); got != other {
 		t.Errorf("got %q want %q", got, other)
 	}
 }
 
 func TestByName(t *testing.T) {
-	for _, name := range []string{"", "claude"} {
+	for name, want := range map[string]string{"": "claude", "claude": "claude", "codex": "codex", "grok": "grok"} {
 		a, err := ByName(name)
-		if err != nil || a.Name() != "claude" {
+		if err != nil || a.Name() != want {
 			t.Errorf("ByName(%q) = %v, %v", name, a, err)
 		}
 	}

@@ -18,9 +18,11 @@ type SpawnIn struct {
 	Title  string   `json:"title" jsonschema:"short task title, e.g. 'meter ingestion worker'"`
 	Prompt string   `json:"prompt" jsonschema:"self-contained instructions: goal, files, constraints, how to verify, done-when"`
 	Claims []string `json:"claims,omitempty" jsonschema:"repo-relative path globs this task owns, e.g. internal/meter/**; must not overlap other live tasks"`
-	Model  string   `json:"model,omitempty" jsonschema:"claude model alias: opus, sonnet or haiku; defaults to config"`
-	ID     string   `json:"id,omitempty" jsonschema:"optional task id; defaults to the next tN"`
-	Issue  int      `json:"issue,omitempty" jsonschema:"GitHub issue number this task implements; its PR will close it"`
+	Model  string   `json:"model,omitempty" jsonschema:"model for the adapter, e.g. claude's opus, sonnet or haiku; defaults to config for claude and to the CLI's default otherwise"`
+	// Adapter picks the agent CLI; see agent.ByName.
+	Adapter string `json:"adapter,omitempty" jsonschema:"agent to run: claude (default), codex (general-purpose) or grok (image generation, e.g. hero art). Codex and Grok have no saddle hooks, so their claims are advisory"`
+	ID      string `json:"id,omitempty" jsonschema:"optional task id; defaults to the next tN"`
+	Issue   int    `json:"issue,omitempty" jsonschema:"GitHub issue number this task implements; its PR will close it"`
 	// Confirm overrides app.ErrNeedsConfirm.
 	Confirm bool `json:"confirm,omitempty" jsonschema:"spawn even though every claim covers work landed or queued tasks already did; only after the user agreed"`
 }
@@ -214,7 +216,7 @@ func New(a *app.App, task string) *mcp.Server {
 			if err := self(); err != nil {
 				return nil, SpawnOut{}, err
 			}
-			t, err := a.Spawn(app.SpawnReq{ID: in.ID, Title: in.Title, Prompt: in.Prompt, Claims: in.Claims, Model: in.Model, Parent: task, Issue: in.Issue, Confirm: in.Confirm})
+			t, err := a.Spawn(app.SpawnReq{ID: in.ID, Title: in.Title, Prompt: in.Prompt, Claims: in.Claims, Model: in.Model, Adapter: in.Adapter, Parent: task, Issue: in.Issue, Confirm: in.Confirm})
 			if err != nil {
 				return nil, SpawnOut{}, err
 			}

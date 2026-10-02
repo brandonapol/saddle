@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -31,9 +32,10 @@ type Adapter interface {
 type UsageSource struct {
 	Agent string // a usage agent kind: usage.Claude, usage.Codex or usage.Grok
 	// Transcript returns the transcript of session for an agent working in
-	// dir. session is empty for agents whose hooks don't report one. It
-	// returns a best guess, or "" when there is nothing to read yet.
-	Transcript func(dir, session string) string
+	// dir and launched from runDir. session is empty for agents whose hooks
+	// don't report one. It returns a best guess, or "" when there is nothing
+	// to read yet.
+	Transcript func(dir, runDir, session string) string
 }
 
 // WakeLine is typed into an idle agent whose hook will deliver its notices.
@@ -61,7 +63,7 @@ func Names() []string {
 }
 
 func adapters() map[string]Adapter {
-	return map[string]Adapter{usage.Claude: Claude{}}
+	return map[string]Adapter{usage.Claude: Claude{}, usage.Codex: Codex{}, usage.Grok: Grok{}}
 }
 
 // Claude is the Claude Code adapter: hooks and the saddle MCP server are wired
@@ -73,15 +75,21 @@ type Claude struct {
 	ConfigDir string
 }
 
-func (Claude) Name() string                    { return usage.Claude }
-func (Claude) Launch(l Launch) (string, error) { return l.Write() }
-func (Claude) Inject(string) string            { return WakeLine }
-func (Claude) Hooks() bool                     { return true }
+func (Claude) Name() string         { return usage.Claude }
+func (Claude) Inject(string) string { return WakeLine }
+func (Claude) Hooks() bool          { return true }
+func (Claude) Launch(l Launch) (string, error) {
+	if err := l.record(usage.Claude); err != nil {
+		return "", err
+	}
+	return l.Write()
+}
+
 func (c Claude) Usage() UsageSource {
 	return UsageSource{Agent: usage.Claude, Transcript: c.transcript}
 }
 
-func (c Claude) transcript(dir, session string) string {
+func (c Claude) transcript(dir, _, session string) string {
 	cfg := c.ConfigDir
 	if cfg == "" {
 		cfg = os.Getenv("CLAUDE_CONFIG_DIR")
@@ -94,4 +102,24 @@ func (c Claude) transcript(dir, session string) string {
 		return f
 	}
 	return p
+}
+
+// adapterFile records which adapter a task's run dir was launched with.
+const adapterFile = "adapter"
+
+func (l Launch) record(name string) error {
+	if err := os.MkdirAll(l.RunDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(l.RunDir, adapterFile), []byte(name+"\n"), 0o644)
+}
+
+// Recorded returns the adapter name a run dir was launched with; Claude Code
+// for run dirs written before adapters were recorded.
+func Recorded(runDir string) string {
+	b, err := os.ReadFile(filepath.Join(runDir, adapterFile))
+	if err != nil || strings.TrimSpace(string(b)) == "" {
+		return usage.Claude
+	}
+	return strings.TrimSpace(string(b))
 }

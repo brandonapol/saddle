@@ -2,6 +2,7 @@ package usage
 
 import (
 	"encoding/json"
+	"strconv"
 	"time"
 )
 
@@ -60,13 +61,9 @@ func ParseClaude(line []byte) (Record, bool, error) {
 	if l.Message.Model == "<synthetic>" {
 		return Record{}, false, nil
 	}
-	var ts time.Time
-	if l.Timestamp != "" {
-		t, err := time.Parse(time.RFC3339Nano, l.Timestamp)
-		if err != nil {
-			return Record{}, false, err
-		}
-		ts = t
+	ts, err := parseTime(l.Timestamp)
+	if err != nil {
+		return Record{}, false, err
 	}
 	u := l.Message.Usage
 	return Record{
@@ -80,8 +77,106 @@ func ParseClaude(line []byte) (Record, bool, error) {
 	}, true, nil
 }
 
-// ParseCodex is a stub: Codex usage is not collected yet.
-func ParseCodex([]byte) (Record, bool, error) { return Record{}, false, nil }
+type codexLine struct {
+	Timestamp string `json:"timestamp"`
+	Type      string `json:"type"`
+	Payload   *struct {
+		Type string `json:"type"`
+		Info *struct {
+			Total *codexUsage `json:"total_token_usage"`
+			Last  *codexUsage `json:"last_token_usage"`
+		} `json:"info"`
+	} `json:"payload"`
+}
 
-// ParseGrok is a stub: Grok usage is not collected yet.
-func ParseGrok([]byte) (Record, bool, error) { return Record{}, false, nil }
+type codexUsage struct {
+	Input       int64 `json:"input_tokens"`
+	CachedInput int64 `json:"cached_input_tokens"`
+	Output      int64 `json:"output_tokens"`
+	Total       int64 `json:"total_tokens"`
+}
+
+// CodexModel labels Codex usage: token counts don't name the model, and a
+// Parser sees one line at a time.
+const CodexModel = "codex"
+
+// ParseCodex parses a line of a Codex CLI rollout
+// ($CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl). Each turn ends with a
+// token_count event whose last_token_usage is that turn's usage; input_tokens
+// includes the cached ones. Codex can repeat the event, so Record.ID is the
+// running total, which only a repeat shares.
+func ParseCodex(line []byte) (Record, bool, error) {
+	var l codexLine
+	if err := json.Unmarshal(line, &l); err != nil {
+		return Record{}, false, err
+	}
+	if l.Type != "event_msg" || l.Payload == nil || l.Payload.Type != "token_count" ||
+		l.Payload.Info == nil || l.Payload.Info.Last == nil {
+		return Record{}, false, nil
+	}
+	ts, err := parseTime(l.Timestamp)
+	if err != nil {
+		return Record{}, false, err
+	}
+	u := l.Payload.Info.Last
+	id := ""
+	if t := l.Payload.Info.Total; t != nil {
+		id = strconv.FormatInt(t.Total, 10)
+	}
+	return Record{
+		ID: id, Time: ts, Model: CodexModel,
+		Tokens: Tokens{Input: u.Input - u.CachedInput, CacheRead: u.CachedInput, Output: u.Output},
+	}, true, nil
+}
+
+type grokLine struct {
+	ID      string `json:"id"`
+	Created int64  `json:"created"`
+	Model   string `json:"model"`
+	Usage   *struct {
+		Prompt     int64 `json:"prompt_tokens"`
+		Completion int64 `json:"completion_tokens"`
+		Details    *struct {
+			Cached int64 `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+	} `json:"usage"`
+}
+
+// ParseGrok parses a line of Grok CLI output, which saddle tees to a file.
+// Best effort: lines that are OpenAI-style completions with usage count, and
+// everything else, including plain console text, is skipped.
+func ParseGrok(line []byte) (Record, bool, error) {
+	if len(line) == 0 || line[0] != '{' {
+		return Record{}, false, nil
+	}
+	var l grokLine
+	if err := json.Unmarshal(line, &l); err != nil {
+		return Record{}, false, err
+	}
+	if l.Usage == nil {
+		return Record{}, false, nil
+	}
+	var ts time.Time
+	if l.Created > 0 {
+		ts = time.Unix(l.Created, 0)
+	}
+	var cached int64
+	if l.Usage.Details != nil {
+		cached = l.Usage.Details.Cached
+	}
+	model := l.Model
+	if model == "" {
+		model = Grok
+	}
+	return Record{
+		ID: l.ID, Time: ts, Model: model,
+		Tokens: Tokens{Input: l.Usage.Prompt - cached, CacheRead: cached, Output: l.Usage.Completion},
+	}, true, nil
+}
+
+func parseTime(s string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339Nano, s)
+}

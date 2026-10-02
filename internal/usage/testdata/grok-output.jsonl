@@ -1,0 +1,6 @@
+Generating hero image...
+{"id":"chatcmpl-1","object":"chat.completion","created":1790935200,"model":"grok-4","usage":{"prompt_tokens":900,"completion_tokens":60,"total_tokens":960,"prompt_tokens_details":{"cached_tokens":400}}}
+{"type":"tool_call","name":"generate_image"}
+{"id":"chatcmpl-2","object":"chat.completion","created":1790935260,"model":"grok-2-image","usage":{"prompt_tokens":50,"completion_tokens":0,"total_tokens":50}}
+{"id":"chatcmpl-2","object":"chat.completion","created":1790935260,"model":"grok-2-image","usage":{"prompt_tokens":50,"completion_tokens":0,"total_tokens":50}}
+Saved hero.png

@@ -25,6 +25,7 @@ type Launch struct {
 	RunDir   string   // where launch files are written
 	Allow    []string // permission allow rules; nil means the worker defaults
 	Deny     []string // tools removed from the session entirely
+	Args     []string // extra CLI arguments (Codex and Grok adapters)
 	ExtraEnv map[string]string
 }
 
