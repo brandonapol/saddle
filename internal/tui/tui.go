@@ -922,11 +922,11 @@ func renderLine(c chatLine, w int, wrap lipgloss.Style) string {
 		return sFaint.Render("  ⚙ " + truncate(c.text, w-6))
 	case store.ChatNarrator:
 		if narratorNeedsYou(c) {
-			return lipgloss.NewStyle().Foreground(cAlert).Bold(true).Render(wrap.Render(c.text))
+			return renderMarkdown(c.text, w-2, lipgloss.NewStyle().Foreground(cAlert).Bold(true))
 		}
-		return sDim.Render(wrap.Render("· " + c.text))
+		return renderMarkdown("· "+c.text, w-2, sDim)
 	default:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#C9A26B")).Render(wrap.Render("◇ " + c.text))
+		return renderMarkdown("◇ "+c.text, w-2, lipgloss.NewStyle().Foreground(lipgloss.Color("#C9A26B")))
 	}
 }
 
