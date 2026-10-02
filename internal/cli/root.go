@@ -106,6 +106,9 @@ It starts agents in a hidden tmux session, watches them, and tells you when one
 needs you. Quitting leaves the agents running; run saddle up again to come back.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, args []string) error {
+			if err := a.CheckMergeSettings(cmd.ErrOrStderr()); err != nil {
+				return err
+			}
 			if err := a.Init(); err != nil {
 				return err
 			}
@@ -362,6 +365,9 @@ func landCmd() *cobra.Command {
 		Use:   "land",
 		Short: "Run the merge train: land queued branches one at a time",
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
+			if err := a.CheckMergeSettings(cmd.ErrOrStderr()); err != nil {
+				return err
+			}
 			rs, err := a.Land()
 			for _, r := range rs {
 				fmt.Fprintf(cmd.OutOrStdout(), "%-6s %-12s %s\n", r.Task, r.State, r.Note)
@@ -406,6 +412,9 @@ func prsCmd() *cobra.Command {
 		Use:   "prs",
 		Short: "Push landed branches and open or update a stack of PRs",
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
+			if err := a.CheckMergeSettings(cmd.ErrOrStderr()); err != nil {
+				return err
+			}
 			urls, err := a.PRs()
 			for _, u := range urls {
 				fmt.Fprintln(cmd.OutOrStdout(), u)
