@@ -14,6 +14,12 @@ func (o Origin) name() string {
 
 // Message describes the failure and how to fix it, with the log tail.
 func (f Failed) Message() string {
+	return f.Report() + fmt.Sprintf("\nFix it on %s, commit, and call the saddle done tool again.", f.Branch)
+}
+
+// Report describes the failure with the log tail, without saying who should
+// fix it or how.
+func (f Failed) Report() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "CI failed on %s: check %q", f.name(), f.Check.Label())
 	if f.Step != "" {
@@ -29,7 +35,6 @@ func (f Failed) Message() string {
 	case f.LogErr != "":
 		b.WriteString("\nThe log could not be fetched: " + f.LogErr)
 	}
-	fmt.Fprintf(&b, "\nFix it on %s, commit, and call the saddle done tool again.", f.Branch)
 	return b.String()
 }
 
