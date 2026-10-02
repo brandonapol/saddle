@@ -195,6 +195,9 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 		if err := a.checkLaunch(); err != nil {
 			return t, err
 		}
+		if err := a.checkSpawnCaps(r.Parent); err != nil {
+			return t, err
+		}
 	}
 	for i, c := range r.Claims {
 		r.Claims[i] = claims.Clean(c)

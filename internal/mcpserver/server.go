@@ -110,6 +110,66 @@ type UnstackIn struct {
 	Task string `json:"task" jsonschema:"task id (t3), PR URL, or PR number (#12)"`
 }
 
+// BriefOut is a task's live brief: what to do, what it owns and what it must not touch.
+type BriefOut struct {
+	Task       string              `json:"task"`
+	Title      string              `json:"title"`
+	Goal       string              `json:"goal,omitempty"`
+	Status     string              `json:"status"`
+	Adapter    string              `json:"adapter"`
+	Branch     string              `json:"branch,omitempty"`
+	Worktree   string              `json:"worktree,omitempty"`
+	Parent     string              `json:"parent,omitempty"`
+	Claims     []string            `json:"claims,omitempty"`
+	DoNotTouch map[string][]string `json:"do_not_touch,omitempty" jsonschema:"other live tasks' claims, by task id; ask_owner reaches them"`
+	Serial     []string            `json:"serial,omitempty" jsonschema:"files only the merge train changes"`
+	Children   []TaskView          `json:"children,omitempty"`
+	Notices    int                 `json:"pending_notices,omitempty"`
+	DoneWhen   string              `json:"done_when"`
+}
+
+// DoneWhen is the finish line every worker brief states.
+const DoneWhen = "tests pass and everything is committed; then call done with a 2-4 sentence summary"
+
+type AskIn struct {
+	Path     string `json:"path" jsonschema:"repo-relative path you need changed or have a question about"`
+	Question string `json:"question"`
+}
+
+type AskOut struct {
+	Owner   string `json:"owner" jsonschema:"task that was asked; t0 is the orchestrator"`
+	Message string `json:"message"`
+}
+
+// Brief builds task's live brief from the store.
+func Brief(a *app.App, task string) (BriefOut, error) {
+	t, err := a.Store.Task(task)
+	if err != nil {
+		return BriefOut{}, err
+	}
+	out := BriefOut{Task: t.ID, Title: t.Title, Goal: t.Prompt, Status: t.Status, Adapter: a.AdapterName(t),
+		Branch: t.Branch, Worktree: t.Worktree, Parent: t.Parent, Serial: a.Cfg.Serial, DoneWhen: DoneWhen}
+	views, err := Tasks(a)
+	if err != nil {
+		return out, err
+	}
+	for _, v := range views {
+		switch {
+		case v.ID == task:
+			out.Claims, out.Notices = v.Claims, v.Notices
+		case len(v.Claims) > 0:
+			if out.DoNotTouch == nil {
+				out.DoNotTouch = map[string][]string{}
+			}
+			out.DoNotTouch[v.ID] = v.Claims
+		}
+		if v.Parent == task {
+			out.Children = append(out.Children, v)
+		}
+	}
+	return out, nil
+}
+
 type OK struct {
 	Message string `json:"message"`
 }
@@ -211,7 +271,7 @@ func New(a *app.App, task string) *mcp.Server {
 		return nil
 	}
 
-	mcp.AddTool(s, &mcp.Tool{Name: "spawn", Description: "Start a new parallel agent on its own branch and worktree in a new tmux window. Give it disjoint claims."},
+	mcp.AddTool(s, &mcp.Tool{Name: "spawn", Description: fmt.Sprintf("Start a new parallel agent on its own branch and worktree in a new tmux window. Give it disjoint claims. Sub-tasks are capped in depth (%d below the orchestrator) and in working children per task (%d).", app.DefaultMaxDepth, app.DefaultMaxChildren)},
 		func(_ context.Context, _ *mcp.CallToolRequest, in SpawnIn) (*mcp.CallToolResult, SpawnOut, error) {
 			if err := self(); err != nil {
 				return nil, SpawnOut{}, err
@@ -244,6 +304,27 @@ func New(a *app.App, task string) *mcp.Server {
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, StatusOut, error) {
 			out, err := Status(a)
 			return nil, out, err
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "brief", Description: "Your task's live brief: goal, branch, your claims, other tasks' claims you must not touch, serial files, your sub-tasks and when you are done."},
+		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, BriefOut, error) {
+			if err := self(); err != nil {
+				return nil, BriefOut{}, err
+			}
+			out, err := Brief(a, task)
+			return nil, out, err
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "ask_owner", Description: "Ask whoever owns a path a question, e.g. before you need a change in a file another task claims. It goes to the claiming task, or to the orchestrator for serial files; the answer arrives as a [saddle] message."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in AskIn) (*mcp.CallToolResult, AskOut, error) {
+			if err := self(); err != nil {
+				return nil, AskOut{}, err
+			}
+			owner, err := a.AskOwner(task, in.Path, in.Question)
+			if err != nil {
+				return nil, AskOut{}, err
+			}
+			return nil, AskOut{Owner: owner, Message: "Asked " + owner + "; the answer will arrive as a [saddle] message. Keep working on what you can meanwhile."}, nil
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "done", Description: "Finish your task: requires a clean, committed worktree. Queues your branch in the merge train."},
