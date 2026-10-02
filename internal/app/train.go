@@ -473,10 +473,12 @@ func overlaps(wt, base string, files []string) bool {
 	return false
 }
 
-// PRs pushes every landed branch in the stack and opens or updates a stack
-// of PRs: the first targets base, each later one targets the branch landed
-// before it. It pushes the commits the train landed, never whatever the
-// branches point at. Tasks GitHub says are done leave the stack first (see
+// PRs pushes every landed branch in the stack and opens or updates its PR,
+// laid out as stacks (see prLayout): dependent or same-topic tasks stack, each
+// PR on the one below it, and unrelated tasks' PRs target base (#52). A layer
+// on its train predecessor pushes the commit the train landed, never whatever
+// its branch points at; any other pushes those landed commits replayed onto
+// the PR below. Tasks GitHub says are done leave the stack first (see
 // ReconcileStack). Layers below the first broken or flagged one are
 // published; from there up nothing is pushed or changed, and the error says
 // why.
@@ -502,10 +504,15 @@ func (a *App) PRs() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	layout, err := a.prLayout(landed)
+	if err != nil {
+		return nil, err
+	}
 	var stop error
 	var stack []store.Task
+	var groups []int
 	base, baseName := a.baseRef(), a.Cfg.Base
-	for _, l := range landed {
+	for i, l := range landed {
 		if flagged && !flag.Acked && l.ID == flag.Task {
 			stop = flagErr(flag)
 			break
@@ -521,11 +528,15 @@ func (a *App) PRs() ([]string, error) {
 		}
 		a.warnOutsideClaims(l, base)
 		t := l.Task
-		if err := a.pushLanded(t.Branch, l.To); err != nil {
+		if err := a.pushLanded(t.Branch, layout[i].Head); err != nil {
 			return nil, err
 		}
+		if layout[i].Head != l.To {
+			a.Store.Event(t.ID, "pr_layout", fmt.Sprintf("%s published as %s on %s", short(l.To), short(layout[i].Head), a.prBase(landed, layout, i)))
+		}
+		prBase := a.prBase(landed, layout, i)
 		if t.PR == "" {
-			url, err := gh(a.Root, "pr", "create", "--base", baseBranch(a.Cfg.Base, stack), "--head", t.Branch, "--title", t.Title, "--body", t.Summary)
+			url, err := gh(a.Root, "pr", "create", "--base", prBase, "--head", t.Branch, "--title", t.Title, "--body", t.Summary)
 			if err != nil {
 				return nil, err
 			}
@@ -533,11 +544,12 @@ func (a *App) PRs() ([]string, error) {
 			if err := a.Store.SetField(t.ID, "pr", t.PR); err != nil {
 				return nil, err
 			}
-		} else if _, err := gh(a.Root, "pr", "edit", t.PR, "--base", baseBranch(a.Cfg.Base, stack)); err != nil {
+		} else if _, err := gh(a.Root, "pr", "edit", t.PR, "--base", prBase); err != nil {
 			return nil, err
 		}
 		base, baseName = l.To, l.ID+"'s branch"
 		stack = append(stack, t)
+		groups = append(groups, layout[i].Group)
 	}
 	var urls []string
 	for i, t := range stack {
@@ -546,13 +558,23 @@ func (a *App) PRs() ([]string, error) {
 		if t.Issue > 0 {
 			fmt.Fprintf(&b, "\n\nCloses #%d", t.Issue)
 		}
-		b.WriteString("\n\n---\n**Stack** (opened by saddle; merge bottom-up)\n\n")
-		for j := len(stack) - 1; j >= 0; j-- {
-			mark := ""
-			if j == i {
-				mark = " 👈"
+		var mine []store.Task
+		for j, u := range stack {
+			if groups[j] == groups[i] {
+				mine = append(mine, u)
 			}
-			fmt.Fprintf(&b, "%d. %s %s%s\n", j+1, stack[j].PR, stack[j].Title, mark)
+		}
+		if len(mine) > 1 {
+			b.WriteString("\n\n---\n**Stack** (opened by saddle; merge bottom-up)\n\n")
+			for j := len(mine) - 1; j >= 0; j-- {
+				mark := ""
+				if mine[j].ID == t.ID {
+					mark = " 👈"
+				}
+				fmt.Fprintf(&b, "%d. %s %s%s\n", j+1, mine[j].PR, mine[j].Title, mark)
+			}
+		} else {
+			b.WriteString("\n\n---\nOpened by saddle; it doesn't depend on another saddle PR.\n")
 		}
 		b.WriteString("\nBase: `" + a.Cfg.Base + "`\n")
 		if _, err := gh(a.Root, "pr", "edit", t.PR, "--body", b.String()); err != nil {
@@ -563,13 +585,13 @@ func (a *App) PRs() ([]string, error) {
 	return urls, stop
 }
 
-// baseBranch is the branch a new layer's PR targets: base for the bottom one,
-// else the branch of the layer below.
-func baseBranch(base string, below []store.Task) string {
-	if len(below) == 0 {
-		return base
+// prBase is the branch layer i's PR targets: base, or the branch of the
+// layer below it in its stack.
+func (a *App) prBase(stack []landedTask, layout []prLayer, i int) string {
+	if b := layout[i].Below; b >= 0 {
+		return stack[b].Branch
 	}
-	return below[len(below)-1].Branch
+	return a.Cfg.Base
 }
 
 // landedTask is a task the train landed, with the range of commits it landed:

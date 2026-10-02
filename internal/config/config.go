@@ -133,7 +133,15 @@ type Train struct {
 	// NoAutoRebase stops the train rebasing live agents' clean worktrees onto
 	// integration after each landing; they are only told to sync.
 	NoAutoRebase bool `toml:"no_auto_rebase"`
+	// Output is how prs lays out PRs: "stack" groups dependent or same-topic
+	// tasks into stacks and puts unrelated ones on base; "single" makes one
+	// linear stack in train order; "per-task" puts every task on base unless
+	// its work only applies on top of an earlier task's.
+	Output string `toml:"output"`
 }
+
+// Outputs are the PR layouts prs supports.
+var Outputs = []string{"stack", "single", "per-task"}
 
 type Test struct {
 	// Cmd runs in the task worktree after rebasing onto integration; non-zero blocks landing.
@@ -164,7 +172,7 @@ func Default() Config {
 			ReviewLabel: "requires review",
 		},
 		CI:    CI{Interval: 10 * time.Minute},
-		Train: Train{MaxAttempts: 2},
+		Train: Train{MaxAttempts: 2, Output: "stack"},
 		Usage: Usage{
 			Poll: 15 * time.Second,
 			Windows: []Window{
@@ -225,6 +233,12 @@ func Load(root string) (Config, error) {
 	if cfg.Train.MaxAttempts < 1 {
 		cfg.Train.MaxAttempts = Default().Train.MaxAttempts
 	}
+	if cfg.Train.Output == "" {
+		cfg.Train.Output = Default().Train.Output
+	}
+	if !slices.Contains(Outputs, cfg.Train.Output) {
+		return cfg, fmt.Errorf("train.output %q: want one of %s", cfg.Train.Output, strings.Join(Outputs, ", "))
+	}
 	if cfg.CI.Interval <= 0 {
 		cfg.CI.Interval = Default().CI.Interval
 	}
@@ -276,6 +290,9 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # After each landing the train rebases every live agent's clean worktree onto
 # integration; set this to only tell them to run saddle sync.
 # no_auto_rebase = false
+# PR layout: "stack" stacks dependent or same-topic tasks and puts unrelated
+# ones on base; "single" is one linear stack; "per-task" stacks only when it must.
+# output = "stack"
 
 [triage]
 # Uses TypeSafe Jev (set JEV_TOKEN; make setup asks for it) to decide which agent events reach

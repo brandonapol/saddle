@@ -379,37 +379,51 @@ func (a *App) checkedOut(t store.Task) bool {
 }
 
 // republish force-with-lease pushes the moved branches that have PRs and
-// retargets those PRs: each targets the nearest unmerged branch below it, or
-// base. A merged task's PR is left alone, and a PR GitHub refuses to retarget
-// because it is closed takes its task out of the stack instead of failing.
+// retargets those PRs by the PR layout of the rebuilt stack (see prLayout):
+// each targets the layer below it in its stack, or base. A merged task's PR
+// is left alone, and a PR GitHub refuses to retarget because it is closed
+// takes its task out of the stack instead of failing.
 func (a *App) republish(plan []restacked, res *RestackResult) error {
-	base := a.Cfg.Base
+	var live []restacked
+	var stack []landedTask
 	for _, r := range plan {
 		if r.gone() {
 			continue
 		}
-		if r.PR != "" {
-			if r.NewTo != r.To {
-				if err := a.pushLanded(r.Branch, r.NewTo); err != nil {
-					return err
-				}
-				a.Store.Event(r.ID, "restack_push", r.Branch+" "+short(r.NewTo))
-			}
-			if _, err := gh(a.Root, "pr", "edit", r.PR, "--base", base); err != nil {
-				if !strings.Contains(err.Error(), "closed pull request") {
-					return err
-				}
-				r.From, r.To = r.NewFrom, r.NewTo
-				if err := a.leaveStack(r.landedTask, TrainSuperseded, "its PR "+r.PR+" is closed"); err != nil {
-					return err
-				}
-				base = r.Branch
-				continue
-			}
-			res.Retargeted = append(res.Retargeted, r.ID)
-			a.Store.Event(r.ID, "restack_retarget", r.PR+" → "+base)
+		l := r.landedTask
+		l.From, l.To = r.NewFrom, r.NewTo
+		live = append(live, r)
+		stack = append(stack, l)
+	}
+	layout, err := a.prLayout(stack)
+	if err != nil {
+		return err
+	}
+	for i, r := range live {
+		if r.PR == "" {
+			continue
 		}
-		base = r.Branch
+		base := a.prBase(stack, layout, i)
+		head := layout[i].Head
+		published, _ := gitx.RevParse(a.Root, "refs/remotes/origin/"+r.Branch)
+		if r.NewTo != r.To || head != published {
+			if err := a.pushLanded(r.Branch, head); err != nil {
+				return err
+			}
+			a.Store.Event(r.ID, "restack_push", r.Branch+" "+short(head))
+		}
+		if _, err := gh(a.Root, "pr", "edit", r.PR, "--base", base); err != nil {
+			if !strings.Contains(err.Error(), "closed pull request") {
+				return err
+			}
+			r.From, r.To = r.NewFrom, r.NewTo
+			if err := a.leaveStack(r.landedTask, TrainSuperseded, "its PR "+r.PR+" is closed"); err != nil {
+				return err
+			}
+			continue
+		}
+		res.Retargeted = append(res.Retargeted, r.ID)
+		a.Store.Event(r.ID, "restack_retarget", r.PR+" → "+base)
 	}
 	return nil
 }

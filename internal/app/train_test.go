@@ -180,6 +180,7 @@ func TestDetectTestCmd(t *testing.T) {
 
 func TestPRsPushesLandedSHAs(t *testing.T) {
 	a := trainSetup(t)
+	a.Cfg.Train.Output = "single" // pins the one linear stack this test was written for (#52)
 	origin, ghLog := originWithGh(t, a)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
 	t2 := landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})
@@ -229,6 +230,7 @@ func TestPRsRefusesDriftedBranch(t *testing.T) {
 // t4 still sits on their old lineage plus a merge commit.
 func TestPRsRefusesForkedStack(t *testing.T) {
 	a := trainSetup(t)
+	a.Cfg.Train.Output = "single" // pins the one linear stack this test was written for (#52)
 	origin, ghLog := originWithGh(t, a)
 	t1 := landTask(t, a, "t1", "usage", map[string]string{"usage.txt": "usage\n"})
 	t2 := landTask(t, a, "t2", "planner", map[string]string{"planner.txt": "planner\n"})

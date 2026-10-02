@@ -262,12 +262,16 @@ func TestTrainDefaultsAndParse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Train.MaxAttempts != 2 {
-		t.Fatalf("default max_attempts = %d", cfg.Train.MaxAttempts)
+	if cfg.Train.MaxAttempts != 2 || cfg.Train.Output != "stack" || cfg.Train.NoAutoRebase {
+		t.Fatalf("train defaults: %+v", cfg.Train)
 	}
 	root := t.TempDir()
-	writeConfig(t, root, "[train]\nmax_attempts = 4\n")
-	if cfg, err = Load(root); err != nil || cfg.Train.MaxAttempts != 4 {
-		t.Fatalf("max_attempts = %d, %v", cfg.Train.MaxAttempts, err)
+	writeConfig(t, root, "[train]\nmax_attempts = 4\noutput = \"single\"\nno_auto_rebase = true\n")
+	if cfg, err = Load(root); err != nil || cfg.Train.MaxAttempts != 4 || cfg.Train.Output != "single" || !cfg.Train.NoAutoRebase {
+		t.Fatalf("train = %+v, %v", cfg.Train, err)
+	}
+	writeConfig(t, root, "[train]\noutput = \"linear\"\n")
+	if _, err := Load(root); err == nil {
+		t.Fatal("bad train.output: want error")
 	}
 }
