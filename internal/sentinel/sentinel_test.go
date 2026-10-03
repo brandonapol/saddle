@@ -1,12 +1,14 @@
 package sentinel
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/gitx"
@@ -393,6 +395,48 @@ func TestSentinelSkipsWhileTrainBusy(t *testing.T) {
 	rep, err := New(a).Check()
 	if err != nil || !rep.Busy {
 		t.Fatalf("check with the train busy: %+v, %v", rep, err)
+	}
+}
+
+// A cycle that finds the train busy (automerge or a land holds the lock) is
+// retried after BusyRetry, not a full Interval: saddle up starts the sentinel
+// next to automerge, and losing the first race left the stack unchecked for
+// minutes.
+func TestSentinelRunRetriesSoonWhenTrainBusy(t *testing.T) {
+	a, _ := setup(t)
+	gh := newFakeGH(t)
+	t1 := landTask(t, a, "t1", "one")
+	if _, err := a.PRs(); err != nil {
+		t.Fatal(err)
+	}
+	t1, _ = a.Store.Task(t1.ID)
+	gh.setPR(t1.PR, "OPEN", "CONFLICTING")
+
+	unlock, ok, err := a.TryLockTrain()
+	if err != nil || !ok {
+		t.Fatalf("lock: %v %v", ok, err)
+	}
+	s := New(a)
+	s.Interval = time.Hour
+	s.BusyRetry = 10 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = s.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	time.Sleep(50 * time.Millisecond)
+	unlock()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, flagged, err := a.Flag()
+		must(t, err)
+		if flagged {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("sentinel did not check again once the train lock was free")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

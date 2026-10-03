@@ -42,6 +42,10 @@ const (
 // DefaultInterval is how often Run checks the stack.
 const DefaultInterval = 2 * time.Minute
 
+// DefaultBusyRetry is how soon Run checks again after a cycle found the train
+// lock held.
+const DefaultBusyRetry = 2 * time.Second
+
 // PR is what GitHub says about a pull request.
 type PR = app.PRInfo
 
@@ -139,7 +143,9 @@ type Sentinel struct {
 	App      *app.App
 	GH       GitHub
 	Interval time.Duration
-	lastErr  string
+	// BusyRetry is the wait after a cycle skipped because the train was busy.
+	BusyRetry time.Duration
+	lastErr   string
 	// posted is the sentinel comment last seen or written on each PR, so a
 	// quiet tick costs no GitHub calls.
 	posted map[string]Comment
@@ -147,7 +153,7 @@ type Sentinel struct {
 
 // New returns a sentinel for a's stack that talks to GitHub through gh.
 func New(a *app.App) *Sentinel {
-	return &Sentinel{App: a, GH: &GH{Dir: a.Root}, Interval: DefaultInterval}
+	return &Sentinel{App: a, GH: &GH{Dir: a.Root}, Interval: DefaultInterval, BusyRetry: DefaultBusyRetry}
 }
 
 // Report is the outcome of one check.
@@ -163,23 +169,33 @@ type Report struct {
 
 // Run checks the stack now and then every Interval until ctx ends. A failed
 // check is recorded as an event (once per distinct error) and retried on the
-// next tick.
+// next tick. A cycle skipped because the train was busy is retried after
+// BusyRetry instead.
 func (s *Sentinel) Run(ctx context.Context) error {
 	iv := s.Interval
 	if iv <= 0 {
 		iv = DefaultInterval
 	}
-	t := time.NewTicker(iv)
+	busy := s.BusyRetry
+	if busy <= 0 {
+		busy = DefaultBusyRetry
+	}
+	t := time.NewTimer(iv)
 	defer t.Stop()
 	for {
-		if _, err := s.Check(); err != nil {
+		wait := iv
+		if rep, err := s.Check(); err != nil {
 			if msg := err.Error(); msg != s.lastErr {
 				s.lastErr = msg
 				s.App.Store.Event("", EventError, msg)
 			}
 		} else {
 			s.lastErr = ""
+			if rep.Busy {
+				wait = min(busy, iv)
+			}
 		}
+		t.Reset(wait)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
