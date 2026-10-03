@@ -227,7 +227,7 @@ func TestTerminalResizeFollowsWindow(t *testing.T) {
 
 func TestTerminalHelpShowsToggle(t *testing.T) {
 	m := newTermModel(t)
-	if !strings.Contains(m.viewKeys(200), "ctrl+`") {
+	if !strings.Contains(m.viewKeys(200), "alt+`") {
 		t.Fatal("chat help should advertise the terminal toggle")
 	}
 	m.Update(toggleKey())
@@ -261,7 +261,6 @@ func toggleKeys(t *testing.T) map[string]tea.Msg {
 }
 
 func TestTerminalToggleEveryEncoding(t *testing.T) {
-	t.Skip("#198: needs the keys.go binding and the tui.go ExtendedKey hook")
 	for name, k := range toggleKeys(t) {
 		m := newTermModel(t)
 		m.Update(k)
@@ -282,7 +281,6 @@ func TestTerminalToggleEveryEncoding(t *testing.T) {
 // The toggle must reach the TUI, not the shell, even when it arrives as an
 // escape sequence while the shell has focus.
 func TestTerminalToggleNotForwardedToShell(t *testing.T) {
-	t.Skip("#198: needs the keys.go binding and the tui.go ExtendedKey hook")
 	for name, k := range toggleKeys(t) {
 		m := newTermModel(t)
 		openShell(t, m)
