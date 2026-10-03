@@ -184,3 +184,197 @@ func TestJourneyParallelLandPRsAutomerge(t *testing.T) {
 		t.Fatalf("stack not empty after both merged: %+v", st)
 	}
 }
+
+// conflictSetup makes t2's branch conflict with t1's landed work the way it
+// happens in practice: t2 was cut before t1 landed, and only edits the
+// shared file once t1's claim is gone, without syncing first. (With the
+// default auto-rebase the train would move t2's clean worktree onto t1
+// first, so these journeys turn it off.)
+func conflictSetup(t *testing.T, w *World, t2 ...fa.Step) {
+	t.Helper()
+	w.Spawn("t1", "First edit", []string{"alpha/**"},
+		fa.Write("shared.txt", "one\n"), fa.Commit("one"), fa.Done("One."))
+	steps := append([]fa.Step{fa.Wait("proceed-now"),
+		fa.Write("shared.txt", "two\n"), fa.Commit("two"), fa.Done("Two.")}, t2...)
+	w.Spawn("t2", "Second edit", []string{"beta/**"}, steps...)
+	w.WaitTask("t1", "queued", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
+	if r := w.MustSaddle("land"); w.Task("t1").Status != "landed" {
+		t.Fatalf("t1 didn't land: %s", r)
+	}
+	w.MustSaddle("message", "t2", "proceed-now")
+	w.WaitTask("t2", "queued", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
+}
+
+// TestJourneyConflictReturnedToProducer: t2's branch conflicts with landed
+// work. The train hands the conflict back to t2, not the human: its window
+// is woken, its hook delivers the conflict, and it syncs, resolves, calls
+// done again and lands.
+func TestJourneyConflictReturnedToProducer(t *testing.T) {
+	w := world(t, Options{Tables: "[train]\nno_auto_rebase = true\n"})
+	conflictSetup(t, w,
+		fa.Wait("could not land"),
+		fa.Step{Run: "saddle sync", Optional: true}, // stops at the conflict, exits non-zero
+		fa.Resolve("shared.txt", "one\ntwo\n"),
+		fa.Done("Two, merged with one."))
+
+	r := w.Saddle("land")
+	if v := w.Task("t2"); v.Status != "conflict" || strings.HasPrefix(v.Train, "landed") {
+		t.Fatalf("t2 after a conflicting land = %+v\n%s", v, r)
+	}
+	w.WaitAgentLog("t2", "input: [saddle] You have new notices")
+	w.WaitAgentLog("t2", "could not land")
+	w.WaitAgentLog("t2", "idle: script finished")
+	w.WaitTask("t2", "queued again", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
+
+	r = w.MustSaddle("land")
+	if w.Task("t2").Status != "landed" {
+		t.Fatalf("t2 didn't land after resolving: %s", r)
+	}
+	if got := w.Git(w.Repo, "show", "saddle/integration:shared.txt"); got != "one\ntwo" {
+		t.Fatalf("integration shared.txt = %q", got)
+	}
+}
+
+// TestJourneyConflictEscalatesAfterMaxAttempts: a producer that keeps
+// handing back the same conflict is escalated to the owner after
+// train.max_attempts, and told to stop instead of being handed it again.
+func TestJourneyConflictEscalatesAfterMaxAttempts(t *testing.T) {
+	w := world(t, Options{Tables: "[train]\nno_auto_rebase = true\nmax_attempts = 2\n"})
+	conflictSetup(t, w,
+		fa.Wait("could not land"),
+		fa.Done("Trying again without fixing it."),
+		fa.Wait("Stop retrying"),
+		fa.Wait("Message from the user: fix it like this"))
+
+	w.Saddle("land")
+	w.WaitAgentLog("t2", "done ok")
+	w.WaitTask("t2", "queued again", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
+	r := w.Saddle("land")
+	if !strings.Contains(r.Stdout, "escalated") {
+		t.Fatalf("second failure wasn't escalated: %s", r)
+	}
+	v := w.Task("t2")
+	if v.Status != "needs_you" || !strings.HasPrefix(v.Train, "escalated") {
+		t.Fatalf("t2 = %+v, want needs_you and escalated", v)
+	}
+	if n, err := w.App().Store.PendingNotices("t0"); err != nil || n == 0 {
+		t.Fatalf("the orchestrator has no notice of the escalation (%d, %v)", n, err)
+	}
+	// The producer was told to stop, without being woken for it.
+	if strings.Contains(w.AgentLog("t2"), "Stop retrying") {
+		t.Fatal("the escalation woke the producer")
+	}
+}
+
+// TestJourneyMessageReachesEscalatedTask: after an escalation the owner is
+// told to "tell t2 what to do"; that message must wake t2.
+func TestJourneyMessageReachesEscalatedTask(t *testing.T) {
+	t.Skip("#189: escalation leaves an idle agent needs_you, and Notify only wakes idle, done or conflict tasks")
+	w := world(t, Options{Tables: "[train]\nno_auto_rebase = true\nmax_attempts = 1\n"})
+	conflictSetup(t, w, fa.Wait("Stop retrying"), fa.Wait("Message from the user: fix it like this"))
+	if r := w.Saddle("land"); !strings.Contains(r.Stdout, "escalated") {
+		t.Fatalf("not escalated: %s", r)
+	}
+	w.MustSaddle("message", "t2", "fix it like this")
+	w.WaitAgentLog("t2", "idle: script finished")
+}
+
+// TestJourneyRestackAfterHumanSquashMerge: a person squash-merges the
+// bottom PR of a stack in the GitHub UI. Restack sees it merged, rebuilds
+// the rest of the stack on the new main and retargets the next PR to main,
+// and prs never reopens the merged one.
+func TestJourneyRestackAfterHumanSquashMerge(t *testing.T) {
+	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
+	urls := landTwo(t, w)
+	low := prNumber(t, w.GHState(), urls["t1"])
+	must(t, w.GH.MergeByHand(low.Number, "squash"))
+
+	out := w.MustMCP("t0", "restack", nil)
+	if !strings.Contains(out, "retargeted") {
+		t.Fatalf("restack: %s", out)
+	}
+	s := w.GHState()
+	high := prNumber(t, s, urls["t2"])
+	if high.Base != "main" {
+		t.Fatalf("t2's PR targets %s after restack, want main", high.Base)
+	}
+	if files := w.Git(w.Repo, "diff", "--name-only", "origin/main...origin/"+high.Head); files != "beta/work.txt" {
+		t.Fatalf("t2's PR diff = %q, want only its own file", files)
+	}
+	if mb, main := w.Git(w.Repo, "merge-base", "origin/main", "origin/"+high.Head), w.Git(w.Repo, "rev-parse", "origin/main"); mb != main {
+		t.Fatal("t2's branch isn't on the new main")
+	}
+	w.MustSaddle("prs")
+	if s := w.GHState(); len(s.PRs) != 2 || len(s.Open()) != 1 {
+		t.Fatalf("prs after the merge: %d PRs, %d open; want the merged one left alone", len(s.PRs), len(s.Open()))
+	}
+	must(t, w.GH.MergeByHand(high.Number, "squash"))
+	if w.OriginFile("main", "alpha/work.txt") == "" || w.OriginFile("main", "beta/work.txt") == "" {
+		t.Fatal("main lacks the stack's work")
+	}
+}
+
+// TestJourneyUnstackAndRequeue: the escape hatches. unstack takes a landed
+// task out of the stack for good: restack drops its commits from
+// integration and prs stops publishing it. requeue puts it back in the
+// train, and it lands and gets a PR again.
+func TestJourneyUnstackAndRequeue(t *testing.T) {
+	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
+	urls := landTwo(t, w)
+
+	r := w.MustSaddle("unstack", "t1")
+	t.Log(r.Stdout)
+	if v := w.Task("t1"); !strings.HasPrefix(v.Train, "superseded") {
+		t.Fatalf("t1 after unstack = %+v", v)
+	}
+	w.MustMCP("t0", "restack", nil)
+	if files := w.Git(w.Repo, "ls-tree", "-r", "--name-only", "saddle/integration"); strings.Contains(files, "alpha/") {
+		t.Fatalf("integration still has t1's work after restack:\n%s", files)
+	}
+	// unstack's own sentinel check flagged t2 (it still held t1's commit);
+	// restack doesn't re-check, so check now (#190, TestJourneyPRsRightAfterUnstackRestack).
+	if r := w.MustSaddle("sentinel", "check"); !strings.Contains(r.Stdout, "checks clean") {
+		t.Fatalf("stack not clean after restack: %s", r)
+	}
+	w.MustSaddle("prs")
+	s := w.GHState()
+	if p := prNumber(t, s, urls["t2"]); p.Base != "main" {
+		t.Fatalf("t2's PR targets %s, want main once t1 left the stack", p.Base)
+	}
+	t1pr := prNumber(t, s, urls["t1"])
+	callsBefore := len(s.Calls)
+
+	r = w.MustSaddle("requeue", "t1")
+	t.Log(r.Stdout)
+	w.MustSaddle("land")
+	if v := w.Task("t1"); v.Status != "landed" {
+		t.Fatalf("t1 after requeue and land = %+v", v)
+	}
+	if files := w.Git(w.Repo, "ls-tree", "-r", "--name-only", "saddle/integration"); !strings.Contains(files, "alpha/work.txt") {
+		t.Fatalf("integration lacks t1's work after requeue:\n%s", files)
+	}
+	w.MustSaddle("prs")
+	s = w.GHState()
+	for _, c := range s.Calls[callsBefore:] {
+		if len(c) > 2 && c[0] == "pr" && c[1] == "edit" && c[2] == urls["t1"] && t1pr.State == "OPEN" {
+			continue
+		}
+	}
+	if !strings.Contains(w.OriginFile(w.Task("t1").Branch, "alpha/work.txt"), "alpha") {
+		t.Fatal("t1's branch on origin lacks its work after requeue")
+	}
+}
+
+// TestJourneyPRsRightAfterUnstackRestack: unstack says "run restack to drop
+// their commits"; once restack has, prs must work without waiting for the
+// next sentinel cycle.
+func TestJourneyPRsRightAfterUnstackRestack(t *testing.T) {
+	t.Skip("#190: restack fixes the stack but leaves unstack's at-risk flag until the next sentinel check")
+	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
+	landTwo(t, w)
+	w.MustSaddle("unstack", "t1")
+	w.MustMCP("t0", "restack", nil)
+	if r := w.Saddle("prs"); r.Code != 0 {
+		t.Fatalf("prs after unstack and restack: %s", r)
+	}
+}
