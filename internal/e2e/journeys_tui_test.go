@@ -204,8 +204,20 @@ func TestJourneyTUIMergeViewKeys(t *testing.T) {
 	urls := landThree(t, w)
 	// CI stays pending, so nothing merges while auto-merge is on.
 	must(t, w.GH.SetAllChecks(fakegh.Pending))
-	w.AutomergeTick() // the watcher's first check, which saddle up also runs at start
+	before := w.AutomergeTick().Checked
 	u := w.StartTUI(120, 45)
+	// saddle up's watcher checks at once; a toggle saved during that check
+	// would be lost (#209), so let it finish first.
+	Eventually(t, "saddle up's first auto-merge check", func() error {
+		st, err := w.App().AutomergeState()
+		if err != nil {
+			return err
+		}
+		if !st.Checked.After(before) {
+			return errorf("last check at %s", st.Checked)
+		}
+		return nil
+	})
 
 	u.Keys("M-3")
 	u.WaitScreen("auto-merge off", "stack t1", "stack t2", "stack t3")

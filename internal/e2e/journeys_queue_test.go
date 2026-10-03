@@ -3,9 +3,12 @@
 package e2e
 
 import (
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/brandonapol/saddle/internal/automerge"
 	fa "github.com/brandonapol/saddle/internal/e2e/fakeagent"
 	"github.com/brandonapol/saddle/internal/e2e/fakegh"
 	"github.com/brandonapol/saddle/internal/mcpserver"
@@ -134,5 +137,51 @@ func TestJourneyAutomergeHoldKeepsGreenStack(t *testing.T) {
 		if w.OriginFile("main", f) == "" {
 			t.Fatalf("main lacks %s", f)
 		}
+	}
+}
+
+// pausingGH is the real gh client, except that its first PR read signals
+// started and waits for proceed: a check caught mid-way through reading
+// GitHub.
+type pausingGH struct {
+	automerge.GitHub
+	once             sync.Once
+	started, proceed chan struct{}
+}
+
+func (g *pausingGH) PR(url string) (automerge.PR, error) {
+	g.once.Do(func() {
+		close(g.started)
+		<-g.proceed
+	})
+	return g.GitHub.PR(url)
+}
+
+// TestJourneyAutomergeHoldDuringCheckSticks (#209): a hold (or on,
+// off, release) made while the watcher is in the middle of a check must
+// survive that check. Today Check saves the whole state it loaded before
+// reading GitHub, so the hold is silently dropped and the held stack can
+// merge on the next tick.
+func TestJourneyAutomergeHoldDuringCheckSticks(t *testing.T) {
+	t.Skip("#209: a check saves the state it loaded first, dropping holds and toggles made meanwhile")
+	w := world(t, Options{})
+	landThree(t, w)
+	a := w.App()
+	gh := &pausingGH{GitHub: &automerge.GH{Run: automerge.ExecRunner(a.Root)}, started: make(chan struct{}), proceed: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.NewAutomerge(gh).Check()
+		done <- err
+	}()
+	<-gh.started
+	w.MustSaddle("automerge", "hold", "t1")
+	w.MustSaddle("automerge", "on")
+	close(gh.proceed)
+	must(t, <-done)
+
+	st, err := w.App().AutomergeState()
+	must(t, err)
+	if !st.Enabled || !slices.Contains(st.Holds, "t1") {
+		t.Fatalf("after the check: enabled=%v holds=%q; want on with t1 held", st.Enabled, st.Holds)
 	}
 }
