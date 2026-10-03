@@ -113,9 +113,13 @@ func (a *App) Restack() (RestackResult, error) {
 	for _, id := range ids {
 		inBase[id] = true
 	}
-	if last, ok := a.lastOn(all, integ); ok {
-		if err := a.checkIntegration(last, integ, inBase); err != nil {
-			return res, err
+	// When base already holds integration, nothing can be dropped: restack
+	// just fast-forwards it.
+	if mb != integ {
+		if last, ok := a.lastOn(all, integ); ok {
+			if err := a.checkIntegration(last, integ, res.Base, mb, inBase); err != nil {
+				return res, err
+			}
 		}
 	}
 	res.Superseded = a.leaving(all, integ, inBase)
@@ -188,21 +192,35 @@ func (a *App) leaving(all []landedTask, integ string, inBase map[string]bool) []
 
 // checkIntegration refuses when integration holds work restack would lose:
 // it must contain the last landed commit, and anything after that must
-// already be in base (e.g. a merge of base into integration).
-func (a *App) checkIntegration(last landedTask, integ string, inBase map[string]bool) error {
+// already be in base, by SHA (base's own commits, as when integration sits on
+// an older base after squash merges), by patch-id or by tree (e.g. a merge of
+// base into integration).
+func (a *App) checkIntegration(last landedTask, integ, base, mb string, inBase map[string]bool) error {
 	if _, err := gitx.Run(a.Root, "merge-base", "--is-ancestor", last.To, integ); err != nil {
 		return fmt.Errorf("%s doesn't contain %s's landed commit %s, so restack can't tell what is on it; nothing was moved",
 			a.Cfg.Integration, last.ID, short(last.To))
 	}
-	extra, err := patchIDs(a.Root, last.To+".."+integ)
-	if err != nil {
+	extra, err := gitx.Run(a.Root, "rev-list", "--no-merges", "--format=%T", integ, "^"+last.To, "^"+base)
+	if err != nil || extra == "" {
 		return err
 	}
-	n := 0
-	for _, id := range extra {
-		if !inBase[id] {
-			n++
+	trees := map[string]bool{}
+	if out, err := gitx.Run(a.Root, "log", "--format=%T", mb+".."+base); err == nil {
+		for _, t := range strings.Fields(out) {
+			trees[t] = true
 		}
+	}
+	n := 0
+	lines := strings.Split(extra, "\n")
+	for i := 0; i+1 < len(lines); i += 2 {
+		c := strings.TrimPrefix(lines[i], "commit ")
+		if trees[lines[i+1]] {
+			continue
+		}
+		if ids, _ := patchIDs(a.Root, c+"^!"); len(ids) == 0 || inBase[ids[0]] {
+			continue // empty, or base has its change
+		}
+		n++
 	}
 	if n > 0 {
 		return fmt.Errorf("%s has %s after %s's landed commit that no landed task owns and base doesn't have; restack would drop them, so nothing was moved",
