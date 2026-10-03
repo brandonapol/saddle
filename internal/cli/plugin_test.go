@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/banner"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -190,5 +192,66 @@ func TestPluginCommandRegistered(t *testing.T) {
 	cmd, _, err := Root().Find([]string{"plugin", "wait"})
 	if err != nil || cmd.Name() != "wait" {
 		t.Fatalf("saddle plugin wait: %v", err)
+	}
+}
+
+// bareRepo is a git repo with one commit where saddle init never ran.
+func bareRepo(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("SADDLE_ROOT", "")
+	t.Setenv("SADDLE_TASK", "")
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	root := t.TempDir()
+	gitRun(t, root, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, root, "add", "-A")
+	gitRun(t, root, "commit", "-qm", "init")
+	return root
+}
+
+func runInit(t *testing.T, root string, tty bool, args ...string) string {
+	t.Helper()
+	old := stdoutIsTTY
+	stdoutIsTTY = func(io.Writer) bool { return tty }
+	t.Cleanup(func() { stdoutIsTTY = old })
+	t.Chdir(root)
+	var out bytes.Buffer
+	cmd := Root()
+	cmd.SetOut(&out)
+	cmd.SetArgs(append([]string{"init"}, args...))
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	return out.String()
+}
+
+func TestInitPrintsHowdyBannerOnTTY(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	root := bareRepo(t)
+	out := runInit(t, root, true)
+	if !strings.Contains(out, banner.Howdy()) || !strings.Contains(out, "initialized") {
+		t.Fatalf("init on a TTY:\n%s", out)
+	}
+	if strings.Contains(out, "\x1b") {
+		t.Fatalf("NO_COLOR set but init printed escapes: %q", out)
+	}
+}
+
+func TestInitBannerSuppressedByQuietAndNonTTY(t *testing.T) {
+	root := bareRepo(t)
+	if out := runInit(t, root, true, "--quiet"); strings.Contains(out, "Howdy") {
+		t.Fatalf("--quiet printed the banner:\n%s", out)
+	}
+	if out := runInit(t, root, false); strings.Contains(out, "Howdy") || !strings.Contains(out, "initialized") {
+		t.Fatalf("non-TTY init:\n%s", out)
 	}
 }

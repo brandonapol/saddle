@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/banner"
 	"github.com/brandonapol/saddle/internal/engine"
 	"github.com/brandonapol/saddle/internal/hook"
 	"github.com/brandonapol/saddle/internal/mcpserver"
@@ -68,6 +69,9 @@ func saddleRoot(dir string) string {
 		}
 	}
 }
+
+// stdoutIsTTY decides whether the howdy banner prints; tests replace it.
+var stdoutIsTTY = banner.IsTerminal
 
 func wd() string {
 	d, _ := os.Getwd()

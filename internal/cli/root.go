@@ -16,6 +16,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/banner"
 	"github.com/brandonapol/saddle/internal/ciwatch"
 	"github.com/brandonapol/saddle/internal/doctor"
 	"github.com/brandonapol/saddle/internal/hook"
@@ -84,17 +85,21 @@ func resolveTask(a *app.App, flag string) (string, error) {
 }
 
 func initCmd() *cobra.Command {
-	return &cobra.Command{
+	var quiet bool
+	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Create .saddle/ with a config template",
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
 			if err := a.Init(); err != nil {
 				return err
 			}
+			banner.Print(cmd.OutOrStdout(), banner.Options{Quiet: quiet, IsTTY: stdoutIsTTY})
 			fmt.Fprintf(cmd.OutOrStdout(), "initialized %s/.saddle (edit .saddle/config.toml)\n", a.Root)
 			return nil
 		}),
 	}
+	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "don't print the howdy banner")
+	return cmd
 }
 
 func upCmd() *cobra.Command {
