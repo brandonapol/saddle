@@ -18,7 +18,7 @@ import (
 // once with a notice.
 const hookScript = `#!/bin/sh
 in=$(cat)
-echo "$in" >> "$LOGDIR/hooks.jsonl"
+printf '%s\n' "$in" >> "$LOGDIR/hooks.jsonl"
 case "$in" in
   *'"PreToolUse"'*blocked/*) echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"[saddle] t9 owns blocked/"}}' ;;
   *'"UserPromptSubmit"'*) echo '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"[saddle] notice: rebase please"}}' ;;
