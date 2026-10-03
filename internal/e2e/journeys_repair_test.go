@@ -106,3 +106,64 @@ func TestJourneyOrphanedConflictRepairs(t *testing.T) {
 		t.Fatalf("repair PR %q isn't on main", url)
 	}
 }
+
+// redBottomStack lands t1 and t2 as one stack (t2's PR on t1's branch), t1
+// red and t2 green: the deadlock of #196.
+func redBottomStack(t *testing.T, w *World) (low, high *fakegh.PR) {
+	t.Helper()
+	urls := landTwo(t, w)
+	s := w.GHState()
+	low, high = prNumber(t, s, urls["t1"]), prNumber(t, s, urls["t2"])
+	if high.Base != low.Head {
+		t.Fatalf("t2's PR targets %s, want t1's branch %s", high.Base, low.Head)
+	}
+	must(t, w.GH.SetChecks(low.Number, fakegh.Check{Name: "ci", Workflow: "CI", State: fakegh.Fail}))
+	must(t, w.GH.SetChecks(high.Number, fakegh.Check{Name: "ci", Workflow: "CI", State: fakegh.Pass}))
+	return low, high
+}
+
+// checkCollapsed asserts both tasks merged through t2's PR.
+func checkCollapsed(t *testing.T, w *World, low, high *fakegh.PR) {
+	t.Helper()
+	s := w.GHState()
+	if p := s.PR(high.Number); p.State != "MERGED" || p.Base != "main" {
+		t.Fatalf("t2's PR = %s on %s, want merged into main", p.State, p.Base)
+	}
+	if p := s.PR(low.Number); p.State != "CLOSED" || len(p.Comments) == 0 {
+		t.Fatalf("t1's PR = %s with %d comments, want closed with a comment", p.State, len(p.Comments))
+	}
+	for _, id := range []string{"t1", "t2"} {
+		if v := w.Task(id); !strings.HasPrefix(v.Train, app.TrainMerged) {
+			t.Fatalf("%s = %+v, want merged", id, v)
+		}
+	}
+	if w.OriginFile("main", "alpha/work.txt") == "" || w.OriginFile("main", "beta/work.txt") == "" {
+		t.Fatal("main lacks the stack's work")
+	}
+}
+
+// TestJourneyStackCollapseRedBottom: #196's hand fix as one command. The
+// bottom PR is red and its fix is the PR above; `saddle stack collapse`
+// retargets the top PR to main, sees CI green, squash-merges it, marks both
+// tasks merged, closes the bottom PR with a comment, and restacks.
+func TestJourneyStackCollapseRedBottom(t *testing.T) {
+	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
+	low, high := redBottomStack(t, w)
+	r := w.MustSaddle("stack", "collapse", "t1")
+	if !strings.Contains(r.Stdout, "collapsed stack t1") {
+		t.Fatalf("collapse: %s", r)
+	}
+	checkCollapsed(t, w, low, high)
+}
+
+// TestJourneyAutoCollapseRedBottom: auto-merge's hook. A red bottom with a
+// green PR above that holds its commits collapses with no human step.
+func TestJourneyAutoCollapseRedBottom(t *testing.T) {
+	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
+	low, high := redBottomStack(t, w)
+	pr, err := w.App().AutoCollapse("t1", nil)
+	if err != nil || pr != w.Task("t2").PR {
+		t.Fatalf("auto collapse = %q, %v", pr, err)
+	}
+	checkCollapsed(t, w, low, high)
+}

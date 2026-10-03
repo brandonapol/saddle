@@ -129,7 +129,7 @@ commit; saddle never resolves it.`,
 			}
 			return nil
 		}),
-	})
+	}, stackCollapseCmd())
 	return cmd
 }
 
