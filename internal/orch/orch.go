@@ -22,6 +22,9 @@ const (
 	Init   = "init"   // session started; SessionID is set
 	Error  = "error"
 	Exit   = "exit" // the process ended
+	// Compacted: the session's context was compacted; Text is the trigger
+	// ("manual" or "auto").
+	Compacted = "compacted"
 )
 
 type Event struct {
@@ -132,7 +135,10 @@ type line struct {
 	IsError   bool            `json:"is_error"`
 	CostUSD   float64         `json:"total_cost_usd"`
 	Event     json.RawMessage `json:"event"`
-	Message   struct {
+	Compact   struct {
+		Trigger string `json:"trigger"`
+	} `json:"compact_metadata"`
+	Message struct {
 		Content []struct {
 			Type  string          `json:"type"`
 			Text  string          `json:"text"`
@@ -150,8 +156,11 @@ func parse(b []byte) []Event {
 	}
 	switch l.Type {
 	case "system":
-		if l.Subtype == "init" {
+		switch l.Subtype {
+		case "init":
 			return []Event{{Kind: Init, SessionID: l.SessionID}}
+		case "compact_boundary":
+			return []Event{{Kind: Compacted, Text: l.Compact.Trigger, SessionID: l.SessionID}}
 		}
 	case "stream_event":
 		var ev struct {
