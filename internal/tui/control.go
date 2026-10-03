@@ -274,6 +274,9 @@ func (m *model) viewLeft(w, h int) string {
 			}
 		}
 	}
+	if m.briefOn {
+		title, body = m.briefPane(w - 2)
+	}
 	parts = append(parts, box(title, w, peekH, false, body))
 	if usageH > 0 {
 		parts = append(parts, box("USAGE · 60m", w, usageH, false, m.graph.render(w-2, graphH)))

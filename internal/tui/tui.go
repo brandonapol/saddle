@@ -101,11 +101,13 @@ type model struct {
 	view          int  // viewControl, viewPlan or viewMerge
 	helpOpen      bool // the key help overlay covers the body
 
-	tasks []mcpserver.TaskView
-	stats map[string]agentStats // tokens, context and activity per task
-	sel   int
-	peek  string
-	prev  map[string]string // last seen status per task, for attention events
+	tasks   []mcpserver.TaskView
+	stats   map[string]agentStats // tokens, context and activity per task
+	sel     int
+	peek    string
+	briefOn bool              // the brief pane replaces the peek
+	prompts map[string]string // task prompts for the brief pane, read once
+	prev    map[string]string // last seen status per task, for attention events
 
 	chat      []chatLine
 	streaming strings.Builder
@@ -619,6 +621,8 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		m.startSpawn()
 	case key.Matches(k, keys.Pause):
 		return m.pause(), true
+	case key.Matches(k, keys.Brief):
+		m.briefOn = !m.briefOn
 	case key.Matches(k, keys.Kill):
 		if t, ok := m.selected(); ok {
 			id := t.ID
