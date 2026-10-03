@@ -269,7 +269,6 @@ func TestJourneyConflictEscalatesAfterMaxAttempts(t *testing.T) {
 // TestJourneyMessageReachesEscalatedTask: after an escalation the owner is
 // told to "tell t2 what to do"; that message must wake t2.
 func TestJourneyMessageReachesEscalatedTask(t *testing.T) {
-	t.Skip("#189: escalation leaves an idle agent needs_you, and Notify only wakes idle, done or conflict tasks")
 	w := world(t, Options{Tables: "[train]\nno_auto_rebase = true\nmax_attempts = 1\n"})
 	conflictSetup(t, w, fa.Wait("Stop retrying"), fa.Wait("Message from the user: fix it like this"))
 	if r := w.Saddle("land"); !strings.Contains(r.Stdout, "escalated") {
@@ -368,7 +367,6 @@ func TestJourneyUnstackAndRequeue(t *testing.T) {
 // their commits"; once restack has, prs must work without waiting for the
 // next sentinel cycle.
 func TestJourneyPRsRightAfterUnstackRestack(t *testing.T) {
-	t.Skip("#190: restack fixes the stack but leaves unstack's at-risk flag until the next sentinel check")
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	landTwo(t, w)
 	w.MustSaddle("unstack", "t1")

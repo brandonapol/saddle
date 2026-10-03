@@ -60,7 +60,36 @@ func (c *RestackConflict) Error() string {
 // each onto the nearest stacked branch below it or base; a closed or merged
 // PR is never retargeted. A conflict stops it before any ref moves and goes
 // back to the task that owns the commit. Restack never resolves one itself.
+// When the stack is flagged at risk, a successful restack re-checks it at
+// once, so a flag it fixed lifts now rather than on the next sentinel cycle
+// (#190).
 func (a *App) Restack() (RestackResult, error) {
+	res, err := a.restack()
+	if err == nil {
+		a.recheckFlag()
+	}
+	return res, err
+}
+
+// StackCheck runs one stack sentinel check. The sentinel package registers
+// it, since it builds on App and can't be imported here.
+var StackCheck func(*App) error
+
+// recheckFlag re-runs the stack check when the stack is flagged. A failed
+// check is recorded and left to the sentinel's next cycle.
+func (a *App) recheckFlag() {
+	if StackCheck == nil {
+		return
+	}
+	if _, flagged, err := a.Flag(); err != nil || !flagged {
+		return
+	}
+	if err := StackCheck(a); err != nil {
+		a.Store.Event("", "sentinel_error", "re-check after restack: "+err.Error())
+	}
+}
+
+func (a *App) restack() (RestackResult, error) {
 	var res RestackResult
 	unlock, err := a.lockTrain()
 	if err != nil {
