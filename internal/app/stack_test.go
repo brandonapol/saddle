@@ -126,3 +126,92 @@ func contains(ss []string, s string) bool {
 	}
 	return false
 }
+
+// Every landed task was squash-merged into main and recorded with a
+// single-SHA merged note on an old main commit; integration sits at the old
+// main, and then a human PR merges to main. Integration has nothing main
+// lacks, so restack fast-forwards it rather than counting main's own squash
+// commits as work it would drop.
+func TestRestackFastForwardsIntegrationBehindBase(t *testing.T) {
+	a := trainSetup(t)
+	origin, _ := originWithGh(t, a)
+	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+	t2 := landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})
+	old := git(t, a.Root, "rev-parse", "origin/main")
+
+	other := filepath.Join(t.TempDir(), "other")
+	git(t, a.Root, "clone", "-q", origin, other)
+	for _, tk := range []string{t1.Branch, t2.Branch} {
+		git(t, other, "fetch", "-q", a.Root, tk)
+		git(t, other, "merge", "-q", "--squash", "FETCH_HEAD")
+		git(t, other, "commit", "-qm", "squash "+tk)
+	}
+	git(t, other, "push", "-q", "origin", "main")
+	for _, id := range []string{t1.ID, t2.ID} {
+		if err := a.Store.SetTrain(id, TrainMerged, old, false); err != nil {
+			t.Fatal(err)
+		}
+		// Its landing's commit is gone too, so the note can't be recovered.
+		a.Store.Event(id, "landed", strings.Repeat("d", 40))
+	}
+	// Integration was restacked onto that main earlier.
+	git(t, a.Root, "fetch", "-q", "origin")
+	if _, err := trainGit(a.Root, "update-ref", "refs/heads/"+a.Cfg.Integration, "origin/main"); err != nil {
+		t.Fatal(err)
+	}
+
+	write(t, other, "human.txt", "human\n")
+	commitAll(t, other, "human PR (#164)")
+	git(t, other, "push", "-q", "origin", "main")
+	head := git(t, other, "rev-parse", "HEAD")
+
+	// prs and land must not trip over the same stale notes.
+	if _, err := a.PRs(); err != nil {
+		t.Fatalf("PRs with integration behind main: %v", err)
+	}
+	if _, err := a.Restack(); err != nil {
+		t.Fatalf("restack refused an integration main already holds: %v", err)
+	}
+	if got := git(t, a.Root, "rev-parse", a.Cfg.Integration); got != head {
+		t.Fatalf("integration = %s, want fast-forwarded to main %s", got, head)
+	}
+	landTask(t, a, "t3", "three", map[string]string{"three.txt": "three\n"})
+	if _, err := a.PRs(); err != nil {
+		t.Fatalf("PRs after restack: %v", err)
+	}
+	if n := git(t, a.Root, "rev-list", "--count", "origin/main.."+a.Cfg.Integration); n != "1" {
+		t.Fatalf("integration has %s commits over main, want only t3's", n)
+	}
+}
+
+// A commit on integration that no landed task owns and base doesn't have
+// still stops restack: dropping it would lose work.
+func TestRestackRefusesUnownedIntegrationCommit(t *testing.T) {
+	a := trainSetup(t)
+	origin, _ := originWithGh(t, a)
+	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+
+	wt := filepath.Join(t.TempDir(), "integ")
+	git(t, a.Root, "worktree", "add", "-q", wt, a.Cfg.Integration)
+	write(t, wt, "stray.txt", "stray\n")
+	git(t, wt, "add", "-A")
+	if _, err := trainGit(wt, "commit", "-qm", "stray commit"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, a.Root, "worktree", "remove", "--force", wt)
+	before := git(t, a.Root, "rev-parse", a.Cfg.Integration)
+
+	other := filepath.Join(t.TempDir(), "other")
+	git(t, a.Root, "clone", "-q", origin, other)
+	write(t, other, "human.txt", "human\n")
+	commitAll(t, other, "human PR")
+	git(t, other, "push", "-q", "origin", "main")
+
+	_, err := a.Restack()
+	if err == nil || !strings.Contains(err.Error(), "no landed task owns") || !strings.Contains(err.Error(), "1 commit ") {
+		t.Fatalf("restack err = %v, want refusal over the 1 stray commit", err)
+	}
+	if got := git(t, a.Root, "rev-parse", a.Cfg.Integration); got != before {
+		t.Fatal("integration moved despite the stray commit")
+	}
+}
