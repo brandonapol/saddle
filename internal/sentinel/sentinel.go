@@ -151,6 +151,13 @@ type Sentinel struct {
 	posted map[string]Comment
 }
 
+func init() {
+	app.StackCheck = func(a *app.App) error {
+		_, err := New(a).Check()
+		return err
+	}
+}
+
 // New returns a sentinel for a's stack that talks to GitHub through gh.
 func New(a *app.App) *Sentinel {
 	return &Sentinel{App: a, GH: &GH{Dir: a.Root}, Interval: DefaultInterval, BusyRetry: DefaultBusyRetry}

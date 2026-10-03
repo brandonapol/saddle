@@ -617,15 +617,30 @@ func (a *App) Notify(task, kind, text string) error {
 	if ad := a.taskAdapter(t); !ad.Hooks() {
 		return a.injectNotices(t, ad)
 	}
-	if t.Status == store.Idle || t.Status == store.Done || t.Status == store.Conflict {
-		if a.ownWindow(t) {
-			tmux.SendWhenIdle(a.Tmux, t.Window, agent.Claude{}.Inject(""), func() bool {
-				n, err := a.Store.PendingNotices(task)
-				return err != nil || n > 0
-			})
+	// A needs-you agent is woken only when its screen shows no prompt: an
+	// escalated task waits idle at its prompt for instructions (#189), while
+	// the wake line would answer a permission prompt.
+	asks := t.Status == store.NeedsYou
+	if (t.Status == store.Idle || t.Status == store.Done || t.Status == store.Conflict || asks) && a.ownWindow(t) {
+		if asks && a.onPrompt(t) {
+			return nil
 		}
+		tmux.SendWhenIdle(a.Tmux, t.Window, agent.Claude{}.Inject(""), func() bool {
+			if asks && a.onPrompt(t) {
+				return false
+			}
+			n, err := a.Store.PendingNotices(task)
+			return err != nil || n > 0
+		})
 	}
 	return nil
+}
+
+// onPrompt reports whether t's window shows a permission prompt or question,
+// or can't be read.
+func (a *App) onPrompt(t store.Task) bool {
+	screen, err := a.Tmux.Capture(t.Window, 30)
+	return err != nil || DetectPrompt(screen) != PromptNone
 }
 
 // Done marks a task finished and queues its branch in the merge train.

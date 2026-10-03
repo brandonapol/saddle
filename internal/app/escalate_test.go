@@ -89,3 +89,47 @@ func TestRedTestsEscalate(t *testing.T) {
 		t.Fatalf("second land = %+v", rs)
 	}
 }
+
+// The escalation tells the owner to "tell t2 what to do": that message must
+// wake t2, whose agent sits idle at its prompt while it is needs-you (#189).
+func TestMessageWakesEscalatedTask(t *testing.T) {
+	a, ft := setup(t)
+	a.Cfg.Train.MaxAttempts = 1
+	t1, _ := a.Spawn(SpawnReq{Title: "one"})
+	t2, _ := a.Spawn(SpawnReq{Title: "two"})
+	write(t, t1.Worktree, "README.md", "one\n")
+	commitAll(t, t1.Worktree, "one")
+	write(t, t2.Worktree, "README.md", "two\n")
+	commitAll(t, t2.Worktree, "two")
+	must(t, a.Done(t1.ID, "one"))
+	must(t, a.Done(t2.ID, "two"))
+	if _, err := a.Land(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := a.Store.Task(t2.ID); got.Status != store.NeedsYou {
+		t.Fatalf("status = %s, want needs_you", got.Status)
+	}
+	woken := len(ft.sent[t2.Window])
+	must(t, a.Notify(t2.ID, store.NoticeAction, "Message from the user: fix it like this"))
+	if len(ft.sent[t2.Window]) != woken+1 {
+		t.Fatalf("the message didn't wake the escalated task: sent %q", ft.sent[t2.Window])
+	}
+}
+
+// A needs-you task on a permission prompt is not typed at: the wake line
+// would answer the prompt. Its notice waits for its next tool call.
+func TestNotifyLeavesTaskOnPromptAlone(t *testing.T) {
+	a, ft := setup(t)
+	c, err := a.Spawn(SpawnReq{Title: "asks"})
+	must(t, err)
+	must(t, a.Store.SetStatus(c.ID, store.NeedsYou))
+	ft.screens = map[string]string{c.Window: "Do you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel"}
+	sent := len(ft.sent[c.Window])
+	must(t, a.Notify(c.ID, store.NoticeAction, "hello"))
+	if len(ft.sent[c.Window]) != sent {
+		t.Fatalf("typed into a permission prompt: %q", ft.sent[c.Window][sent:])
+	}
+	if n, _ := a.Store.PendingNotices(c.ID); n != 1 {
+		t.Fatalf("%d notices pending, want the message kept", n)
+	}
+}

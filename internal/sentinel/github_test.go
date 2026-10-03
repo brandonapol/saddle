@@ -161,3 +161,31 @@ func TestSentinelDropsLabelsWhenConflictGoes(t *testing.T) {
 		t.Fatalf("label kept: %v", gh.log()[before:])
 	}
 }
+
+// #190: unstack's own check flags the layer above (it still holds the
+// unstacked task's commit). Restack drops that commit, and must lift the flag
+// itself so prs works at once, not after the next sentinel cycle.
+func TestRestackLiftsFlagUnstackRaised(t *testing.T) {
+	a, _ := setup(t)
+	newFakeGH(t)
+	landTask(t, a, "t1", "one")
+	landTask(t, a, "t2", "two")
+	if _, err := a.PRs(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Unstack("t1"); err != nil {
+		t.Fatal(err)
+	}
+	if rep, err := New(a).Check(); err != nil || !rep.AtRisk || rep.Task != "t2" {
+		t.Fatalf("check after unstack = %+v, %v; want t2 at risk", rep, err)
+	}
+	if _, err := a.Restack(); err != nil {
+		t.Fatal(err)
+	}
+	if f, ok, err := a.Flag(); err != nil || ok {
+		t.Fatalf("flag after restack = %+v, %v, %v; want it lifted", f, ok, err)
+	}
+	if _, err := a.PRs(); err != nil {
+		t.Fatalf("prs right after unstack and restack: %v", err)
+	}
+}
