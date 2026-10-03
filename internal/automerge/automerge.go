@@ -7,6 +7,13 @@
 // a stack-at-risk flag, based on base), then runs restack so the next PR
 // retargets to base and its CI runs again. Only one PR merges per tick.
 //
+// A tick that finds the train lock held (a land's test gate, a restack, the
+// stack sentinel) merges nothing, says so in the saved status and retries
+// after BusyRetry instead of a whole Interval, so a ready PR merges as soon
+// as the lock frees. Every tick that merges nothing while a ready PR exists
+// logs why (at most once per Interval for the same reason), and status says
+// for every stack why it isn't merged and when the next check is.
+//
 // A held stack (`saddle automerge hold <stack|pr>`) is never merged, but it is
 // still tracked and restacked; when it falls behind base the orchestrator
 // hears about it once, as info. Any merge or restack failure stops the
@@ -41,6 +48,7 @@ const (
 	EventBehind  = "automerge_behind"  // a held stack fell behind base
 	EventToggle  = "automerge_toggle"  // on or off
 	EventHold    = "automerge_hold"    // a stack held or released
+	EventIdle    = "automerge_idle"    // a check merged nothing while a PR was ready, and why
 )
 
 // Where the on/off state came from.
@@ -59,6 +67,10 @@ const (
 
 // DefaultInterval is how often Run checks, the sentinel's cadence.
 const DefaultInterval = 2 * time.Minute
+
+// DefaultBusyRetry is how soon Run checks again after a tick found the train
+// lock held.
+const DefaultBusyRetry = 5 * time.Second
 
 // Entry is a task in the PR stack, in train order.
 type Entry struct {
@@ -117,19 +129,25 @@ type Stack struct {
 	Next   string `json:"next"`             // the PR it merges next: the bottom one
 	Ready  bool   `json:"ready"`            // Next can merge now
 	Why    string `json:"why,omitempty"`    // why Next can't, when not ready
-	wait   bool   // Why is something to wait out, not a refusal
+	// Blocked says why a ready Next wasn't merged, or when it will be.
+	Blocked string `json:"blocked,omitempty"`
+	wait    bool   // Why is something to wait out, not a refusal
 }
 
 // Status is the watcher's state and what it would do.
 type Status struct {
-	Enabled bool      `json:"enabled"`
-	Source  string    `json:"source"`            // config or runtime
-	Stopped string    `json:"stopped,omitempty"` // why it stopped; on clears it
-	Busy    bool      `json:"busy,omitempty"`    // the train held its lock; nothing was checked
-	Holds   []string  `json:"holds,omitempty"`
-	Stacks  []Stack   `json:"stacks,omitempty"`
-	Merged  string    `json:"merged,omitempty"` // the PR this check merged
-	Checked time.Time `json:"checked"`
+	Enabled bool   `json:"enabled"`
+	Source  string `json:"source"`            // config or runtime
+	Stopped string `json:"stopped,omitempty"` // why it stopped; on clears it
+	Busy    bool   `json:"busy,omitempty"`    // the train held its lock; nothing was checked
+	// BusySince is when the watcher first found the lock held in a row of busy ticks.
+	BusySince time.Time `json:"busy_since,omitzero"`
+	Holds     []string  `json:"holds,omitempty"`
+	Stacks    []Stack   `json:"stacks,omitempty"`
+	Merged    string    `json:"merged,omitempty"` // the PR this check merged
+	Checked   time.Time `json:"checked"`
+	// Next is when the watcher checks again; zero until a watcher has run.
+	Next time.Time `json:"next_check,omitzero"`
 }
 
 // State is the file under .saddle/ that outlives restarts.
@@ -138,7 +156,13 @@ type State struct {
 	Holds   []string       `json:"holds,omitempty"`   // held tasks or PRs; any one holds its stack
 	Stopped string         `json:"stopped,omitempty"`
 	Behind  map[string]int `json:"behind,omitempty"` // held stacks already flagged behind
-	Last    Status         `json:"last"`             // the last check, for readers without GitHub
+	// Logged is the last refusal or wait logged per PR, so a reason is
+	// logged once per change even across restarts.
+	Logged map[string]string `json:"logged,omitempty"`
+	// Idle and IdleAt are the last idle event and when it was logged.
+	Idle   string    `json:"idle,omitempty"`
+	IdleAt time.Time `json:"idle_at,omitzero"`
+	Last   Status    `json:"last"` // the last check, for readers without GitHub
 }
 
 // Load reads the state file; a missing one is the zero state.
@@ -190,9 +214,31 @@ type Watcher struct {
 	Notify func(action bool, text string) // to the orchestrator
 	// Interval is how often Run checks.
 	Interval time.Duration
-	Now      func() time.Time
+	// BusyRetry is how soon Run checks again after a tick found the train busy.
+	BusyRetry time.Duration
+	Now       func() time.Time
+}
 
-	logged map[string]string // the last decision logged per PR
+func (w *Watcher) interval() time.Duration {
+	if w.Interval > 0 {
+		return w.Interval
+	}
+	return DefaultInterval
+}
+
+func (w *Watcher) busyRetry() time.Duration {
+	if w.BusyRetry > 0 {
+		return min(w.BusyRetry, w.interval())
+	}
+	return min(DefaultBusyRetry, w.interval())
+}
+
+// wait is how long Run waits after a check: BusyRetry after a busy one.
+func (w *Watcher) wait(busy bool) time.Duration {
+	if busy {
+		return w.busyRetry()
+	}
+	return w.interval()
 }
 
 func (w *Watcher) now() time.Time {
@@ -307,13 +353,60 @@ func (w *Watcher) Status() (Status, error) {
 }
 
 // Plan reads GitHub and reports what Check would do, without merging,
-// logging or saving anything.
+// logging or saving anything. Busy, BusySince and Next come from the
+// watcher's last check, and each ready stack says why it isn't merged yet.
 func (w *Watcher) Plan() (Status, error) {
 	s, err := Load(w.Path)
 	if err != nil {
 		return Status{}, err
 	}
-	return w.plan(s)
+	st, err := w.plan(s)
+	if err != nil {
+		return st, err
+	}
+	st.Busy, st.BusySince, st.Next = s.Last.Busy, s.Last.BusySince, s.Last.Next
+	w.explain(&st, s.Last.Checked, "")
+	return st, nil
+}
+
+// explain sets Blocked on every ready stack: why it isn't merged, or when
+// it will be. last is the watcher's last check; merged is the PR this
+// check merged, if any.
+func (w *Watcher) explain(st *Status, last time.Time, merged string) {
+	at := func(t time.Time) string { return t.Local().Format("15:04:05") }
+	first := ""
+	for i := range st.Stacks {
+		x := &st.Stacks[i]
+		x.Blocked = ""
+		if !x.Ready || x.Next == merged {
+			continue
+		}
+		switch {
+		case !st.Enabled:
+			x.Blocked = "auto-merge is off; `saddle automerge on` turns it on"
+		case st.Stopped != "":
+			x.Blocked = "auto-merge stopped after a failure (" + st.Stopped + "); `saddle automerge on` resumes"
+		case st.Busy:
+			x.Blocked = fmt.Sprintf("the train lock is busy (a land, restack or the stack sentinel holds it) since %s; the watcher retries every %s",
+				at(st.BusySince), w.busyRetry())
+		case merged != "":
+			x.Blocked = fmt.Sprintf("one PR merges per check and this one merged %s; it goes at a later check", merged)
+		case first != "":
+			x.Blocked = fmt.Sprintf("one PR merges per check; it goes after %s", first)
+		case st.Next.IsZero() && last.IsZero():
+			x.Blocked = "no watcher has checked yet; it runs inside `saddle up` or `saddle plugin engine`"
+		case st.Next.IsZero():
+			x.Blocked = "the watcher last checked at " + at(last) + "; it runs inside `saddle up` or `saddle plugin engine`"
+		case w.now().After(st.Next.Add(w.interval())):
+			x.Blocked = fmt.Sprintf("the watcher was due at %s and hasn't checked since %s: is `saddle up` or `saddle plugin engine` running for this repo?",
+				at(st.Next), at(last))
+		default:
+			x.Blocked = "the watcher merges it at its next check, at " + at(st.Next)
+		}
+		if first == "" {
+			first = x.Next
+		}
+	}
 }
 
 func (w *Watcher) plan(s State) (Status, error) {
@@ -445,9 +538,7 @@ func (w *Watcher) Check() (Status, error) {
 			return Status{}, err
 		}
 		if !ok {
-			st, _ := w.Status()
-			st.Busy = true
-			return st, nil
+			return w.busy(s)
 		}
 		unlock = u
 	}
@@ -467,15 +558,74 @@ func (w *Watcher) Check() (Status, error) {
 	w.flagBehind(&s, st.Stacks)
 
 	if st.Enabled && s.Stopped == "" {
-		w.logDecisions(st.Stacks)
+		w.logDecisions(&s, st.Stacks)
 		if i := slices.IndexFunc(st.Stacks, func(x Stack) bool { return x.Ready }); i >= 0 {
 			release() // restack takes the train lock itself
 			w.merge(&s, &st, st.Stacks[i])
 		}
 	}
 	st.Stopped = s.Stopped
+	st.Next = w.now().Add(w.wait(false))
+	w.explain(&st, st.Checked, st.Merged)
+	w.logIdle(&s, st)
 	s.Last = st
 	return st, s.Save(w.Path)
+}
+
+// busy records a tick that found the train lock held, marked busy since the
+// first busy tick in a row, with the next check after BusyRetry. It reads
+// GitHub without the lock, as Plan does, at most once per Interval; retries
+// in between reuse what it read.
+func (w *Watcher) busy(s State) (Status, error) {
+	st := s.Last
+	if !st.Busy || w.now().Sub(st.Checked) >= w.interval() {
+		fresh, err := w.plan(s)
+		if err != nil {
+			return fresh, err
+		}
+		fresh.Busy, fresh.BusySince = st.Busy, st.BusySince
+		st = fresh
+	}
+	st.Enabled, st.Source = w.enabled(s)
+	st.Stopped, st.Holds, st.Merged = s.Stopped, s.Holds, ""
+	if !st.Busy || st.BusySince.IsZero() {
+		st.BusySince = w.now()
+	}
+	st.Busy = true
+	st.Next = w.now().Add(w.wait(true))
+	w.explain(&st, st.Checked, "")
+	w.logIdle(&s, st)
+	s.Last = st
+	return st, s.Save(w.Path)
+}
+
+// logIdle logs an EventIdle when a check merged nothing while auto-merge is
+// on and a PR is ready, with the reason. The same reason is logged again
+// once per Interval, so busy retries don't flood the log.
+func (w *Watcher) logIdle(s *State, st Status) {
+	if !st.Enabled || st.Merged != "" {
+		return
+	}
+	var prs []string
+	task, why := "", ""
+	for _, x := range st.Stacks {
+		if x.Ready && x.Blocked != "" {
+			if task == "" {
+				task, why = x.Nodes[0].Task, x.Blocked
+			}
+			prs = append(prs, x.Next)
+		}
+	}
+	if len(prs) == 0 {
+		s.Idle, s.IdleAt = "", time.Time{}
+		return
+	}
+	data := strings.Join(prs, ", ") + " ready but not merged: " + why
+	if data == s.Idle && w.now().Sub(s.IdleAt) < w.interval() {
+		return
+	}
+	s.Idle, s.IdleAt = data, w.now()
+	w.event(task, EventIdle, data)
 }
 
 // merge merges stack's bottom PR and restacks; a failure of either stops
@@ -498,7 +648,7 @@ func (w *Watcher) merge(s *State, st *Status, stack Stack) {
 	}
 	st.Merged = n.PR
 	w.event(n.Task, EventMerged, fmt.Sprintf("%s by %s: checks %s, mergeable, CLEAN", n.PR, method, n.Checks))
-	delete(w.logged, n.PR)
+	delete(s.Logged, n.PR)
 	if err := w.Restack(); err != nil {
 		stop(fmt.Sprintf("restack after merging %s failed: %v", n.PR, err))
 		return
@@ -507,19 +657,33 @@ func (w *Watcher) merge(s *State, st *Status, stack Stack) {
 }
 
 // logDecisions records why each stack's next PR isn't merging, once per
-// change of reason.
-func (w *Watcher) logDecisions(stacks []Stack) {
-	if w.logged == nil {
-		w.logged = map[string]string{}
+// change of reason; the reasons are kept in the state file.
+func (w *Watcher) logDecisions(s *State, stacks []Stack) {
+	open := map[string]bool{}
+	for _, st := range stacks {
+		for _, n := range st.Nodes {
+			open[n.PR] = true
+		}
+	}
+	for pr := range s.Logged {
+		if !open[pr] {
+			delete(s.Logged, pr)
+		}
 	}
 	for _, st := range stacks {
 		if st.Ready || st.Next == "" {
+			if st.Ready {
+				delete(s.Logged, st.Next)
+			}
 			continue
 		}
-		if w.logged[st.Next] == st.Why {
+		if s.Logged[st.Next] == st.Why {
 			continue
 		}
-		w.logged[st.Next] = st.Why
+		if s.Logged == nil {
+			s.Logged = map[string]string{}
+		}
+		s.Logged[st.Next] = st.Why
 		kind := EventRefused
 		if st.wait && !st.Held {
 			kind = EventWaiting
@@ -555,25 +719,26 @@ func (w *Watcher) flagBehind(s *State, stacks []Stack) {
 	}
 }
 
-// Run checks now and then every Interval until ctx ends. A failed check is
-// recorded as an event once per distinct error and retried next tick.
+// Run checks now and then every Interval until ctx ends; a tick that found
+// the train lock held is retried after BusyRetry instead. A failed check is
+// recorded as an event once per distinct error and retried next tick. The
+// wait starts after each check, so Run doesn't stay in step with other
+// watchers that started with it and compete for the lock.
 func (w *Watcher) Run(ctx context.Context) error {
-	iv := w.Interval
-	if iv <= 0 {
-		iv = DefaultInterval
-	}
-	t := time.NewTicker(iv)
+	t := time.NewTimer(w.interval())
 	defer t.Stop()
 	last := ""
 	for {
-		if _, err := w.Check(); err != nil {
+		busy := false
+		if st, err := w.Check(); err != nil {
 			if msg := err.Error(); msg != last {
 				last = msg
 				w.event("", EventFailed, "check: "+msg)
 			}
 		} else {
-			last = ""
+			last, busy = "", st.Busy
 		}
+		t.Reset(w.wait(busy))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
