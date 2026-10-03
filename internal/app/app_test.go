@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +34,8 @@ func TestMain(m *testing.M) {
 }
 
 type fakeTmux struct {
+	mu      sync.Mutex // SendWhenIdle retries and delivery checks run in goroutines
+	frozen  bool       // SendText leaves the screen as it was
 	session bool
 	windows map[string]bool
 	sent    map[string][]string
@@ -56,13 +59,41 @@ func (f *fakeTmux) NewWindow(name, _, _ string) (string, error) {
 func (f *fakeTmux) WindowName(id string) (string, error) { return f.names[id], nil }
 func (f *fakeTmux) KillWindow(id string) error           { delete(f.windows, id); return nil }
 func (f *fakeTmux) Alive(id string) bool                 { return f.windows[id] }
+
+// SendText records text and, unless frozen, echoes it onto the screen the
+// way a submitted prompt changes the pane.
 func (f *fakeTmux) SendText(id, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.sent[id] = append(f.sent[id], text)
+	if !f.frozen {
+		if f.screens == nil {
+			f.screens = map[string]string{}
+		}
+		f.screens[id] += "\n" + text
+	}
 	return nil
 }
-func (f *fakeTmux) Capture(id string, _ int) (string, error) { return f.screens[id], nil }
-func (f *fakeTmux) SendKeys(string, ...string) error         { return nil }
-func (f *fakeTmux) KillSession() error                       { return nil }
+func (f *fakeTmux) Capture(id string, _ int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.screens[id], nil
+}
+func (f *fakeTmux) setScreen(id, s string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.screens == nil {
+		f.screens = map[string]string{}
+	}
+	f.screens[id] = s
+}
+func (f *fakeTmux) sentTo(id string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.sent[id]...)
+}
+func (f *fakeTmux) SendKeys(string, ...string) error { return nil }
+func (f *fakeTmux) KillSession() error               { return nil }
 
 // git runs git in dir. In a task's worktree it runs as that task, the way
 // its agent would, so the ref guard lets it move the task's branch.

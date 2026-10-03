@@ -135,3 +135,8 @@ func (t Tmux) Capture(id string, lines int) (string, error) {
 func (t Tmux) WindowName(id string) (string, error) {
 	return run("display-message", "-p", "-t", id, "#{window_name}")
 }
+
+// CaptureStyled is Capture with SGR escapes kept (capture-pane -e).
+func (t Tmux) CaptureStyled(id string, lines int) (string, error) {
+	return run("capture-pane", "-e", "-p", "-t", id, "-S", fmt.Sprintf("-%d", lines))
+}
