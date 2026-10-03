@@ -112,6 +112,25 @@ func TestPreToolUseDeniesOtherTasksFiles(t *testing.T) {
 	if hs["permissionDecision"] != "deny" || !strings.Contains(hs["permissionDecisionReason"].(string), t1.ID) {
 		t.Fatalf("out = %v", out)
 	}
+	// Claude's legacy top-level decision only takes approve/block; "deny"
+	// there can fail its output validation, so Claude gets only hookSpecificOutput.
+	if _, ok := out["decision"]; ok {
+		t.Fatalf("claude deny carries a top-level decision: %v", out)
+	}
+	// Grok's PreToolUse payload is camelCase and names the path "path".
+	// The deny has to be both Claude's permissionDecision and Grok's decision.
+	out = run(t, a, t2.ID, map[string]any{
+		"hookEventName": "pre_tool_use", "hook_event_name": "PreToolUse",
+		"toolName": "write_file", "sessionId": "sid",
+		"toolInput": map[string]any{"path": filepath.Join(t2.Worktree, "a.go")},
+	})
+	if out["decision"] != "deny" {
+		t.Fatalf("grok deny = %v", out)
+	}
+	hs, _ = out["hookSpecificOutput"].(map[string]any)
+	if hs["permissionDecision"] != "deny" || !strings.Contains(hs["permissionDecisionReason"].(string), t1.ID) {
+		t.Fatalf("grok out = %v", out)
+	}
 	if out := run(t, a, t1.ID, map[string]any{
 		"hook_event_name": "PreToolUse", "tool_name": "Write",
 		"tool_input": map[string]any{"file_path": filepath.Join(t1.Worktree, "a.go")},

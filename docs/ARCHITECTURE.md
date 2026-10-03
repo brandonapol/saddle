@@ -153,8 +153,16 @@ close PRs and delete branches, and it handles those without anyone editing
 - **Claude Code**: Saddle writes a per-worktree `.claude/settings.local.json`
   that wires hooks to `saddle hook` and registers `saddle mcp`. It then
   launches `claude --model <m>` with the task brief.
-- **Codex / Grok**: same interface. Usage and status come from their output on
-  a best-effort basis. Grok is used for image-generation tasks.
+- **Grok CLI** (`harness = "grok"`): same task, worktree and tmux window.
+  Saddle writes `.grok/hooks/saddle.json` and a `[mcp_servers.saddle]` block
+  (both gitexcluded) and launches `grok --trust` with the brief as `--rules`.
+  The orchestrator has no long-lived stdin protocol, so `saddle grok-bridge`
+  runs one `grok -p` turn per chat message and resumes the session. Output is
+  `streaming-messages-json`, which matches the Claude stream the TUI parses.
+  `[adapters.grok]` cmd and args apply here too.
+- **Codex / one-shot Grok** (`adapter=codex|grok` under the Claude harness):
+  hookless, so claims are advisory and notices are typed in. Usage and status
+  come from their output on a best-effort basis.
 
 Sub-agents spawned through MCP are ordinary tasks with a `parent_task`. Each
 gets its own worktree, window and claims, and the train lands it before its

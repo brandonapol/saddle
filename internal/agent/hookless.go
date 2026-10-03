@@ -180,6 +180,9 @@ func (Grok) Inject(notices string) string { return hooklessInject(notices) }
 const grokTranscript = "transcript.jsonl"
 
 func (Grok) Launch(l Launch) (string, error) {
+	if l.Kind == KindGrok {
+		return l.writeGrok()
+	}
 	argv := []string{shellQuote(l.cmdOr("grok")), "--directory", shellQuote(l.Dir)}
 	if l.Model != "" {
 		argv = append(argv, "--model", shellQuote(l.Model))
@@ -194,3 +197,16 @@ func (Grok) Usage() UsageSource {
 		return filepath.Join(runDir, grokTranscript)
 	}}
 }
+
+// GrokWithHooks is a grok worker started with harness = "grok": project hooks
+// and the saddle MCP server are installed, so claims are enforced.
+type GrokWithHooks struct{}
+
+func (GrokWithHooks) Name() string         { return usage.Grok }
+func (GrokWithHooks) Hooks() bool          { return true }
+func (GrokWithHooks) Inject(string) string { return WakeLine }
+func (GrokWithHooks) Launch(l Launch) (string, error) {
+	l.Kind = KindGrok
+	return l.writeGrok()
+}
+func (GrokWithHooks) Usage() UsageSource { return Grok{}.Usage() }
