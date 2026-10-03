@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/app"
@@ -90,7 +91,19 @@ type StatusOut struct {
 	Integration string     `json:"integration"`
 	Warnings    []string   `json:"warnings,omitempty"`
 	StackAtRisk *StackRisk `json:"stack_at_risk,omitempty"`
-	Tasks       []TaskView `json:"tasks"`
+	// OrchestratorContext is how full the orchestrator's context is; absent
+	// before its transcript has a reading.
+	OrchestratorContext *OrchContext `json:"orchestrator_context,omitempty"`
+	Tasks               []TaskView   `json:"tasks"`
+}
+
+// OrchContext is the orchestrator's context use against its compact threshold.
+type OrchContext struct {
+	Percent   int    `json:"percent"`    // of the context window in use
+	Tokens    int64  `json:"tokens"`     // prompt size of the latest response
+	Window    int64  `json:"window"`     // context window in tokens
+	CompactAt int    `json:"compact_at"` // percent at which saddle compacts it
+	Model     string `json:"model,omitempty"`
 }
 
 // StackRisk is the stack sentinel's flag: the stack is at risk from Task up.
@@ -227,6 +240,10 @@ func Status(a *app.App) (StatusOut, error) {
 	if flagged {
 		out.StackAtRisk = &StackRisk{Task: f.Task, Cause: f.Cause, PRs: f.PRs, Acked: f.Acked, Fix: StackFix}
 	}
+	if u, err := a.OrchestratorContext(); err == nil && u.Prompt > 0 {
+		out.OrchestratorContext = &OrchContext{Percent: int(math.Round(u.Fraction() * 100)), Tokens: u.Prompt,
+			Window: u.Window, CompactAt: int(math.Round(a.CompactAt() * 100)), Model: u.Model}
+	}
 	out.Tasks, err = Tasks(a)
 	return out, err
 }
@@ -324,7 +341,7 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, OK{Message: "released"}, a.Store.Release(task, in.Paths...)
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "List every saddle task with status, claims and merge-train state, plus warnings and stack_at_risk when the stack sentinel has flagged the PR stack."},
+	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "List every saddle task with status, claims and merge-train state, plus warnings, stack_at_risk when the stack sentinel has flagged the PR stack, and orchestrator_context: how full your context is against the compact_at threshold."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, StatusOut, error) {
 			out, err := Status(a)
 			return nil, out, err

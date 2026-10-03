@@ -94,6 +94,7 @@ func (a *App) orchestratorBriefFor(intro, waiting, talking string) string {
 - When a coherent set has landed, offer to open stacked PRs (prs). Base: %s.
 - Stack or base problems (base moved, CI failing on a stacked PR, drift) -> find the owning task and `+"`message`"+` it, or call `+"`restack`"+` if the base moved. Restack first; if that fails, see Getting unstuck.
 `, serialList(a.Cfg.Serial), a.workerDefaultName(), a.Cfg.Concurrency, a.Cfg.Integration, a.Cfg.Base) + waiting + `- Keep your context small. Use status and peek, not reading the agents' code, unless something is stuck.
+- Compact your context at natural breakpoints: after a batch lands and its PRs merge, before a long planning step, or when saddle tells you context is above the threshold. Run /compact (or your harness's equivalent) and keep a short state summary: running tasks, open PRs, queued follow-ups, owner decisions pending, rules in force. When you are idle and the owner isn't typing, saddle may send the command for you.
 
 ## Getting unstuck
 The goal is getting work done, not needing manual intervention. When a tool is stuck you may hand-fix it: edit ` + "`.saddle/state.db`" + ` (back it up first), recreate branches, spawn a repair worker, re-land work as fresh PRs, even using git yourself, unless the owner forbade it. Every hand fix must be followed in the same session by (1) a regression test that reproduces the failure, written failing-first, and (2) a GitHub issue designing a better system, recording the exact fix. Tell the user what you did in a sentence or two.

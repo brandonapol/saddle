@@ -3,6 +3,8 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -87,4 +89,30 @@ func TestRestackToolIsTheFixForAFlaggedStack(t *testing.T) {
 		return
 	}
 	t.Fatal("no restack tool")
+}
+
+// #179: status reports how full the orchestrator's context is, against its
+// compact_at threshold, once its transcript has a reading.
+func TestStatusShowsOrchestratorContext(t *testing.T) {
+	a, _ := stackSetup(t)
+	cfgDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfgDir)
+	if _, err := a.EnsureOrchestrator(); err != nil {
+		t.Fatal(err)
+	}
+	if out := callStatus(t, a); out.OrchestratorContext != nil {
+		t.Fatalf("no session yet, but context = %+v", out.OrchestratorContext)
+	}
+	if err := a.Store.SetField(app.OrchestratorID, "session_id", "s1"); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"assistant","timestamp":"2026-10-03T10:00:00Z","message":{"id":"m1","model":"claude-opus-4-5","usage":{"input_tokens":1,"output_tokens":5,"cache_read_input_tokens":89999}}}` + "\n"
+	if err := os.MkdirAll(filepath.Join(cfgDir, "projects", "-x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, cfgDir, "projects/-x/s1.jsonl", line)
+	c := callStatus(t, a).OrchestratorContext
+	if c == nil || c.Percent != 45 || c.Tokens != 90_000 || c.Window != 200_000 || c.CompactAt != 70 {
+		t.Fatalf("orchestrator_context = %+v, want 45%% of 200000 with compact_at 70", c)
+	}
 }

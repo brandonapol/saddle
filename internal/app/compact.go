@@ -4,12 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/BurntSushi/toml"
 
 	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/config"
@@ -183,26 +180,11 @@ func (a *App) OrchestratorContext() (ContextUse, error) {
 }
 
 // CompactAt is orchestrator.compact_at, the context fraction at which the
-// orchestrator is told to compact. Unset or outside (0, 1) means
-// DefaultCompactAt.
-//
-// It reads the key straight from the config files until config.Config grows
-// an Orchestrator section; then this becomes a.Cfg.Orchestrator.CompactAt.
+// orchestrator is told to compact. Unset or outside (0, 1] means
+// DefaultCompactAt; config.Load rejects such values from files.
 func (a *App) CompactAt() float64 {
-	var f struct {
-		Orchestrator struct {
-			CompactAt *float64 `toml:"compact_at"`
-		} `toml:"orchestrator"`
-	}
-	paths := []string{filepath.Join(a.Root, ".saddle", "config.toml")}
-	if home, err := os.UserConfigDir(); err == nil {
-		paths = append([]string{filepath.Join(home, "saddle", "config.toml")}, paths...)
-	}
-	for _, p := range paths {
-		_, _ = toml.DecodeFile(p, &f) // a missing or bad file leaves the value; config.Load reports bad ones
-	}
-	if v := f.Orchestrator.CompactAt; v != nil && *v > 0 && *v < 1 {
-		return *v
+	if v := a.Cfg.Orchestrator.CompactAt; v > 0 && v <= 1 {
+		return v
 	}
 	return DefaultCompactAt
 }
@@ -315,10 +297,7 @@ func (w *CompactWatcher) getTarget() CompactTarget {
 	if t != nil {
 		return t
 	}
-	if v, ok := compactTargets.Load(w.App); ok {
-		return v.(CompactTarget)
-	}
-	return nil
+	return w.App.CompactTarget()
 }
 
 // compactTargets holds each App's orchestrator input, set by whatever runs
@@ -333,6 +312,14 @@ func (a *App) SetCompactTarget(t CompactTarget) {
 		return
 	}
 	compactTargets.Store(a, t)
+}
+
+// CompactTarget is the orchestrator input registered for a, or nil.
+func (a *App) CompactTarget() CompactTarget {
+	if v, ok := compactTargets.Load(a); ok {
+		return v.(CompactTarget)
+	}
+	return nil
 }
 
 // CompactReport is the outcome of one Check.

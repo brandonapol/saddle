@@ -88,14 +88,20 @@ func TestCompactAtDefaultAndConfig(t *testing.T) {
 	if got := a.CompactAt(); got != DefaultCompactAt {
 		t.Fatalf("CompactAt = %v, want default %v", got, DefaultCompactAt)
 	}
-	write(t, a.Root, ".saddle/config.toml", "[orchestrator]\ncompact_at = 0.55\n")
+	a.Cfg.Orchestrator.CompactAt = 0.55
 	if got := a.CompactAt(); got != 0.55 {
 		t.Fatalf("CompactAt = %v, want 0.55 from config", got)
 	}
-	// Out-of-range values fall back to the default instead of compacting always or never.
-	write(t, a.Root, ".saddle/config.toml", "[orchestrator]\ncompact_at = 1.5\n")
-	if got := a.CompactAt(); got != DefaultCompactAt {
-		t.Fatalf("CompactAt = %v, want default for an out-of-range value", got)
+	if w := a.NewCompactWatcher(); w.Threshold != 0.55 {
+		t.Fatalf("watcher threshold = %v, want the configured 0.55", w.Threshold)
+	}
+	// An unset (zero) or out-of-range value falls back to the default
+	// instead of compacting always or never.
+	for _, v := range []float64{0, 1.5} {
+		a.Cfg.Orchestrator.CompactAt = v
+		if got := a.CompactAt(); got != DefaultCompactAt {
+			t.Fatalf("CompactAt(%v) = %v, want the default", v, got)
+		}
 	}
 }
 
