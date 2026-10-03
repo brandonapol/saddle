@@ -190,7 +190,7 @@ func TestPluginBriefReportsEngineAndAgents(t *testing.T) {
 }
 
 func TestPluginCommandRegistered(t *testing.T) {
-	for _, name := range []string{"wait", "setup"} {
+	for _, name := range []string{"wait", "setup", "install"} {
 		cmd, _, err := Root().Find([]string{"plugin", name})
 		if err != nil || cmd.Name() != name {
 			t.Fatalf("saddle plugin %s: %v", name, err)
@@ -373,5 +373,134 @@ func TestOnboardLeavesAgentsAndNonRepos(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(d, ".saddle")); !os.IsNotExist(err) {
 			t.Fatalf(".saddle created in %s: %v", d, err)
 		}
+	}
+}
+
+// fakeExec stands in for PATH and running programs in install checks.
+type fakeExec struct {
+	path    map[string]bool
+	version string
+	ran     [][]string
+	out     *bytes.Buffer
+	seen    []string // what out held when each program ran
+	onRun   func(args []string)
+}
+
+func (f *fakeExec) deps() installDeps {
+	return installDeps{
+		lookPath: func(name string) (string, error) {
+			if f.path[name] {
+				return "/bin/" + name, nil
+			}
+			return "", exec.ErrNotFound
+		},
+		run: func(name string, args ...string) (string, error) {
+			all := append([]string{name}, args...)
+			if name == "saddle" && len(args) == 1 && args[0] == "version" {
+				return f.version, nil
+			}
+			f.ran = append(f.ran, all)
+			if f.out != nil {
+				f.seen = append(f.seen, f.out.String())
+			}
+			if f.onRun != nil {
+				f.onRun(all)
+			}
+			return "", nil
+		},
+	}
+}
+
+func TestCheckInstallStates(t *testing.T) {
+	for _, tc := range []struct {
+		name, have string
+		onPath     bool
+		want       installState
+	}{
+		{"missing", "", false, installMissing},
+		{"outdated", "v0.0.9", true, installOutdated},
+		{"outdated minor", "v0.1.0", true, installOutdated}, // want is 0.2.0 below
+		{"current", "v0.2.0", true, installCurrent},
+		{"current ahead of tag", "v0.2.0-3-gabc1234-dirty", true, installCurrent},
+		{"newer", "v1.0.0", true, installCurrent},
+		{"dev build", "dev", true, installUnknown},
+		{"commit build", "abc1234", true, installUnknown},
+		{"pseudo-version", "v0.0.0-20261003120000-abcdef123456", true, installUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeExec{path: map[string]bool{"saddle": tc.onPath}, version: tc.have}
+			got := checkInstall(f.deps(), "0.2.0")
+			if got.State != tc.want {
+				t.Fatalf("have %q: state %v, want %v", tc.have, got.State, tc.want)
+			}
+		})
+	}
+}
+
+func TestInstallPrintsPlanAndNeverRunsWithoutYes(t *testing.T) {
+	var out bytes.Buffer
+	f := &fakeExec{path: map[string]bool{"saddle": true, "go": true}, version: "v0.0.9"}
+	if ok := runInstall(&out, f.deps(), "0.1.0", false); ok {
+		t.Fatal("outdated binary reported ok")
+	}
+	if len(f.ran) != 0 {
+		t.Fatalf("ran %v without --yes", f.ran)
+	}
+	for _, want := range []string{"v0.0.9", "0.1.0", "go install github.com/brandonapol/saddle/cmd/saddle@v0.1.0", "--yes"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("plan missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestInstallYesPrintsCommandBeforeRunningIt(t *testing.T) {
+	var out bytes.Buffer
+	f := &fakeExec{path: map[string]bool{"go": true}, out: &out}
+	f.onRun = func([]string) { f.path["saddle"] = true; f.version = "v0.1.0" }
+	if ok := runInstall(&out, f.deps(), "0.1.0", true); !ok {
+		t.Fatalf("install failed:\n%s", out.String())
+	}
+	want := []string{"go", "install", "github.com/brandonapol/saddle/cmd/saddle@v0.1.0"}
+	if len(f.ran) != 1 || strings.Join(f.ran[0], " ") != strings.Join(want, " ") {
+		t.Fatalf("ran %v, want %v", f.ran, want)
+	}
+	if !strings.Contains(f.seen[0], "+ go install github.com/brandonapol/saddle/cmd/saddle@v0.1.0") {
+		t.Fatalf("command not printed before it ran; output then:\n%s", f.seen[0])
+	}
+	if !strings.Contains(out.String(), "v0.1.0 installed") {
+		t.Fatalf("no confirmation:\n%s", out.String())
+	}
+}
+
+func TestInstallWithoutGoGivesInstructions(t *testing.T) {
+	var out bytes.Buffer
+	f := &fakeExec{path: map[string]bool{}}
+	if runInstall(&out, f.deps(), "0.1.0", true) || len(f.ran) != 0 {
+		t.Fatalf("ran %v with no Go installed", f.ran)
+	}
+	for _, want := range []string{"not on your PATH", "go.dev/dl", "QUICKSTART"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("instructions missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestInstallCurrentAndDevAreQuiet(t *testing.T) {
+	for _, have := range []string{"v0.1.0", "dev"} {
+		var out bytes.Buffer
+		f := &fakeExec{path: map[string]bool{"saddle": true, "go": true}, version: have}
+		if !runInstall(&out, f.deps(), "0.1.0", true) || out.Len() != 0 || len(f.ran) != 0 {
+			t.Fatalf("have %s: out %q ran %v", have, out.String(), f.ran)
+		}
+	}
+}
+
+func TestPluginVersionMatchesManifest(t *testing.T) {
+	v, err := pluginVersion(filepath.Join("..", "..", "plugin"))
+	if err != nil || v == "" {
+		t.Fatalf("plugin version %q: %v", v, err)
+	}
+	if _, _, _, ok := semver(v); !ok {
+		t.Fatalf("plugin version %q isn't X.Y.Z", v)
 	}
 }

@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -32,7 +35,7 @@ func pluginCmd() *cobra.Command {
 		Use:   "plugin",
 		Short: "Entrypoints for the saddle Claude Code plugin (orchestrate from your own Claude Code session)",
 	}
-	cmd.AddCommand(pluginMCPCmd(), pluginHookCmd(), pluginSetupCmd(), pluginBriefCmd(), pluginEngineCmd(), pluginWaitCmd())
+	cmd.AddCommand(pluginMCPCmd(), pluginHookCmd(), pluginSetupCmd(), pluginInstallCmd(), pluginBriefCmd(), pluginEngineCmd(), pluginWaitCmd())
 	return cmd
 }
 
@@ -399,4 +402,185 @@ func waitNotices(ctx context.Context, a *app.App, poll time.Duration, w io.Write
 		case <-t.C:
 		}
 	}
+}
+
+// saddlePkg is what go install builds; pinned to the plugin's version.
+const saddlePkg = "github.com/brandonapol/saddle/cmd/saddle"
+
+func init() {
+	// go install pkg@vX.Y.Z builds without the Makefile's -ldflags, so the
+	// module version is the only place the release version is recorded. The
+	// plugin's version check needs it.
+	if Version != "dev" {
+		return
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		Version = bi.Main.Version
+	}
+}
+
+type installState int
+
+const (
+	installCurrent installState = iota
+	installMissing
+	installOutdated
+	installUnknown // a dev or commit build: no release version to compare
+)
+
+// installDeps is how install checks reach PATH and run programs; tests fake it.
+type installDeps struct {
+	lookPath func(name string) (string, error)
+	// run runs a program and returns its trimmed combined output.
+	run func(name string, args ...string) (string, error)
+}
+
+func systemInstallDeps() installDeps {
+	return installDeps{
+		lookPath: exec.LookPath,
+		run: func(name string, args ...string) (string, error) {
+			b, err := exec.Command(name, args...).CombinedOutput()
+			return strings.TrimSpace(string(b)), err
+		},
+	}
+}
+
+type installCheck struct {
+	State installState
+	Have  string
+}
+
+// checkInstall compares the saddle on PATH with the version the plugin
+// expects. A binary at or past want is current.
+func checkInstall(d installDeps, want string) installCheck {
+	if _, err := d.lookPath("saddle"); err != nil {
+		return installCheck{State: installMissing}
+	}
+	have, err := d.run("saddle", "version")
+	if err != nil {
+		return installCheck{State: installMissing, Have: have}
+	}
+	h1, h2, h3, okH := semver(have)
+	w1, w2, w3, okW := semver(want)
+	if !okH || !okW {
+		return installCheck{State: installUnknown, Have: have}
+	}
+	for _, p := range [][2]int{{h1, w1}, {h2, w2}, {h3, w3}} {
+		if p[0] != p[1] {
+			if p[0] < p[1] {
+				return installCheck{State: installOutdated, Have: have}
+			}
+			break
+		}
+	}
+	return installCheck{State: installCurrent, Have: have}
+}
+
+// semver parses the X.Y.Z at the start of v ("v0.1.0-3-gabc" is 0.1.0). Go
+// pseudo-versions of untagged builds (v0.0.0-...) don't count.
+func semver(v string) (major, minor, patch int, ok bool) {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return 0, 0, 0, false
+	}
+	var n [3]int
+	for i, p := range parts {
+		x, err := strconv.Atoi(p)
+		if err != nil || x < 0 {
+			return 0, 0, 0, false
+		}
+		n[i] = x
+	}
+	if n == [3]int{} {
+		return 0, 0, 0, false
+	}
+	return n[0], n[1], n[2], true
+}
+
+// runInstall reports whether the saddle on PATH is good for a plugin at
+// version want, printing nothing when it is. Otherwise it prints exactly
+// what it would run to fix that, and runs it only when yes. Without Go it
+// prints instructions and runs nothing.
+func runInstall(w io.Writer, d installDeps, want string, yes bool) bool {
+	c := checkInstall(d, want)
+	switch c.State {
+	case installCurrent, installUnknown:
+		return true
+	case installMissing:
+		fmt.Fprintf(w, "The saddle plugin %s needs the saddle binary, and it is not on your PATH.\n", want)
+	case installOutdated:
+		fmt.Fprintf(w, "saddle %s on your PATH is older than the saddle plugin (%s).\n", c.Have, want)
+	}
+	cmd := []string{"go", "install", saddlePkg + "@v" + want}
+	line := strings.Join(cmd, " ")
+	if _, err := d.lookPath("go"); err != nil {
+		fmt.Fprintf(w, "Install Go (https://go.dev/dl/), then run:\n  %s\nand put $(go env GOPATH)/bin on your PATH. See docs/QUICKSTART.md.\n", line)
+		return false
+	}
+	if !yes {
+		fmt.Fprintf(w, "To install it, saddle will run:\n  %s\nRun `saddle plugin install --yes` to do that now (it changes nothing else).\n", line)
+		return false
+	}
+	fmt.Fprintln(w, "+ "+line)
+	if out, err := d.run(cmd[0], cmd[1:]...); err != nil {
+		fmt.Fprintf(w, "%s\ngo install failed: %v\n", out, err)
+		return false
+	}
+	if c := checkInstall(d, want); c.State == installMissing || c.State == installOutdated {
+		fmt.Fprintf(w, "Installed, but the saddle on your PATH is still %q. Put $(go env GOPATH)/bin first on your PATH.\n", c.Have)
+		return false
+	}
+	fmt.Fprintf(w, "saddle v%s installed.\n", want)
+	return true
+}
+
+// pluginVersion reads the version from the plugin's manifest under root.
+func pluginVersion(root string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(root, ".claude-plugin", "plugin.json"))
+	if err != nil {
+		return "", err
+	}
+	var m struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return "", fmt.Errorf("plugin.json: %w", err)
+	}
+	return m.Version, nil
+}
+
+func pluginInstallCmd() *cobra.Command {
+	var want string
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Check the saddle binary against the plugin's version and print how to install it",
+		Long: `Compares the saddle on PATH with the version the saddle Claude Code plugin
+expects (--want, or the plugin.json under $CLAUDE_PLUGIN_ROOT). When it is
+missing or older, prints the exact command that installs the plugin's version
+(go install ` + saddlePkg + `@v<version>), and runs it only with --yes.
+Prints nothing when the binary is current or a dev build.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if want == "" {
+				root := os.Getenv("CLAUDE_PLUGIN_ROOT")
+				if root == "" {
+					return errors.New("no version to check against: pass --want or set CLAUDE_PLUGIN_ROOT")
+				}
+				v, err := pluginVersion(root)
+				if err != nil {
+					return err
+				}
+				want = v
+			}
+			runInstall(cmd.OutOrStdout(), systemInstallDeps(), want, yes)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&want, "want", "", "the plugin version saddle should be at least")
+	cmd.Flags().BoolVar(&yes, "yes", false, "run the printed install command")
+	return cmd
 }

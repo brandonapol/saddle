@@ -16,6 +16,40 @@ make setup      # dev tools; asks for a Jev key / Claude login only if missing
 make install    # builds saddle into $GOBIN; agents run this binary
 ```
 
+### Or: install through the Claude Code plugin
+
+To orchestrate from your own Claude Code session instead of the TUI, install
+the plugin:
+
+```text
+/plugin marketplace add brandonapol/saddle
+/plugin install saddle@saddle
+```
+
+The plugin needs the `saddle` binary on your PATH, at least at the plugin's
+version. The supported way to get it is `go install` of that release tag:
+
+```sh
+go install github.com/brandonapol/saddle/cmd/saddle@v<plugin version>   # e.g. @v0.1.0
+```
+
+and `$(go env GOPATH)/bin` on your PATH. You don't have to remember this: at
+session start the plugin checks the binary and, when it is missing or older
+than the plugin, prints the exact command above (or, without Go, how to get
+Go first). It never installs anything by itself. To install, run the printed
+command, ask Claude to run it, or run `saddle plugin install --yes` (or the
+plugin's `bin/saddle-check --yes` when saddle is missing), which prints the
+command and then runs it. Dev builds (`make install`) are never flagged.
+
+The first time you use `/saddle:orchestrate` or `/saddle:status` in a repo
+that never ran `saddle init`, the plugin runs `saddle init` and
+`saddle doctor` for you (steps 3 and 4 below) and shows the doctor table.
+It goes on only when no check fails; warnings are shown but don't block. Fix
+any failures and run the command again. It records this in
+`.saddle/plugin-onboarded`, so it happens once per repo, and it leaves repos
+that already ran `saddle init` alone. Restart Claude Code once afterwards so
+the plugin's MCP tools load for the new repo.
+
 ## 2. Stay up to date
 
 ```sh
@@ -32,10 +66,12 @@ cd your-repo
 saddle init
 ```
 
-This writes `.saddle/config.toml`, adds `/.saddle/` to `.git/info/exclude`,
-detects a test command (`make check`, `go test ./...`, `npm test`,
-`cargo test`) and installs the ref guard hooks, which stop anyone but the
-merge train from moving Saddle's branches.
+It greets you with a small howdy banner. `--quiet` or a non-terminal stdout
+hides it, and `NO_COLOR` prints it without color. It also writes
+`.saddle/config.toml`, adds `/.saddle/` to `.git/info/exclude`, detects a
+test command (`make check`, `go test ./...`, `npm test`, `cargo test`) and
+installs the ref guard hooks, which stop anyone but the merge train from
+moving Saddle's branches.
 
 ## 4. Run the doctor
 
