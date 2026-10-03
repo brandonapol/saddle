@@ -131,21 +131,21 @@ type Stack struct {
 	Why    string `json:"why,omitempty"`    // why Next can't, when not ready
 	// Blocked says why a ready Next wasn't merged, or when it will be.
 	Blocked string `json:"blocked,omitempty"`
-	wait   bool   // Why is something to wait out, not a refusal
+	wait    bool   // Why is something to wait out, not a refusal
 }
 
 // Status is the watcher's state and what it would do.
 type Status struct {
-	Enabled bool      `json:"enabled"`
-	Source  string    `json:"source"`            // config or runtime
-	Stopped string    `json:"stopped,omitempty"` // why it stopped; on clears it
-	Busy    bool      `json:"busy,omitempty"`    // the train held its lock; nothing was checked
+	Enabled bool   `json:"enabled"`
+	Source  string `json:"source"`            // config or runtime
+	Stopped string `json:"stopped,omitempty"` // why it stopped; on clears it
+	Busy    bool   `json:"busy,omitempty"`    // the train held its lock; nothing was checked
 	// BusySince is when the watcher first found the lock held in a row of busy ticks.
 	BusySince time.Time `json:"busy_since,omitzero"`
-	Holds   []string  `json:"holds,omitempty"`
-	Stacks  []Stack   `json:"stacks,omitempty"`
-	Merged  string    `json:"merged,omitempty"` // the PR this check merged
-	Checked time.Time `json:"checked"`
+	Holds     []string  `json:"holds,omitempty"`
+	Stacks    []Stack   `json:"stacks,omitempty"`
+	Merged    string    `json:"merged,omitempty"` // the PR this check merged
+	Checked   time.Time `json:"checked"`
 	// Next is when the watcher checks again; zero until a watcher has run.
 	Next time.Time `json:"next_check,omitzero"`
 }
@@ -162,7 +162,7 @@ type State struct {
 	// Idle and IdleAt are the last idle event and when it was logged.
 	Idle   string    `json:"idle,omitempty"`
 	IdleAt time.Time `json:"idle_at,omitzero"`
-	Last    Status         `json:"last"`             // the last check, for readers without GitHub
+	Last   Status    `json:"last"` // the last check, for readers without GitHub
 }
 
 // Load reads the state file; a missing one is the zero state.

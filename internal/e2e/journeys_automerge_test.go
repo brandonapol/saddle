@@ -167,4 +167,3 @@ func TestJourneyAutomergeRetriesSoonAfterBusyTrain(t *testing.T) {
 		return nil
 	})
 }
-
