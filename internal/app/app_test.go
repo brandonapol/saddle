@@ -61,8 +61,8 @@ func (f *fakeTmux) SendText(id, text string) error {
 	return nil
 }
 func (f *fakeTmux) Capture(id string, _ int) (string, error) { return f.screens[id], nil }
-func (f *fakeTmux) SendKeys(string, ...string) error          { return nil }
-func (f *fakeTmux) KillSession() error                        { return nil }
+func (f *fakeTmux) SendKeys(string, ...string) error         { return nil }
+func (f *fakeTmux) KillSession() error                       { return nil }
 
 // git runs git in dir. In a task's worktree it runs as that task, the way
 // its agent would, so the ref guard lets it move the task's branch.
