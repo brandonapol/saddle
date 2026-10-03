@@ -326,4 +326,3 @@ func TestJourneyTUIUsageStrip(t *testing.T) {
 	u.WaitScreen("85%")
 	u.Quit()
 }
-
