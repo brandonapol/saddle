@@ -356,12 +356,13 @@ func (a *App) launch(t store.Task, cl []string, ad agent.Adapter) (string, error
 		Brief: a.workerBrief(t, cl), Prompt: t.Prompt,
 	}
 	// harness = "grok" runs the full Grok CLI (hooks, MCP, tmux), not the
-	// one-shot image adapter.
+	// one-shot image adapter. [adapters.grok] cmd and args still apply.
 	if a.Cfg.Harness == config.HarnessGrok && ad.Name() == usage.Grok {
 		l.Kind = agent.KindGrok
-		l.Cmd = a.Cfg.Grok.Cmd
+		if l.Cmd == "" {
+			l.Cmd = a.Cfg.Grok.Cmd
+		}
 		l.Mode = a.Cfg.Grok.PermissionMode
-		l.Args = nil
 	}
 	cmd, err := ad.Launch(l)
 	if err != nil {
@@ -423,7 +424,10 @@ func (a *App) newLaunch(t store.Task, dir, model, brief, prompt string, allow, d
 	}
 	if a.Cfg.Harness == config.HarnessGrok {
 		l.Kind = agent.KindGrok
-		l.Cmd = a.Cfg.Grok.Cmd
+		l.Cmd, l.Args = a.adapterCmd(usage.Grok)
+		if l.Cmd == "" {
+			l.Cmd = a.Cfg.Grok.Cmd
+		}
 		l.Mode = a.Cfg.Grok.PermissionMode
 		return l
 	}

@@ -112,6 +112,11 @@ func TestPreToolUseDeniesOtherTasksFiles(t *testing.T) {
 	if hs["permissionDecision"] != "deny" || !strings.Contains(hs["permissionDecisionReason"].(string), t1.ID) {
 		t.Fatalf("out = %v", out)
 	}
+	// Claude's legacy top-level decision only takes approve/block; "deny"
+	// there can fail its output validation, so Claude gets only hookSpecificOutput.
+	if _, ok := out["decision"]; ok {
+		t.Fatalf("claude deny carries a top-level decision: %v", out)
+	}
 	// Grok's PreToolUse payload is camelCase and names the path "path".
 	// The deny has to be both Claude's permissionDecision and Grok's decision.
 	out = run(t, a, t2.ID, map[string]any{

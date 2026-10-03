@@ -125,3 +125,33 @@ func TestAdapterCmdFromConfig(t *testing.T) {
 		t.Errorf("launch ignores adapters.codex:\n%s", script)
 	}
 }
+
+// harness = "grok" makes grok the default worker with hooks enforced, and
+// still honors [adapters.grok] cmd and args from #142.
+func TestSpawnUnderGrokHarness(t *testing.T) {
+	a, _ := setup(t)
+	a.Cfg.Harness = config.HarnessGrok
+	a.Cfg.Grok = config.Grok{Cmd: "grok", Model: "grok-4.5", PermissionMode: "bypassPermissions"}
+	a.Cfg.Adapters = map[string]config.Adapter{"grok": {Cmd: "/opt/grok", Args: []string{"--sandbox"}}}
+	g, err := a.Spawn(SpawnReq{Title: "grok work"})
+	must(t, err)
+	run := a.stateDir("run", g.ID)
+	if agent.Recorded(run) != usage.Grok || g.Model != "grok-4.5" {
+		t.Fatalf("default spawn under grok harness: adapter %q model %q", agent.Recorded(run), g.Model)
+	}
+	if !a.taskAdapter(g).Hooks() {
+		t.Error("grok harness worker should have hooks, so claims are enforced")
+	}
+	script, err := os.ReadFile(filepath.Join(run, "launch.sh"))
+	must(t, err)
+	for _, want := range []string{"'/opt/grok'", "'--sandbox'", "'--trust'", "'bypassPermissions'"} {
+		if !strings.Contains(string(script), want) {
+			t.Errorf("launch.sh missing %s:\n%s", want, script)
+		}
+	}
+	c, err := a.Spawn(SpawnReq{Title: "claude work", Adapter: usage.Claude})
+	must(t, err)
+	if agent.Recorded(a.stateDir("run", c.ID)) != usage.Claude || c.Model != a.Cfg.Claude.Model {
+		t.Errorf("explicit claude under grok harness: %+v", c)
+	}
+}

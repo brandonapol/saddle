@@ -21,6 +21,8 @@ type Input struct {
 	ToolInput      map[string]any `json:"tool_input"`
 	Message        string         `json:"message"`
 	StopHookActive bool           `json:"stop_hook_active"`
+	// Grok is set when the payload came from the Grok CLI (camelCase keys).
+	Grok bool `json:"-"`
 }
 
 type specific struct {
@@ -54,9 +56,14 @@ func Handle(a *app.App, task string, in Input) *Output {
 		if d.Allow {
 			return nil
 		}
-		return &Output{Decision: "deny", Reason: "[saddle] " + d.Reason,
-			Specific: &specific{HookEventName: "PreToolUse", PermissionDecision: "deny",
-				PermissionDecisionReason: "[saddle] " + d.Reason}}
+		out := &Output{Specific: &specific{HookEventName: "PreToolUse", PermissionDecision: "deny",
+			PermissionDecisionReason: "[saddle] " + d.Reason}}
+		// Grok reads the top-level decision. Claude's only takes approve or
+		// block, so it gets hookSpecificOutput alone.
+		if in.Grok {
+			out.Decision, out.Reason = "deny", "[saddle] "+d.Reason
+		}
+		return out
 
 	case "PostToolUse":
 		markActive(st, task) // a tool ran, so any prompt it was waiting on was answered
@@ -156,6 +163,7 @@ func decodeInput(b []byte) (Input, error) {
 		ToolInput:      w.InputSnake,
 		Message:        w.Message,
 		StopHookActive: w.StopSnake || w.StopCamel,
+		Grok:           w.EventCamel != "" || w.SessionIDCamel != "" || w.ToolCamel != "",
 	}
 	if in.ToolInput == nil {
 		in.ToolInput = w.InputCamel

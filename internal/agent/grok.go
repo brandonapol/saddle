@@ -139,6 +139,7 @@ func (l Launch) grokArgs(headless bool) []string {
 	for _, r := range rules {
 		args = append(args, "--deny", r)
 	}
+	args = append(args, l.Args...) // [adapters.grok] args
 	if headless {
 		// streaming-messages-json is the Claude stream-json wire format the
 		// orchestrator already parses, including stream_event deltas.

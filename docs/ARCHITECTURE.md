@@ -159,7 +159,10 @@ close PRs and delete branches, and it handles those without anyone editing
   The orchestrator has no long-lived stdin protocol, so `saddle grok-bridge`
   runs one `grok -p` turn per chat message and resumes the session. Output is
   `streaming-messages-json`, which matches the Claude stream the TUI parses.
-- **Codex**: not implemented. Usage and status would be best-effort.
+  `[adapters.grok]` cmd and args apply here too.
+- **Codex / one-shot Grok** (`adapter=codex|grok` under the Claude harness):
+  hookless, so claims are advisory and notices are typed in. Usage and status
+  come from their output on a best-effort basis.
 
 Sub-agents spawned through MCP are ordinary tasks with a `parent_task`. Each
 gets its own worktree, window and claims, and the train lands it before its
