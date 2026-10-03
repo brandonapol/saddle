@@ -29,7 +29,7 @@ type keyMap struct {
 	Ask, AskScreen key.Binding
 
 	// Merge view.
-	AutoMerge, Hold, Rebase key.Binding
+	AutoMerge, Hold, Rebase, QueueDown, QueueUp, TakeOver key.Binding
 
 	// Plan view.
 	Approve, EditPlan, Replan, ModelUp, ModelDown, Go, PlanNext, PlanPrev key.Binding
@@ -73,6 +73,9 @@ func newKeyMap() keyMap {
 		AutoMerge: b("M", "auto-merge on/off", "M"),
 		Hold:      b("h", "hold/release", "h"),
 		Rebase:    b("r", "rebase stack", "r"),
+		QueueDown: b("J/K", "move in queue", "J"),
+		QueueUp:   b("K", "move up in queue", "K"),
+		TakeOver:  b("t", "take over (open agent)", "t"),
 
 		Approve:   b("a", "approve/reopen", "a"),
 		EditPlan:  b("e", "edit in $EDITOR", "e"),
@@ -109,7 +112,7 @@ func (k keyMap) groups() []keyGroup {
 		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget, k.Ask, k.AskScreen}},
 		{"Agents", []key.Binding{k.Down, k.Up, k.Open, k.Skill, k.Spawn, k.Pause, k.Kill, k.Land, k.Back}},
 		{"Plan view", []key.Binding{k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.ModelDown, k.Go, k.PlanNext, k.PlanPrev}},
-		{"Merge view", []key.Binding{k.AutoMerge, k.Hold, k.Rebase}},
+		{"Merge view", []key.Binding{k.AutoMerge, k.Hold, k.Rebase, k.QueueDown, k.QueueUp, k.TakeOver}},
 		{"Terminal", []key.Binding{k.Terminal, k.TermBack, k.TermScrollUp, k.TermScrollDown}},
 	}
 }
@@ -124,8 +127,11 @@ func (m *model) help() []key.Binding {
 	if m.focus == focusTerm {
 		return []key.Binding{withHelp(k.Terminal, "ctrl+`", "hide"), k.TermBack, k.TermScrollUp}
 	}
+	if m.view == viewMerge && m.tr.focus {
+		return []key.Binding{withHelp(k.Down, "j/k", "entry"), k.QueueDown, k.Hold, k.TakeOver, withHelp(k.Focus, "tab", "stacks"), k.AutoMerge, k.ViewControl, k.Help, k.Terminal, k.Quit}
+	}
 	if m.view == viewMerge {
-		return []key.Binding{withHelp(k.Down, "j/k", "stack"), k.AutoMerge, k.Hold, k.Rebase, k.ViewControl, k.Help, k.Terminal, k.Quit}
+		return []key.Binding{withHelp(k.Down, "j/k", "stack"), withHelp(k.Focus, "tab", "train"), k.AutoMerge, k.Hold, k.Rebase, k.ViewControl, k.Help, k.Terminal, k.Quit}
 	}
 	if m.view == viewPlan {
 		if m.pl.noting {

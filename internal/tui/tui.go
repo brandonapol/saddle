@@ -136,6 +136,7 @@ type model struct {
 	amBusy    string                                       // the auto-merge action running, if any
 	stackSel  string                                       // the merge view's selected stack
 	pl        planState                                    // the plan review view
+	tr        trainState                                   // the merge view's train panel
 	narr      narrSink                                     // narrator lines; nil when the narrator is off
 	asker     asker                                        // answers questions; nil when the narrator is off
 	askScreen bool                                         // the next question carries the selected agent's screen
@@ -372,9 +373,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		cmds = append(cmds, m.refresh(), tick())
-		if m.view == viewPlan {
+		switch m.view {
+		case viewPlan:
 			cmds = append(cmds, m.loadPlan())
+		case viewMerge:
+			cmds = append(cmds, m.loadTrain())
 		}
+
+	case trainLoadedMsg:
+		m.trainLoaded(msg)
+
+	case trainDoneMsg:
+		m.tr.busy = ""
+		m.flash, m.flashAt = string(msg), time.Now()
+		cmds = append(cmds, m.loadTrain())
 
 	case planLoadedMsg:
 		m.planLoaded(msg)
@@ -649,8 +661,16 @@ func (m *model) selected() (mcpserver.TaskView, bool) {
 // (prefix d) comes back here.
 func (m *model) attach() tea.Cmd {
 	t, ok := m.selected()
-	if !ok || t.Window == "" {
-		return func() tea.Msg { return flashMsg("no live window for that task") }
+	if !ok {
+		return flashCmd("no live window for that task")
+	}
+	return m.attachTask(t)
+}
+
+// attachTask hands the terminal to t's tmux window.
+func (m *model) attachTask(t mcpserver.TaskView) tea.Cmd {
+	if t.Window == "" {
+		return flashCmd("no live window for that task")
 	}
 	session := m.app.Cfg.Session
 	_ = exec.Command("tmux", "select-window", "-t", t.Window).Run()

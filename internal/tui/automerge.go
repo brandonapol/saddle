@@ -131,6 +131,15 @@ func (m *model) moveStack(dir int) {
 // mergeKey handles the merge view's keys; ok is false for any other key.
 func (m *model) mergeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 	keys := m.keys
+	if key.Matches(k, keys.Focus) {
+		m.tr.focus = !m.tr.focus
+		return nil, true
+	}
+	if m.tr.focus {
+		if c, ok := m.trainKey(k); ok || !key.Matches(k, keys.AutoMerge) {
+			return c, ok
+		}
+	}
 	switch {
 	case key.Matches(k, keys.Down):
 		m.moveStack(1)
@@ -225,7 +234,7 @@ func (m *model) viewStacks(w int) []string {
 	base := m.app.Cfg.Base
 	for _, s := range st.Stacks {
 		mark := "  "
-		if s.ID == sel.ID {
+		if s.ID == sel.ID && !m.tr.focus {
 			mark = sKey.Render("▸ ")
 		}
 		head := mark + sBright.Render("stack "+s.ID)

@@ -43,7 +43,7 @@ func (m *model) routeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 		return m.loadPlan(), true
 	case key.Matches(k, keys.ViewMerge):
 		m.setView(viewMerge)
-		return nil, true
+		return m.loadTrain(), true
 	}
 	// The replan note takes typing, help key included.
 	if m.view == viewPlan && m.pl.noting {
@@ -137,25 +137,10 @@ func (m *model) viewHelp(w, h int) string {
 	return box("KEYS", w, h, true, clip(body, inner))
 }
 
-// viewMerge lists the tasks in the merge train with their train state.
+// viewMerge shows the auto-merge PR stacks above the merge train.
 func (m *model) viewMerge(w, h int) string {
-	rows := append(m.viewStacks(w-2), "", sBright.Render("Train"))
-	train := len(rows)
-	for _, t := range m.tasks {
-		if t.Train == "" {
-			continue
-		}
-		g, gc := glyph(t.Status)
-		state := sDim.Render(t.Train)
-		if s := firstWord(t.Train); s != "queued" && s != "landed" {
-			state = lipgloss.NewStyle().Foreground(cAlert).Render(t.Train)
-		}
-		rows = append(rows, lipgloss.NewStyle().Foreground(gc).Render(g)+" "+sDim.Render(fmt.Sprintf("%-5s", t.ID))+" "+
-			sText.Render(t.Title)+"  "+state)
-	}
-	if len(rows) == train {
-		rows = append(rows, sDim.Render("The train is empty. Tasks join it when they call done."))
-	}
+	rows := append(m.viewStacks(w-2), "")
+	rows = append(rows, m.viewTrain(w-2)...)
 	title := "MERGE TRAIN"
 	if m.graph != nil {
 		title += " · opus on merges " + humanTokens(m.graph.MergeOpus)

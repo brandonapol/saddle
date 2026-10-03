@@ -38,11 +38,11 @@ type planState struct {
 	note    textinput.Model
 
 	// Hooks; nil means the real thing.
-	dir    string                                     // plans directory
-	base   func() (string, error)                     // commit approve freezes at
-	editor func(path string) tea.Cmd                  // runs $EDITOR, then sends planEditedMsg
-	replan func(path, note string) error              // asks the planner model to revise
-	goPlan func(path string, d planner.Doc)           // starts an approved plan
+	dir    string                           // plans directory
+	base   func() (string, error)           // commit approve freezes at
+	editor func(path string) tea.Cmd        // runs $EDITOR, then sends planEditedMsg
+	replan func(path, note string) error    // asks the planner model to revise
+	goPlan func(path string, d planner.Doc) // starts an approved plan
 }
 
 type (

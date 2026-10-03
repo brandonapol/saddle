@@ -19,7 +19,7 @@ func (m *model) viewHeader() string {
 		counts[t.Status]++
 		switch firstWord(t.Train) {
 		case "", store.TrainOK:
-		case store.Queued:
+		case store.Queued, store.OnHold:
 			queued++
 		default:
 			stuck++
