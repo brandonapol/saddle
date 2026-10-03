@@ -132,7 +132,8 @@ func TestHeaderShowsViewsBranchesCountsTrain(t *testing.T) {
 	}
 }
 
-// The merge view lists the train, the plan view says where plans come from.
+// The merge view lists the train; with no plan the plan view says how to
+// make one.
 func TestMergeAndPlanViews(t *testing.T) {
 	m := newViewModel(120, 30)
 	m.view = viewMerge
@@ -146,7 +147,7 @@ func TestMergeAndPlanViews(t *testing.T) {
 		t.Errorf("a task outside the train is in the merge view:\n%s", out)
 	}
 	m.view = viewPlan
-	if out := m.View(); !strings.Contains(out, "PLAN") || !strings.Contains(out, "saddle check") {
+	if out := m.View(); !strings.Contains(out, "PLAN") || !strings.Contains(out, "saddle plan") {
 		t.Errorf("plan view:\n%s", out)
 	}
 }

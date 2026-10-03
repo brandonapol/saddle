@@ -29,7 +29,10 @@ type keyMap struct {
 	Ask, AskScreen key.Binding
 
 	// Merge view.
-	AutoMerge, Hold, Rebase key.Binding
+	AutoMerge, Hold, Rebase, QueueDown, QueueUp, TakeOver key.Binding
+
+	// Plan view.
+	Approve, EditPlan, Replan, ModelUp, ModelDown, Go, PlanNext, PlanPrev key.Binding
 
 	// Task list.
 	Up, Down, Open, Skill, Spawn, Pause, Kill, Land, Back key.Binding
@@ -70,6 +73,18 @@ func newKeyMap() keyMap {
 		AutoMerge: b("M", "auto-merge on/off", "M"),
 		Hold:      b("h", "hold/release", "h"),
 		Rebase:    b("r", "rebase stack", "r"),
+		QueueDown: b("J/K", "move in queue", "J"),
+		QueueUp:   b("K", "move up in queue", "K"),
+		TakeOver:  b("t", "take over (open agent)", "t"),
+
+		Approve:   b("a", "approve/reopen", "a"),
+		EditPlan:  b("e", "edit in $EDITOR", "e"),
+		Replan:    b("r", "replan with a note", "r"),
+		ModelUp:   b("+/-", "task model", "+", "="),
+		ModelDown: b("-", "task model down", "-"),
+		Go:        b("g", "go: run the plan", "g"),
+		PlanNext:  b("]/[", "next/prev plan", "]"),
+		PlanPrev:  b("[", "prev plan", "["),
 
 		Up:    b("k", "up", "k", "up"),
 		Down:  b("j/k", "select", "j", "down"),
@@ -96,7 +111,8 @@ func (k keyMap) groups() []keyGroup {
 		{"Anywhere", []key.Binding{k.ViewControl, k.ViewPlan, k.ViewMerge, k.Help, k.NextAgent, k.PrevAgent, k.Focus, k.PageUp, k.PageDown, k.Restart, k.Quit}},
 		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget, k.Ask, k.AskScreen}},
 		{"Agents", []key.Binding{k.Down, k.Up, k.Open, k.Skill, k.Spawn, k.Pause, k.Kill, k.Land, k.Back}},
-		{"Merge view", []key.Binding{k.AutoMerge, k.Hold, k.Rebase}},
+		{"Plan view", []key.Binding{k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.ModelDown, k.Go, k.PlanNext, k.PlanPrev}},
+		{"Merge view", []key.Binding{k.AutoMerge, k.Hold, k.Rebase, k.QueueDown, k.QueueUp, k.TakeOver}},
 		{"Terminal", []key.Binding{k.Terminal, k.TermBack, k.TermScrollUp, k.TermScrollDown}},
 	}
 }
@@ -111,8 +127,17 @@ func (m *model) help() []key.Binding {
 	if m.focus == focusTerm {
 		return []key.Binding{withHelp(k.Terminal, "ctrl+`", "hide"), k.TermBack, k.TermScrollUp}
 	}
+	if m.view == viewMerge && m.tr.focus {
+		return []key.Binding{withHelp(k.Down, "j/k", "entry"), k.QueueDown, k.Hold, k.TakeOver, withHelp(k.Focus, "tab", "stacks"), k.AutoMerge, k.ViewControl, k.Help, k.Terminal, k.Quit}
+	}
 	if m.view == viewMerge {
-		return []key.Binding{withHelp(k.Down, "j/k", "stack"), k.AutoMerge, k.Hold, k.Rebase, k.ViewControl, k.Help, k.Terminal, k.Quit}
+		return []key.Binding{withHelp(k.Down, "j/k", "stack"), withHelp(k.Focus, "tab", "train"), k.AutoMerge, k.Hold, k.Rebase, k.ViewControl, k.Help, k.Terminal, k.Quit}
+	}
+	if m.view == viewPlan {
+		if m.pl.noting {
+			return []key.Binding{withHelp(k.Send, "enter", "replan"), withHelp(k.Back, "esc", "cancel"), k.ViewControl, k.Quit}
+		}
+		return []key.Binding{withHelp(k.Down, "j/k", "task"), k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.Go, k.PlanNext, k.ViewControl, k.Help, k.Terminal, k.Quit}
 	}
 	if m.view != viewControl {
 		return []key.Binding{k.ViewControl, k.Help, k.Terminal, k.Quit}
