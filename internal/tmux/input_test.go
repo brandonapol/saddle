@@ -80,8 +80,6 @@ func (s *styledDriver) SendText(id, t string) error {
 	return nil
 }
 
-func (s *styledDriver) setStyled(p string) { s.mu.Lock(); s.styled = p; s.mu.Unlock() }
-
 func (s *styledDriver) keysSent() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

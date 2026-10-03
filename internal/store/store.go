@@ -514,6 +514,54 @@ func (s *Store) TakeNotices(task string, actionOnly bool) ([]Notice, error) {
 	return out, err
 }
 
+// PeekNotices returns undelivered notices for a task without marking them.
+// Pair it with MarkDelivered once they were seen.
+func (s *Store) PeekNotices(task string, actionOnly bool) ([]Notice, error) {
+	q := `SELECT id, kind, text FROM notices WHERE task = ? AND delivered = 0`
+	args := []any{task}
+	if actionOnly {
+		q += ` AND kind = ?`
+		args = append(args, NoticeAction)
+	}
+	rows, err := s.db.Query(q+` ORDER BY id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Notice
+	for rows.Next() {
+		var n Notice
+		if err := rows.Scan(&n.ID, &n.Kind, &n.Text); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// MarkDelivered marks the given notices delivered.
+func (s *Store) MarkDelivered(ns []Notice) error {
+	return s.tx(func(tx *sql.Tx) error {
+		for _, n := range ns {
+			if _, err := tx.Exec(`UPDATE notices SET delivered = 1 WHERE id = ?`, n.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// OldestPendingAction returns when a task's oldest undelivered action notice
+// was queued; ok is false when it has none.
+func (s *Store) OldestPendingAction(task string) (ts time.Time, ok bool, err error) {
+	var sec sql.NullInt64
+	err = s.db.QueryRow(`SELECT MIN(ts) FROM notices WHERE task = ? AND delivered = 0 AND kind = ?`, task, NoticeAction).Scan(&sec)
+	if err != nil || !sec.Valid {
+		return time.Time{}, false, err
+	}
+	return time.Unix(sec.Int64, 0), true, nil
+}
+
 func (s *Store) PendingNotices(task string) (int, error) {
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM notices WHERE task = ? AND delivered = 0`, task).Scan(&n)

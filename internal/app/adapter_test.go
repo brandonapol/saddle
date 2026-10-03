@@ -53,13 +53,41 @@ func TestNotifyTypesNoticesIntoHooklessAgent(t *testing.T) {
 		t.Fatalf("info notice typed: %q", ft.sent[c.Window])
 	}
 	must(t, a.Notify(c.ID, store.NoticeAction, "rebase onto integration"))
-	sent := ft.sent[c.Window]
+	sent := ft.sentTo(c.Window)
 	if len(sent) != 1 || !strings.Contains(sent[0], "rebase onto integration") || !strings.Contains(sent[0], "t3 landed") {
 		t.Fatalf("sent = %q", sent)
 	}
-	if n, _ := a.Store.PendingNotices(c.ID); n != 0 {
-		t.Errorf("%d notices still pending after typing them", n)
+	if !waitUntil(func() bool { n, _ := a.Store.PendingNotices(c.ID); return n == 0 }) {
+		t.Errorf("notices still pending after the pane showed them")
 	}
+}
+
+// #183: a notice typed into a hookless agent's pane is marked delivered only
+// once the pane changed, and is typed with Enter exactly once.
+func TestHooklessNoticeStaysPendingUntilPaneChanges(t *testing.T) {
+	a, ft := setup(t)
+	fastRetry(t)
+	ft.frozen = true
+	c, err := a.Spawn(SpawnReq{Title: "codex work", Adapter: "codex"})
+	must(t, err)
+	must(t, a.Notify(c.ID, store.NoticeAction, "rebase onto integration"))
+	time.Sleep(300 * time.Millisecond)
+	if n, _ := a.Store.PendingNotices(c.ID); n != 1 {
+		t.Fatalf("%d pending; the pane never changed, so the notice must stay pending", n)
+	}
+	if s := ft.sentTo(c.Window); len(s) != 1 {
+		t.Fatalf("typed %d times, want exactly 1: %q", len(s), s)
+	}
+}
+
+func waitUntil(cond func() bool) bool {
+	for range 200 {
+		if cond() {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
 }
 
 // Claims are advisory for hookless agents: done goes through, and the

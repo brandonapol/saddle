@@ -219,10 +219,11 @@ func Run(a *app.App, first string) error {
 	defer func() { m.registerCompact(nil); m.proc.Close() }()
 
 	// saddle up holds the repo's TUI lock, so this is the one process that
-	// meters usage and narrates.
+	// meters usage, narrates and wakes agents sitting on old notices.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.NewUsageMeter().Run(ctx, nil)
+	go a.RunNoticeWaker(ctx)
 	sink := make(narrSink, 256)
 	if n := a.NarratorFromEnv(sink); n != nil {
 		m.narr, m.asker = sink, n

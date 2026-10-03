@@ -402,3 +402,25 @@ func TestOrchestratorCompactAt(t *testing.T) {
 		t.Error("template doesn't document orchestrator.compact_at")
 	}
 }
+
+// #183: notices.wake_after defaults to 3 minutes; zero or less means the default.
+func TestNoticesWakeAfter(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notices.WakeAfter != 3*time.Minute {
+		t.Fatalf("wake_after default = %v, want 3m", cfg.Notices.WakeAfter)
+	}
+	root := t.TempDir()
+	for body, want := range map[string]time.Duration{`"90s"`: 90 * time.Second, `"0s"`: 3 * time.Minute} {
+		writeConfig(t, root, "[notices]\nwake_after = "+body+"\n")
+		if cfg, err = Load(root); err != nil || cfg.Notices.WakeAfter != want {
+			t.Fatalf("wake_after = %s: got %v, %v", body, cfg.Notices.WakeAfter, err)
+		}
+	}
+	if !strings.Contains(Template, "[notices]") || !strings.Contains(Template, `# wake_after = "3m"`) {
+		t.Error("template doesn't document notices.wake_after")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/claims"
@@ -39,16 +40,49 @@ func (a *App) taskAdapter(t store.Task) agent.Adapter {
 }
 
 // injectNotices types every pending notice into a hookless agent's window:
-// it has no hook to collect them and never reports itself idle.
-func (a *App) injectNotices(t store.Task, ad agent.Adapter) error {
+// it has no hook to collect them and never reports itself idle. Notices are
+// marked delivered only once the pane changed after the submit (#183); until
+// then a second call leaves them alone rather than typing them twice. force
+// types over what looks like a draft.
+func (a *App) injectNotices(t store.Task, ad agent.Adapter, force bool) error {
 	if !a.ownWindow(t) {
 		return nil
 	}
-	ns, err := a.Store.TakeNotices(t.ID, false)
+	w := a.wakeState()
+	w.mu.Lock()
+	if w.injecting[t.ID] != 0 {
+		w.mu.Unlock()
+		return nil
+	}
+	ns, err := a.Store.PeekNotices(t.ID, false)
 	if err != nil || len(ns) == 0 {
+		w.mu.Unlock()
 		return err
 	}
-	tmux.SendWhenIdle(a.Tmux, t.Window, ad.Inject(store.FormatNotices(ns)), nil)
+	w.gen++
+	gen := w.gen
+	w.injecting[t.ID] = gen
+	w.mu.Unlock()
+	release := func() {
+		w.mu.Lock()
+		if w.injecting[t.ID] == gen {
+			delete(w.injecting, t.ID)
+		}
+		w.mu.Unlock()
+	}
+	// Let go if the text never goes in or the pane never confirms it; the
+	// notices stay pending for the next notice or the idle wake.
+	time.AfterFunc(tmux.RetryFor+tmux.ConfirmFor, release)
+	tmux.Deliver(a.Tmux, t.Window, ad.Inject(store.FormatNotices(ns)), tmux.Delivery{
+		Force: force,
+		Sent: func() {
+			_ = a.Store.MarkDelivered(ns)
+			release()
+			if n, err := a.Store.PendingNotices(t.ID); err == nil && n > 0 {
+				_ = a.injectNotices(t, ad, false)
+			}
+		},
+	})
 	return nil
 }
 

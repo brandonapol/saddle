@@ -29,6 +29,8 @@ type App struct {
 	Store *store.Store
 	Tmux  tmux.Driver
 	Bin   string
+
+	wake wakeState // idle notice wake-ups (#183)
 }
 
 // Open finds the repo from dir (SADDLE_ROOT wins) and opens its state.
@@ -615,23 +617,16 @@ func (a *App) Notify(task, kind, text string) error {
 		return nil
 	}
 	if ad := a.taskAdapter(t); !ad.Hooks() {
-		return a.injectNotices(t, ad)
+		return a.injectNotices(t, ad, false)
 	}
 	// A needs-you agent is woken only when its screen shows no prompt: an
 	// escalated task waits idle at its prompt for instructions (#189), while
 	// the wake line would answer a permission prompt.
-	asks := t.Status == store.NeedsYou
-	if (t.Status == store.Idle || t.Status == store.Done || t.Status == store.Conflict || asks) && a.ownWindow(t) {
-		if asks && a.onPrompt(t) {
+	if waitsAtPrompt(t) && a.ownWindow(t) {
+		if t.Status == store.NeedsYou && a.onPrompt(t) {
 			return nil
 		}
-		tmux.SendWhenIdle(a.Tmux, t.Window, agent.Claude{}.Inject(""), func() bool {
-			if asks && a.onPrompt(t) {
-				return false
-			}
-			n, err := a.Store.PendingNotices(task)
-			return err != nil || n > 0
-		})
+		a.sendWake(t, false)
 	}
 	return nil
 }

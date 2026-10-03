@@ -120,7 +120,7 @@ func decode(line string) []cell {
 			i = j
 		case ']': // OSC: up to BEL or ESC \
 			j := i + 2
-			for j < len(rs) && rs[j] != '\a' && !(rs[j] == '\x1b' && j+1 < len(rs) && rs[j+1] == '\\') {
+			for j < len(rs) && rs[j] != '\a' && (rs[j] != '\x1b' || j+1 >= len(rs) || rs[j+1] != '\\') {
 				j++
 			}
 			if j < len(rs) && rs[j] == '\x1b' {

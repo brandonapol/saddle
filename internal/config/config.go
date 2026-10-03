@@ -60,6 +60,15 @@ type Config struct {
 	Spawn Spawn `toml:"spawn"`
 	// Orchestrator tunes the orchestrator session itself.
 	Orchestrator Orchestrator `toml:"orchestrator"`
+	// Notices tunes how queued notices reach idle agents.
+	Notices Notices `toml:"notices"`
+}
+
+// Notices configures notice delivery to agents.
+type Notices struct {
+	// WakeAfter is how long an idle agent may sit with undelivered action
+	// notices before saddle wakes it even over what looks like a draft (#183).
+	WakeAfter time.Duration `toml:"wake_after"`
 }
 
 // Orchestrator configures the orchestrator session.
@@ -232,6 +241,7 @@ func Default() Config {
 		CI:           CI{Interval: 10 * time.Minute},
 		Spawn:        Spawn{MaxDepth: 3, MaxChildren: 8},
 		Orchestrator: Orchestrator{CompactAt: 0.7},
+		Notices:      Notices{WakeAfter: 3 * time.Minute},
 		Train:        Train{MaxAttempts: 2, Output: "stack"},
 		Usage: Usage{
 			Poll: 15 * time.Second,
@@ -317,6 +327,9 @@ func Load(root string) (Config, error) {
 	if c := cfg.Orchestrator.CompactAt; c <= 0 || c > 1 {
 		return cfg, fmt.Errorf("orchestrator.compact_at %v: want a fraction above 0 and at most 1", c)
 	}
+	if cfg.Notices.WakeAfter <= 0 {
+		cfg.Notices.WakeAfter = Default().Notices.WakeAfter
+	}
 	if cfg.CI.Interval <= 0 {
 		cfg.CI.Interval = Default().CI.Interval
 	}
@@ -388,6 +401,12 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # tells it to compact, and sends /compact itself once the orchestrator is idle
 # and you aren't typing. A fraction above 0, at most 1.
 # compact_at = 0.7
+
+[notices]
+# An idle agent whose action notices (failed tests, conflicts, messages)
+# still haven't reached it after this long is woken anyway: saddle clears its
+# input line and types the wake-up, and logs a notice_wake event.
+# wake_after = "3m"
 
 # Agent CLIs other than claude: the command and extra arguments.
 # [adapters.codex]
