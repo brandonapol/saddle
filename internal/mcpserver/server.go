@@ -276,6 +276,13 @@ func Serve(ctx context.Context, a *app.App, task string) error {
 	return New(a, task).Run(ctx, &mcp.StdioTransport{})
 }
 
+// ServeIdle runs a server with no tools whose instructions say why: the
+// plugin's server in a session saddle can't orchestrate from.
+func ServeIdle(ctx context.Context, why string) error {
+	s := mcp.NewServer(&mcp.Implementation{Name: "saddle", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: why})
+	return s.Run(ctx, &mcp.StdioTransport{})
+}
+
 // New builds the MCP server for task without starting it.
 func New(a *app.App, task string) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "saddle", Version: "0.1.0"}, &mcp.ServerOptions{

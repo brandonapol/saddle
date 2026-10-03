@@ -520,6 +520,13 @@ func (s *Store) PendingNotices(task string) (int, error) {
 	return n, err
 }
 
+// PendingActionNotices counts a task's undelivered action notices.
+func (s *Store) PendingActionNotices(task string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM notices WHERE task = ? AND delivered = 0 AND kind = ?`, task, NoticeAction).Scan(&n)
+	return n, err
+}
+
 // Tables lists the tables RowCounts reports, in schema order.
 var Tables = []string{"tasks", "claims", "events", "train", "notices", "renames", "chat", "usage", "narrator_spend"}
 

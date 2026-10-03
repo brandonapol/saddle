@@ -146,3 +146,46 @@ func TestNoticesDeliveredAndStopBlocks(t *testing.T) {
 		t.Fatalf("status = %s", got.Status)
 	}
 }
+
+func TestOrchestratorHookDeliversNoticesWithoutTakingTheSession(t *testing.T) {
+	a := setup(t)
+	if _, err := a.EnsureOrchestrator(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Notify(app.OrchestratorID, store.NoticeInfo, "t1 landed"); err != nil {
+		t.Fatal(err)
+	}
+	out := HandleOrchestrator(a, Input{Event: "SessionStart", SessionID: "user-session"})
+	if out == nil || !strings.Contains(out.Specific.AdditionalContext, "[saddle] t1 landed") {
+		t.Fatalf("SessionStart: %+v", out)
+	}
+	// The TUI resumes t0's session id; it must never resume the user's own session.
+	if t0, _ := a.Store.Task(app.OrchestratorID); t0.SessionID != "" {
+		t.Fatalf("session id recorded: %q", t0.SessionID)
+	}
+	if out := HandleOrchestrator(a, Input{Event: "PostToolUse"}); out != nil {
+		t.Fatalf("notice delivered twice: %+v", out)
+	}
+	if out := HandleOrchestrator(a, Input{Event: "PreToolUse", ToolInput: map[string]any{"file_path": filepath.Join(a.Root, "a.go")}}); out != nil {
+		t.Fatalf("orchestrator writes are not claim-checked: %+v", out)
+	}
+}
+
+func TestOrchestratorHookStopContinuesForActionNotices(t *testing.T) {
+	a := setup(t)
+	if _, err := a.EnsureOrchestrator(); err != nil {
+		t.Fatal(err)
+	}
+	_ = a.Notify(app.OrchestratorID, store.NoticeInfo, "t1 spawned")
+	if out := HandleOrchestrator(a, Input{Event: "Stop"}); out != nil {
+		t.Fatalf("info notice alone kept the session going: %+v", out)
+	}
+	_ = a.Notify(app.OrchestratorID, store.NoticeAction, "t2 conflicted")
+	if out := HandleOrchestrator(a, Input{Event: "Stop", StopHookActive: true}); out != nil {
+		t.Fatalf("blocked a stop that already continued once: %+v", out)
+	}
+	out := HandleOrchestrator(a, Input{Event: "Stop"})
+	if out == nil || out.Decision != "block" || !strings.Contains(out.Reason, "t2 conflicted") {
+		t.Fatalf("Stop: %+v", out)
+	}
+}

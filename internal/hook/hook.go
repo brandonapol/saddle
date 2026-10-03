@@ -88,6 +88,27 @@ func Handle(a *app.App, task string, in Input) *Output {
 	return nil
 }
 
+// HandleOrchestrator processes one hook invocation from the user's own Claude
+// Code session orchestrating through the saddle plugin. It only delivers the
+// orchestrator's notices: the session writes no claimed files, and its
+// session id is not recorded, so the TUI never resumes the user's session.
+func HandleOrchestrator(a *app.App, in Input) *Output {
+	st := a.Store
+	switch in.Event {
+	case "SessionStart", "UserPromptSubmit", "PostToolUse":
+		return context(in.Event, takeAll(st, app.OrchestratorID))
+	case "Stop":
+		if in.StopHookActive {
+			return nil // it already continued once for notices; let it stop
+		}
+		ns, _ := st.TakeNotices(app.OrchestratorID, true)
+		if len(ns) > 0 {
+			return &Output{Decision: "block", Reason: store.FormatNotices(ns)}
+		}
+	}
+	return nil
+}
+
 // Run reads hook JSON from r and writes the response to w.
 func Run(a *app.App, task string, r io.Reader, w io.Writer) error {
 	var in Input
