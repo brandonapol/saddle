@@ -35,7 +35,7 @@ type keyMap struct {
 	Approve, EditPlan, Replan, ModelUp, ModelDown, Go, PlanNext, PlanPrev key.Binding
 
 	// Task list.
-	Up, Down, Open, Skill, Spawn, Pause, Kill, Land, Back key.Binding
+	Up, Down, Open, Skill, Spawn, Pause, Brief, Kill, Land, Back key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -92,6 +92,7 @@ func newKeyMap() keyMap {
 		Skill: b("/", "skill in agent", "/"),
 		Spawn: b("s", "spawn", "s"),
 		Pause: b("p", "pause (esc)", "p"),
+		Brief: b("b", "brief/peek", "b"),
 		Kill:  b("x", "kill", "x"),
 		Land:  b("L", "land", "L"),
 		Back:  b("esc/tab", "orchestrator", "esc"),
@@ -110,7 +111,7 @@ func (k keyMap) groups() []keyGroup {
 	return []keyGroup{
 		{"Anywhere", []key.Binding{k.ViewControl, k.ViewPlan, k.ViewMerge, k.Help, k.NextAgent, k.PrevAgent, k.Focus, k.PageUp, k.PageDown, k.Restart, k.Quit}},
 		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget, k.Ask, k.AskScreen}},
-		{"Agents", []key.Binding{k.Down, k.Up, k.Open, k.Skill, k.Spawn, k.Pause, k.Kill, k.Land, k.Back}},
+		{"Agents", []key.Binding{k.Down, k.Up, k.Open, k.Skill, k.Spawn, k.Pause, k.Brief, k.Kill, k.Land, k.Back}},
 		{"Plan view", []key.Binding{k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.ModelDown, k.Go, k.PlanNext, k.PlanPrev}},
 		{"Merge view", []key.Binding{k.AutoMerge, k.Hold, k.Rebase, k.QueueDown, k.QueueUp, k.TakeOver}},
 		{"Terminal", []key.Binding{k.Terminal, k.TermBack, k.TermScrollUp, k.TermScrollDown}},
@@ -154,7 +155,7 @@ func (m *model) help() []key.Binding {
 		}
 		return append(hs, k.NextAgent, withHelp(k.Focus, "tab", "agents"), k.ViewControl, k.Terminal, withHelp(k.Help, "f1", "keys"), k.PageUp, k.Restart, k.Quit)
 	}
-	return []key.Binding{k.Down, k.NextAgent, k.Open, k.ViewControl, m.detachHelp(), k.Skill, k.Spawn, k.Pause, k.Ask, k.Back, k.Kill, k.Land, k.Help, k.Restart, k.Quit}
+	return []key.Binding{k.Down, k.NextAgent, k.Open, k.Brief, k.ViewControl, m.detachHelp(), k.Skill, k.Spawn, k.Pause, k.Ask, k.Back, k.Kill, k.Land, k.Help, k.Restart, k.Quit}
 }
 
 func withHelp(b key.Binding, h, desc string) key.Binding {

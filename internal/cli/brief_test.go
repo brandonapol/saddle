@@ -19,7 +19,7 @@ func storeApp(t *testing.T) *app.App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 	cfg := config.Default()
 	cfg.Serial = []string{"go.mod"}
 	return &app.App{Root: root, Cfg: cfg, Store: st}

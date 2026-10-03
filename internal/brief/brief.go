@@ -142,7 +142,7 @@ func doneWhen(prompt string) []Check {
 	lines := strings.Split(prompt, "\n")
 	for i, l := range lines {
 		t := strings.TrimSpace(l)
-		if !(strings.HasPrefix(t, "#") || strings.HasSuffix(t, ":")) || !doneTitle.MatchString(t) {
+		if !strings.HasPrefix(t, "#") && !strings.HasSuffix(t, ":") || !doneTitle.MatchString(t) {
 			continue
 		}
 		var out []Check
