@@ -38,3 +38,6 @@ func world(t *testing.T, opts Options) *World {
 	t.Cleanup(w.Diagnose)
 	return w
 }
+
+// errorf is fmt.Errorf, for conditions.
+func errorf(format string, a ...any) error { return fmt.Errorf(format, a...) }

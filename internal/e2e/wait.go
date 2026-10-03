@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 	"testing"
@@ -48,6 +47,3 @@ func Eventually(t testing.TB, what string, cond func() error) {
 
 // itoa is strconv.Itoa, for building args.
 func itoa(n int) string { return strconv.Itoa(n) }
-
-// errorf is fmt.Errorf, for conditions.
-func errorf(format string, a ...any) error { return fmt.Errorf(format, a...) }
