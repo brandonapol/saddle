@@ -40,10 +40,14 @@ func (m *model) routeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 		return nil, true
 	case key.Matches(k, keys.ViewPlan):
 		m.setView(viewPlan)
-		return nil, true
+		return m.loadPlan(), true
 	case key.Matches(k, keys.ViewMerge):
 		m.setView(viewMerge)
 		return nil, true
+	}
+	// The replan note takes typing, help key included.
+	if m.view == viewPlan && m.pl.noting {
+		return m.planKey(k)
 	}
 	if m.helpOpen {
 		if key.Matches(k, keys.Help, keys.Back) {
@@ -56,6 +60,11 @@ func (m *model) routeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 	if key.Matches(k, keys.Help) && (!typing || k.Type == tea.KeyF1) {
 		m.helpOpen = true
 		return nil, true
+	}
+	if m.view == viewPlan {
+		if c, ok := m.planKey(k); ok {
+			return c, true
+		}
 	}
 	if m.view == viewMerge {
 		if c, ok := m.mergeKey(k); ok {
@@ -126,13 +135,6 @@ func (m *model) viewHelp(w, h int) string {
 		body = strings.Join(sections, "\n\n")
 	}
 	return box("KEYS", w, h, true, clip(body, inner))
-}
-
-// viewPlan is where plan review (#35) will live. Plans aren't stored yet.
-func (m *model) viewPlan(w, h int) string {
-	body := sDim.Render("No plan under review. Ask the orchestrator to plan an epic, or validate a plan file with ") +
-		sKey.Render("saddle check <plan.md>") + sDim.Render(".")
-	return box("PLAN", w, h, false, lipgloss.NewStyle().Width(w-2).Render(body))
 }
 
 // viewMerge lists the tasks in the merge train with their train state.

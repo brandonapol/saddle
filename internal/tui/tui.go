@@ -135,6 +135,7 @@ type model struct {
 	amer      automerger                                   // the merge view's actions; nil means the app's
 	amBusy    string                                       // the auto-merge action running, if any
 	stackSel  string                                       // the merge view's selected stack
+	pl        planState                                    // the plan review view
 	narr      narrSink                                     // narrator lines; nil when the narrator is off
 	asker     asker                                        // answers questions; nil when the narrator is off
 	askScreen bool                                         // the next question carries the selected agent's screen
@@ -371,6 +372,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		cmds = append(cmds, m.refresh(), tick())
+		if m.view == viewPlan {
+			cmds = append(cmds, m.loadPlan())
+		}
+
+	case planLoadedMsg:
+		m.planLoaded(msg)
+
+	case planDoneMsg:
+		m.pl.busy = ""
+		m.flash, m.flashAt = string(msg), time.Now()
+		cmds = append(cmds, m.loadPlan())
+
+	case planEditedMsg:
+		cmds = append(cmds, m.planEdited(msg))
 
 	case refreshMsg:
 		m.refreshing = false
