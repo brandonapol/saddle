@@ -118,7 +118,9 @@ func (m *model) termEvent(msg tea.Msg) tea.Cmd {
 			m.focusChat()
 		}
 		m.layout()
-		return func() tea.Msg { return flashMsg("shell exited; ctrl+` starts a new one") }
+		return func() tea.Msg {
+			return flashMsg("shell exited; " + m.keys.Terminal.Help().Key + " starts a new one")
+		}
 	}
 	return nil
 }
