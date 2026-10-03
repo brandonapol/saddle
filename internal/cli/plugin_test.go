@@ -14,6 +14,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/banner"
+	"github.com/brandonapol/saddle/internal/doctor"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -189,9 +190,11 @@ func TestPluginBriefReportsEngineAndAgents(t *testing.T) {
 }
 
 func TestPluginCommandRegistered(t *testing.T) {
-	cmd, _, err := Root().Find([]string{"plugin", "wait"})
-	if err != nil || cmd.Name() != "wait" {
-		t.Fatalf("saddle plugin wait: %v", err)
+	for _, name := range []string{"wait", "setup"} {
+		cmd, _, err := Root().Find([]string{"plugin", name})
+		if err != nil || cmd.Name() != name {
+			t.Fatalf("saddle plugin %s: %v", name, err)
+		}
 	}
 }
 
@@ -253,5 +256,122 @@ func TestInitBannerSuppressedByQuietAndNonTTY(t *testing.T) {
 	}
 	if out := runInit(t, root, false); strings.Contains(out, "Howdy") || !strings.Contains(out, "initialized") {
 		t.Fatalf("non-TTY init:\n%s", out)
+	}
+}
+
+// fakeDoctor returns rs and counts its runs.
+type fakeDoctor struct {
+	rs   []doctor.Result
+	runs int
+}
+
+func (f *fakeDoctor) run(string) []doctor.Result {
+	f.runs++
+	return f.rs
+}
+
+func marker(t *testing.T, root string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(root, ".saddle", onboardMarker))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+func TestOnboardInitsAndRunsDoctorOnceOnUninitializedRepo(t *testing.T) {
+	root := bareRepo(t)
+	doc := &fakeDoctor{rs: []doctor.Result{
+		{Name: "tmux", Status: doctor.OK, Detail: "tmux 3.4"},
+		{Name: "branch protection", Status: doctor.Warn, Detail: "none", Fix: "protect main"},
+	}}
+	var out bytes.Buffer
+	if !onboard(&out, root, doc.run) {
+		t.Fatalf("warnings blocked the plugin:\n%s", out.String())
+	}
+	got := out.String()
+	for _, want := range []string{"Howdy", "saddle init", "branch protection", "protect main"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("first use missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "\x1b") {
+		t.Errorf("plugin output is captured by Claude Code; it must not be colored: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".saddle", "config.toml")); err != nil {
+		t.Fatalf("not initialized: %v", err)
+	}
+	if m := marker(t, root); m != "ok" {
+		t.Fatalf("marker %q, want ok", m)
+	}
+
+	out.Reset()
+	if !onboard(&out, filepath.Join(root), doc.run) || doc.runs != 1 || out.Len() != 0 {
+		t.Fatalf("second use: runs %d, out %q", doc.runs, out.String())
+	}
+}
+
+func TestOnboardSkipsInitializedRepo(t *testing.T) {
+	a := pluginRepo(t)
+	doc := &fakeDoctor{}
+	var out bytes.Buffer
+	if !onboard(&out, a.Root, doc.run) || doc.runs != 0 || out.Len() != 0 {
+		t.Fatalf("already initialized: runs %d, out %q", doc.runs, out.String())
+	}
+	if m := marker(t, a.Root); m != "" {
+		t.Fatalf("marker %q written for a repo the plugin didn't set up", m)
+	}
+}
+
+func TestOnboardFailingDoctorBlocksUntilFixed(t *testing.T) {
+	root := bareRepo(t)
+	doc := &fakeDoctor{rs: []doctor.Result{{Name: "gh auth", Status: doctor.Fail, Detail: "not logged in", Fix: "gh auth login"}}}
+	var out bytes.Buffer
+	if onboard(&out, root, doc.run) {
+		t.Fatalf("a failing check didn't block:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "FAIL") || !strings.Contains(out.String(), "gh auth login") || !strings.Contains(out.String(), "again") {
+		t.Fatalf("blocked output:\n%s", out.String())
+	}
+	if m := marker(t, root); m != "pending" {
+		t.Fatalf("marker %q, want pending", m)
+	}
+
+	// Next use reruns only the doctor: no second banner or init.
+	doc.rs = []doctor.Result{{Name: "gh auth", Status: doctor.OK, Detail: "logged in"}}
+	out.Reset()
+	if !onboard(&out, root, doc.run) || doc.runs != 2 {
+		t.Fatalf("fixed: runs %d out %q", doc.runs, out.String())
+	}
+	if strings.Contains(out.String(), "Howdy") {
+		t.Fatalf("banner shown twice:\n%s", out.String())
+	}
+	if m := marker(t, root); m != "ok" {
+		t.Fatalf("marker %q, want ok", m)
+	}
+	out.Reset()
+	if !onboard(&out, root, doc.run) || doc.runs != 2 || out.Len() != 0 {
+		t.Fatalf("third use: runs %d out %q", doc.runs, out.String())
+	}
+}
+
+func TestOnboardLeavesAgentsAndNonRepos(t *testing.T) {
+	doc := &fakeDoctor{}
+	dir := t.TempDir()
+	t.Setenv("SADDLE_ROOT", "")
+	t.Setenv("SADDLE_TASK", "")
+	var out bytes.Buffer
+	if !onboard(&out, dir, doc.run) || doc.runs != 0 {
+		t.Fatalf("non-repo: runs %d out %q", doc.runs, out.String())
+	}
+	root := bareRepo(t)
+	t.Setenv("SADDLE_TASK", "t1")
+	if !onboard(&out, root, doc.run) || doc.runs != 0 {
+		t.Fatalf("agent: runs %d out %q", doc.runs, out.String())
+	}
+	for _, d := range []string{dir, root} {
+		if _, err := os.Stat(filepath.Join(d, ".saddle")); !os.IsNotExist(err) {
+			t.Fatalf(".saddle created in %s: %v", d, err)
+		}
 	}
 }

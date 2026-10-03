@@ -23,20 +23,15 @@ func Howdy() string { return howdy }
 
 // Options controls Print.
 type Options struct {
-	// Quiet suppresses the banner (--quiet). It wins over Force.
+	// Quiet suppresses the banner (--quiet).
 	Quiet bool
-	// Force prints even when w is not a terminal, e.g. into a Claude Code
-	// session that captures the plugin's output. Forced output to a
-	// non-terminal is never colored.
-	Force bool
 	// IsTTY reports whether w is a terminal. Nil checks for a character
 	// device.
 	IsTTY func(io.Writer) bool
 }
 
-// Print writes the banner to w unless opts.Quiet, or w is not a terminal and
-// opts.Force is unset. It is colored only on a terminal and when NO_COLOR is
-// unset (https://no-color.org).
+// Print writes the banner to w unless opts.Quiet or w is not a terminal. It
+// is colored unless NO_COLOR is set (https://no-color.org).
 func Print(w io.Writer, opts Options) {
 	if opts.Quiet {
 		return
@@ -45,11 +40,10 @@ func Print(w io.Writer, opts Options) {
 	if isTTY == nil {
 		isTTY = IsTerminal
 	}
-	term := isTTY(w)
-	if !term && !opts.Force {
+	if !isTTY(w) {
 		return
 	}
-	if term && os.Getenv("NO_COLOR") == "" {
+	if os.Getenv("NO_COLOR") == "" {
 		fmt.Fprint(w, "\x1b[33m"+howdy+"\x1b[0m")
 		return
 	}

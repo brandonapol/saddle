@@ -15,7 +15,9 @@ import (
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/banner"
+	"github.com/brandonapol/saddle/internal/doctor"
 	"github.com/brandonapol/saddle/internal/engine"
+	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/hook"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/store"
@@ -30,7 +32,7 @@ func pluginCmd() *cobra.Command {
 		Use:   "plugin",
 		Short: "Entrypoints for the saddle Claude Code plugin (orchestrate from your own Claude Code session)",
 	}
-	cmd.AddCommand(pluginMCPCmd(), pluginHookCmd(), pluginBriefCmd(), pluginEngineCmd(), pluginWaitCmd())
+	cmd.AddCommand(pluginMCPCmd(), pluginHookCmd(), pluginSetupCmd(), pluginBriefCmd(), pluginEngineCmd(), pluginWaitCmd())
 	return cmd
 }
 
@@ -47,7 +49,7 @@ func openPlugin(dir string) (*app.App, string) {
 		root = saddleRoot(dir)
 	}
 	if root == "" {
-		return nil, "Saddle isn't set up here. Run `saddle init` and `saddle doctor` in a git repo to orchestrate agents in it."
+		return nil, "Saddle isn't set up here. Use /saddle:orchestrate in a git repo to set it up (it runs `saddle init` and `saddle doctor`), then restart the session to get the orchestrator tools."
 	}
 	a, err := app.Open(root)
 	if err != nil {
@@ -69,6 +71,76 @@ func saddleRoot(dir string) string {
 		}
 	}
 }
+
+// onboardMarker, under .saddle/, records that the plugin set this repo up:
+// "pending" until the doctor passes, then "ok".
+const onboardMarker = "plugin-onboarded"
+
+// onboard sets saddle up the first time a plugin command is used in a repo
+// that never ran saddle init: it greets the user, runs init and the doctor,
+// and shows the doctor table. It reports whether the command may go on: only
+// when no check fails (warnings are shown, not blocking). While a check
+// fails, each later use reruns just the doctor. Repos that were already
+// initialized, saddle's own agents and dirs outside git are left alone.
+// Only explicit plugin commands call it, never the hook or MCP server, which
+// run in every project.
+func onboard(w io.Writer, dir string, runDoctor func(root string) []doctor.Result) bool {
+	if os.Getenv("SADDLE_TASK") != "" {
+		return true
+	}
+	root := os.Getenv("SADDLE_ROOT")
+	if root == "" {
+		root = saddleRoot(dir)
+	}
+	if root != "" {
+		b, _ := os.ReadFile(filepath.Join(root, ".saddle", onboardMarker))
+		if strings.TrimSpace(string(b)) != "pending" {
+			return true
+		}
+	} else {
+		var err error
+		if root, err = gitx.Root(dir); err != nil {
+			return true // openPlugin explains that saddle needs a git repo
+		}
+		fmt.Fprint(w, banner.Howdy()) // captured by Claude Code: never colored
+		fmt.Fprintf(w, "\nFirst use of saddle in %s: running saddle init and saddle doctor.\n\n", root)
+		if err := initRepo(root); err != nil {
+			fmt.Fprintln(w, "saddle init failed:", err)
+			return false
+		}
+		if err := writeMarker(root, "pending"); err != nil {
+			fmt.Fprintln(w, "saddle init:", err)
+			return false
+		}
+	}
+	rs := runDoctor(root)
+	doctor.WriteTable(w, rs)
+	if doctor.Failed(rs) {
+		fmt.Fprintln(w, "\nsaddle doctor found failing checks. Fix them, then run this command again.")
+		return false
+	}
+	fmt.Fprintln(w)
+	if err := writeMarker(root, "ok"); err != nil {
+		fmt.Fprintln(w, "saddle:", err)
+		return false
+	}
+	return true
+}
+
+func initRepo(root string) error {
+	a, err := app.Open(root)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+	return a.Init()
+}
+
+func writeMarker(root, state string) error {
+	return os.WriteFile(filepath.Join(root, ".saddle", onboardMarker), []byte(state+"\n"), 0o644)
+}
+
+func systemDoctor(root string) []doctor.Result { return doctor.Run(doctor.System(root)) }
 
 // stdoutIsTTY decides whether the howdy banner prints; tests replace it.
 var stdoutIsTTY = banner.IsTerminal
@@ -145,11 +217,36 @@ func runPluginHook(r io.Reader, w io.Writer) error {
 	return json.NewEncoder(w).Encode(out)
 }
 
+// pluginSetupCmd is the plugin commands' first step: it sets saddle up in a
+// repo that never ran saddle init (see onboard).
+func pluginSetupCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "setup",
+		Short: "Set saddle up in this repo on first use: saddle init, then saddle doctor",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			out := cmd.OutOrStdout()
+			if !onboard(out, wd(), systemDoctor) {
+				return nil
+			}
+			if a, why := openPlugin(wd()); a == nil {
+				fmt.Fprintln(out, why)
+			} else {
+				a.Close()
+				fmt.Fprintln(out, "Saddle is set up in "+a.Root+".")
+			}
+			return nil
+		},
+	}
+}
+
 func pluginBriefCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "brief",
 		Short: "Print the orchestrator brief and where things stand",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !onboard(cmd.OutOrStdout(), wd(), systemDoctor) {
+				return nil
+			}
 			a, why := openPlugin(wd())
 			if a == nil {
 				fmt.Fprintln(cmd.OutOrStdout(), why)

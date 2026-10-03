@@ -67,20 +67,6 @@ func TestPrintSuppressed(t *testing.T) {
 	}
 }
 
-func TestPrintForceSkipsTTYCheckButNotQuiet(t *testing.T) {
-	t.Setenv("NO_COLOR", "")
-	var b bytes.Buffer
-	Print(&b, Options{Force: true})
-	if b.Len() == 0 || strings.Contains(b.String(), "\x1b") {
-		t.Fatalf("forced to a non-TTY: want the plain banner, got %q", b.String())
-	}
-	b.Reset()
-	Print(&b, Options{Force: true, Quiet: true})
-	if b.Len() != 0 {
-		t.Fatalf("Force overrode Quiet: %q", b.String())
-	}
-}
-
 func stripANSI(s string) string {
 	var out strings.Builder
 	for i := 0; i < len(s); i++ {
