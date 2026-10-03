@@ -256,3 +256,25 @@ func TestStackRebaseConflictReturnsToOwner(t *testing.T) {
 		t.Fatal("unknown stack: want error")
 	}
 }
+
+// #196: the watcher NewAutomerge builds collapses a red-bottom stack through
+// its green top PR when nothing else is ready, with no human step.
+func TestAutomergeCollapsesRedBottom(t *testing.T) {
+	a, h, _ := stackOfTwo(t)
+	t2, _ := a.Store.Task("t2")
+	w := a.NewAutomerge(h)
+	must(t, w.SetEnabled(true))
+	st, err := w.Check()
+	must(t, err)
+	if st.Merged != t2.PR || st.Stopped != "" {
+		t.Fatalf("check = merged %q stopped %q; want %s collapsed in", st.Merged, st.Stopped, t2.PR)
+	}
+	if !slices.Equal(h.merged, []string{t2.PR}) {
+		t.Fatalf("merged = %v, want only t2's PR", h.merged)
+	}
+	for _, id := range []string{"t1", "t2"} {
+		if got := trainState(t, a, id); got != TrainMerged {
+			t.Fatalf("%s = %s, want merged", id, got)
+		}
+	}
+}

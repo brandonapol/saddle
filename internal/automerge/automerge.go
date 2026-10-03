@@ -14,6 +14,13 @@
 // logs why (at most once per Interval for the same reason), and status says
 // for every stack why it isn't merged and when the next check is.
 //
+// A stack whose bottom PR is red can't merge bottom-up, but its fix often
+// lives in a PR above it (#196). When no stack is ready, the first one that
+// isn't held, whose bottom is red only for its CI and which has a green PR
+// above it, is handed to Collapse: it retargets that PR to base, merges it
+// carrying the stack below it, and restacks. Collapse decides whether the
+// stack really qualifies; a failure stops the watcher like a failed merge.
+//
 // A held stack (`saddle automerge hold <stack|pr>`) is never merged, but it is
 // still tracked and restacked; when it falls behind base the orchestrator
 // hears about it once, as info. Any merge or restack failure stops the
@@ -41,14 +48,15 @@ const NeedsHuman = "needs-human"
 
 // Event kinds in the events table.
 const (
-	EventMerged  = "automerge_merged"  // a PR it merged
-	EventRefused = "automerge_refused" // a PR it won't merge until something changes, and why
-	EventWaiting = "automerge_waiting" // a PR it waits on (pending CI, GitHub computing), and why
-	EventFailed  = "automerge_failed"  // a merge or restack failed; the watcher stopped
-	EventBehind  = "automerge_behind"  // a held stack fell behind base
-	EventToggle  = "automerge_toggle"  // on or off
-	EventHold    = "automerge_hold"    // a stack held or released
-	EventIdle    = "automerge_idle"    // a check merged nothing while a PR was ready, and why
+	EventMerged    = "automerge_merged"    // a PR it merged
+	EventRefused   = "automerge_refused"   // a PR it won't merge until something changes, and why
+	EventWaiting   = "automerge_waiting"   // a PR it waits on (pending CI, GitHub computing), and why
+	EventFailed    = "automerge_failed"    // a merge or restack failed; the watcher stopped
+	EventBehind    = "automerge_behind"    // a held stack fell behind base
+	EventToggle    = "automerge_toggle"    // on or off
+	EventHold      = "automerge_hold"      // a stack held or released
+	EventIdle      = "automerge_idle"      // a check merged nothing while a PR was ready, and why
+	EventCollapsed = "automerge_collapsed" // a red-bottom stack it merged through a green PR above (#196)
 )
 
 // Where the on/off state came from.
@@ -129,6 +137,9 @@ type Stack struct {
 	Next   string `json:"next"`             // the PR it merges next: the bottom one
 	Ready  bool   `json:"ready"`            // Next can merge now
 	Why    string `json:"why,omitempty"`    // why Next can't, when not ready
+	// Collapse is the green PR above a red bottom that the watcher would
+	// merge the stack through, when no stack is ready.
+	Collapse string `json:"collapse,omitempty"`
 	// Blocked says why a ready Next wasn't merged, or when it will be.
 	Blocked string `json:"blocked,omitempty"`
 	wait    bool   // Why is something to wait out, not a refusal
@@ -209,9 +220,13 @@ type Watcher struct {
 	// Restack rebuilds the stack on base after a merge.
 	Restack func() error
 	// Lock takes the train lock if it is free; nil means don't lock.
-	Lock   func() (unlock func(), ok bool, err error)
-	Event  func(task, kind, data string)
-	Notify func(action bool, text string) // to the orchestrator
+	Lock func() (unlock func(), ok bool, err error)
+	// Collapse merges a red-bottom stack through a green PR above it and
+	// restacks, returning the PR it merged; "" when the stack doesn't
+	// qualify. It takes the train lock itself. nil means never collapse.
+	Collapse func(stack string) (merged string, err error)
+	Event    func(task, kind, data string)
+	Notify   func(action bool, text string) // to the orchestrator
 	// Interval is how often Run checks.
 	Interval time.Duration
 	// BusyRetry is how soon Run checks again after a tick found the train busy.
@@ -490,9 +505,33 @@ func (w *Watcher) graph(es []Entry, holds []string) []Stack {
 			st.Why = "the stack is held; `saddle automerge release " + st.ID + "` lets it merge"
 		}
 		st.Ready = st.Why == ""
+		if st.Collapse = w.collapsible(st); st.Collapse != "" {
+			st.Why += fmt.Sprintf("; next: collapse the stack into %s, the green PR above it, if it holds this one's commits", st.Collapse)
+		}
 		out = append(out, st)
 	}
 	return out
+}
+
+const whyRed = "its CI is red"
+
+// collapsible is the PR Check would collapse st into: the lowest green PR
+// above a bottom that is refused only for red CI, with nothing up to it
+// that a human must settle first. "" when there is none or no Collapse.
+func (w *Watcher) collapsible(st Stack) string {
+	if w.Collapse == nil || st.Held || len(st.Nodes) < 2 || st.Why != whyRed {
+		return ""
+	}
+	for _, n := range st.Nodes[1:] {
+		if n.Error != "" || n.Draft || slices.Contains(n.Labels, NeedsHuman) || n.AtRisk != "" ||
+			n.Mergeable == "CONFLICTING" || n.MergeState == "DIRTY" {
+			return ""
+		}
+		if n.Checks == ChecksPass {
+			return n.PR
+		}
+	}
+	return ""
 }
 
 // refusal says why n can't merge now, "" if it can; wait marks reasons that
@@ -512,7 +551,7 @@ func (w *Watcher) refusal(n Node) (why string, wait bool) {
 	case n.Mergeable == "CONFLICTING" || n.MergeState == "DIRTY":
 		return "it conflicts with " + w.Base, false
 	case n.Checks == ChecksFail:
-		return "its CI is red", false
+		return whyRed, false
 	case n.Checks == ChecksPending:
 		return "its CI is pending", true
 	case n.Mergeable != "MERGEABLE" || n.MergeState == "UNKNOWN" || n.MergeState == "":
@@ -562,6 +601,9 @@ func (w *Watcher) Check() (Status, error) {
 		if i := slices.IndexFunc(st.Stacks, func(x Stack) bool { return x.Ready }); i >= 0 {
 			release() // restack takes the train lock itself
 			w.merge(&s, &st, st.Stacks[i])
+		} else if i := slices.IndexFunc(st.Stacks, func(x Stack) bool { return x.Collapse != "" }); i >= 0 {
+			release() // collapse takes the train lock itself
+			w.collapse(&s, &st, st.Stacks[i])
 		}
 	}
 	st.Stopped = s.Stopped
@@ -654,6 +696,27 @@ func (w *Watcher) merge(s *State, st *Status, stack Stack) {
 		return
 	}
 	w.notify(false, fmt.Sprintf("Auto-merged %s (%s) into %s and restacked the rest of stack %s.", n.PR, n.Task, w.Base, stack.ID))
+}
+
+// collapse hands a red-bottom stack to Collapse; a failure stops the watcher.
+func (w *Watcher) collapse(s *State, st *Status, stack Stack) {
+	n := stack.Nodes[0]
+	pr, err := w.Collapse(stack.ID)
+	if err != nil {
+		why := fmt.Sprintf("collapsing stack %s (red %s) into %s failed: %v", stack.ID, n.PR, stack.Collapse, err)
+		s.Stopped = why
+		w.event(n.Task, EventFailed, why)
+		w.notify(true, fmt.Sprintf("Auto-merge stopped: %s. It won't retry; fix it (or `saddle stack collapse %s` by hand), then `saddle automerge on` to resume.", why, stack.ID))
+		return
+	}
+	if pr == "" {
+		return
+	}
+	st.Merged = pr
+	w.event(n.Task, EventCollapsed, fmt.Sprintf("%s merged into %s carrying stack %s past its red bottom %s", pr, w.Base, stack.ID, n.PR))
+	for _, x := range stack.Nodes {
+		delete(s.Logged, x.PR)
+	}
 }
 
 // logDecisions records why each stack's next PR isn't merging, once per

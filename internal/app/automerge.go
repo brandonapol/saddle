@@ -23,16 +23,17 @@ func (a *App) NewAutomerge(gh automerge.GitHub) *automerge.Watcher {
 		gh = &automerge.GH{Run: automerge.ExecRunner(a.Root)}
 	}
 	return &automerge.Watcher{
-		Path:    a.automergePath(),
-		Default: a.Cfg.Train.AutoMerge,
-		Base:    a.Cfg.Base,
-		GH:      gh,
-		Entries: a.automergeEntries,
-		AtRisk:  a.flagCovers,
-		Behind:  a.behindBase,
-		Restack: func() error { _, err := a.Restack(); return err },
-		Lock:    a.TryLockTrain,
-		Event:   a.Store.Event,
+		Path:     a.automergePath(),
+		Default:  a.Cfg.Train.AutoMerge,
+		Base:     a.Cfg.Base,
+		GH:       gh,
+		Entries:  a.automergeEntries,
+		AtRisk:   a.flagCovers,
+		Behind:   a.behindBase,
+		Restack:  func() error { _, err := a.Restack(); return err },
+		Lock:     a.TryLockTrain,
+		Collapse: func(s string) (string, error) { return a.AutoCollapse(s, gh) },
+		Event:    a.Store.Event,
 		Notify: func(action bool, text string) {
 			kind := store.NoticeInfo
 			if action {
