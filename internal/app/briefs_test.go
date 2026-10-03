@@ -51,3 +51,32 @@ func TestOrchestratorBriefQueueAndAutomergeTools(t *testing.T) {
 		}
 	}
 }
+
+// #179: the orchestrator brief says when and how to compact its context.
+func TestOrchestratorBriefCompaction(t *testing.T) {
+	a, _ := setup(t)
+	for name, brief := range map[string]string{"tui": a.orchestratorBrief(), "plugin": a.PluginBrief()} {
+		for _, want := range []string{
+			"Compact your context at natural breakpoints", "before a long planning step",
+			"Run /compact", "running tasks, open PRs, queued follow-ups, owner decisions pending, rules in force",
+			"saddle may send the command for you",
+		} {
+			if !strings.Contains(brief, want) {
+				t.Errorf("%s brief lacks %q", name, want)
+			}
+		}
+	}
+}
+
+// #176: the brief states the live cap and names the concurrency tool.
+func TestOrchestratorBriefConcurrency(t *testing.T) {
+	a, _ := setup(t)
+	_, err := a.SetConcurrency(3)
+	must(t, err)
+	brief := a.orchestratorBrief()
+	for _, want := range []string{"Run at most 3 at once", "`concurrency`"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("orchestrator brief lacks %q", want)
+		}
+	}
+}

@@ -4,11 +4,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/planner"
 )
 
@@ -275,5 +277,85 @@ func TestPlanReplanAndGo(t *testing.T) {
 	press(m, runeKey('g'))
 	if went != path {
 		t.Errorf("g on an approved plan: went %q", went)
+	}
+}
+
+// #176: the plan view shows running bots against the limit, with or
+// without a plan, at narrow and wide widths.
+func TestPlanViewShowsBots(t *testing.T) {
+	for _, w := range []int{36, 120} {
+		m, _ := newPlanModel(t, w, 50)
+		m.conc = &app.Concurrency{Limit: 4, Source: app.ConcurrencyRuntime, Config: 5}
+		openPlan(t, m)
+		out := m.View()
+		checkScreen(t, "plan", out, w, 50)
+		for _, want := range []string{"bots: 1/4", ">/<"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("width %d: plan view lacks %q:\n%s", w, want, out)
+			}
+		}
+		if w == 120 && !strings.Contains(out, "runtime") {
+			t.Errorf("wide plan view should say the limit is a runtime override:\n%s", out)
+		}
+
+		e := newViewModel(w, 30)
+		e.pl.dir = t.TempDir()
+		press(e, altKey('2'))
+		out = e.View()
+		checkScreen(t, "empty plan", out, w, 30)
+		if !strings.Contains(out, "bots: 1/5") { // config's 5 before a refresh reads the override
+			t.Errorf("width %d: empty plan view lacks the bots line:\n%s", w, out)
+		}
+	}
+}
+
+// #176: > and < raise and lower the limit within [1, 16], off the UI
+// goroutine; past the bounds they only say why.
+func TestPlanKeysAdjustBots(t *testing.T) {
+	m, _ := newPlanModel(t, 120, 40)
+	var calls []int
+	m.concSet = func(n int) (app.Concurrency, error) {
+		calls = append(calls, n)
+		return app.Concurrency{Limit: n, Running: 1, Source: app.ConcurrencyRuntime}, nil
+	}
+	m.conc = &app.Concurrency{Limit: 4, Running: 1}
+	openPlan(t, m)
+	press(m, runeKey('>'))
+	press(m, runeKey('<'))
+	press(m, runeKey('<'))
+	if want := []int{5, 4, 3}; !slices.Equal(calls, want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+	if m.conc.Limit != 3 || !strings.Contains(m.flash, "3") {
+		t.Fatalf("limit %d, flash %q", m.conc.Limit, m.flash)
+	}
+
+	calls = nil
+	m.conc = &app.Concurrency{Limit: app.MaxConcurrency}
+	press(m, runeKey('>'))
+	m.conc = &app.Concurrency{Limit: app.MinConcurrency}
+	press(m, runeKey('<'))
+	if len(calls) > 0 {
+		t.Fatalf("stepped past [1, 16]: %v", calls)
+	}
+	if !strings.Contains(m.flash, "at least 1") {
+		t.Errorf("flash = %q, want it to name the bound", m.flash)
+	}
+
+	m.concSet = func(int) (app.Concurrency, error) { return app.Concurrency{}, errors.New("disk full") }
+	m.conc = &app.Concurrency{Limit: 4}
+	press(m, runeKey('>'))
+	if !strings.Contains(m.flash, "disk full") || m.conc.Limit != 4 {
+		t.Errorf("error: flash %q, limit %d", m.flash, m.conc.Limit)
+	}
+}
+
+// A refresh carries the concurrency state into the model.
+func TestRefreshCarriesConcurrency(t *testing.T) {
+	m := newViewModel(120, 40)
+	m.prev = map[string]string{}
+	m.Update(refreshMsg{tasks: m.tasks, conc: &app.Concurrency{Limit: 7}})
+	if m.conc == nil || m.conc.Limit != 7 {
+		t.Fatalf("conc = %+v", m.conc)
 	}
 }

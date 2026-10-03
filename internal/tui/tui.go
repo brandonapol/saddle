@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -114,8 +115,9 @@ type model struct {
 	follow    bool
 	vp        viewport.Model
 	input     textarea.Model
-	target    string   // task whose pane gets the next /command, if not the orchestrator
-	skills    []string // skill names for completion, loaded on first use
+	drafting  atomic.Bool // input holds text; read by the compact watcher off the UI goroutine
+	target    string      // task whose pane gets the next /command, if not the orchestrator
+	skills    []string    // skill names for completion, loaded on first use
 	keys      keyMap
 	prefix    string // the user's tmux prefix, for help text
 
@@ -136,6 +138,8 @@ type model struct {
 	am        *automerge.Status                            // auto-merge as last saved; nil until read
 	amer      automerger                                   // the merge view's actions; nil means the app's
 	amBusy    string                                       // the auto-merge action running, if any
+	conc      *app.Concurrency                             // the bots limit as last read; nil until read
+	concSet   func(n int) (app.Concurrency, error)         // sets the bots limit; nil means the app's
 	stackSel  string                                       // the merge view's selected stack
 	pl        planState                                    // the plan review view
 	tr        trainState                                   // the merge view's train panel
@@ -182,6 +186,7 @@ type (
 		stats   map[string]agentStats
 		graph   *usageGraph
 		am      *automerge.Status
+		conc    *app.Concurrency
 	}
 	flashMsg   string
 	quitExpiry time.Time // the arming a timer was set for
@@ -211,7 +216,7 @@ func Run(a *app.App, first string) error {
 	if err := m.startProc(resume); err != nil {
 		return err
 	}
-	defer func() { m.proc.Close() }()
+	defer func() { m.registerCompact(nil); m.proc.Close() }()
 
 	// saddle up holds the repo's TUI lock, so this is the one process that
 	// meters usage and narrates.
@@ -266,7 +271,25 @@ func (m *model) startProc(resume string) error {
 		return fmt.Errorf("start orchestrator: %w", err)
 	}
 	m.proc, m.resumed, m.gotInit = p, resume != "", false
+	m.registerCompact(p)
 	return nil
+}
+
+// orchInput is what the compact watcher needs of the orchestrator process.
+type orchInput interface {
+	Busy() bool
+	Send(text string) error
+}
+
+// registerCompact lets the compact watcher type /compact into p when it is
+// idle and the owner isn't typing; nil unregisters it. The watcher runs on
+// another goroutine, so it reads drafting, not the input box.
+func (m *model) registerCompact(p orchInput) {
+	if p == nil {
+		m.app.SetCompactTarget(nil)
+		return
+	}
+	m.app.SetCompactTarget(app.FuncTarget{BusyFn: p.Busy, DraftingFn: m.drafting.Load, SendFn: p.Send})
 }
 
 func (m *model) Init() tea.Cmd {
@@ -334,6 +357,9 @@ func (m *model) refresh() tea.Cmd {
 		if st, err := a.AutomergeState(); err == nil {
 			msg.am = &st
 		}
+		if c, err := a.Concurrency(); err == nil {
+			msg.conc = &c
+		}
 		return msg
 	}
 }
@@ -393,6 +419,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case planLoadedMsg:
 		m.planLoaded(msg)
 
+	case concDoneMsg:
+		m.concDone(msg)
+
 	case planDoneMsg:
 		m.pl.busy = ""
 		m.flash, m.flashAt = string(msg), time.Now()
@@ -427,6 +456,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tasks, m.peek, m.stats = msg.tasks, msg.peek, msg.stats
 		if msg.graph != nil {
 			m.graph = msg.graph
+		}
+		if msg.conc != nil {
+			m.conc = msg.conc
 		}
 		if msg.am != nil {
 			m.am = msg.am
@@ -467,6 +499,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case closedMsg:
 		// The process is gone; ctrl+r restarts it.
+		m.registerCompact(nil)
 
 	case quitExpiry:
 		// Only the latest arming may clear the hint.
@@ -507,6 +540,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.renderChat()
+	m.drafting.Store(strings.TrimSpace(m.input.Value()) != "")
 	return m, tea.Batch(cmds...)
 }
 
@@ -750,6 +784,7 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 		m.addChat(store.ChatEvent, "Orchestrator error: "+e.Text)
 	case orch.Exit:
 		m.streaming.Reset()
+		m.registerCompact(nil) // a restart registers the new process
 		if m.resumed && !m.gotInit {
 			// The saved session couldn't be resumed; start a fresh one.
 			_ = m.app.Store.SetField(app.OrchestratorID, "session_id", "")

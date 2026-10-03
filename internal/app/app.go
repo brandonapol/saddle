@@ -192,8 +192,8 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 		if err != nil {
 			return t, err
 		}
-		if n >= a.Cfg.Concurrency {
-			return t, fmt.Errorf("at concurrency cap (%d running); wait for a task to finish or raise concurrency in .saddle/config.toml", n)
+		if limit := a.ConcurrencyLimit(); n >= limit {
+			return t, concurrencyErr(n, limit)
 		}
 		if err := a.checkLaunch(); err != nil {
 			return t, err

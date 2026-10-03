@@ -82,7 +82,7 @@ func (a *App) orchestratorBriefFor(intro, waiting, talking string) string {
 - Split the work into tasks that can run at the same time with DISJOINT path claims (globs like "internal/foo/**"). Two tasks that must edit the same file are not parallel: sequence them or merge them.
 - Directory moves, renames and big restructures are BARRIERS. Run one alone, land it, then start the work that depends on it.
 - Shared registries (route tables, wiring, lockfiles, migrations) belong to exactly one task. Serial files (%s) are owned by the merge train.
-- Default to %q for workers. Use a smaller model for small, mechanical tasks. Run at most %d at once.
+- Default to %q for workers. Use a smaller model for small, mechanical tasks. Run at most %d at once; `+"`concurrency`"+` reads or changes that cap (saddle concurrency N), only when the owner asks. Lowering it stops nothing; spawn refuses until fewer run.
 - Give each task a self-contained prompt: goal, files, constraints, how to verify, which tests must exist, done-when. The agent sees only that prompt and the repo. Pass issue=<n> when a task implements an issue.
 - If spawn says it needs confirmation, every claim covers work that already landed or is queued. Tell the user why, and retry with confirm=true only if they agree.
 - Before spawning, show the plan in a few lines (task, model, claims, order) and wait for a go-ahead, unless the user already said to just go.
@@ -93,7 +93,8 @@ func (a *App) orchestratorBriefFor(intro, waiting, talking string) string {
 - Agents call done when finished. Then run land: the merge train lands branches one at a time on %s, tests them, and sends any conflict back to the agent that wrote the code. Don't resolve conflicts yourself.
 - When a coherent set has landed, offer to open stacked PRs (prs). Base: %s.
 - Stack or base problems (base moved, CI failing on a stacked PR, drift) -> find the owning task and `+"`message`"+` it, or call `+"`restack`"+` if the base moved. Restack first; if that fails, see Getting unstuck.
-`, serialList(a.Cfg.Serial), a.workerDefaultName(), a.Cfg.Concurrency, a.Cfg.Integration, a.Cfg.Base) + waiting + `- Keep your context small. Use status and peek, not reading the agents' code, unless something is stuck.
+`, serialList(a.Cfg.Serial), a.workerDefaultName(), a.ConcurrencyLimit(), a.Cfg.Integration, a.Cfg.Base) + waiting + `- Keep your context small. Use status and peek, not reading the agents' code, unless something is stuck.
+- Compact your context at natural breakpoints: after a batch lands and its PRs merge, before a long planning step, or when saddle tells you context is above the threshold. Run /compact (or your harness's equivalent) and keep a short state summary: running tasks, open PRs, queued follow-ups, owner decisions pending, rules in force. When you are idle and the owner isn't typing, saddle may send the command for you.
 
 ## Getting unstuck
 The goal is getting work done, not needing manual intervention. When a tool is stuck you may hand-fix it: edit ` + "`.saddle/state.db`" + ` (back it up first), recreate branches, spawn a repair worker, re-land work as fresh PRs, even using git yourself, unless the owner forbade it. Every hand fix must be followed in the same session by (1) a regression test that reproduces the failure, written failing-first, and (2) a GitHub issue designing a better system, recording the exact fix. Tell the user what you did in a sentence or two.

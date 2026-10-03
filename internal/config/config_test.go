@@ -374,3 +374,31 @@ func TestTemplateDocumentsNewKeys(t *testing.T) {
 		t.Fatalf("uncommented template: spawn %+v adapters %+v", cfg.Spawn, cfg.Adapters)
 	}
 }
+
+// #179: orchestrator.compact_at defaults to 0.7 and must be in (0, 1].
+func TestOrchestratorCompactAt(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Orchestrator.CompactAt != 0.7 {
+		t.Fatalf("compact_at default = %v, want 0.7", cfg.Orchestrator.CompactAt)
+	}
+	root := t.TempDir()
+	for body, want := range map[string]float64{"0.55": 0.55, "1": 1} {
+		writeConfig(t, root, "[orchestrator]\ncompact_at = "+body+"\n")
+		if cfg, err = Load(root); err != nil || cfg.Orchestrator.CompactAt != want {
+			t.Fatalf("compact_at = %s: got %v, %v", body, cfg.Orchestrator.CompactAt, err)
+		}
+	}
+	for _, bad := range []string{"0", "-0.1", "1.5"} {
+		writeConfig(t, root, "[orchestrator]\ncompact_at = "+bad+"\n")
+		if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "compact_at") {
+			t.Errorf("compact_at = %s: err %v, want a compact_at error", bad, err)
+		}
+	}
+	if !strings.Contains(Template, "[orchestrator]") || !strings.Contains(Template, "# compact_at = 0.7") {
+		t.Error("template doesn't document orchestrator.compact_at")
+	}
+}

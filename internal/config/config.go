@@ -58,6 +58,15 @@ type Config struct {
 	Adapters map[string]Adapter `toml:"adapters"`
 	// Spawn caps how deep and wide spawn chains below the orchestrator go.
 	Spawn Spawn `toml:"spawn"`
+	// Orchestrator tunes the orchestrator session itself.
+	Orchestrator Orchestrator `toml:"orchestrator"`
+}
+
+// Orchestrator configures the orchestrator session.
+type Orchestrator struct {
+	// CompactAt is the fraction of its context window at which the
+	// orchestrator is told to compact, and compacted once it is idle.
+	CompactAt float64 `toml:"compact_at"`
 }
 
 // Adapter is how saddle launches an agent CLI. An empty Cmd means the
@@ -220,9 +229,10 @@ func Default() Config {
 			Method:      "squash",
 			ReviewLabel: "requires review",
 		},
-		CI:    CI{Interval: 10 * time.Minute},
-		Spawn: Spawn{MaxDepth: 3, MaxChildren: 8},
-		Train: Train{MaxAttempts: 2, Output: "stack"},
+		CI:           CI{Interval: 10 * time.Minute},
+		Spawn:        Spawn{MaxDepth: 3, MaxChildren: 8},
+		Orchestrator: Orchestrator{CompactAt: 0.7},
+		Train:        Train{MaxAttempts: 2, Output: "stack"},
 		Usage: Usage{
 			Poll: 15 * time.Second,
 			Windows: []Window{
@@ -304,6 +314,9 @@ func Load(root string) (Config, error) {
 	if cfg.Spawn.MaxDepth < 0 || cfg.Spawn.MaxChildren < 0 {
 		return cfg, fmt.Errorf("spawn: max_depth and max_children must not be negative (0 means no cap)")
 	}
+	if c := cfg.Orchestrator.CompactAt; c <= 0 || c > 1 {
+		return cfg, fmt.Errorf("orchestrator.compact_at %v: want a fraction above 0 and at most 1", c)
+	}
 	if cfg.CI.Interval <= 0 {
 		cfg.CI.Interval = Default().CI.Interval
 	}
@@ -334,7 +347,7 @@ func checkLimits(l usage.Limits) error {
 const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # base = "main"
 # integration = "saddle/integration"
-# concurrency = 5
+# concurrency = 5            # saddle concurrency N (or the TUI plan view) overrides it at runtime
 # close_on_land = true
 # harness = "claude"          # claude | grok
 # serial = ["go.sum", "db/migrations/**"]
@@ -369,6 +382,12 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # children one task may have. 0 means no cap.
 # max_depth = 3
 # max_children = 8
+
+[orchestrator]
+# When the orchestrator's context passes this fraction of its window, saddle
+# tells it to compact, and sends /compact itself once the orchestrator is idle
+# and you aren't typing. A fraction above 0, at most 1.
+# compact_at = 0.7
 
 # Agent CLIs other than claude: the command and extra arguments.
 # [adapters.codex]

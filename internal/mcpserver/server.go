@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/app"
@@ -90,7 +91,19 @@ type StatusOut struct {
 	Integration string     `json:"integration"`
 	Warnings    []string   `json:"warnings,omitempty"`
 	StackAtRisk *StackRisk `json:"stack_at_risk,omitempty"`
-	Tasks       []TaskView `json:"tasks"`
+	// OrchestratorContext is how full the orchestrator's context is; absent
+	// before its transcript has a reading.
+	OrchestratorContext *OrchContext `json:"orchestrator_context,omitempty"`
+	Tasks               []TaskView   `json:"tasks"`
+}
+
+// OrchContext is the orchestrator's context use against its compact threshold.
+type OrchContext struct {
+	Percent   int    `json:"percent"`    // of the context window in use
+	Tokens    int64  `json:"tokens"`     // prompt size of the latest response
+	Window    int64  `json:"window"`     // context window in tokens
+	CompactAt int    `json:"compact_at"` // percent at which saddle compacts it
+	Model     string `json:"model,omitempty"`
 }
 
 // StackRisk is the stack sentinel's flag: the stack is at risk from Task up.
@@ -111,6 +124,11 @@ const StackFix = "run restack to rebuild the stack; don't fix it with git or a w
 type AutomergeIn struct {
 	Action string `json:"action" jsonschema:"on, off, status, hold or release"`
 	Stack  string `json:"stack,omitempty" jsonschema:"for hold and release: the stack's name (its bottom task), a task id, PR URL or PR number"`
+}
+
+type ConcurrencyIn struct {
+	Limit int  `json:"limit,omitempty" jsonschema:"new cap on running worker agents, 1 to 16; omit to only read it"`
+	Reset bool `json:"reset,omitempty" jsonschema:"drop the runtime override and go back to the configured concurrency"`
 }
 
 type QueueMoveIn struct {
@@ -227,6 +245,10 @@ func Status(a *app.App) (StatusOut, error) {
 	if flagged {
 		out.StackAtRisk = &StackRisk{Task: f.Task, Cause: f.Cause, PRs: f.PRs, Acked: f.Acked, Fix: StackFix}
 	}
+	if u, err := a.OrchestratorContext(); err == nil && u.Prompt > 0 {
+		out.OrchestratorContext = &OrchContext{Percent: int(math.Round(u.Fraction() * 100)), Tokens: u.Prompt,
+			Window: u.Window, CompactAt: int(math.Round(a.CompactAt() * 100)), Model: u.Model}
+	}
 	out.Tasks, err = Tasks(a)
 	return out, err
 }
@@ -324,7 +346,7 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, OK{Message: "released"}, a.Store.Release(task, in.Paths...)
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "List every saddle task with status, claims and merge-train state, plus warnings and stack_at_risk when the stack sentinel has flagged the PR stack."},
+	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "List every saddle task with status, claims and merge-train state, plus warnings, stack_at_risk when the stack sentinel has flagged the PR stack, and orchestrator_context: how full your context is against the compact_at threshold."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, StatusOut, error) {
 			out, err := Status(a)
 			return nil, out, err
@@ -456,6 +478,20 @@ func New(a *app.App, task string) *mcp.Server {
 			}
 			st, err := w.Status()
 			return nil, st, err
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "concurrency", Description: fmt.Sprintf("Read or change how many worker agents may run at once (the bots limit): running count, limit, and whether it comes from config or a runtime override. limit (%d-%d) overrides config until reset; spawn honors it at once. Lowering it stops nothing that runs; new spawns wait until fewer run. Only change it when the owner asks.", app.MinConcurrency, app.MaxConcurrency)},
+		func(_ context.Context, _ *mcp.CallToolRequest, in ConcurrencyIn) (*mcp.CallToolResult, app.Concurrency, error) {
+			switch {
+			case in.Reset:
+				c, err := a.ResetConcurrency()
+				return nil, c, err
+			case in.Limit != 0:
+				c, err := a.SetConcurrency(in.Limit)
+				return nil, c, err
+			}
+			c, err := a.Concurrency()
+			return nil, c, err
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "queue_move", Description: "Move a branch waiting in the merge train to a position in the queue (1 lands next), e.g. to land a fix before the work that needs it."},
