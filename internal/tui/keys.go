@@ -56,8 +56,9 @@ func newKeyMap() keyMap {
 		ViewMerge:   b("alt+3", "merge view", "alt+3"),
 		Help:        b("?", "keys", "?", "f1"),
 
-		// Terminals send ctrl+` as NUL, which bubbletea names ctrl+@.
-		Terminal:       b("ctrl+`", "terminal", "ctrl+@"),
+		// Terminals send alt+` as ESC ` and ctrl+` as NUL, which bubbletea
+		// names ctrl+@.
+		Terminal:       b("alt+`", "terminal", "alt+`", "ctrl+@"),
 		TermBack:       b("esc", "chat", "esc"),
 		TermScrollUp:   b("ctrl+pgup/dn", "history", "ctrl+pgup"),
 		TermScrollDown: b("ctrl+pgdn", "history", "ctrl+pgdown"),
@@ -128,7 +129,7 @@ func (m *model) help() []key.Binding {
 		return []key.Binding{withHelp(k.Help, "esc/?", "close"), k.ViewControl, k.Quit}
 	}
 	if m.focus == focusTerm {
-		return []key.Binding{withHelp(k.Terminal, "ctrl+`", "hide"), k.TermBack, k.TermScrollUp}
+		return []key.Binding{withHelp(k.Terminal, "alt+`", "hide"), k.TermBack, k.TermScrollUp}
 	}
 	if m.view == viewMerge && m.tr.focus {
 		return []key.Binding{withHelp(k.Down, "j/k", "entry"), k.QueueDown, k.Hold, k.TakeOver, withHelp(k.Focus, "tab", "stacks"), k.AutoMerge, k.ViewControl, k.Help, k.Terminal, k.Quit}

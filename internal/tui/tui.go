@@ -394,6 +394,9 @@ func rank(status string) int {
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	if k, ok := termpane.ExtendedKey(msg); ok {
+		msg = k
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height

@@ -155,7 +155,6 @@ func TestJourneyTerminalPane(t *testing.T) {
 // shell or the chat input. (ESC and backtick arriving in separate reads
 // still split: #200.)
 func TestJourneyTerminalToggleEncodings(t *testing.T) {
-	t.Skip("#198: needs the keys.go binding and the tui.go ExtendedKey hook")
 	w := world(t, Options{})
 	u := w.StartTUI(120, 36)
 
