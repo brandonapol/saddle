@@ -89,9 +89,11 @@ func TestRestackAfterSquashMerge(t *testing.T) {
 }
 
 // A landed commit that conflicts with the new base stops restack before any
-// ref moves, and the conflict goes back to its task.
+// ref moves, and the conflict goes back to its task while its agent is alive
+// (an orphaned one gets a repair task instead: TestRestackOrphanConflictSpawnsOneRepair).
 func TestRestackConflictReturnsToOwner(t *testing.T) {
 	a := trainSetup(t)
+	a.Cfg.CloseOnLand = false
 	origin, _ := originWithGh(t, a)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"README.md": "one\n"})
 	before := git(t, a.Root, "rev-parse", a.Cfg.Integration)

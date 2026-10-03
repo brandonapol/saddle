@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/gitx"
@@ -26,6 +27,10 @@ type RestackResult struct {
 	Superseded []string      `json:"superseded,omitempty"` // tasks out of the stack whose commits left integration
 	Dropped    int           `json:"dropped,omitempty"`    // landed commits base already has
 	Retargeted []string      `json:"retargeted,omitempty"`
+	// Repairing are tasks whose landed commits conflict with base while no
+	// agent of theirs is alive: they left the stack for a repair task (#172).
+	Repairing []string `json:"repairing,omitempty"`
+	Repairs   []string `json:"repairs,omitempty"` // the repair tasks spawned
 }
 
 // restacked is a landed task's place in the rebuilt stack: NewFrom..NewTo.
@@ -154,7 +159,24 @@ func (a *App) restack() (RestackResult, error) {
 	res.Superseded = a.leaving(all, integ, inBase)
 
 	plan, dropped, err := a.replay(stack, res.Base, inBase)
+	// A conflict in a task with no live agent goes to a repair task instead:
+	// that task leaves the replay and the rest of the stack moves on (#172).
+	type orphan struct {
+		l landedTask
+		c *RestackConflict
+	}
+	var orphans []orphan
 	var conflict *RestackConflict
+	for errors.As(err, &conflict) && a.orphaned(conflict.Task) {
+		i := slices.IndexFunc(stack, func(l landedTask) bool { return l.ID == conflict.Task })
+		if i < 0 {
+			break
+		}
+		orphans = append(orphans, orphan{stack[i], conflict})
+		stack = slices.Delete(slices.Clone(stack), i, i+1)
+		conflict = nil
+		plan, dropped, err = a.replay(stack, res.Base, inBase)
+	}
 	if errors.As(err, &conflict) {
 		a.returnConflict(conflict)
 	}
@@ -162,6 +184,14 @@ func (a *App) restack() (RestackResult, error) {
 		return res, err
 	}
 	res.Dropped = dropped
+	for _, o := range orphans {
+		a.Store.Event(o.c.Task, "restack_conflict", fmt.Sprintf("%s %s", o.c.Commit, strings.Join(o.c.Files, ", ")))
+		seed := repairSeed{Source: "restack", Commit: o.c.Commit, Files: o.c.Files, Onto: "origin/" + a.Cfg.Base, Base: res.Base}
+		if err := a.markRepairing(o.l, seed); err != nil {
+			return res, err
+		}
+		res.Repairing = append(res.Repairing, o.l.ID)
+	}
 
 	if err := a.moveStack(plan, integ, res.Base, &res); err != nil {
 		return res, err
@@ -169,6 +199,7 @@ func (a *App) restack() (RestackResult, error) {
 	if err := a.republish(plan, &res); err != nil {
 		return res, err
 	}
+	res.Repairs = a.spawnRepairs()
 	msg := fmt.Sprintf("Restacked %d landed tasks onto origin/%s at %s: %d refs moved, %d commits already in base dropped.",
 		len(plan), a.Cfg.Base, short(res.Base), len(res.Moves), res.Dropped)
 	if len(res.Merged) > 0 {
@@ -176,6 +207,9 @@ func (a *App) restack() (RestackResult, error) {
 	}
 	if len(res.Superseded) > 0 {
 		msg += " Out of the stack, so their commits left " + a.Cfg.Integration + ": " + strings.Join(res.Superseded, ", ") + "."
+	}
+	if len(res.Repairing) > 0 {
+		msg += " Conflicting with no agent to resolve it, so out of the stack until a repair task re-lands their work: " + strings.Join(res.Repairing, ", ") + "."
 	}
 	if err := a.Notify(OrchestratorID, store.NoticeInfo, msg); err != nil {
 		return res, err
@@ -202,7 +236,7 @@ func (a *App) lastOn(all []landedTask, integ string) (landedTask, bool) {
 func (a *App) leaving(all []landedTask, integ string, inBase map[string]bool) []string {
 	var out []string
 	for _, l := range all {
-		if l.stacked() || l.State == TrainMerged || l.From == "" || l.To == "" {
+		if l.stacked() || l.State == TrainMerged || l.State == TrainRepairing || l.From == "" || l.To == "" {
 			continue
 		}
 		if _, err := gitx.Run(a.Root, "merge-base", "--is-ancestor", l.To, integ); err != nil {

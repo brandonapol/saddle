@@ -285,6 +285,20 @@ func (a *App) landOne(id string) LandResult {
 	}
 	if !rr.OK {
 		files := strings.Join(rr.Conflicts, ", ")
+		if a.orphaned(id) {
+			// Nobody would read the conflict: a repair task takes it (#172).
+			res.State, res.Note = store.TrainError, files
+			a.Store.Event(id, "train_"+store.TrainError, files)
+			if err := errors.Join(a.Store.SetTrain(id, store.TrainError, files, true), a.Store.SetStatus(id, store.Conflict)); err != nil {
+				res.Note += " (could not record: " + err.Error() + ")"
+			}
+			seed := a.landSeed(t, files)
+			seed.From = from
+			if r, _, err := a.ensureRepair(t, seed, false); err == nil {
+				res.Note += "; its agent is gone, so " + r.ID + " repairs it"
+			}
+			return res
+		}
 		return fail(store.TrainError, files, fmt.Sprintf(
 			"Your branch could not land: rebasing onto %s conflicts in %s. Other work already landed there, so this conflict is yours to fix.\n"+
 				"1. Run `saddle sync`. It starts the rebase and stops at the conflicts.\n"+
@@ -342,7 +356,7 @@ func (a *App) landOne(id string) LandResult {
 		}
 		_ = gitx.WorktreeRemove(a.Root, t.Worktree)
 	}
-	if err := a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf("%s %q landed on %s at %s.", id, t.Title, a.Cfg.Integration, head[:12])); err != nil {
+	if err := a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf("%s %q landed on %s at %s.%s", id, t.Title, a.Cfg.Integration, head[:12], a.repairLanded(id))); err != nil {
 		res.Note += " (orchestrator not notified: " + err.Error() + ")"
 	}
 	return res
@@ -669,7 +683,7 @@ func (a *App) landedAll() ([]landedTask, error) {
 	var spans []span
 	var refs []string
 	for _, e := range entries {
-		if e.State != store.TrainOK && e.State != TrainMerged && e.State != TrainSuperseded {
+		if e.State != store.TrainOK && e.State != TrainMerged && e.State != TrainSuperseded && e.State != TrainRepairing {
 			continue
 		}
 		t, ok := byID[e.Task]

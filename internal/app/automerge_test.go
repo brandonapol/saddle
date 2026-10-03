@@ -222,9 +222,11 @@ func TestStackRebaseMovesHeldStack(t *testing.T) {
 	}
 }
 
-// A conflict stops stack rebase, moves nothing, and goes back to its owner.
+// A conflict stops stack rebase, moves nothing, and goes back to its owner
+// while its agent is alive (#172 repairs an orphaned one instead).
 func TestStackRebaseConflictReturnsToOwner(t *testing.T) {
 	a := trainSetup(t)
+	a.Cfg.CloseOnLand = false
 	origin, _ := originWithGh(t, a)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"README.md": "mine\n"})
 	_, err := a.PRs()

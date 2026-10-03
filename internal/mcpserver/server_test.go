@@ -60,6 +60,15 @@ func (f *fakeTmux) Capture(string, int) (string, error) { return "", nil }
 func (f *fakeTmux) SendKeys(string, ...string) error    { return nil }
 func (f *fakeTmux) KillSession() error                  { return nil }
 
+// namedTmux is fakeTmux with window names, so a task's window counts as
+// its own.
+type namedTmux struct {
+	*fakeTmux
+	names map[string]string
+}
+
+func (n namedTmux) WindowName(id string) (string, error) { return n.names[id], nil }
+
 func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	out, err := gitx.Run(dir, args...)
@@ -183,6 +192,15 @@ func TestRestackToolMovesStack(t *testing.T) {
 
 func TestRestackToolReportsConflictOwner(t *testing.T) {
 	a, other := stackSetup(t)
+	// t1's agent is still alive, so the conflict is its own; an orphaned
+	// task gets a repair task instead (#172).
+	tk, err := a.Store.Task("t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ft := a.Tmux.(*fakeTmux)
+	ft.windows[tk.Window] = true
+	a.Tmux = namedTmux{ft, map[string]string{tk.Window: "t1-readme"}}
 	write(t, other, "README.md", "hi from main\n")
 	git(t, other, "commit", "-qam", "readme on main")
 	git(t, other, "push", "-q", "origin", "main")
