@@ -116,8 +116,8 @@ type model struct {
 	vp        viewport.Model
 	input     textarea.Model
 	drafting  atomic.Bool // input holds text; read by the compact watcher off the UI goroutine
-	target    string   // task whose pane gets the next /command, if not the orchestrator
-	skills    []string // skill names for completion, loaded on first use
+	target    string      // task whose pane gets the next /command, if not the orchestrator
+	skills    []string    // skill names for completion, loaded on first use
 	keys      keyMap
 	prefix    string // the user's tmux prefix, for help text
 
@@ -138,6 +138,8 @@ type model struct {
 	am        *automerge.Status                            // auto-merge as last saved; nil until read
 	amer      automerger                                   // the merge view's actions; nil means the app's
 	amBusy    string                                       // the auto-merge action running, if any
+	conc      *app.Concurrency                             // the bots limit as last read; nil until read
+	concSet   func(n int) (app.Concurrency, error)         // sets the bots limit; nil means the app's
 	stackSel  string                                       // the merge view's selected stack
 	pl        planState                                    // the plan review view
 	tr        trainState                                   // the merge view's train panel
@@ -184,6 +186,7 @@ type (
 		stats   map[string]agentStats
 		graph   *usageGraph
 		am      *automerge.Status
+		conc    *app.Concurrency
 	}
 	flashMsg   string
 	quitExpiry time.Time // the arming a timer was set for
@@ -354,6 +357,9 @@ func (m *model) refresh() tea.Cmd {
 		if st, err := a.AutomergeState(); err == nil {
 			msg.am = &st
 		}
+		if c, err := a.Concurrency(); err == nil {
+			msg.conc = &c
+		}
 		return msg
 	}
 }
@@ -413,6 +419,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case planLoadedMsg:
 		m.planLoaded(msg)
 
+	case concDoneMsg:
+		m.concDone(msg)
+
 	case planDoneMsg:
 		m.pl.busy = ""
 		m.flash, m.flashAt = string(msg), time.Now()
@@ -447,6 +456,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tasks, m.peek, m.stats = msg.tasks, msg.peek, msg.stats
 		if msg.graph != nil {
 			m.graph = msg.graph
+		}
+		if msg.conc != nil {
+			m.conc = msg.conc
 		}
 		if msg.am != nil {
 			m.am = msg.am

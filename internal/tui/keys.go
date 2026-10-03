@@ -32,7 +32,7 @@ type keyMap struct {
 	AutoMerge, Hold, Rebase, QueueDown, QueueUp, TakeOver key.Binding
 
 	// Plan view.
-	Approve, EditPlan, Replan, ModelUp, ModelDown, Go, PlanNext, PlanPrev key.Binding
+	Approve, EditPlan, Replan, ModelUp, ModelDown, Go, PlanNext, PlanPrev, BotsUp, BotsDown key.Binding
 
 	// Task list.
 	Up, Down, Open, Skill, Spawn, Pause, Brief, Kill, Land, Back key.Binding
@@ -85,6 +85,8 @@ func newKeyMap() keyMap {
 		Go:        b("g", "go: run the plan", "g"),
 		PlanNext:  b("]/[", "next/prev plan", "]"),
 		PlanPrev:  b("[", "prev plan", "["),
+		BotsUp:    b(">/<", "bots limit", ">", "."),
+		BotsDown:  b("<", "bots limit down", "<", ","),
 
 		Up:    b("k", "up", "k", "up"),
 		Down:  b("j/k", "select", "j", "down"),
@@ -112,7 +114,7 @@ func (k keyMap) groups() []keyGroup {
 		{"Anywhere", []key.Binding{k.ViewControl, k.ViewPlan, k.ViewMerge, k.Help, k.NextAgent, k.PrevAgent, k.Focus, k.PageUp, k.PageDown, k.Restart, k.Quit}},
 		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget, k.Ask, k.AskScreen}},
 		{"Agents", []key.Binding{k.Down, k.Up, k.Open, k.Skill, k.Spawn, k.Pause, k.Brief, k.Kill, k.Land, k.Back}},
-		{"Plan view", []key.Binding{k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.ModelDown, k.Go, k.PlanNext, k.PlanPrev}},
+		{"Plan view", []key.Binding{k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.ModelDown, k.Go, k.PlanNext, k.PlanPrev, k.BotsUp, k.BotsDown}},
 		{"Merge view", []key.Binding{k.AutoMerge, k.Hold, k.Rebase, k.QueueDown, k.QueueUp, k.TakeOver}},
 		{"Terminal", []key.Binding{k.Terminal, k.TermBack, k.TermScrollUp, k.TermScrollDown}},
 	}
@@ -138,7 +140,7 @@ func (m *model) help() []key.Binding {
 		if m.pl.noting {
 			return []key.Binding{withHelp(k.Send, "enter", "replan"), withHelp(k.Back, "esc", "cancel"), k.ViewControl, k.Quit}
 		}
-		return []key.Binding{withHelp(k.Down, "j/k", "task"), k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.Go, k.PlanNext, k.ViewControl, k.Help, k.Terminal, k.Quit}
+		return []key.Binding{withHelp(k.Down, "j/k", "task"), k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.Go, k.BotsUp, k.PlanNext, k.ViewControl, k.Help, k.Terminal, k.Quit}
 	}
 	if m.view != viewControl {
 		return []key.Binding{k.ViewControl, k.Help, k.Terminal, k.Quit}

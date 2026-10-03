@@ -67,3 +67,16 @@ func TestOrchestratorBriefCompaction(t *testing.T) {
 		}
 	}
 }
+
+// #176: the brief states the live cap and names the concurrency tool.
+func TestOrchestratorBriefConcurrency(t *testing.T) {
+	a, _ := setup(t)
+	_, err := a.SetConcurrency(3)
+	must(t, err)
+	brief := a.orchestratorBrief()
+	for _, want := range []string{"Run at most 3 at once", "`concurrency`"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("orchestrator brief lacks %q", want)
+		}
+	}
+}

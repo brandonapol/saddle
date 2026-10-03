@@ -126,6 +126,11 @@ type AutomergeIn struct {
 	Stack  string `json:"stack,omitempty" jsonschema:"for hold and release: the stack's name (its bottom task), a task id, PR URL or PR number"`
 }
 
+type ConcurrencyIn struct {
+	Limit int  `json:"limit,omitempty" jsonschema:"new cap on running worker agents, 1 to 16; omit to only read it"`
+	Reset bool `json:"reset,omitempty" jsonschema:"drop the runtime override and go back to the configured concurrency"`
+}
+
 type QueueMoveIn struct {
 	Task     string `json:"task" jsonschema:"task id waiting in the merge train"`
 	Position int    `json:"position" jsonschema:"1 lands next; past the end means the back"`
@@ -473,6 +478,20 @@ func New(a *app.App, task string) *mcp.Server {
 			}
 			st, err := w.Status()
 			return nil, st, err
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "concurrency", Description: fmt.Sprintf("Read or change how many worker agents may run at once (the bots limit): running count, limit, and whether it comes from config or a runtime override. limit (%d-%d) overrides config until reset; spawn honors it at once. Lowering it stops nothing that runs; new spawns wait until fewer run. Only change it when the owner asks.", app.MinConcurrency, app.MaxConcurrency)},
+		func(_ context.Context, _ *mcp.CallToolRequest, in ConcurrencyIn) (*mcp.CallToolResult, app.Concurrency, error) {
+			switch {
+			case in.Reset:
+				c, err := a.ResetConcurrency()
+				return nil, c, err
+			case in.Limit != 0:
+				c, err := a.SetConcurrency(in.Limit)
+				return nil, c, err
+			}
+			c, err := a.Concurrency()
+			return nil, c, err
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "queue_move", Description: "Move a branch waiting in the merge train to a position in the queue (1 lands next), e.g. to land a fix before the work that needs it."},

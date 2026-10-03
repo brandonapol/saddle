@@ -18,6 +18,7 @@ import (
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/planner"
+	"github.com/brandonapol/saddle/internal/store"
 )
 
 // planState is the plan review view (#35): the newest plan under
@@ -82,7 +83,7 @@ func (m *model) loadPlan() tea.Cmd {
 	}
 	m.pl.loading = true
 	dir, cur := m.planDir(), m.pl.cur
-	serial, limit := m.app.Cfg.Serial, m.app.Cfg.Concurrency
+	serial, limit := m.app.Cfg.Serial, m.botsLimit()
 	return func() tea.Msg {
 		msg := planLoadedMsg{paths: planFiles(dir)}
 		if !slices.Contains(msg.paths, cur) {
@@ -236,8 +237,90 @@ func (m *model) planKey(k tea.KeyMsg) (tea.Cmd, bool) {
 		return m.planModel(-1), true
 	case key.Matches(k, keys.Go):
 		return m.planGo(), true
+	case key.Matches(k, keys.BotsUp):
+		return m.botsStep(1), true
+	case key.Matches(k, keys.BotsDown):
+		return m.botsStep(-1), true
 	}
 	return nil, false
+}
+
+// botsLimit is the cap on running agents: the last read, else config's.
+func (m *model) botsLimit() int {
+	if m.conc != nil {
+		return m.conc.Limit
+	}
+	return m.app.Cfg.Concurrency
+}
+
+// botsRunning counts the workers that hold a slot under the limit.
+func (m *model) botsRunning() int {
+	n := 0
+	for _, t := range m.tasks {
+		if t.ID != app.OrchestratorID && (t.Status == store.Running || t.Status == store.Idle || t.Status == store.NeedsYou) {
+			n++
+		}
+	}
+	return n
+}
+
+// concDoneMsg is a bots limit change landing.
+type concDoneMsg struct {
+	c   app.Concurrency
+	err error
+}
+
+// botsStep raises (dir 1) or lowers (dir -1) the bots limit within
+// [MinConcurrency, MaxConcurrency], persisted like saddle concurrency N.
+func (m *model) botsStep(dir int) tea.Cmd {
+	n := m.botsLimit() + dir
+	if n > app.MaxConcurrency {
+		return flashCmd(fmt.Sprintf("bots limit is at most %d", app.MaxConcurrency))
+	}
+	if n < app.MinConcurrency {
+		return flashCmd(fmt.Sprintf("bots limit is at least %d", app.MinConcurrency))
+	}
+	set := m.concSet
+	if set == nil {
+		set = m.app.SetConcurrency
+	}
+	return func() tea.Msg {
+		c, err := set(n)
+		return concDoneMsg{c, err}
+	}
+}
+
+func (m *model) concDone(msg concDoneMsg) {
+	if msg.err != nil {
+		m.flash, m.flashAt = "bots limit: "+msg.err.Error(), time.Now()
+		return
+	}
+	c := msg.c
+	m.conc = &c
+	text := fmt.Sprintf("bots limit %d", c.Limit)
+	if run := m.botsRunning(); run > c.Limit {
+		text += fmt.Sprintf(": %d running keep going; new spawns wait", run)
+	}
+	m.flash, m.flashAt = text, time.Now()
+}
+
+// botsLine is the plan view's "bots: running/limit" line and its keys.
+func (m *model) botsLine() string {
+	run, limit := m.botsRunning(), m.botsLimit()
+	count := fmt.Sprintf("%d/%d", run, limit)
+	if run > limit {
+		count = lipgloss.NewStyle().Foreground(cAlert).Render(count)
+	} else {
+		count = sBright.Render(count)
+	}
+	line := sDim.Render("bots: ") + count
+	if m.conc != nil && m.conc.Source == app.ConcurrencyRuntime {
+		line += sDim.Render(" · runtime")
+	}
+	if run > limit {
+		line += sDim.Render(" · over: new spawns wait")
+	}
+	return line + sDim.Render(" · ") + sKey.Render(m.keys.BotsUp.Help().Key) + sDim.Render(" adjust")
 }
 
 // planRun runs one plan action off the UI goroutine, one at a time; the plan
@@ -262,7 +345,7 @@ func (m *model) planApprove() tea.Cmd {
 	if path == "" {
 		return flashCmd("no plan to approve")
 	}
-	serial, limit := m.app.Cfg.Serial, m.app.Cfg.Concurrency
+	serial, limit := m.app.Cfg.Serial, m.botsLimit()
 	name := filepath.Base(path)
 	if d != nil && d.Approved {
 		return m.planRun("reopening "+name, func() (string, error) {
@@ -322,7 +405,7 @@ func (m *model) planEdited(msg planEditedMsg) tea.Cmd {
 	if msg.err != nil {
 		return flashCmd("editor: " + msg.err.Error())
 	}
-	serial, limit := m.app.Cfg.Serial, m.app.Cfg.Concurrency
+	serial, limit := m.app.Cfg.Serial, m.botsLimit()
 	name := filepath.Base(msg.path)
 	return m.planRun("checking "+name, func() (string, error) {
 		_, _, err := planner.Edit(msg.path, func(string) error { return nil }, serial, limit)
@@ -344,7 +427,7 @@ func (m *model) planModel(dir int) tea.Cmd {
 	if d.Approved {
 		return flashCmd(planner.ErrApproved.Error() + ": press a")
 	}
-	serial, limit := m.app.Cfg.Serial, m.app.Cfg.Concurrency
+	serial, limit := m.app.Cfg.Serial, m.botsLimit()
 	doc := *d
 	doc.Tasks = slices.Clone(d.Tasks)
 	i := slices.IndexFunc(doc.Tasks, func(t planner.Task) bool { return t.ID == id })
@@ -394,12 +477,12 @@ func appReplan(a *app.App) func(path, note string) error {
 			return err
 		}
 		snap.Serial = a.Cfg.Serial
-		dr, err := planner.Generate(ctx, plannerModel(a), planner.Request{Epic: d.Text, Snapshot: snap, Previous: d.Tasks, Note: note}, a.Cfg.Concurrency)
+		dr, err := planner.Generate(ctx, plannerModel(a), planner.Request{Epic: d.Text, Snapshot: snap, Previous: d.Tasks, Note: note}, a.ConcurrencyLimit())
 		if err != nil {
 			return err
 		}
 		d.Tasks = dr.Tasks
-		return planner.WriteDoc(path, d, a.Cfg.Serial, a.Cfg.Concurrency)
+		return planner.WriteDoc(path, d, a.Cfg.Serial, a.ConcurrencyLimit())
 	}
 }
 
@@ -447,7 +530,7 @@ func (m *model) viewPlan(w, h int) string {
 	if m.pl.cur == "" {
 		body := sDim.Render("No plan under review. Plan an epic with ") + sKey.Render("saddle plan <epic.md|gh:#N>") +
 			sDim.Render(" or ask the orchestrator to; plans live in .saddle/plans.")
-		return box("PLAN", w, h, false, wrap.Render(body))
+		return box("PLAN", w, h, false, wrap.Render(m.botsLine())+"\n\n"+wrap.Render(body))
 	}
 	title := "PLAN · " + filepath.Base(m.pl.cur)
 	if len(m.pl.paths) > 1 {
@@ -472,7 +555,7 @@ func (m *model) viewPlan(w, h int) string {
 	if d.Approved {
 		state = lipgloss.NewStyle().Foreground(cDone).Render("approved at " + short(d.Base))
 	}
-	rows = append(rows, wrap.Render(sBright.Render(d.Epic)+sDim.Render(" · ")+state), wrap.Render(m.planEstimate()), "")
+	rows = append(rows, wrap.Render(sBright.Render(d.Epic)+sDim.Render(" · ")+state), wrap.Render(m.planEstimate()), wrap.Render(m.botsLine()), "")
 
 	right := inner
 	var left string
@@ -501,7 +584,7 @@ func (m *model) planEstimate() string {
 		for _, w := range p.Waves {
 			widest = max(widest, len(w))
 		}
-		parts = append(parts, plural(len(p.Waves), "wave"), fmt.Sprintf("≤%d at once of %d", widest, m.app.Cfg.Concurrency))
+		parts = append(parts, plural(len(p.Waves), "wave"), fmt.Sprintf("≤%d at once of %d", widest, m.botsLimit()))
 		if n := len(p.Train); n > 0 {
 			parts = append(parts, fmt.Sprintf("%d via train", n))
 		}

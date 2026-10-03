@@ -347,7 +347,7 @@ func checkLimits(l usage.Limits) error {
 const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # base = "main"
 # integration = "saddle/integration"
-# concurrency = 5
+# concurrency = 5            # saddle concurrency N (or the TUI plan view) overrides it at runtime
 # close_on_land = true
 # harness = "claude"          # claude | grok
 # serial = ["go.sum", "db/migrations/**"]
