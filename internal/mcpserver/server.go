@@ -25,6 +25,8 @@ type SpawnIn struct {
 	Adapter string `json:"adapter,omitempty" jsonschema:"agent to run: claude (default), codex (general-purpose) or grok (image generation, e.g. hero art). Codex and Grok have no saddle hooks, so their claims are advisory"`
 	ID      string `json:"id,omitempty" jsonschema:"optional task id; defaults to the next tN"`
 	Issue   int    `json:"issue,omitempty" jsonschema:"GitHub issue number this task implements; its PR will close it"`
+	// After becomes explicit stack edges; see app.SpawnReq.After.
+	After []string `json:"after,omitempty" jsonschema:"ids of unmerged tasks this one builds on, e.g. [\"t61\"] when it uses a make target or API t61 adds; its PR stacks on theirs even when their files don't overlap"`
 	// Confirm overrides app.ErrNeedsConfirm.
 	Confirm bool `json:"confirm,omitempty" jsonschema:"spawn even though every claim covers work landed or queued tasks already did; only after the user agreed"`
 }
@@ -317,12 +319,12 @@ func New(a *app.App, task string) *mcp.Server {
 		return nil
 	}
 
-	mcp.AddTool(s, &mcp.Tool{Name: "spawn", Description: fmt.Sprintf("Start a new parallel agent on its own branch and worktree in a new tmux window. Give it disjoint claims. Sub-tasks are capped in depth below the orchestrator (spawn.max_depth, default %d) and in working children per task (spawn.max_children, default %d).", app.DefaultMaxDepth, app.DefaultMaxChildren)},
+	mcp.AddTool(s, &mcp.Tool{Name: "spawn", Description: fmt.Sprintf("Start a new parallel agent on its own branch and worktree in a new tmux window. Give it disjoint claims. When it builds on another task's unmerged work (a make target, file or API that task adds), pass after with that task's id so its PR stacks on that task's PR instead of failing CI on base. Sub-tasks are capped in depth below the orchestrator (spawn.max_depth, default %d) and in working children per task (spawn.max_children, default %d).", app.DefaultMaxDepth, app.DefaultMaxChildren)},
 		func(_ context.Context, _ *mcp.CallToolRequest, in SpawnIn) (*mcp.CallToolResult, SpawnOut, error) {
 			if err := self(); err != nil {
 				return nil, SpawnOut{}, err
 			}
-			t, err := a.Spawn(app.SpawnReq{ID: in.ID, Title: in.Title, Prompt: in.Prompt, Claims: in.Claims, Model: in.Model, Adapter: in.Adapter, Parent: task, Issue: in.Issue, Confirm: in.Confirm})
+			t, err := a.Spawn(app.SpawnReq{ID: in.ID, Title: in.Title, Prompt: in.Prompt, Claims: in.Claims, Model: in.Model, Adapter: in.Adapter, Parent: task, Issue: in.Issue, After: in.After, Confirm: in.Confirm})
 			if err != nil {
 				return nil, SpawnOut{}, err
 			}

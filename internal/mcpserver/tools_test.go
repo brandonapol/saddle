@@ -132,3 +132,19 @@ func TestAskOwnerTool(t *testing.T) {
 		t.Error("asking yourself should fail")
 	}
 }
+
+// #193: spawn's after arg reaches the app, so the task stacks on t7.
+func TestSpawnToolAfter(t *testing.T) {
+	a, _ := stackSetup(t)
+	if _, err := a.Spawn(app.SpawnReq{ID: "t7", Title: "harness"}); err != nil {
+		t.Fatal(err)
+	}
+	var out SpawnOut
+	res := callTool(t, a, app.OrchestratorID, "spawn", map[string]any{"title": "ci job", "prompt": "x", "after": []string{"t7"}}, &out)
+	if res.IsError {
+		t.Fatalf("spawn failed: %s", errText(res))
+	}
+	if got := a.TaskAfter(out.ID); len(got) != 1 || got[0] != "t7" {
+		t.Fatalf("after = %v, want [t7]", got)
+	}
+}

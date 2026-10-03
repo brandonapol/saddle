@@ -136,6 +136,9 @@ type SpawnReq struct {
 	Parent string
 	Base   string // defaults to the integration branch
 	Issue  int    // GitHub issue the task implements; its PR will close it
+	// After lists tasks whose unmerged work this one builds on. Its PR
+	// stacks on theirs even when their files don't overlap (#193).
+	After []string
 	// Adapter is the agent to launch: claude (the default), codex or grok.
 	Adapter string
 	Force   bool // ignore claim conflicts, the concurrency cap and paused launches
@@ -238,6 +241,10 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if _, err := a.Store.Task(id); err == nil {
 		return t, fmt.Errorf("task %s already exists", id)
 	}
+	after, err := a.cleanAfter(id, r.After)
+	if err != nil {
+		return t, err
+	}
 	name := id + "-" + slug(r.Title)
 	base := r.Base
 	if base == "" {
@@ -271,6 +278,9 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 		if err != nil {
 			return t, a.spawnFailed(t, false, hadBranch, err)
 		}
+	}
+	if err := a.setAfter(id, after); err != nil {
+		return t, a.spawnFailed(t, false, hadBranch, err)
 	}
 	if err := gitx.WorktreeAdd(a.Root, t.Worktree, t.Branch, base); err != nil {
 		return t, a.spawnFailed(t, false, hadBranch, fmt.Errorf("worktree add: %w", err))
