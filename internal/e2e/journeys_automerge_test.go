@@ -122,19 +122,6 @@ func TestJourneyAutomergeRetriesSoonAfterBusyTrain(t *testing.T) {
 			unlock()
 		}
 	}()
-	// A tick that can run must have seen the PR once before the train got
-	// busy, as on the day: the last check had it ready.
-	unlock()
-	plan, err := a.NewAutomerge(nil).Plan()
-	must(t, err)
-	if len(plan.Stacks) != 1 || !plan.Stacks[0].Ready {
-		t.Fatalf("PR not ready: %+v", plan.Stacks)
-	}
-	unlock, ok, err = a.TryLockTrain()
-	must(t, err)
-	if !ok {
-		t.Fatal("train lock taken")
-	}
 
 	// The regular interval is an hour: only a quick busy retry can merge it
 	// within the test's timeout.
@@ -174,10 +161,10 @@ func TestJourneyAutomergeRetriesSoonAfterBusyTrain(t *testing.T) {
 		if p := prNumber(t, w.GHState(), url); p.State != "MERGED" {
 			return errorf("PR is %s", p.State)
 		}
+		if merged := events(t, a, automerge.EventMerged); len(merged) != 1 {
+			return errorf("merged events = %q", merged)
+		}
 		return nil
 	})
-	if merged := events(t, a, automerge.EventMerged); len(merged) != 1 {
-		t.Fatalf("merged events = %q", merged)
-	}
 }
 

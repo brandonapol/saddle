@@ -1,11 +1,14 @@
 package automerge
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type fakeGH struct {
@@ -493,5 +496,180 @@ func TestChecksSummary(t *testing.T) {
 		if got := summarize(tc.rollup); got != tc.want {
 			t.Errorf("summarize(%+v) = %s, want %s", tc.rollup, got, tc.want)
 		}
+	}
+}
+
+// idles lists the idle events' data.
+func (r *rig) idles() []string {
+	var out []string
+	for _, e := range r.events {
+		if e.kind == EventIdle {
+			out = append(out, e.data)
+		}
+	}
+	return out
+}
+
+// clock is a settable Now.
+type clock struct{ t time.Time }
+
+func (c *clock) now() time.Time { return c.t }
+
+// The 2026-10-03 bug: every tick found the train lock held and returned
+// without saving or logging anything, so status called ready PRs ready while
+// nothing merged for an hour. A busy tick now records itself, says why the
+// ready PR waits and when the next check is, and logs it once per interval.
+func TestBusyTickRecordsWhyAndRetriesSoon(t *testing.T) {
+	r := newRig(t, "", "t3")
+	c := &clock{time.Date(2026, 10, 3, 12, 41, 0, 0, time.Local)}
+	r.w.Now = c.now
+	r.on(t)
+	// The last check saw t3 ready, then the train got busy.
+	s, _ := Load(r.w.Path)
+	st, _ := r.w.plan(s)
+	s.Last = st
+	if err := s.Save(r.w.Path); err != nil {
+		t.Fatal(err)
+	}
+	r.w.Lock = func() (func(), bool, error) { return nil, false, nil }
+
+	c.t = c.t.Add(2 * time.Minute)
+	busySince := c.t
+	got := check(t, r.w)
+	if !got.Busy || !got.BusySince.Equal(busySince) || !got.Next.Equal(c.t.Add(DefaultBusyRetry)) {
+		t.Fatalf("busy tick = busy %v since %v next %v", got.Busy, got.BusySince, got.Next)
+	}
+	if len(got.Stacks) != 1 || !got.Stacks[0].Ready || !strings.Contains(got.Stacks[0].Blocked, "train lock is busy") {
+		t.Fatalf("stacks = %+v", got.Stacks)
+	}
+	saved, err := r.w.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.Busy || !saved.Next.Equal(got.Next) {
+		t.Fatalf("busy tick not saved: %+v", saved)
+	}
+	if idle := r.idles(); len(idle) != 1 || !strings.Contains(idle[0], "pr/t3 ready but not merged: the train lock is busy") {
+		t.Fatalf("idle events = %q", idle)
+	}
+
+	// Retries inside the interval keep BusySince and don't log again.
+	c.t = c.t.Add(DefaultBusyRetry)
+	got = check(t, r.w)
+	if !got.BusySince.Equal(busySince) || len(r.idles()) != 1 {
+		t.Fatalf("retry: since %v, idle %q", got.BusySince, r.idles())
+	}
+	// After an interval the same reason is logged again.
+	c.t = c.t.Add(DefaultInterval)
+	check(t, r.w)
+	if len(r.idles()) != 2 {
+		t.Fatalf("idle after an interval = %q", r.idles())
+	}
+
+	// The lock frees: the next tick merges and clears busy.
+	r.w.Lock = func() (func(), bool, error) { return func() {}, true, nil }
+	got = check(t, r.w)
+	if got.Busy || !got.BusySince.IsZero() || got.Merged != "pr/t3" {
+		t.Fatalf("after the lock freed: %+v", got)
+	}
+}
+
+func TestRunRetriesSoonAfterBusyTick(t *testing.T) {
+	r := newRig(t, "", "t1")
+	r.on(t)
+	var tries atomic.Int32
+	r.w.Lock = func() (func(), bool, error) {
+		if tries.Add(1) < 3 {
+			return nil, false, nil
+		}
+		return func() {}, true, nil
+	}
+	r.w.Interval, r.w.BusyRetry = time.Hour, time.Millisecond
+	merged := make(chan struct{})
+	r.w.Restack = func() error { close(merged); return nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.w.Run(ctx) }()
+	select {
+	case <-merged:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run waited a whole interval after a busy tick")
+	}
+	cancel()
+	<-done
+	if len(r.gh.merged) != 1 {
+		t.Fatalf("merged = %v", r.gh.merged)
+	}
+}
+
+func TestIdleEventWhenStoppedNotWhenOff(t *testing.T) {
+	r := newRig(t, "", "t1")
+	check(t, r.w)
+	if len(r.idles()) != 0 {
+		t.Fatalf("logged idle while off: %q", r.idles())
+	}
+	st := check(t, r.w)
+	if !strings.Contains(st.Stacks[0].Blocked, "auto-merge is off") {
+		t.Fatalf("off: blocked = %q", st.Stacks[0].Blocked)
+	}
+	r.on(t)
+	s, _ := Load(r.w.Path)
+	s.Stopped = "merging pr/x failed"
+	if err := s.Save(r.w.Path); err != nil {
+		t.Fatal(err)
+	}
+	st = check(t, r.w)
+	if len(r.gh.merged) != 0 || !strings.Contains(st.Stacks[0].Blocked, "stopped") {
+		t.Fatalf("stopped: merged %v, %+v", r.gh.merged, st.Stacks)
+	}
+	if idle := r.idles(); len(idle) != 1 || !strings.Contains(idle[0], "merging pr/x failed") {
+		t.Fatalf("idle = %q", idle)
+	}
+}
+
+func TestPlanSaysWhyEachReadyStackWaits(t *testing.T) {
+	r := newRig(t, "", "t1")
+	r.entries = append(r.entries, Entry{Task: "t2", Branch: "saddle/t2", PR: "pr/t2"})
+	r.gh.prs["pr/t2"] = ready("t2", "main")
+	c := &clock{time.Date(2026, 10, 3, 12, 0, 0, 0, time.Local)}
+	r.w.Now = c.now
+	r.on(t)
+
+	st, err := r.w.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(st.Stacks[0].Blocked, "no watcher has checked yet") || !strings.Contains(st.Stacks[1].Blocked, "after pr/t1") {
+		t.Fatalf("before any check: %q / %q", st.Stacks[0].Blocked, st.Stacks[1].Blocked)
+	}
+	got := check(t, r.w)
+	if got.Merged != "pr/t1" || !strings.Contains(got.Stacks[1].Blocked, "one PR merges per check and this one merged pr/t1") {
+		t.Fatalf("check: %+v", got)
+	}
+	st, _ = r.w.Plan()
+	if len(st.Stacks) != 1 || st.Stacks[0].Blocked != "the watcher merges it at its next check, at 12:02:00" {
+		t.Fatalf("plan after a check: %+v", st.Stacks)
+	}
+	// A watcher long overdue is called out: nothing is running it.
+	c.t = c.t.Add(time.Hour)
+	st, _ = r.w.Plan()
+	if !strings.Contains(st.Stacks[0].Blocked, "was due at 12:02:00 and hasn't checked since 12:00:00") {
+		t.Fatalf("overdue: %q", st.Stacks[0].Blocked)
+	}
+}
+
+// Each CLI call and restart builds a new Watcher; a refusal is still logged
+// once per change of reason.
+func TestRefusalLoggedOnceAcrossWatchers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "automerge.json")
+	r := newRig(t, path, "t1")
+	r.gh.prs["pr/t1"].Checks = ChecksFail
+	r.on(t)
+	check(t, r.w)
+	r2 := newRig(t, path, "t1")
+	r2.gh.prs["pr/t1"].Checks = ChecksFail
+	check(t, r2.w)
+	if n := len(r.events) + len(r2.events); slices.Index(r.kinds(), EventRefused) < 0 || slices.Contains(r2.kinds(), EventRefused) {
+		t.Fatalf("refusals: first %v, second %v (%d events)", r.kinds(), r2.kinds(), n)
 	}
 }

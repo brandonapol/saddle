@@ -175,6 +175,12 @@ func writeAutomerge(out io.Writer, st automerge.Status, base string) {
 	if len(st.Holds) > 0 {
 		fmt.Fprintf(out, "held: %s\n", strings.Join(st.Holds, ", "))
 	}
+	if st.Busy {
+		fmt.Fprintf(out, "train lock busy since %s (a land, restack or the stack sentinel holds it)\n", st.BusySince.Local().Format("15:04:05"))
+	}
+	if !st.Next.IsZero() {
+		fmt.Fprintf(out, "next check: %s\n", st.Next.Local().Format("15:04:05"))
+	}
 	if len(st.Stacks) == 0 {
 		fmt.Fprintln(out, "no open PR stacks")
 		return
@@ -208,9 +214,12 @@ func writeAutomerge(out io.Writer, st automerge.Status, base string) {
 			}
 			fmt.Fprintln(out)
 		}
-		if s.Ready {
+		switch {
+		case s.Ready && s.Blocked != "":
+			fmt.Fprintf(out, "  next: %s is ready to merge; %s\n", s.Next, s.Blocked)
+		case s.Ready:
 			fmt.Fprintf(out, "  next: %s is ready to merge\n", s.Next)
-		} else {
+		default:
 			fmt.Fprintf(out, "  next: %s waits: %s\n", s.Next, s.Why)
 		}
 	}

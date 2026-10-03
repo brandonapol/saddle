@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/automerge"
 	"github.com/spf13/cobra"
 )
 
@@ -123,6 +125,29 @@ func TestRootRegistersAutomerge(t *testing.T) {
 	for _, name := range []string{"automerge", "stack"} {
 		if c, _, err := Root().Find([]string{name}); err != nil || c.Name() != name {
 			t.Errorf("saddle %s not registered: %v", name, err)
+		}
+	}
+}
+
+// Status says why each stack isn't merged, the busy train lock, and when
+// the watcher checks next.
+func TestWriteAutomergeSaysWhyAndWhen(t *testing.T) {
+	at := time.Date(2026, 10, 3, 12, 41, 0, 0, time.Local)
+	st := automerge.Status{Enabled: true, Source: automerge.SourceRuntime, Busy: true, BusySince: at, Next: at.Add(5 * time.Second),
+		Stacks: []automerge.Stack{
+			{ID: "t61", Next: "pr/191", Why: "its CI is red", Nodes: []automerge.Node{{Task: "t61", PR: "pr/191", Base: "main"}}},
+			{ID: "t58", Next: "pr/185", Ready: true, Blocked: "the train lock is busy", Nodes: []automerge.Node{{Task: "t58", PR: "pr/185", Base: "main"}}},
+		}}
+	var out strings.Builder
+	writeAutomerge(&out, st, "main")
+	for _, want := range []string{
+		"train lock busy since 12:41:00",
+		"next check: 12:41:05",
+		"next: pr/191 waits: its CI is red",
+		"next: pr/185 is ready to merge; the train lock is busy",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("status lacks %q:\n%s", want, out.String())
 		}
 	}
 }
