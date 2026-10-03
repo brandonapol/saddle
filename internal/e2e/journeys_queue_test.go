@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	fa "github.com/brandonapol/saddle/internal/e2e/fakeagent"
+	"github.com/brandonapol/saddle/internal/e2e/fakegh"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 )
 
@@ -92,5 +93,46 @@ func TestJourneyQueueMoveHoldRelease(t *testing.T) {
 	}
 	if r := w.MustSaddle("queue"); !strings.Contains(r.Stdout, "the queue is empty") {
 		t.Fatalf("queue after everything landed: %s", r)
+	}
+}
+
+// TestJourneyAutomergeHoldKeepsGreenStack: three green stacks on main with
+// auto-merge on, the first held. Auto-merge passes the held one and merges
+// the others, one per tick, says the held stack waits on its hold, and
+// merges it once released.
+func TestJourneyAutomergeHoldKeepsGreenStack(t *testing.T) {
+	w := world(t, Options{})
+	urls := landThree(t, w)
+	must(t, w.GH.SetAllChecks(fakegh.Pass))
+	w.MustSaddle("automerge", "on")
+	if r := w.MustSaddle("automerge", "hold", "t1"); !strings.Contains(r.Stdout, "t1") {
+		t.Fatalf("automerge hold: %s", r)
+	}
+
+	for _, want := range []string{"t2", "t3"} {
+		st := w.AutomergeTick()
+		if st.Merged != urls[want] {
+			t.Fatalf("tick merged %q, want %s's %s past the held t1: %+v", st.Merged, want, urls[want], st)
+		}
+	}
+	st := w.AutomergeTick()
+	if st.Merged != "" || len(st.Stacks) != 1 || st.Stacks[0].ID != "t1" || !st.Stacks[0].Held {
+		t.Fatalf("with only the held stack left: %+v", st)
+	}
+	if p := prNumber(t, w.GHState(), urls["t1"]); p.State != "OPEN" {
+		t.Fatalf("held t1 = %s, want still open", p.State)
+	}
+	if out := w.MustSaddle("automerge", "status").Stdout; !strings.Contains(out, "stack t1") || !strings.Contains(out, "held") {
+		t.Fatalf("status doesn't say t1 is held:\n%s", out)
+	}
+
+	w.MustSaddle("automerge", "release", "t1")
+	if st := w.AutomergeTick(); st.Merged != urls["t1"] {
+		t.Fatalf("after release the tick merged %q, want t1's %s: %+v", st.Merged, urls["t1"], st)
+	}
+	for _, f := range []string{"alpha/work.txt", "beta/work.txt", "gamma/work.txt"} {
+		if w.OriginFile("main", f) == "" {
+			t.Fatalf("main lacks %s", f)
+		}
 	}
 }
