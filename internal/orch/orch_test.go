@@ -9,6 +9,7 @@ func TestParse(t *testing.T) {
 	}{
 		{`{"type":"system","subtype":"init","session_id":"s1"}`, []Event{{Kind: Init, SessionID: "s1"}}},
 		{`{"type":"system","subtype":"hook_started"}`, nil},
+		{`{"type":"system","subtype":"compact_boundary","session_id":"s1","compact_metadata":{"trigger":"manual","pre_tokens":150000}}`, []Event{{Kind: Compacted, Text: "manual", SessionID: "s1"}}},
 		{`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"po"}}}`, []Event{{Kind: Delta, Text: "po"}}},
 		{`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"x"}}}`, nil},
 		{`{"type":"assistant","message":{"content":[{"type":"thinking","thinking":""},{"type":"text","text":"pong"}]}}`, []Event{{Kind: Text, Text: "pong"}}},

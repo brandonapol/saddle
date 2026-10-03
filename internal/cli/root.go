@@ -157,7 +157,7 @@ needs you. Quitting leaves the agents running; run saddle up again to come back.
 
 // startWatchers starts the background loops that live as long as saddle up:
 // the stack sentinel, the auto-merge watcher (which merges nothing unless
-// on) and, unless ci.disabled, the CI watcher. Short-lived commands never
+// on), the orchestrator compact watcher and, unless ci.disabled, the CI watcher. Short-lived commands never
 // start them. The returned func stops them and waits until they have.
 func startWatchers(ctx context.Context, a *app.App) (stop func()) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -165,7 +165,8 @@ func startWatchers(ctx context.Context, a *app.App) (stop func()) {
 	wg.Go(func() {
 		_ = sentinel.New(a).Run(ctx) // Run records failed checks as events
 	})
-	wg.Go(func() { _ = a.NewAutomerge(nil).Run(ctx) }) // merges only when on; failures are events
+	wg.Go(func() { _ = a.NewAutomerge(nil).Run(ctx) })   // merges only when on; failures are events
+	wg.Go(func() { _ = a.NewCompactWatcher().Run(ctx) }) // notices and compacts; failures are events
 	if !a.Cfg.CI.Disabled {
 		if ci, err := a.NewCIWatcher(ciwatch.ExecRunner(a.Root)); err == nil {
 			wg.Go(func() { ci.Run(ctx) }) // gh errors are recorded as events
