@@ -78,3 +78,12 @@ func TestBriefCommandShape(t *testing.T) {
 		t.Fatalf("brief command: %s", c.UsageString())
 	}
 }
+
+func TestBriefAndTmuxRegistered(t *testing.T) {
+	if c, _, err := Root().Find([]string{"brief"}); err != nil || c.Name() != "brief" {
+		t.Fatalf("saddle brief not registered: %v", err)
+	}
+	if c, _, err := Root().Find([]string{"status"}); err != nil || c.Flags().Lookup("tmux") == nil {
+		t.Fatalf("saddle status --tmux not registered: %v", err)
+	}
+}
