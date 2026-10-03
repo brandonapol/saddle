@@ -270,12 +270,20 @@ func TestJourneyConflictEscalatesAfterMaxAttempts(t *testing.T) {
 // told to "tell t2 what to do"; that message must wake t2.
 func TestJourneyMessageReachesEscalatedTask(t *testing.T) {
 	w := world(t, Options{Tables: "[train]\nno_auto_rebase = true\nmax_attempts = 1\n"})
-	conflictSetup(t, w, fa.Wait("Stop retrying"), fa.Wait("Message from the user: fix it like this"))
+	conflictSetup(t, w, fa.Wait("Message from the user: fix it like this"))
 	if r := w.Saddle("land"); !strings.Contains(r.Stdout, "escalated") {
 		t.Fatalf("not escalated: %s", r)
 	}
 	w.MustSaddle("message", "t2", "fix it like this")
 	w.WaitAgentLog("t2", "idle: script finished")
+	// Escalation doesn't wake t2, so its notice arrives with the message, in
+	// one delivery.
+	for _, line := range strings.Split(w.AgentLog("t2"), "\n") {
+		if strings.Contains(line, "Stop retrying") && strings.Contains(line, "Message from the user: fix it like this") {
+			return
+		}
+	}
+	t.Fatalf("no single delivery carried both the escalation and the message:\n%s", w.AgentLog("t2"))
 }
 
 // TestJourneyRestackAfterHumanSquashMerge: a person squash-merges the
