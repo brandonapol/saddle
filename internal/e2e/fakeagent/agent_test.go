@@ -255,3 +255,17 @@ func TestHeadlessAcknowledgesStreamJSON(t *testing.T) {
 		t.Fatalf("orchestrator log = %q", b)
 	}
 }
+
+func TestVersionAnswersWithoutStartingASession(t *testing.T) {
+	d := t.TempDir()
+	var out bytes.Buffer
+	if code := Main([]string{"--script-dir", d, "--version"}, strings.NewReader(""), &out); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if strings.TrimSpace(out.String()) != Version {
+		t.Fatalf("version = %q", out.String())
+	}
+	if ents, _ := os.ReadDir(d); len(ents) != 0 {
+		t.Fatalf("--version wrote %v", ents)
+	}
+}

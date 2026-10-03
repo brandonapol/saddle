@@ -38,12 +38,19 @@ type Agent struct {
 	lines  chan string
 }
 
+// Version is what --version prints, shaped like Claude Code's.
+const Version = "2.1.0 (Claude Code; fakeagent)"
+
 // idleForever is a wait nothing matches: after the script the agent idles.
 const idleForever = "\x00idle"
 
 // Main parses Claude Code's command line and runs the agent; it returns the
 // exit code. --script-dir is the only flag of its own.
 func Main(args []string, stdin io.Reader, stdout io.Writer) int {
+	if slices.Contains(args, "--version") || slices.Contains(args, "-v") {
+		fmt.Fprintln(stdout, Version)
+		return 0
+	}
 	a := &Agent{Task: os.Getenv("SADDLE_TASK"), In: stdin, Out: stdout}
 	a.Work, _ = os.Getwd()
 	headless := false
