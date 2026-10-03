@@ -99,18 +99,30 @@ func (u *TUI) WaitGone(s string) {
 	})
 }
 
-// Quit presses ctrl+c and waits for saddle up to exit.
+// Quit presses ctrl+c twice (the first only arms quitting) and waits for
+// saddle up to exit.
 func (u *TUI) Quit() {
 	u.w.T.Helper()
+	u.Keys("C-c")
+	u.WaitScreen("again to quit")
 	u.Keys("C-c")
 	u.WaitScreen("[saddle up exited")
 }
 
-// MaxWidth is the widest rendered row, in runes.
-func (u *TUI) MaxWidth() int {
-	n := 0
+// Fits reports whether the frame was laid out for the terminal's width
+// rather than clipped by it: no row is wider and every box edge that opens
+// on a row closes on it.
+func (u *TUI) Fits(width int) error {
 	for _, l := range u.Lines() {
-		n = max(n, len([]rune(strings.TrimRight(l, " "))))
+		l = strings.TrimRight(l, " ")
+		r := []rune(l)
+		if len(r) > width {
+			return fmt.Errorf("row is %d wide: %q", len(r), l)
+		}
+		if strings.Count(l, "╭") != strings.Count(l, "╮") || strings.Count(l, "╰") != strings.Count(l, "╯") {
+			return fmt.Errorf("box edge clipped at %d columns: %q", width, l)
+		}
 	}
-	return n
+	return nil
 }
+

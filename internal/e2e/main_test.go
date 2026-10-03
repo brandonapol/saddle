@@ -17,6 +17,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	if bins, err = Build(dir); err != nil {
+		_ = os.RemoveAll(dir)
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
