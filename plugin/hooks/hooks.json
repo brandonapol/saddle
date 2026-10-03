@@ -1,7 +1,7 @@
 {
-  "description": "Delivers saddle's agent events (prompts, stalls, conflicts, landings) into the session orchestrating this repo. Does nothing unless `saddle plugin engine` is running for the repo.",
+  "description": "At session start, says how to install saddle when the binary is missing or older than the plugin (it never installs by itself). Delivers saddle's agent events (prompts, stalls, conflicts, landings) into the session orchestrating this repo. Does nothing unless `saddle plugin engine` is running for the repo.",
   "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "saddle plugin hook", "timeout": 10 }] }],
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/saddle-check\"", "timeout": 10 }, { "type": "command", "command": "saddle plugin hook", "timeout": 10 }] }],
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "saddle plugin hook", "timeout": 10 }] }],
     "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "saddle plugin hook", "timeout": 10 }] }],
     "Stop": [{ "hooks": [{ "type": "command", "command": "saddle plugin hook", "timeout": 10 }] }]

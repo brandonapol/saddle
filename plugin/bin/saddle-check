@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Runs at session start. Says nothing when the saddle binary on PATH is at
+# the plugin's version or newer. When it is missing or older, prints exactly
+# what installs the right version. It never installs anything unless run by
+# hand with --yes.
+set -u
+[ -n "${SADDLE_TASK:-}" ] && exit 0 # saddle's own agents
+root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+want=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$root/.claude-plugin/plugin.json" | head -n1)
+cmd="go install github.com/brandonapol/saddle/cmd/saddle@v$want"
+
+if command -v saddle >/dev/null 2>&1; then
+	# saddle plugin install does the version check (and --yes the install).
+	if saddle plugin --help 2>/dev/null | grep -q '^  install '; then
+		exec saddle plugin install --want "$want" "$@"
+	fi
+	echo "The saddle on your PATH predates the saddle plugin $want."
+else
+	echo "The saddle plugin $want needs the saddle binary, and it is not on your PATH."
+fi
+if ! command -v go >/dev/null 2>&1; then
+	echo "Install Go (https://go.dev/dl/), then run:"
+	echo "  $cmd"
+	echo "and put \$(go env GOPATH)/bin on your PATH. See docs/QUICKSTART.md."
+	exit 0
+fi
+if [ "${1:-}" != "--yes" ]; then
+	echo "To install it, run:"
+	echo "  $cmd"
+	echo "or run this script again with --yes: $0 --yes"
+	exit 0
+fi
+echo "+ $cmd"
+$cmd
