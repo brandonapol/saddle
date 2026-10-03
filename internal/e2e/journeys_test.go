@@ -323,7 +323,9 @@ func TestJourneyUnstackAndRequeue(t *testing.T) {
 	urls := landTwo(t, w)
 
 	r := w.MustSaddle("unstack", "t1")
-	t.Log(r.Stdout)
+	if !strings.Contains(r.Stdout, "t1 is out of the PR stack") {
+		t.Fatalf("unstack: %s", r)
+	}
 	if v := w.Task("t1"); !strings.HasPrefix(v.Train, "superseded") {
 		t.Fatalf("t1 after unstack = %+v", v)
 	}
@@ -341,24 +343,21 @@ func TestJourneyUnstackAndRequeue(t *testing.T) {
 	if p := prNumber(t, s, urls["t2"]); p.Base != "main" {
 		t.Fatalf("t2's PR targets %s, want main once t1 left the stack", p.Base)
 	}
-	t1pr := prNumber(t, s, urls["t1"])
-	callsBefore := len(s.Calls)
 
 	r = w.MustSaddle("requeue", "t1")
-	t.Log(r.Stdout)
+	if !strings.Contains(r.Stdout, "queued again") {
+		t.Fatalf("requeue: %s", r)
+	}
 	w.MustSaddle("land")
-	if v := w.Task("t1"); v.Status != "landed" {
+	if v := w.Task("t1"); v.Status != "landed" || !strings.HasPrefix(v.Train, "landed") {
 		t.Fatalf("t1 after requeue and land = %+v", v)
 	}
 	if files := w.Git(w.Repo, "ls-tree", "-r", "--name-only", "saddle/integration"); !strings.Contains(files, "alpha/work.txt") {
 		t.Fatalf("integration lacks t1's work after requeue:\n%s", files)
 	}
-	w.MustSaddle("prs")
-	s = w.GHState()
-	for _, c := range s.Calls[callsBefore:] {
-		if len(c) > 2 && c[0] == "pr" && c[1] == "edit" && c[2] == urls["t1"] && t1pr.State == "OPEN" {
-			continue
-		}
+	r = w.MustSaddle("prs")
+	if !strings.Contains(r.Stdout, w.Task("t1").PR) || w.Task("t1").PR == "" {
+		t.Fatalf("t1 isn't published again: %s", r)
 	}
 	if !strings.Contains(w.OriginFile(w.Task("t1").Branch, "alpha/work.txt"), "alpha") {
 		t.Fatal("t1's branch on origin lacks its work after requeue")

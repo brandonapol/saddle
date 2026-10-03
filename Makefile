@@ -104,6 +104,13 @@ clean: ## Remove build artifacts (never touches .saddle/ state)
 test: ## Run unit and integration tests
 	$(GO) test $(GO_TAGFLAG) ./...
 
+.PHONY: test/e2e
+test/e2e: ## Run the end-to-end journeys (RUN=Journey to pick some; needs tmux)
+	# Builds saddle, a fake gh and a fake agent, then drives the real binary in
+	# hermetic temp repos with a private tmux server. See internal/e2e.
+	# E2E_RACE=1 also race-builds saddle itself (slow: minutes, not seconds).
+	E2E_GO_TAGS='$(GO_TAGS)' $(GO) test -tags '$(GO_TAGS) e2e' -race -count=1 -timeout 15m $(if $(RUN),-run '$(RUN)') ./internal/e2e/...
+
 .PHONY: test/scripts
 test/scripts: ## Test the shell scripts (scripts/upgrade.sh)
 	bash scripts/upgrade_test.sh
@@ -130,7 +137,7 @@ test/cover: ## Run tests and write coverage.html
 ##@ Code quality
 
 .PHONY: check
-check: check/format check/tidy check/vet test test/scripts check/lint ## Run every check CI runs
+check: check/format check/tidy check/vet test test/e2e test/scripts check/lint ## Run every check CI runs
 
 .PHONY: check/format
 check/format: ## Fail if any Go file needs gofmt

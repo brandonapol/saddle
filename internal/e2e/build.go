@@ -27,7 +27,8 @@ type Bins struct {
 	Agent  string // the fake agent
 }
 
-// Build compiles saddle, the gh shim and the fake agent into dir.
+// Build compiles saddle, the gh shim and the fake agent into dir. With
+// E2E_RACE=1 saddle is built with the race detector.
 func Build(dir string) (Bins, error) {
 	b := Bins{Dir: dir, Saddle: filepath.Join(dir, "saddle"), GH: filepath.Join(dir, "gh"),
 		Agent: filepath.Join(dir, "fakeagent")}
@@ -44,7 +45,11 @@ func Build(dir string) (Bins, error) {
 		b.GH:     "./internal/e2e/fakegh/cmd/gh",
 		b.Agent:  "./internal/e2e/fakeagent/cmd/fakeagent",
 	} {
-		cmd := exec.Command("go", "build", "-tags", tags, "-o", out, pkg)
+		args := []string{"build", "-tags", tags, "-o", out}
+		if os.Getenv("E2E_RACE") == "1" && out == b.Saddle {
+			args = append(args, "-race") // races in the product fail the journeys
+		}
+		cmd := exec.Command("go", append(args, pkg)...)
 		cmd.Dir = root
 		if o, err := cmd.CombinedOutput(); err != nil {
 			return b, fmt.Errorf("go build %s: %w\n%s", pkg, err, o)

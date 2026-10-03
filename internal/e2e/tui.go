@@ -125,4 +125,3 @@ func (u *TUI) Fits(width int) error {
 	}
 	return nil
 }
-
