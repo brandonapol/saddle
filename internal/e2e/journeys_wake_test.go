@@ -61,11 +61,10 @@ func (w *World) waitPrompt(target string) {
 }
 
 // TestJourneyWakeIdleAgentWithPromptSuggestion (#183): Claude Code fills an
-// idle agent's empty prompt with a grey suggestion of what to do next.
-// Saddle reads that as the user drafting and never types the wake line, so
-// the notice (here a message) sits undelivered while the agent idles.
+// idle agent's empty prompt with a grey suggestion of what to do next. That
+// is not the user drafting: the wake line must still reach the agent, so a
+// notice (here a message) doesn't sit undelivered while it idles.
 func TestJourneyWakeIdleAgentWithPromptSuggestion(t *testing.T) {
-	t.Skip("#183: a grey prompt suggestion reads as a draft, so the idle agent is never woken")
 	w := world(t, Options{})
 	w.Spawn("t1", "Alpha work", []string{"alpha/**"}, fa.Wait("carry on with alpha"))
 	v := w.WaitStatus("t1", "idle")
