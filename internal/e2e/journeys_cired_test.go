@@ -74,9 +74,14 @@ func TestJourneyCIRedHoldsAboveAndClearsWhenGreen(t *testing.T) {
 	if why := a.CIRedCovers("t2"); why == "" {
 		t.Fatal("auto-merge isn't kept off t2, above red t1")
 	}
-	// A quiet second cycle changes nothing and notifies nobody.
+	// A quiet second cycle changes nothing, notifies nobody and costs one
+	// gh call per stacked PR.
+	before := len(w.GHState().Calls)
 	if rep := w.CIRedTick(); len(rep.New) != 0 || len(rep.Cleared) != 0 {
 		t.Fatalf("second cycle = %+v, want no change", rep)
+	}
+	if calls := w.GHState().Calls[before:]; len(calls) != 2 || !slices.ContainsFunc(calls, func(c []string) bool { return strings.Join(c[:2], " ") == "pr view" }) {
+		t.Fatalf("a quiet cycle made %d gh calls, want one pr view per PR: %v", len(calls), calls)
 	}
 
 	// t3 is t1's repair (see the journeys below); t10 and t11 are new work.
