@@ -65,8 +65,9 @@ func TestLintDoneRefusesRedAndPassesGreen(t *testing.T) {
 // red gate to the producer like red tests, with the output tail.
 func TestLandReturnsLintFailureToProducer(t *testing.T) {
 	a := trainSetup(t)
-	a.Cfg.Train.Lint = config.Lint{Cmd: badLint, Set: true}
+	// Queued before the gate is set, so done's own check doesn't stop it.
 	tk := queueTask(t, a, "t1", "lint", map[string]string{"x.go": "LINTBAD\n"})
+	a.Cfg.Train.Lint = config.Lint{Cmd: badLint, Set: true}
 	rs, err := a.Land()
 	must(t, err)
 	if len(rs) != 1 || rs[0].State != store.TestFailed || rs[0].Note != "lint failed" {
@@ -121,10 +122,16 @@ func TestLandRunsLintOnceWhenSameAsTest(t *testing.T) {
 	count := filepath.Join(t.TempDir(), "count")
 	a.Cfg.Test.Cmd = "echo x >> " + count
 	a.Cfg.Train.Lint = config.Lint{Cmd: a.Cfg.Test.Cmd, Set: true}
-	landTask(t, a, "t1", "once", map[string]string{"x.txt": "x\n"})
+	queueTask(t, a, "t1", "once", map[string]string{"x.txt": "x\n"})
+	before, _ := os.ReadFile(count) // done may have run the gate
+	rs, err := a.Land()
+	must(t, err)
+	if len(rs) != 1 || rs[0].State != store.TrainOK {
+		t.Fatalf("results = %+v", rs)
+	}
 	b, err := os.ReadFile(count)
 	must(t, err)
-	if n := strings.Count(string(b), "x"); n != 1 {
-		t.Fatalf("ran %d times", n)
+	if n := strings.Count(string(b), "x") - strings.Count(string(before), "x"); n != 1 {
+		t.Fatalf("the train ran it %d times", n)
 	}
 }
