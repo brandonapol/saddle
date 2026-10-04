@@ -66,7 +66,7 @@ func Main(dir string, args []string, stdout, stderr io.Writer) int {
 				return &ghError{msg: msg, code: exitErr}
 			}
 		}
-		c := &call{dir: r.Dir, s: s, out: stdout}
+		c := &call{dir: r.Dir, cwd: dir, s: s, out: stdout}
 		code, err = c.run(args)
 		return err
 	})
@@ -98,7 +98,8 @@ func fail(format string, a ...any) error {
 }
 
 type call struct {
-	dir string
+	dir string // the bare repo
+	cwd string // where gh ran
 	s   *State
 	out io.Writer
 }
@@ -152,6 +153,8 @@ func (c *call) run(args []string) (int, error) {
 		return exitOK, c.label(args[1], args[2:])
 	case "api":
 		return exitOK, c.api(args[1:])
+	case "stack":
+		return c.stack(args[1:])
 	case "repo":
 		if args[1] == "view" {
 			_, f := flags(args[2:])
@@ -493,6 +496,7 @@ func (c *call) api(args []string) error {
 	}
 	ep := strings.TrimPrefix(pos[0], "/")
 	ep = strings.ReplaceAll(ep, "{owner}/{repo}", c.s.Owner+"/"+c.s.Name)
+	ep, _, _ = strings.Cut(ep, "?")
 	method := strings.ToUpper(one(f, "X", "method"))
 	fields := map[string]string{}
 	for _, k := range []string{"f", "F", "field", "raw-field"} {
@@ -516,6 +520,9 @@ func (c *call) api(args []string) error {
 		return fail("gh: Not Found (HTTP 404)")
 	}
 	rest := parts[3:]
+	if len(rest) > 0 && rest[0] == "stacks" && method == "GET" {
+		return c.stacksAPI(rest, jq)
+	}
 	switch {
 	case len(rest) == 0:
 		if method == "PATCH" {

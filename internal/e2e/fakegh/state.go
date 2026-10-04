@@ -5,7 +5,8 @@
 //
 // It implements the subset of gh saddle runs: pr create/edit/view/list/
 // checks/merge/comment/close, label create, issue create/view, run view,
-// repo view, auth status and a few REST and GraphQL api calls.
+// repo view, auth status, a few REST and GraphQL api calls, and the
+// gh-stack extension's stack link/view/merge with the stacks REST API.
 package fakegh
 
 import (
@@ -47,6 +48,13 @@ type State struct {
 	Fail map[string]string `json:"fail,omitempty"`
 	// NextComment numbers comment node ids.
 	NextComment int `json:"next_comment"`
+	// Stacks are native stacked PRs (gh stack link). Stack numbers share
+	// Next with PRs and issues, as on GitHub.
+	Stacks []*Stack `json:"stacks,omitempty"`
+	// NoStackExt makes gh act as if the gh-stack extension isn't installed.
+	NoStackExt bool `json:"no_stack_ext,omitempty"`
+	// StacksDisabled makes the repo lack Stacked PRs (a per-repo preview).
+	StacksDisabled bool `json:"stacks_disabled,omitempty"`
 }
 
 // Settings are the repo's merge settings, as the REST API names them.
