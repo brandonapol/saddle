@@ -112,6 +112,14 @@ type CI struct {
 	Interval time.Duration `toml:"interval"`
 	// Disabled turns the watcher off.
 	Disabled bool `toml:"disabled"`
+	// RedInterval is how often the ci-red watcher polls stacked PRs (one gh
+	// call each) while something is red or changing; RedMaxInterval caps
+	// its backoff while all is quiet.
+	RedInterval    time.Duration `toml:"red_interval"`
+	RedMaxInterval time.Duration `toml:"red_max_interval"`
+	// RepairAttempts is how many repair tasks a red layer gets before the
+	// orchestrator is asked to step in.
+	RepairAttempts int `toml:"repair_attempts"`
 }
 
 // Sweeper configures `saddle sweep`, which merges open saddle PRs that are
@@ -268,7 +276,7 @@ func Default() Config {
 			Method:      "squash",
 			ReviewLabel: "requires review",
 		},
-		CI:           CI{Interval: 10 * time.Minute},
+		CI:           CI{Interval: 10 * time.Minute, RedInterval: 2 * time.Minute, RedMaxInterval: 16 * time.Minute, RepairAttempts: 2},
 		Spawn:        Spawn{MaxDepth: 3, MaxChildren: 8},
 		Orchestrator: Orchestrator{CompactAt: 0.7},
 		Notices:      Notices{WakeAfter: 3 * time.Minute},
@@ -371,6 +379,15 @@ func Load(root string) (Config, error) {
 	}
 	if cfg.CI.Interval <= 0 {
 		cfg.CI.Interval = Default().CI.Interval
+	}
+	if cfg.CI.RedInterval <= 0 {
+		cfg.CI.RedInterval = Default().CI.RedInterval
+	}
+	if cfg.CI.RedMaxInterval < cfg.CI.RedInterval {
+		cfg.CI.RedMaxInterval = max(cfg.CI.RedInterval, Default().CI.RedMaxInterval)
+	}
+	if cfg.CI.RepairAttempts <= 0 {
+		cfg.CI.RepairAttempts = Default().CI.RepairAttempts
 	}
 	if cfg.Sweeper.Method == "" {
 		cfg.Sweeper.Method = Default().Sweeper.Method
@@ -490,6 +507,13 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # task and the orchestrator, or to a new fix task when the owner has landed.
 # interval = "10m"
 # disabled = false
+# The ci-red watcher holds layers stacked above a PR whose checks failed and
+# spawns one repair per red head, on that layer; after repair_attempts it
+# asks the orchestrator instead. It polls every red_interval, backing off to
+# red_max_interval while nothing is red.
+# red_interval = "2m"
+# red_max_interval = "16m"
+# repair_attempts = 2
 
 [usage]
 # Plan-limit bars are estimates: set cap to your plan's token budget for each

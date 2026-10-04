@@ -157,7 +157,8 @@ needs you. Quitting leaves the agents running; run saddle up again to come back.
 
 // startWatchers starts the background loops that live as long as saddle up:
 // the stack sentinel, the auto-merge watcher (which merges nothing unless
-// on), the orchestrator compact watcher and, unless ci.disabled, the CI watcher. Short-lived commands never
+// on), the orchestrator compact watcher and, unless ci.disabled, the CI and
+// ci-red watchers. Short-lived commands never
 // start them. The returned func stops them and waits until they have.
 func startWatchers(ctx context.Context, a *app.App) (stop func()) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -168,6 +169,7 @@ func startWatchers(ctx context.Context, a *app.App) (stop func()) {
 	wg.Go(func() { _ = a.NewAutomerge(nil).Run(ctx) })   // merges only when on; failures are events
 	wg.Go(func() { _ = a.NewCompactWatcher().Run(ctx) }) // notices and compacts; failures are events
 	if !a.Cfg.CI.Disabled {
+		wg.Go(func() { _ = sentinel.NewCIRed(a).Run(ctx) }) // holds layers above red CI; errors are events
 		if ci, err := a.NewCIWatcher(ciwatch.ExecRunner(a.Root)); err == nil {
 			wg.Go(func() { ci.Run(ctx) }) // gh errors are recorded as events
 		}
@@ -281,6 +283,9 @@ func statusCmd() *cobra.Command {
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "  "+r.Fix)
 			}
+			if holds, err := a.CIRedHolds(); err == nil {
+				writeCIRed(cmd.OutOrStdout(), holds)
+			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(w, "ID\tSTATUS\tMODEL\tWIN\tTITLE\tCLAIMS\tTRAIN")
 			for _, t := range st.Tasks {
@@ -299,6 +304,29 @@ func statusCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	return cmd
+}
+
+// writeCIRed prints each red layer and what it holds back (#213).
+func writeCIRed(out io.Writer, holds []app.CIRedHold) {
+	for _, h := range holds {
+		ack := ""
+		if h.Acked {
+			ack = " (acknowledged)"
+		}
+		fmt.Fprintf(out, "ci-red on %s%s: %s on %s\n", h.Task, ack, strings.Join(h.Checks, ", "), h.PR)
+		if len(h.Held) > 0 {
+			fmt.Fprintln(out, "  holds the layers above it: "+strings.Join(h.Held, ", "))
+		}
+		if len(h.Queued) > 0 {
+			fmt.Fprintln(out, "  holds queued work that would stack on it: "+strings.Join(h.Queued, ", "))
+		}
+		switch {
+		case h.Escalated:
+			fmt.Fprintf(out, "  %d repairs failed; the orchestrator decides what next\n", h.Attempts)
+		case h.Repair != "":
+			fmt.Fprintf(out, "  %s is repairing it (attempt %d)\n", h.Repair, h.Attempts)
+		}
+	}
 }
 
 func trunc(s string, n int) string {
