@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/lintgate"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -32,6 +33,7 @@ func TestMain(m *testing.M) {
 type repo struct {
 	t    *testing.T
 	root string
+	bin  string
 	st   *store.Store
 }
 
@@ -63,6 +65,7 @@ func setup(t *testing.T) *repo {
 	if err := Install(root, bin); err != nil {
 		t.Fatal(err)
 	}
+	r.bin = bin
 	return r
 }
 
@@ -231,30 +234,105 @@ func TestNoOpUpdateAllowed(t *testing.T) {
 	}
 }
 
-func TestInstallKeepsForeignHook(t *testing.T) {
+// A repo hook already at a name saddle writes is chained, not clobbered: it
+// moves to <name>.pre-saddle (a symlink stays a symlink) and saddle's hook
+// calls it with the same arguments and stdin; its failure still blocks (#212).
+func TestInstallChainsForeignHook(t *testing.T) {
 	r := setup(t)
 	hooks, err := gitx.Run(r.root, "rev-parse", "--path-format=absolute", "--git-path", "hooks")
 	if err != nil {
 		t.Fatal(err)
 	}
+	log := filepath.Join(t.TempDir(), "log")
+	// The repo's hooks live in a tracked dir and are symlinked in, as quark's
+	// `make setup/hooks` does.
+	shipped := filepath.Join(r.root, "git", "hooks")
+	if err := os.MkdirAll(shipped, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"reference-transaction", "pre-push"} {
-		// Reinstalling over our own hooks is fine.
-		if err := Install(r.root, "/bin/true"); err != nil {
+		body := "#!/bin/sh\necho \"" + name + " $1\" >> '" + log + "'\ncat >> '" + log + "'\n[ -e '" + log + ".fail' ] && exit 3\nexit 0\n"
+		src := filepath.Join(shipped, name)
+		if err := os.WriteFile(src, []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		p := filepath.Join(hooks, name)
-		foreign := "#!/bin/sh\nexit 0\n"
-		if err := os.WriteFile(p, []byte(foreign), 0o755); err != nil {
+		_ = os.Remove(filepath.Join(hooks, name))
+		if err := os.Symlink("../../git/hooks/"+name, filepath.Join(hooks, name)); err != nil {
 			t.Fatal(err)
 		}
-		if err := Install(r.root, "/bin/true"); err == nil || !strings.Contains(err.Error(), name) {
-			t.Fatalf("Install over a foreign %s: err = %v", name, err)
-		}
-		if b, _ := os.ReadFile(p); string(b) != foreign {
-			t.Fatalf("Install overwrote a %s hook it did not write", name)
-		}
-		if err := os.Remove(p); err != nil {
+	}
+	// Twice: reinstalling must not chain saddle's own hook or lose the repo's.
+	for range 2 {
+		if err := Install(r.root, r.bin); err != nil {
 			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"reference-transaction", "pre-push"} {
+		chained := filepath.Join(hooks, name+lintgate.ChainSuffix)
+		if fi, err := os.Lstat(chained); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("%s: repo hook not kept as a symlink at %s: %v", name, chained, err)
+		}
+		if b, _ := os.ReadFile(filepath.Join(shipped, name)); strings.Contains(string(b), marker) {
+			t.Fatalf("Install wrote through the %s symlink into the repo's tracked hook", name)
+		}
+	}
+	hs, err := Installed(r.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range hs {
+		if !h.Saddle || h.Chained != filepath.Join(hooks, h.Name+lintgate.ChainSuffix) {
+			t.Fatalf("installed: %+v", h)
+		}
+	}
+
+	r.git("", "branch", "other")
+	b, _ := os.ReadFile(log)
+	if !strings.Contains(string(b), "reference-transaction prepared") || !strings.Contains(string(b), "refs/heads/other") {
+		t.Fatalf("repo reference-transaction hook not chained with its stdin:\n%s", b)
+	}
+	// Saddle's guard still runs first.
+	r.git("t1", "branch", "saddle/t1-x")
+	r.deny("t2", "branch", "-f", "saddle/t1-x", "HEAD~1")
+
+	remote := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", "--bare", remote).CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	r.git("", "push", "-q", remote, "other")
+	b, _ = os.ReadFile(log)
+	if !strings.Contains(string(b), "pre-push "+remote) || !strings.Contains(string(b), "refs/heads/other ") {
+		t.Fatalf("repo pre-push hook not chained with its stdin:\n%s", b)
+	}
+	// The repo hook's failure blocks, as it did before saddle.
+	r.git("", "branch", "third")
+	if err := os.WriteFile(log+".fail", nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.deny("", "push", "-q", remote, "third")
+	r.deny("", "branch", "fourth")
+}
+
+// A chained hook already parked at <name>.pre-saddle is never overwritten.
+func TestInstallRefusesWhenChainSlotTaken(t *testing.T) {
+	r := setup(t)
+	hooks, err := gitx.Run(r.root, "rev-parse", "--path-format=absolute", "--git-path", "hooks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(hooks, "pre-push")
+	foreign := "#!/bin/sh\nexit 0\n"
+	for _, f := range []string{p, p + lintgate.ChainSuffix} {
+		if err := os.WriteFile(f, []byte(foreign), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Install(r.root, "/bin/true"); err == nil || !strings.Contains(err.Error(), "pre-push") {
+		t.Fatalf("err = %v", err)
+	}
+	for _, f := range []string{p, p + lintgate.ChainSuffix} {
+		if b, _ := os.ReadFile(f); string(b) != foreign {
+			t.Fatalf("Install overwrote %s", f)
 		}
 	}
 }

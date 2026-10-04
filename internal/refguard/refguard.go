@@ -23,6 +23,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/lintgate"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -65,44 +66,66 @@ func Actor(getenv func(string) string) string {
 }
 
 // Install writes the reference-transaction and pre-push hooks into the shared
-// hooks directory of the repo at root. bin is the saddle binary they run. A
-// hook saddle didn't write is left alone and reported as an error, and then
-// neither hook is written.
+// hooks directory of the repo at root. bin is the saddle binary they run.
+//
+// A hook saddle didn't write is chained, never clobbered: it moves to
+// <name>.pre-saddle (a symlink stays a symlink, so a repo's tracked hook is
+// never written through) and saddle's hook runs it after its own check, with
+// the same arguments and stdin; its failure still blocks (#212). When that
+// slot is taken too, nothing is written and the error says so.
 func Install(root, bin string) error {
 	hooks, err := hooksDir(root)
 	if err != nil {
 		return err
 	}
-	scripts := []struct{ name, chain, body string }{
-		{"reference-transaction", `saddle refguard "$@"`,
-			marker + ": only the merge train moves saddle's branches.\n" +
-				"# Written by saddle; reinstalling overwrites it.\n" +
-				"[ \"$1\" = prepared ] || exit 0\n" +
-				"bin=" + shellQuote(bin) + "\n" +
-				"# A missing binary must not block every ref update in the repo.\n" +
-				"[ -x \"$bin\" ] || exit 0\n" +
-				"exec \"$bin\" refguard \"$@\"\n"},
+	scripts := []struct{ name, why, guard, run string }{
+		{"reference-transaction", "only the merge train moves saddle's branches",
+			`[ "$1" = prepared ] && `,
+			`"$bin" refguard "$@"`},
 		// The remote rides in the environment so the command keeps the
 		// `refguard <state>` shape that test binaries answer.
-		{"pre-push", `SADDLE_PUSH_REMOTE="$1" saddle refguard pre-push`,
-			marker + ": only the merge train pushes saddle's branches.\n" +
-				"# Written by saddle; reinstalling overwrites it.\n" +
-				"bin=" + shellQuote(bin) + "\n" +
-				"# A missing binary must not block every push from the repo.\n" +
-				"[ -x \"$bin\" ] || exit 0\n" +
-				"SADDLE_PUSH_REMOTE=\"$1\" exec \"$bin\" refguard pre-push\n"},
+		{"pre-push", "only the merge train pushes saddle's branches", "",
+			`SADDLE_PUSH_REMOTE="$1" "$bin" refguard pre-push`},
 	}
+	var chain []string
 	for _, sc := range scripts {
 		path := filepath.Join(hooks, sc.name)
-		if b, err := os.ReadFile(path); err == nil && !strings.Contains(string(b), marker) {
-			return fmt.Errorf("%s exists and was not written by saddle; chain `%s` from it to guard saddle's branches", path, sc.chain)
+		if _, err := os.Lstat(path); err != nil {
+			continue
 		}
+		if b, err := os.ReadFile(path); err == nil && strings.Contains(string(b), marker) {
+			continue
+		}
+		if _, err := os.Lstat(path + lintgate.ChainSuffix); err == nil {
+			return fmt.Errorf("%s exists and was not written by saddle, and %s is taken, so saddle can't chain it; merge them, then run saddle init again",
+				path, path+lintgate.ChainSuffix)
+		}
+		chain = append(chain, path)
 	}
 	if err := os.MkdirAll(hooks, 0o755); err != nil {
 		return err
 	}
+	for _, path := range chain {
+		if err := os.Rename(path, path+lintgate.ChainSuffix); err != nil {
+			return err
+		}
+	}
 	for _, sc := range scripts {
-		if err := os.WriteFile(filepath.Join(hooks, sc.name), []byte("#!/bin/sh\n"+sc.body), 0o755); err != nil {
+		path := filepath.Join(hooks, sc.name)
+		body := "#!/bin/sh\n" + marker + ": " + sc.why + ".\n" +
+			"# Written by saddle; reinstalling overwrites it. A repo hook that was\n" +
+			"# here lives at " + filepath.Base(path) + lintgate.ChainSuffix + " and runs after saddle's check.\n" +
+			"bin=" + shellQuote(bin) + "\n" +
+			"orig=" + shellQuote(path+lintgate.ChainSuffix) + "\n" +
+			"input=$(cat)\n" +
+			"feed() { [ -z \"$input\" ] || printf '%s\\n' \"$input\"; }\n" +
+			"# A missing binary must not block every ref update or push in the repo.\n" +
+			sc.guard + "[ -x \"$bin\" ] && { feed | " + sc.run + " || exit 1; }\n" +
+			"[ -x \"$orig\" ] || exit 0\n" +
+			"feed | \"$orig\" \"$@\"\n"
+		// Remove first: never write through a symlink into someone else's file.
+		_ = os.Remove(path)
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 			return err
 		}
 	}
@@ -120,6 +143,9 @@ type HookState struct {
 	Present bool   // a file exists at Path
 	Saddle  bool   // saddle wrote it
 	Bin     string // the saddle binary it runs, when Saddle
+	// Chained is the repo hook saddle's hook runs after its own check, when
+	// one is parked at <Path>.pre-saddle.
+	Chained string
 }
 
 // Installed reports the state of the reference-transaction and pre-push
@@ -138,6 +164,9 @@ func Installed(root string) ([]HookState, error) {
 			if h.Saddle {
 				h.Bin = hookBin(string(b))
 			}
+		}
+		if _, err := os.Lstat(h.Path + lintgate.ChainSuffix); err == nil {
+			h.Chained = h.Path + lintgate.ChainSuffix
 		}
 		out = append(out, h)
 	}
