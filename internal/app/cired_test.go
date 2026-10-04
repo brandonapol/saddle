@@ -60,3 +60,41 @@ func TestAckCIRedStopsHoldingUntilNewHead(t *testing.T) {
 		t.Fatalf("held = %v", held)
 	}
 }
+
+// #193: t64's CI ran `make test/e2e`, a target only t61 (unmerged) adds.
+// That failure is explained by the sibling, so it is no repair case.
+func TestSiblingExplainsMissingTarget(t *testing.T) {
+	fails := []CIRedFailure{{Check: "CI / test", LogTail: "make: *** No rule to make target 'test/e2e'.  Stop.\nError: Process completed with exit code 2."}}
+	toks := failureTokens(fails)
+	if !slices.Contains(toks, "test/e2e") {
+		t.Fatalf("tokens = %v, want test/e2e", toks)
+	}
+	sibling := "test/e2e: ## Run the end-to-end journeys\n\tgo test -tags e2e ./internal/e2e/...\n"
+	baseHas := func(tok string) bool { return tok == "Process" }
+	if tok, ok := explainedBy(toks, sibling, baseHas); !ok || tok != "test/e2e" {
+		t.Fatalf("explainedBy = %q, %v; want test/e2e", tok, ok)
+	}
+	// The base already has it: the red layer broke it itself.
+	if _, ok := explainedBy(toks, sibling, func(string) bool { return true }); ok {
+		t.Fatal("explained by a sibling though base has the name")
+	}
+	if _, ok := explainedBy(toks, "unrelated.go\n", baseHas); ok {
+		t.Fatal("explained by a sibling that doesn't add the name")
+	}
+}
+
+func TestIsLintFailure(t *testing.T) {
+	for _, c := range []struct {
+		f    CIRedFailure
+		want bool
+	}{
+		{CIRedFailure{Check: "CI / lint"}, true},
+		{CIRedFailure{Check: "CI / check", Step: "check/format"}, true},
+		{CIRedFailure{Check: "CI / test", LogTail: "dart format: 2 files would reformat"}, true},
+		{CIRedFailure{Check: "CI / test", LogTail: "--- FAIL: TestThing"}, false},
+	} {
+		if got := isLintFailure([]CIRedFailure{c.f}); got != c.want {
+			t.Errorf("%+v: lint = %v, want %v", c.f, got, c.want)
+		}
+	}
+}

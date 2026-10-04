@@ -33,6 +33,8 @@ type CIRed struct {
 	// Interval is the wait after a cycle that saw something red or changing;
 	// MaxInterval caps the backoff while all is quiet.
 	Interval, MaxInterval time.Duration
+	// Logs fetches the failing checks' log tails of a PR; nil uses gh.
+	Logs    func(ctx context.Context, pr string) []ciwatch.Failed
 	labeled bool // the ci-red label exists
 	lastErr string
 }
@@ -94,6 +96,10 @@ func nextWait(wait, iv, maxIv time.Duration, quiet bool) time.Duration {
 func (c *CIRed) Check(ctx context.Context) (CIRedReport, error) {
 	var rep CIRedReport
 	a := c.App
+	// A landed repair joins its red layer first, so the poll sees the new head.
+	if _, err := a.FoldCIRepairs(); err != nil {
+		a.Store.Event("", EventCIRedError, "fold: "+err.Error())
+	}
 	targets, err := a.CIRedTargets()
 	if err != nil {
 		return rep, err
