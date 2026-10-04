@@ -449,3 +449,35 @@ func TestStackBackend(t *testing.T) {
 		t.Error("template lacks stack_backend")
 	}
 }
+
+// [train] lint.cmd: unset auto-detects, "" disables, anything else runs (#212).
+func TestTrainLintCmd(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	for _, tc := range []struct {
+		body     string
+		set      bool
+		cmd      string
+		disabled bool
+	}{
+		{"", false, "", false},
+		{"[train]\nlint.cmd = \"make lint\"\n", true, "make lint", false},
+		{"[train]\nlint.cmd = \"\"\n", true, "", true},
+		{"[train.lint]\ncmd = \"make check\"\n", true, "make check", false},
+	} {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, ".saddle"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".saddle", "config.toml"), []byte(tc.body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l := cfg.Train.Lint
+		if l.Set != tc.set || l.Cmd != tc.cmd || l.Disabled() != tc.disabled {
+			t.Errorf("%q: got %+v (disabled %v)", tc.body, l, l.Disabled())
+		}
+	}
+}

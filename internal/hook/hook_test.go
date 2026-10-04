@@ -208,3 +208,53 @@ func TestOrchestratorHookStopContinuesForActionNotices(t *testing.T) {
 		t.Fatalf("Stop: %+v", out)
 	}
 }
+
+// Agents may not skip the repo's own hooks (#212): git commit --no-verify/-n,
+// git push --no-verify and a hooksPath override are denied; everything else
+// git does passes.
+func TestBypassesHooks(t *testing.T) {
+	for cmd, deny := range map[string]bool{
+		`git commit --no-verify -m "wip"`:                     true,
+		`git commit -n -m wip`:                                true,
+		`git commit -anm wip`:                                 true,
+		`git -C /x commit -qn`:                                true,
+		`cd sub && git commit -a --no-verify`:                 true,
+		`make fix; git commit -nm "fmt"`:                      true,
+		`git push --no-verify origin HEAD`:                    true,
+		`git -c core.hooksPath=/dev/null commit -m x`:         true,
+		`git commit -m "skip -n and --no-verify in text"`:     false,
+		`git commit -m wip -- -n`:                             false,
+		`git commit -F msg.txt`:                               false,
+		`git commit -c HEAD -a`:                               false,
+		`git push -n origin HEAD`:                             false, // dry run
+		`git log --no-verify`:                                 false,
+		`echo git commit --no-verify`:                         false,
+		`git commit -m 'it said: --no-verify'`:                false,
+		`grep -n foo x.go | head -n 3`:                        false,
+		`git commit --amend --no-edit`:                        false,
+		"git commit -m one &&\ngit commit --no-verify -m two": true,
+	} {
+		if got := BypassesHooks(cmd) != ""; got != deny {
+			t.Errorf("%q: deny = %v, want %v", cmd, got, deny)
+		}
+	}
+}
+
+func TestPreToolUseDeniesNoVerify(t *testing.T) {
+	a := setup(t)
+	t1, _ := a.Spawn(app.SpawnReq{Title: "one"})
+	out := run(t, a, t1.ID, map[string]any{
+		"hook_event_name": "PreToolUse", "tool_name": "Bash",
+		"tool_input": map[string]any{"command": "git commit --no-verify -am wip"},
+	})
+	hs, _ := out["hookSpecificOutput"].(map[string]any)
+	if hs["permissionDecision"] != "deny" || !strings.Contains(hs["permissionDecisionReason"].(string), "--no-verify") {
+		t.Fatalf("out = %v", out)
+	}
+	if out := run(t, a, t1.ID, map[string]any{
+		"hook_event_name": "PreToolUse", "tool_name": "Bash",
+		"tool_input": map[string]any{"command": "git commit -am wip"},
+	}); out != nil {
+		t.Fatalf("plain commit denied: %v", out)
+	}
+}

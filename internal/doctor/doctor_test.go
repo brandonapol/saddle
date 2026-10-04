@@ -126,7 +126,7 @@ func TestHealthyRepoAllOK(t *testing.T) {
 		t.Fatal("Failed on a healthy repo")
 	}
 	want := []string{CheckConfig, CheckRemote, CheckDefaultBranch, CheckGH, CheckMergeSettings, CheckProtection, CheckGhStack,
-		CheckTestCmd, CheckTmux, CheckClaude, CheckHooks, CheckIgnored, CheckStateDB, CheckLeftovers}
+		CheckTestCmd, CheckTmux, CheckClaude, CheckHooks, CheckGate, CheckIgnored, CheckStateDB, CheckLeftovers}
 	if len(rs) != len(want) {
 		t.Fatalf("got %d checks, want %d", len(rs), len(want))
 	}
@@ -235,9 +235,23 @@ func TestChecks(t *testing.T) {
 		}, Fail, "saddle init"},
 		{"foreign hook", CheckHooks, func(f *fakeEnv) {
 			f.hooks[1] = refguard.HookState{Name: "pre-push", Path: "/r/.git/hooks/pre-push", Present: true}
-		}, Fail, "saddle refguard pre-push"},
+		}, Fail, "chains it"},
 		{"hook binary gone", CheckHooks, func(f *fakeEnv) { f.paths["/usr/bin/saddle"] = false }, Warn, "make install"},
 		{"hooks unreadable", CheckHooks, func(f *fakeEnv) { f.hooksErr = errors.New("not a git repo") }, Warn, ""},
+
+		{"gate shipped but not installed", CheckGate, func(f *fakeEnv) {
+			gateRepo(t, f, false)
+		}, Warn, "make setup/hooks"},
+		{"gate hook not active in worktrees", CheckGate, func(f *fakeEnv) {
+			gateRepo(t, f, true)
+			f.git["-C "+f.root+"/.saddle/worktrees/t1-x rev-parse --path-format=absolute --git-path hooks/pre-commit"] =
+				res{out: f.root + "/.saddle/worktrees/t1-x/.githooks/pre-commit"}
+		}, Warn, "core.hooksPath"},
+		{"hooks dir inside the checkout", CheckGate, func(f *fakeEnv) {
+			gateRepo(t, f, true)
+			f.git["-C "+f.root+" rev-parse --path-format=absolute --git-path hooks"] = res{out: f.root + "/.githooks"}
+			write(t, filepath.Join(f.root, ".githooks", "pre-commit"), "#!/bin/sh\nmake check\n")
+		}, Warn, "clobber"},
 
 		{".saddle tracked", CheckIgnored, func(f *fakeEnv) { delete(f.git, "check-ignore -q .saddle/") }, Fail, "/.saddle/"},
 
@@ -265,6 +279,58 @@ func TestChecks(t *testing.T) {
 				t.Fatalf("ok with a fix: %q", r.Fix)
 			}
 		})
+	}
+}
+
+func write(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// gateRepo gives f quark's layout: git/hooks/pre-commit runs make check and
+// `make setup/hooks` links it into .git/hooks; installed says whether it is.
+// One agent worktree, t1-x, shares the common hooks directory.
+func gateRepo(t *testing.T, f *fakeEnv, installed bool) {
+	t.Helper()
+	write(t, filepath.Join(f.root, "Makefile"), "check:\n\tgo test ./...\nfix:\n\tgofmt -w .\nsetup/hooks:\n\tln -sf ../../git/hooks/pre-commit .git/hooks/\n")
+	write(t, filepath.Join(f.root, "git", "hooks", "pre-commit"), "#!/bin/sh\nmake check\n")
+	hooks := filepath.Join(f.root, ".git", "hooks")
+	if installed {
+		write(t, filepath.Join(hooks, "pre-commit"), "#!/bin/sh\nmake check\n")
+	}
+	wt := filepath.Join(f.root, ".saddle", "worktrees", "t1-x")
+	f.git["-C "+f.root+" rev-parse --path-format=absolute --git-path hooks"] = res{out: hooks}
+	f.git["worktree list --porcelain"] = res{out: "worktree " + f.root + "\nHEAD abc\nbranch refs/heads/main\n\nworktree " + wt + "\nHEAD def\nbranch refs/heads/saddle/t1-x"}
+	f.git["-C "+wt+" rev-parse --path-format=absolute --git-path hooks/pre-commit"] = res{out: filepath.Join(hooks, "pre-commit")}
+}
+
+func TestGateCheckReportsDetectedGate(t *testing.T) {
+	f := healthy(t)
+	if r := find(t, Run(f), CheckGate); r.Status != OK || !strings.Contains(r.Detail, "none detected") {
+		t.Fatalf("no gate: %+v", r)
+	}
+	gateRepo(t, f, true)
+	r := find(t, Run(f), CheckGate)
+	if r.Status != OK {
+		t.Fatalf("%+v", r)
+	}
+	for _, want := range []string{"pre-commit hook", "make check", "fix: make fix", "installed", "active in agent worktrees"} {
+		if !strings.Contains(r.Detail, want) {
+			t.Errorf("detail %q lacks %q", r.Detail, want)
+		}
+	}
+	f.cfg.Train.Lint = config.Lint{Cmd: "make lint", Set: true}
+	if r := find(t, Run(f), CheckGate); !strings.Contains(r.Detail, "lint.cmd (.saddle/config.toml) runs `make lint`") {
+		t.Errorf("configured: %+v", r)
+	}
+	f.cfg.Train.Lint = config.Lint{Set: true}
+	if r := find(t, Run(f), CheckGate); r.Status != OK || !strings.Contains(r.Detail, "off") {
+		t.Errorf("disabled: %+v", r)
 	}
 }
 

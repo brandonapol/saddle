@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/lintgate"
 	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -212,12 +213,16 @@ func TestInitInstallsRefGuard(t *testing.T) {
 	}
 }
 
-func TestInitRefusesForeignRefHook(t *testing.T) {
+// Init chains a repo's own hook instead of refusing or clobbering it (#212).
+func TestInitChainsForeignRefHook(t *testing.T) {
 	a, _ := setup(t)
 	hooks := git(t, a.Root, "rev-parse", "--path-format=absolute", "--git-path", "hooks")
-	write(t, hooks, "reference-transaction", "#!/bin/sh\nexit 0\n")
-	if err := a.Init(); err == nil || !strings.Contains(err.Error(), "not written by saddle") {
-		t.Fatalf("Init over a foreign hook: err = %v", err)
+	foreign := "#!/bin/sh\nexit 0\n"
+	write(t, hooks, "reference-transaction", foreign)
+	must(t, a.Init())
+	b, err := os.ReadFile(filepath.Join(hooks, "reference-transaction"+lintgate.ChainSuffix))
+	if err != nil || string(b) != foreign {
+		t.Fatalf("repo hook not kept for chaining: %q, %v", b, err)
 	}
 }
 

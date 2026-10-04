@@ -83,7 +83,7 @@ func (l Launch) writeFiles() error {
 	}
 	settings := map[string]any{
 		"hooks": map[string]any{
-			"PreToolUse":       []any{map[string]any{"matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": hook()}},
+			"PreToolUse":       []any{map[string]any{"matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": hook()}},
 			"PostToolUse":      []any{map[string]any{"matcher": "*", "hooks": hook()}},
 			"UserPromptSubmit": []any{map[string]any{"hooks": hook()}},
 			"Stop":             []any{map[string]any{"hooks": hook()}},

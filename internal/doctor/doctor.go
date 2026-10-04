@@ -9,13 +9,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/ghstack"
+	"github.com/brandonapol/saddle/internal/lintgate"
 	"github.com/brandonapol/saddle/internal/refguard"
 )
 
@@ -41,6 +44,7 @@ const (
 	CheckTmux          = "tmux"
 	CheckClaude        = "claude"
 	CheckHooks         = "ref guard hooks"
+	CheckGate          = "lint gate"
 	CheckIgnored       = ".saddle ignored"
 	CheckStateDB       = "state.db"
 	CheckLeftovers     = "leftovers"
@@ -100,7 +104,7 @@ func Run(env Env) []Result {
 		r.config(), r.gitRemote(), r.defaultBranch(), r.ghAuth(), r.mergeSettings(), r.protection(), r.ghStack(),
 		r.testCmd(), r.tool(CheckTmux, "tmux", "-V", "install tmux (e.g. `brew install tmux` or your package manager)"),
 		r.tool(CheckClaude, r.cfg.Claude.Cmd, "--version", "install Claude Code (https://claude.com/claude-code) or set [claude] cmd in .saddle/config.toml"),
-		r.hooks(), r.ignored(), r.stateDB(), r.leftovers(),
+		r.hooks(), r.gate(), r.ignored(), r.stateDB(), r.leftovers(),
 	}
 }
 
@@ -383,18 +387,107 @@ func (r *run) hooks() Result {
 		case !h.Present:
 			return fail(CheckHooks, h.Name+" hook missing", "saddle init installs it; without it agents can move saddle's branches")
 		case !h.Saddle:
-			chain := `saddle refguard "$@"`
-			if h.Name == "pre-push" {
-				chain = `SADDLE_PUSH_REMOTE="$1" saddle refguard pre-push`
-			}
-			return fail(CheckHooks, h.Path+" was not written by saddle", "chain `"+chain+"` from "+h.Path)
+			return fail(CheckHooks, h.Path+" was not written by saddle, so the guard is off",
+				"saddle init chains it: it moves to "+h.Path+lintgate.ChainSuffix+" and saddle's hook runs it after its own check")
 		case !r.env.Exists(h.Bin):
 			return warn(CheckHooks, h.Name+" runs "+h.Bin+", which is gone, so the guard is off",
 				"make install && saddle init, to point the hooks at the current binary")
 		}
-		names = append(names, h.Name)
+		name := h.Name
+		if h.Chained != "" {
+			name += " (chains " + filepath.Base(h.Chained) + ")"
+		}
+		names = append(names, name)
 	}
 	return ok(CheckHooks, strings.Join(names, ", "))
+}
+
+// gate reports the repo's own pre-commit/lint gate (#212): what it runs,
+// whether its hook is installed and active in agent worktrees, and whether
+// saddle's hooks would land among the repo's tracked ones.
+func (r *run) gate() Result {
+	root := r.env.Root()
+	git := func(dir string, args ...string) (string, error) {
+		return r.env.Git(append([]string{"-C", dir}, args...)...)
+	}
+	g := lintgate.Detect(root, r.cfg.Integration, git)
+	if r.cfg.Train.Lint.Disabled() {
+		return ok(CheckGate, "off: [train] lint.cmd = \"\", so done and the train skip the repo's gate")
+	}
+	if l := r.cfg.Train.Lint; l.Set {
+		g.Kind, g.Source, g.Cmd = "lint.cmd", ".saddle/config.toml", l.Cmd
+	}
+	if g.Cmd == "" {
+		return ok(CheckGate, "none detected (no pre-commit hook, .pre-commit-config.yaml, lefthook, husky or Makefile check/lint target)")
+	}
+	detail := fmt.Sprintf("%s (%s) runs `%s`", g.Kind, g.Source, g.Cmd)
+	if g.Fix != "" {
+		detail += ", fix: " + g.Fix
+	}
+	var why, fixes []string
+	switch {
+	case g.Hook != "":
+		detail += "; installed at " + g.Hook
+		if wt := r.agentWorktree(); wt == "" {
+			detail += "; no agent worktrees to check yet"
+		} else if p, err := git(wt, "rev-parse", "--path-format=absolute", "--git-path", "hooks/pre-commit"); err == nil && (p == g.Hook || r.env.Exists(p)) {
+			detail += "; active in agent worktrees"
+		} else {
+			why = append(why, "agent worktrees don't run it: git resolves their pre-commit hook to "+p)
+			fixes = append(fixes, "core.hooksPath is relative, so each worktree looks in its own copy; set it to an absolute path or unset it and link the hook into .git/hooks")
+		}
+	case g.Shipped != "":
+		why = append(why, g.Shipped+" is not installed, so commits in this checkout skip it")
+		fix := "link it: ln -s ../../" + g.Shipped + " .git/hooks/pre-commit"
+		if hasSetupHooks(root) {
+			fix = "make setup/hooks"
+		}
+		fixes = append(fixes, fix+" (saddle runs `"+g.Cmd+"` before done and landing either way)")
+	case g.Kind != lintgate.KindMake:
+		why = append(why, g.Kind+" is not installed as a git hook, so commits in this checkout skip it")
+		fixes = append(fixes, installHint(g.Kind)+" (saddle runs `"+g.Cmd+"` before done and landing either way)")
+	}
+	if hooks, err := git(root, "rev-parse", "--path-format=absolute", "--git-path", "hooks"); err == nil &&
+		strings.HasPrefix(hooks, root+string(filepath.Separator)) && !strings.HasPrefix(hooks, filepath.Join(root, ".git")+string(filepath.Separator)) {
+		why = append(why, "core.hooksPath puts git hooks in "+hooks+", inside the checkout, where saddle's ref-guard hooks could clobber the repo's tracked ones")
+		fixes = append(fixes, "unset core.hooksPath and link the repo's hooks into .git/hooks, where saddle chains them instead of risking a clobber")
+	}
+	if len(why) > 0 {
+		return warn(CheckGate, detail+"; "+strings.Join(why, "; "), strings.Join(fixes, "; "))
+	}
+	return ok(CheckGate, detail)
+}
+
+// agentWorktree is the first saddle agent worktree, "" when none.
+func (r *run) agentWorktree() string {
+	out, err := r.env.Git("worktree", "list", "--porcelain")
+	if err != nil {
+		return ""
+	}
+	prefix := filepath.Join(r.env.Root(), ".saddle", "worktrees") + string(filepath.Separator)
+	for _, line := range strings.Split(out, "\n") {
+		if p, ok := strings.CutPrefix(line, "worktree "); ok && strings.HasPrefix(p, prefix) {
+			return p
+		}
+	}
+	return ""
+}
+
+func hasSetupHooks(root string) bool {
+	b, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	return err == nil && regexp.MustCompile(`(?m)^setup/hooks[ \t]*:([^=]|$)`).Match(b)
+}
+
+func installHint(kind string) string {
+	switch kind {
+	case lintgate.KindPreCommit:
+		return "pre-commit install"
+	case lintgate.KindLefthook:
+		return "lefthook install"
+	case lintgate.KindHusky:
+		return "npx husky"
+	}
+	return "install the repo's pre-commit hook"
 }
 
 func (r *run) ignored() Result {

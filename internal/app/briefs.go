@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/lintgate"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -38,7 +39,21 @@ You are one of several %s agents working on this repo in parallel. Saddle coordi
 6. Messages starting with "[saddle]" come from Saddle or the orchestrator. If one says your branch conflicted or failed tests, fix it, then call `+"`done`"+` again.
 7. Don't wait on other agents in a loop. If you're blocked, say so in your done summary, or ask through the orchestrator.
 `, a.Cfg.Integration)
+	b.WriteString(gateRule(a.LintGate()))
 	return b.String()
+}
+
+// gateRule is the worker rule for the repo's own pre-commit/lint gate (#212).
+func gateRule(g lintgate.Gate) string {
+	const never = "Never commit or push with --no-verify (or -n): the repo's hooks are its gate, and saddle denies it."
+	if g.Cmd == "" {
+		return "8. " + never + "\n"
+	}
+	fix := ""
+	if g.Fix != "" {
+		fix = fmt.Sprintf(" (`%s` fixes some of it)", g.Fix)
+	}
+	return fmt.Sprintf("8. This repo's check is `%s`%s. Run it and make it pass before you call done; done runs it too and refuses while it is red, and the merge train runs it again before landing. %s\n", g.Cmd, fix, never)
 }
 
 func (a *App) orchestratorBrief() string {

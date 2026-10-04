@@ -80,3 +80,19 @@ func TestOrchestratorBriefConcurrency(t *testing.T) {
 		}
 	}
 }
+
+// #212: the brief names the repo's gate and forbids --no-verify.
+func TestWorkerBriefNamesRepoCheck(t *testing.T) {
+	a, _ := setup(t)
+	brief := a.workerBrief(store.Task{ID: "t1", Title: "x"}, nil)
+	if !strings.Contains(brief, "--no-verify") {
+		t.Error("brief lacks the --no-verify rule")
+	}
+	write(t, a.Root, "Makefile", "check:\n\ttrue\nfix:\n\ttrue\n")
+	brief = a.workerBrief(store.Task{ID: "t1", Title: "x"}, nil)
+	for _, want := range []string{"`make check`", "`make fix`", "--no-verify", "done runs it too"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("brief lacks %q", want)
+		}
+	}
+}

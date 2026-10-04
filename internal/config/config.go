@@ -191,7 +191,23 @@ type Train struct {
 	// GitHub as a native stacked PR with the gh-stack extension, falling
 	// back to "saddle" when it is missing or the repo lacks Stacked PRs.
 	StackBackend string `toml:"stack_backend"`
+	// Lint is the repo's own pre-commit/lint gate, written `lint.cmd`.
+	Lint Lint `toml:"lint"`
 }
+
+// Lint configures the repo's own pre-commit/lint gate (#212). The train runs
+// it after [test] cmd on the rebased tree, and done runs it in the worktree;
+// red returns the branch to its agent. Unset, saddle detects the gate (the
+// repo's pre-commit hook, pre-commit, lefthook, husky, make check/lint);
+// set to "" it is off.
+type Lint struct {
+	Cmd string `toml:"cmd"`
+	// Set is whether a config file set cmd, even to "".
+	Set bool `toml:"-"`
+}
+
+// Disabled reports whether config turned the gate off with lint.cmd = "".
+func (l Lint) Disabled() bool { return l.Set && strings.TrimSpace(l.Cmd) == "" }
 
 // Outputs are the PR layouts prs supports.
 var Outputs = []string{"stack", "single", "per-task"}
@@ -285,6 +301,9 @@ func Load(root string) (Config, error) {
 		}
 		if !md.IsDefined("usage", "windows") {
 			cfg.Usage.Windows = prev
+		}
+		if md.IsDefined("train", "lint", "cmd") {
+			cfg.Train.Lint.Set = true
 		}
 	}
 	if cfg.Session == "" {
@@ -413,6 +432,11 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # it; "gh-stack" also links each stack on GitHub as native stacked PRs (needs
 # the gh-stack extension and Stacked PRs on the repo, else falls back to saddle).
 # stack_backend = "saddle"
+# The repo's own pre-commit/lint gate. done runs it in the worktree and the
+# train runs it after [test] cmd; red goes back to the agent like a red test.
+# Unset, saddle detects it (pre-commit hook, pre-commit, lefthook, husky,
+# make check/lint; saddle doctor shows what it found); "" turns it off.
+# lint.cmd = "make check"
 
 [spawn]
 # How deep spawn chains go below the orchestrator, and how many working
