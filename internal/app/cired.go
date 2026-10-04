@@ -423,3 +423,15 @@ func (a *App) AckCIRed() ([]CIRedLayer, error) {
 	}
 	return acked, a.SetCIRed(s)
 }
+
+// CIRedOwns reports whether the ci-red watcher handles task's red CI: it is
+// stacked with a PR and its agent is gone, so the watcher holds, repairs
+// and reports it. ciwatch defers to it for such tasks.
+func (a *App) CIRedOwns(task string) bool {
+	t, err := a.Store.Task(task)
+	if err != nil || t.Active() {
+		return false
+	}
+	ts, err := a.CIRedTargets()
+	return err == nil && slices.ContainsFunc(ts, func(x CIRedTarget) bool { return x.Task == task })
+}

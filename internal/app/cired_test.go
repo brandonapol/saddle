@@ -98,3 +98,10 @@ func TestIsLintFailure(t *testing.T) {
 		}
 	}
 }
+
+func TestCIRedOwnsOnlyStackedLandedTasks(t *testing.T) {
+	a, _ := setup(t)
+	if a.CIRedOwns("t1") || a.CIRedOwns("nope") {
+		t.Fatal("ci-red owns a task that isn't stacked")
+	}
+}
