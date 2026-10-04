@@ -338,3 +338,105 @@ func TestJQ(t *testing.T) {
 		}
 	}
 }
+
+// openStack opens PRs a (on main) and b (on a) and returns their numbers.
+func (f *fixture) openStack() (int, int) {
+	f.branch("a", "a.txt", "a\n")
+	run(f.t, f.clone, "git", "checkout", "-q", "-B", "b", "a")
+	f.write("b.txt", "b\n")
+	f.commit("b")
+	run(f.t, f.clone, "git", "push", "-q", "-f", "origin", "b")
+	f.must("pr", "create", "--base", "main", "--head", "a", "--title", "A", "--body", "")
+	f.must("pr", "create", "--base", "a", "--head", "b", "--title", "B", "--body", "")
+	return 1, 2
+}
+
+func TestStackLinkViewMerge(t *testing.T) {
+	f := newFixture(t)
+	a, b := f.openStack()
+	if out := f.must("stack", "--version"); out != "gh stack version 0.1.1" {
+		t.Fatalf("version = %q", out)
+	}
+	f.must("stack", "link", "--base", "main", "https://github.com/e2e/demo/pull/1", "2")
+	s, _ := f.gh.Load()
+	if len(s.Stacks) != 1 || len(s.Stacks[0].PRs) != 2 || s.Stacks[0].PRs[0] != a || s.Stacks[0].PRs[1] != b {
+		t.Fatalf("stacks = %+v", s.Stacks)
+	}
+	// Linking again is a no-op; the API lists it.
+	f.must("stack", "link", "--base", "main", "1", "2")
+	out := f.must("api", "repos/{owner}/{repo}/stacks?per_page=100", "--paginate")
+	var list []struct {
+		Number int  `json:"number"`
+		Open   bool `json:"open"`
+		PRs    []struct {
+			Number int `json:"number"`
+		} `json:"pull_requests"`
+	}
+	if err := json.Unmarshal([]byte(out), &list); err != nil || len(list) != 1 || len(list[0].PRs) != 2 || !list[0].Open {
+		t.Fatalf("api stacks = %s (%v)", out, err)
+	}
+	run(t, f.clone, "git", "checkout", "-q", "b")
+	if v := f.must("stack", "view", "--json"); !strings.Contains(v, `"number":2`) {
+		t.Fatalf("view = %s", v)
+	}
+	// merge by top PR number merges the whole stack into main in one call.
+	f.must("stack", "merge", "2", "--yes", "--merge-method", "squash")
+	s, _ = f.gh.Load()
+	if s.PR(a).State != "MERGED" || s.PR(b).State != "MERGED" || s.Stacks[0].Open {
+		t.Fatalf("after merge: %+v %+v open=%v", s.PR(a), s.PR(b), s.Stacks[0].Open)
+	}
+	if got := run(t, f.bare, "git", "show", "main:b.txt"); got != "b" {
+		t.Fatalf("main lacks b's work: %q", got)
+	}
+}
+
+func TestStackLinkRefusesBadChainAndBranches(t *testing.T) {
+	f := newFixture(t)
+	f.openStack()
+	if _, errs, code := f.ghRun("stack", "link", "2", "1"); code == 0 || !strings.Contains(errs, "targets") {
+		t.Fatalf("out-of-order link: code %d %s", code, errs)
+	}
+	if _, errs, code := f.ghRun("stack", "link", "a", "b"); code == 0 || !strings.Contains(errs, "push") {
+		t.Fatalf("branch link must fail (it would push): code %d %s", code, errs)
+	}
+}
+
+func TestStackMergeIsAllOrNothing(t *testing.T) {
+	f := newFixture(t)
+	a, b := f.openStack()
+	f.must("stack", "link", "1", "2")
+	must := func(err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(f.gh.Update(func(s *State) error { s.PR(b).Mergeable = "CONFLICTING"; return nil }))
+	before := run(t, f.bare, "git", "rev-parse", "main")
+	if _, errs, code := f.ghRun("stack", "merge", "2", "--yes"); code == 0 || !strings.Contains(errs, "not mergeable") {
+		t.Fatalf("merge: code %d %s", code, errs)
+	}
+	s, _ := f.gh.Load()
+	if s.PR(a).State != "OPEN" || run(t, f.bare, "git", "rev-parse", "main") != before {
+		t.Fatalf("a failed stack merge merged part of it: a=%s", s.PR(a).State)
+	}
+}
+
+func TestStackUnavailable(t *testing.T) {
+	f := newFixture(t)
+	f.openStack()
+	if err := f.gh.Update(func(s *State) error { s.StacksDisabled = true; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, errs, code := f.ghRun("stack", "link", "1", "2"); code == 0 || !strings.Contains(errs, "Stacked PRs are not enabled for this repository") {
+		t.Fatalf("disabled link: %d %s", code, errs)
+	}
+	if _, errs, code := f.ghRun("api", "repos/{owner}/{repo}/stacks?per_page=1"); code == 0 || !strings.Contains(errs, "not enabled") {
+		t.Fatalf("disabled probe: %d %s", code, errs)
+	}
+	if err := f.gh.Update(func(s *State) error { s.NoStackExt = true; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, errs, code := f.ghRun("stack", "--version"); code == 0 || !strings.Contains(errs, `unknown command "stack" for "gh"`) {
+		t.Fatalf("missing extension: %d %s", code, errs)
+	}
+}

@@ -424,3 +424,28 @@ func TestNoticesWakeAfter(t *testing.T) {
 		t.Error("template doesn't document notices.wake_after")
 	}
 }
+
+// #211: [train] stack_backend picks how stacks are published: "saddle"
+// chains PR bases, "gh-stack" also links them natively on GitHub.
+func TestStackBackend(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Train.StackBackend != StackBackendSaddle {
+		t.Fatalf("default stack_backend = %q, want saddle", cfg.Train.StackBackend)
+	}
+	root := t.TempDir()
+	writeConfig(t, root, "[train]\nstack_backend = \"gh-stack\"\n")
+	if cfg, err = Load(root); err != nil || cfg.Train.StackBackend != StackBackendGhStack {
+		t.Fatalf("train = %+v, %v", cfg.Train, err)
+	}
+	writeConfig(t, root, "[train]\nstack_backend = \"graphite\"\n")
+	if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "train.stack_backend") {
+		t.Fatalf("bad stack_backend: err = %v", err)
+	}
+	if !strings.Contains(Template, "stack_backend") {
+		t.Error("template lacks stack_backend")
+	}
+}
