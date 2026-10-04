@@ -48,6 +48,12 @@ func Handle(a *app.App, task string, in Input) *Output {
 		return context(in.Event, takeAll(st, task))
 
 	case "PreToolUse":
+		if cmd, _ := in.ToolInput["command"].(string); cmd != "" {
+			if why := BypassesHooks(cmd); why != "" {
+				st.Event(task, "no_verify_denied", cmd)
+				return deny(in, why+". The repo's gate must pass: fix what it reports (run its fixer if it has one), then commit normally. done runs the same check.")
+			}
+		}
 		p := filePath(in.ToolInput)
 		if p == "" {
 			return nil
@@ -56,14 +62,7 @@ func Handle(a *app.App, task string, in Input) *Output {
 		if d.Allow {
 			return nil
 		}
-		out := &Output{Specific: &specific{HookEventName: "PreToolUse", PermissionDecision: "deny",
-			PermissionDecisionReason: "[saddle] " + d.Reason}}
-		// Grok reads the top-level decision. Claude's only takes approve or
-		// block, so it gets hookSpecificOutput alone.
-		if in.Grok {
-			out.Decision, out.Reason = "deny", "[saddle] "+d.Reason
-		}
-		return out
+		return deny(in, d.Reason)
 
 	case "PostToolUse":
 		markActive(st, task) // a tool ran, so any prompt it was waiting on was answered
@@ -94,6 +93,18 @@ func Handle(a *app.App, task string, in Input) *Output {
 		return nil
 	}
 	return nil
+}
+
+// deny refuses a tool call with reason.
+func deny(in Input, reason string) *Output {
+	out := &Output{Specific: &specific{HookEventName: "PreToolUse", PermissionDecision: "deny",
+		PermissionDecisionReason: "[saddle] " + reason}}
+	// Grok reads the top-level decision. Claude's only takes approve or
+	// block, so it gets hookSpecificOutput alone.
+	if in.Grok {
+		out.Decision, out.Reason = "deny", "[saddle] "+reason
+	}
+	return out
 }
 
 // HandleOrchestrator processes one hook invocation from the user's own Claude
