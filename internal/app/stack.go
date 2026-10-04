@@ -460,10 +460,11 @@ func (a *App) checkedOut(t store.Task) bool {
 }
 
 // republish force-with-lease pushes the moved branches that have PRs and
-// retargets those PRs by the PR layout of the rebuilt stack (see prLayout):
+// retargets those PRs by the PR layout of the rebuilt stack (see stackLayout):
 // each targets the layer below it in its stack, or base. A merged task's PR
 // is left alone, and a PR GitHub refuses to retarget because it is closed
-// takes its task out of the stack instead of failing.
+// takes its task out of the stack instead of failing. With stack_backend =
+// "gh-stack" the stacks are linked on GitHub again afterwards.
 func (a *App) republish(plan []restacked, res *RestackResult) error {
 	var live []restacked
 	var stack []landedTask
@@ -476,11 +477,14 @@ func (a *App) republish(plan []restacked, res *RestackResult) error {
 		live = append(live, r)
 		stack = append(stack, l)
 	}
-	layout, err := a.prLayout(stack)
+	layout, order, err := a.stackLayout(stack)
 	if err != nil {
 		return err
 	}
-	for i, r := range live {
+	var groups []int
+	var linked []store.Task
+	for _, i := range order {
+		r := live[i]
 		if r.PR == "" {
 			continue
 		}
@@ -505,6 +509,9 @@ func (a *App) republish(plan []restacked, res *RestackResult) error {
 		}
 		res.Retargeted = append(res.Retargeted, r.ID)
 		a.Store.Event(r.ID, "restack_retarget", r.PR+" → "+base)
+		linked = append(linked, r.Task)
+		groups = append(groups, layout[i].Group)
 	}
+	a.linkStacks(linked, groups)
 	return nil
 }

@@ -86,7 +86,8 @@ restacked. Any failed merge stops the watcher; 'on' resumes it.`,
 	return cmd
 }
 
-// stackCmd shows the PR stacks as a graph and rebases one.
+// stackCmd shows the PR stacks as a graph, rebases one, and manages the
+// owner's custom stacks (see customStackCmds).
 func stackCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
@@ -130,6 +131,7 @@ commit; saddle never resolves it.`,
 			return nil
 		}),
 	}, stackCollapseCmd())
+	cmd.AddCommand(customStackCmds()...)
 	return cmd
 }
 

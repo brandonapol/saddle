@@ -492,8 +492,9 @@ func overlaps(wt, base string, files []string) bool {
 }
 
 // PRs pushes every landed branch in the stack and opens or updates its PR,
-// laid out as stacks (see prLayout): dependent or same-topic tasks stack, each
-// PR on the one below it, and unrelated tasks' PRs target base (#52). A layer
+// laid out as stacks (see stackLayout): dependent or same-topic tasks stack,
+// each PR on the one below it, and unrelated tasks' PRs target base (#52);
+// the owner's custom stacks stack in the order given (#211). A layer
 // on its train predecessor pushes the commit the train landed, never whatever
 // its branch points at; any other pushes those landed commits replayed onto
 // the PR below. Tasks GitHub says are done leave the stack first (see
@@ -501,53 +502,80 @@ func overlaps(wt, base string, files []string) bool {
 // published; from there up nothing is pushed or changed, and the error says
 // why.
 func (a *App) PRs() ([]string, error) {
+	res, err := a.publish()
+	return res.urls, err
+}
+
+// published is what one prs did.
+type published struct {
+	urls  []string
+	links []stackLink // gh-stack links, with stack_backend = "gh-stack"
+}
+
+// publish is PRs. Layers go out in the layout's order (see stackLayout), so
+// a PR's base branch is pushed before the PR targets it.
+func (a *App) publish() (published, error) {
+	var res published
 	unlock, err := a.lockTrain()
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	defer unlock()
 	if _, err := a.ReconcileStack(a.ghLookup); err != nil {
-		return nil, err
+		return res, err
 	}
 	all, err := a.landedAll()
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	if len(all) == 0 {
-		return nil, fmt.Errorf("nothing has landed yet")
+		return res, fmt.Errorf("nothing has landed yet")
 	}
 	landed := stacked(all)
 	a.healBranches(landed)
 	flag, flagged, err := a.Flag()
 	if err != nil {
-		return nil, err
+		return res, err
 	}
-	layout, err := a.prLayout(landed)
+	layout, order, err := a.stackLayout(landed)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	var stop error
-	var stack []store.Task
-	var groups []int
+	stopAt := len(landed)
 	base, baseName := a.baseRef(), a.Cfg.Base
 	for i, l := range landed {
 		if flagged && !flag.Acked && l.ID == flag.Task {
-			stop = flagErr(flag)
+			stop, stopAt = flagErr(flag), i
 			break
 		}
 		prob, err := a.layerProblem(l, base, baseName)
 		if err != nil {
-			return nil, err
+			return res, err
 		}
 		if prob != "" {
 			stop = fmt.Errorf("the PR stack doesn't match what the train landed, so nothing from %s up was pushed and no PR there changed. "+
 				"Run restack to rebuild it; don't fix it with git:\n  %s: %s", l.ID, l.ID, prob)
+			stopAt = i
 			break
 		}
 		a.warnOutsideClaims(l, base)
+		base, baseName = l.To, l.ID+"'s branch"
+	}
+	var stack []store.Task
+	var groups []int
+	done := map[int]bool{}
+	for _, i := range order {
+		if i >= stopAt {
+			continue
+		}
+		if b := layout[i].Below; b >= 0 && !done[b] {
+			continue // the PR below it wasn't published
+		}
+		l := landed[i]
 		t := l.Task
 		if err := a.pushLanded(t.Branch, layout[i].Head); err != nil {
-			return nil, err
+			return res, err
 		}
 		if layout[i].Head != l.To {
 			a.Store.Event(t.ID, "pr_layout", fmt.Sprintf("%s published as %s on %s", short(l.To), short(layout[i].Head), a.prBase(landed, layout, i)))
@@ -556,20 +584,20 @@ func (a *App) PRs() ([]string, error) {
 		if t.PR == "" {
 			url, err := gh(a.Root, "pr", "create", "--base", prBase, "--head", t.Branch, "--title", t.Title, "--body", t.Summary)
 			if err != nil {
-				return nil, err
+				return res, err
 			}
 			t.PR = lastLine(url)
 			if err := a.Store.SetField(t.ID, "pr", t.PR); err != nil {
-				return nil, err
+				return res, err
 			}
 		} else if _, err := gh(a.Root, "pr", "edit", t.PR, "--base", prBase); err != nil {
-			return nil, err
+			return res, err
 		}
-		base, baseName = l.To, l.ID+"'s branch"
+		done[i] = true
 		stack = append(stack, t)
 		groups = append(groups, layout[i].Group)
 	}
-	var urls []string
+	// stack is in layout order, so each group's tasks are bottom first.
 	for i, t := range stack {
 		var b strings.Builder
 		b.WriteString(t.Summary)
@@ -596,11 +624,12 @@ func (a *App) PRs() ([]string, error) {
 		}
 		b.WriteString("\nBase: `" + a.Cfg.Base + "`\n")
 		if _, err := gh(a.Root, "pr", "edit", t.PR, "--body", b.String()); err != nil {
-			return urls, err
+			return res, err
 		}
-		urls = append(urls, t.PR)
+		res.urls = append(res.urls, t.PR)
 	}
-	return urls, stop
+	res.links = a.linkStacks(stack, groups)
+	return res, stop
 }
 
 // prBase is the branch layer i's PR targets: base, or the branch of the
