@@ -322,6 +322,9 @@ func (a *App) landOne(id string) LandResult {
 				"Your branch rebased cleanly onto %s, but `%s` failed on the result:\n%s\nFix it, commit, and call the saddle done tool again.", a.Cfg.Integration, cmd, tail(out, 40)))
 		}
 	}
+	if msg := a.trainLint(t.Worktree); msg != "" {
+		return fail(store.TestFailed, "lint failed", msg)
+	}
 	head, err := gitx.RevParse(t.Worktree, "HEAD")
 	if err != nil {
 		res.State, res.Note = store.TrainError, err.Error()

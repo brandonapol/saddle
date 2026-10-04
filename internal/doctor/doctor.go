@@ -411,6 +411,12 @@ func (r *run) gate() Result {
 		return r.env.Git(append([]string{"-C", dir}, args...)...)
 	}
 	g := lintgate.Detect(root, r.cfg.Integration, git)
+	if r.cfg.Train.Lint.Disabled() {
+		return ok(CheckGate, "off: [train] lint.cmd = \"\", so done and the train skip the repo's gate")
+	}
+	if l := r.cfg.Train.Lint; l.Set {
+		g.Kind, g.Source, g.Cmd = "lint.cmd", ".saddle/config.toml", l.Cmd
+	}
 	if g.Cmd == "" {
 		return ok(CheckGate, "none detected (no pre-commit hook, .pre-commit-config.yaml, lefthook, husky or Makefile check/lint target)")
 	}

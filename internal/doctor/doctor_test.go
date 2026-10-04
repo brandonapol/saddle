@@ -324,6 +324,14 @@ func TestGateCheckReportsDetectedGate(t *testing.T) {
 			t.Errorf("detail %q lacks %q", r.Detail, want)
 		}
 	}
+	f.cfg.Train.Lint = config.Lint{Cmd: "make lint", Set: true}
+	if r := find(t, Run(f), CheckGate); !strings.Contains(r.Detail, "lint.cmd (.saddle/config.toml) runs `make lint`") {
+		t.Errorf("configured: %+v", r)
+	}
+	f.cfg.Train.Lint = config.Lint{Set: true}
+	if r := find(t, Run(f), CheckGate); r.Status != OK || !strings.Contains(r.Detail, "off") {
+		t.Errorf("disabled: %+v", r)
+	}
 }
 
 func TestEveryNonOKHasAFix(t *testing.T) {
