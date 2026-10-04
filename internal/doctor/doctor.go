@@ -6,6 +6,7 @@ package doctor
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/ghstack"
 	"github.com/brandonapol/saddle/internal/refguard"
 )
 
@@ -34,6 +36,7 @@ const (
 	CheckGH            = "gh auth"
 	CheckMergeSettings = "merge settings"
 	CheckProtection    = "branch protection"
+	CheckGhStack       = "gh stack"
 	CheckTestCmd       = "test.cmd"
 	CheckTmux          = "tmux"
 	CheckClaude        = "claude"
@@ -94,7 +97,7 @@ type run struct {
 func Run(env Env) []Result {
 	r := &run{env: env}
 	return []Result{
-		r.config(), r.gitRemote(), r.defaultBranch(), r.ghAuth(), r.mergeSettings(), r.protection(),
+		r.config(), r.gitRemote(), r.defaultBranch(), r.ghAuth(), r.mergeSettings(), r.protection(), r.ghStack(),
 		r.testCmd(), r.tool(CheckTmux, "tmux", "-V", "install tmux (e.g. `brew install tmux` or your package manager)"),
 		r.tool(CheckClaude, r.cfg.Claude.Cmd, "--version", "install Claude Code (https://claude.com/claude-code) or set [claude] cmd in .saddle/config.toml"),
 		r.hooks(), r.ignored(), r.stateDB(), r.leftovers(),
@@ -238,6 +241,50 @@ func (r *run) mergeSettings() Result {
 			fmt.Sprintf("gh api -X PATCH repos/%s -F allow_squash_merge=true", s.Repo))
 	}
 	return ok(CheckMergeSettings, "merge commits off, squash on")
+}
+
+// ghStack checks the gh-stack extension and whether the repo has Stacked
+// PRs (a private preview, enabled per repo), read-only, against [train]
+// stack_backend. Nothing here fails: without them saddle chains PR bases.
+func (r *run) ghStack() Result {
+	backend := r.cfg.Train.StackBackend
+	if backend == "" {
+		backend = config.StackBackendSaddle
+	}
+	want := backend == config.StackBackendGhStack
+	tail := fmt.Sprintf("stack_backend = %q", backend)
+	if !r.gh {
+		if want {
+			return warn(CheckGhStack, "skipped: gh unavailable; "+tail, skippedFix)
+		}
+		return ok(CheckGhStack, "skipped: gh unavailable; "+tail+" doesn't need it")
+	}
+	c := ghstack.Client{Run: r.env.GH}
+	ver, err := c.Available()
+	if err != nil {
+		if want {
+			return warn(CheckGhStack, "the gh-stack extension is not installed; "+tail+", so stacks are chained by PR bases instead",
+				"gh extension install github/gh-stack")
+		}
+		return ok(CheckGhStack, "gh-stack not installed; "+tail+" doesn't need it")
+	}
+	enabled, err := c.Enabled()
+	state := "Stacked PRs enabled"
+	if !enabled {
+		state = "Stacked PRs aren't enabled for this repo"
+		if !errors.Is(err, ghstack.ErrNotEnabled) {
+			state = "can't tell whether Stacked PRs are enabled (" + err.Error() + ")"
+		}
+	}
+	detail := fmt.Sprintf("gh-stack %s, %s, %s", ver, state, tail)
+	switch {
+	case want && !enabled:
+		return warn(CheckGhStack, detail+"; stacks are chained by PR bases instead",
+			"Stacked PRs are a GitHub preview enabled per repo: ask for it on the repo, or set stack_backend = \"saddle\" under [train]")
+	case !want && enabled:
+		return ok(CheckGhStack, detail+` (set stack_backend = "gh-stack" under [train] to link stacks natively)`)
+	}
+	return ok(CheckGhStack, detail)
 }
 
 func (r *run) protection() Result {

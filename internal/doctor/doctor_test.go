@@ -125,7 +125,7 @@ func TestHealthyRepoAllOK(t *testing.T) {
 	if Failed(rs) {
 		t.Fatal("Failed on a healthy repo")
 	}
-	want := []string{CheckConfig, CheckRemote, CheckDefaultBranch, CheckGH, CheckMergeSettings, CheckProtection,
+	want := []string{CheckConfig, CheckRemote, CheckDefaultBranch, CheckGH, CheckMergeSettings, CheckProtection, CheckGhStack,
 		CheckTestCmd, CheckTmux, CheckClaude, CheckHooks, CheckIgnored, CheckStateDB, CheckLeftovers}
 	if len(rs) != len(want) {
 		t.Fatalf("got %d checks, want %d", len(rs), len(want))
@@ -342,5 +342,52 @@ func TestLeftoversKeptOnlyIsOK(t *testing.T) {
 	r := find(t, Run(f), CheckLeftovers)
 	if r.Status != OK || !strings.Contains(r.Detail, "4 kept") {
 		t.Fatalf("kept-only leftovers = %s %q, want ok noting 4 kept", r.Status, r.Detail)
+	}
+}
+
+// #211: the gh stack check reports the extension, whether the repo has
+// Stacked PRs, and the stack backend. Missing pieces only warn: saddle falls
+// back to chaining PR bases and never fails the train over them.
+func TestGhStackCheck(t *testing.T) {
+	const version, probe = "stack --version", "api repos/{owner}/{repo}/stacks?per_page=1"
+	for _, c := range []struct {
+		name    string
+		backend string
+		gh      map[string]res
+		status  Status
+		want    []string
+	}{
+		{"saddle without extension", "saddle", nil, OK, []string{"not installed", `stack_backend = "saddle"`}},
+		{"saddle with extension", "saddle", map[string]res{version: {out: "gh stack version 0.1.1"}, probe: {out: "[]"}}, OK,
+			[]string{"0.1.1", "Stacked PRs enabled", `stack_backend = "saddle"`}},
+		{"gh-stack ready", "gh-stack", map[string]res{version: {out: "gh stack version 0.1.1"}, probe: {out: "[]"}}, OK,
+			[]string{"0.1.1", "Stacked PRs enabled", `stack_backend = "gh-stack"`}},
+		{"gh-stack missing", "gh-stack", nil, Warn, []string{"not installed", "gh extension install github/gh-stack"}},
+		{"gh-stack not enabled", "gh-stack", map[string]res{version: {out: "gh stack version 0.1.1"},
+			probe: {err: errors.New("exit status 1: Stacked PRs are not enabled for this repository (HTTP 404)")}}, Warn,
+			[]string{"aren't enabled", "chained by PR bases"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			env := healthy(t)
+			env.cfg.Train.StackBackend = c.backend
+			for k, v := range c.gh {
+				env.gh[k] = v
+			}
+			r := find(t, Run(env), CheckGhStack)
+			text := r.Detail + " / " + r.Fix
+			if r.Status != c.status {
+				t.Fatalf("status = %s, want %s: %s", r.Status, c.status, text)
+			}
+			for _, w := range c.want {
+				if !strings.Contains(text, w) {
+					t.Fatalf("%q lacks %q", text, w)
+				}
+			}
+			for _, call := range env.ghCalls {
+				if strings.Contains(call, "-X") || strings.HasPrefix(call, "stack link") || strings.HasPrefix(call, "stack merge") {
+					t.Fatalf("doctor must only read: %s", call)
+				}
+			}
+		})
 	}
 }
