@@ -79,3 +79,22 @@ func TestStackCreateRefusesUnlandedTask(t *testing.T) {
 		t.Fatalf("err = %v\n%s", err, out.String())
 	}
 }
+
+// link and merge need stack_backend = "gh-stack" and say so.
+func TestStackLinkAndMergeNeedGhStackBackend(t *testing.T) {
+	a, _ := landedPR(t)
+	landSecond(t, a)
+	t.Chdir(a.Root)
+	run(t, "stack", "create", "ui", "t1", "t2")
+	for _, args := range [][]string{{"stack", "link"}, {"stack", "merge", "ui"}} {
+		cmd := Root()
+		cmd.SetArgs(args)
+		var out strings.Builder
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		err := cmd.Execute()
+		if err == nil || !strings.Contains(err.Error(), `stack_backend = "gh-stack"`) {
+			t.Fatalf("%v: err = %v\n%s", args, err, out.String())
+		}
+	}
+}

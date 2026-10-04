@@ -7,9 +7,12 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/automerge"
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/ghstack"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
@@ -292,6 +295,16 @@ func (a *App) publishStack(s CustomStack) StackReport {
 	if err != nil {
 		rep.PublishErr = err.Error()
 	}
+	for _, l := range res.links {
+		if len(l.Tasks) == 0 || !slices.Contains(s.Tasks, l.Tasks[0]) {
+			continue
+		}
+		if l.Err != nil {
+			rep.Note = fallbackNote(l.Err)
+		} else {
+			rep.Linked = true
+		}
+	}
 	return rep
 }
 
@@ -355,6 +368,17 @@ func (a *App) ShowStack(ref string) (StackView, error) {
 			m.Base = a.prBase(stack, layout, j)
 		}
 		v.Members = append(v.Members, m)
+	}
+	if a.stackBackend() == config.StackBackendGhStack {
+		for _, m := range v.Members {
+			if m.PR == "" || m.Base == "" {
+				continue
+			}
+			if gs, err := a.GhStack().View(m.PR); err == nil {
+				v.GitHub = &gs
+			}
+			break
+		}
 	}
 	return v, nil
 }
@@ -541,12 +565,246 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 
 // stackLink is one stack prs or restack linked on GitHub, or tried to.
 type stackLink struct {
-	Tasks []string
+	Tasks []string // bottom first
 	Err   error
 }
 
-// linkStacks links the published stacks on GitHub.
-func (a *App) linkStacks(stack []store.Task, groups []int) []stackLink { return nil }
+// ghStackRun runs gh for gh-stack in dir. Tests replace it.
+var ghStackRun = func(dir string, args ...string) (string, error) { return gh(dir, args...) }
+
+// GhStack is the gh-stack extension in the repo.
+func (a *App) GhStack() ghstack.Client {
+	return ghstack.Client{Run: func(args ...string) (string, error) { return ghStackRun(a.Root, args...) }}
+}
 
 // stackBackend is [train] stack_backend.
-func (a *App) stackBackend() string { return "saddle" }
+func (a *App) stackBackend() string {
+	if a.Cfg.Train.StackBackend == "" {
+		return config.StackBackendSaddle
+	}
+	return a.Cfg.Train.StackBackend
+}
+
+// linkStacks links each published stack of two or more PRs on GitHub with
+// gh stack link, by PR URL bottom to top, when stack_backend = "gh-stack".
+// stack is in layout order and groups[i] is stack[i]'s stack. Nothing here
+// fails prs or restack: when gh-stack is missing or the repo lacks Stacked
+// PRs the stacks stay chained by PR base only and the owner hears it once;
+// any other failure is an event.
+func (a *App) linkStacks(stack []store.Task, groups []int) []stackLink {
+	if a.stackBackend() != config.StackBackendGhStack {
+		return nil
+	}
+	var order []int
+	members := map[int][]store.Task{}
+	for i, t := range stack {
+		if _, ok := members[groups[i]]; !ok {
+			order = append(order, groups[i])
+		}
+		members[groups[i]] = append(members[groups[i]], t)
+	}
+	c := a.GhStack()
+	var unavailable error
+	var links []stackLink
+	for _, g := range order {
+		ts := members[g]
+		if len(ts) < 2 {
+			continue
+		}
+		var ids, refs []string
+		for _, t := range ts {
+			ids, refs = append(ids, t.ID), append(refs, t.PR)
+		}
+		if unavailable == nil && links == nil {
+			if _, err := c.Available(); err != nil {
+				unavailable = err
+			}
+		}
+		if unavailable != nil {
+			links = append(links, stackLink{Tasks: ids, Err: unavailable})
+			continue
+		}
+		err := c.Link(a.Cfg.Base, refs...)
+		links = append(links, stackLink{Tasks: ids, Err: err})
+		switch {
+		case errors.Is(err, ghstack.ErrNotEnabled), errors.Is(err, ghstack.ErrNotInstalled):
+			unavailable = err
+		case err != nil:
+			a.Store.Event(ids[0], "gh_stack_link_failed", strings.Join(ids, " → ")+": "+err.Error())
+		default:
+			a.Store.Event(ids[0], "gh_stack_link", strings.Join(ids, " → "))
+		}
+	}
+	if links != nil {
+		a.noteFallback(unavailable)
+	}
+	return links
+}
+
+// noteFallback records why gh-stack can't link stacks, telling the owner
+// once per reason, and that it can again. Called under the train lock.
+func (a *App) noteFallback(why error) {
+	f, err := a.loadStacks()
+	if err != nil {
+		return
+	}
+	reason := ""
+	if why != nil {
+		reason = why.Error()
+	}
+	if reason == f.Fallback {
+		return
+	}
+	f.Fallback = reason
+	if a.saveStacks(f) != nil {
+		return
+	}
+	if reason == "" {
+		a.Store.Event("", "gh_stack_restored", "gh-stack links stacks on GitHub again")
+		return
+	}
+	a.Store.Event("", "gh_stack_fallback", reason)
+	_ = a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
+		"stack_backend is gh-stack, but stacks can't be linked on GitHub: %s. Saddle publishes them its own way, chaining PR bases, "+
+			"and nothing fails over it; `saddle doctor` shows what gh-stack needs.", reason))
+}
+
+// fallbackNote is what a report says when a stack wasn't linked.
+func fallbackNote(err error) string {
+	return "not linked on GitHub (" + err.Error() + "); published the saddle way, chained by PR bases"
+}
+
+// layoutStack is the published stack holding ref, bottom first: a custom
+// stack by name, or the stack, custom or clustered, of a task, PR or branch.
+func (a *App) layoutStack(ref string) ([]store.Task, error) {
+	f, err := a.loadStacks()
+	if err != nil {
+		return nil, err
+	}
+	var target string
+	if i := stackIndex(&f, ref); i >= 0 && len(f.Stacks[i].Tasks) > 0 {
+		target = f.Stacks[i].Tasks[0]
+	} else {
+		t, err := a.stackRef(ref)
+		if err != nil {
+			return nil, fmt.Errorf("no custom stack %s, and %w", ref, err)
+		}
+		target = t.ID
+	}
+	unlock, err := a.lockTrain()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	stack, err := a.landedStack()
+	if err != nil {
+		return nil, err
+	}
+	layout, order, err := a.stackLayout(stack)
+	if err != nil {
+		return nil, err
+	}
+	at := slices.IndexFunc(stack, func(l landedTask) bool { return l.ID == target })
+	if at < 0 {
+		return nil, fmt.Errorf("%s isn't in the PR stack", target)
+	}
+	var out []store.Task
+	for _, i := range order {
+		if layout[i].Group == layout[at].Group {
+			out = append(out, stack[i].Task)
+		}
+	}
+	return out, nil
+}
+
+// StackMerge is what stack merge did.
+type StackMerge struct {
+	Tasks      []string       `json:"tasks"` // bottom first
+	PR         string         `json:"pr"`    // the top PR: everything up to it merged
+	Method     string         `json:"method,omitempty"`
+	Restack    *RestackResult `json:"restack,omitempty"`
+	RestackErr string         `json:"restack_error,omitempty"`
+}
+
+// MergeStack merges the stack holding ref (a custom stack's name, or a task,
+// PR or branch in any stack) atomically with gh stack merge: every PR up to
+// the top one merges into base, or none does. It links the stack first, so
+// GitHub's stack matches saddle's, then restacks so the merged tasks leave
+// the PR stack. It needs stack_backend = "gh-stack", the extension and a
+// repo with Stacked PRs; otherwise auto-merge merges stacks bottom-up. An
+// empty method uses the repo's (squash, else rebase).
+func (a *App) MergeStack(ref, method string) (StackMerge, error) {
+	var out StackMerge
+	fallback := "`saddle automerge on` merges stacks bottom-up, one PR at a time, instead"
+	if a.stackBackend() != config.StackBackendGhStack {
+		return out, fmt.Errorf("atomic stack merges need [train] stack_backend = %q (it is %q); %s",
+			config.StackBackendGhStack, a.stackBackend(), fallback)
+	}
+	c := a.GhStack()
+	if _, err := c.Available(); err != nil {
+		return out, fmt.Errorf("%w; %s", err, fallback)
+	}
+	if ok, err := c.Enabled(); !ok {
+		return out, fmt.Errorf("can't merge with gh-stack: %w; %s", err, fallback)
+	}
+	ts, err := a.layoutStack(ref)
+	if err != nil {
+		return out, err
+	}
+	if len(ts) < 2 {
+		return out, fmt.Errorf("%s isn't stacked with another PR; merge its PR on its own", ts[0].ID)
+	}
+	var refs []string
+	for _, t := range ts {
+		if t.PR == "" {
+			return out, fmt.Errorf("%s has no PR yet; run `saddle prs` first", t.ID)
+		}
+		out.Tasks, refs = append(out.Tasks, t.ID), append(refs, t.PR)
+	}
+	out.PR = refs[len(refs)-1]
+	if err := c.Link(a.Cfg.Base, refs...); err != nil {
+		return out, err
+	}
+	if method == "" {
+		method, _ = (&automerge.GH{Run: automerge.ExecRunner(a.Root)}).MergeMethod()
+	}
+	out.Method = method
+	if err := c.Merge(strconv.Itoa(ghstack.PRNumber(out.PR)), method); err != nil {
+		a.Store.Event(out.Tasks[0], "gh_stack_merge_failed", err.Error())
+		return out, err
+	}
+	a.Store.Event(out.Tasks[0], "gh_stack_merge", strings.Join(out.Tasks, " → ")+" up to "+out.PR)
+	_ = a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf("Merged the stack %s into %s atomically with gh stack merge.",
+		strings.Join(out.Tasks, " → "), a.Cfg.Base))
+	res, err := a.Restack()
+	out.Restack = &res
+	if err != nil {
+		out.RestackErr = err.Error()
+	}
+	return out, nil
+}
+
+// StackLinked is one stack `saddle stack link` linked on GitHub, or tried to.
+type StackLinked struct {
+	Tasks []string `json:"tasks"` // bottom first
+	Error string   `json:"error,omitempty"`
+}
+
+// LinkStacks publishes the stacks (prs) and links each on GitHub with
+// gh-stack; it needs stack_backend = "gh-stack". A stack that couldn't be
+// linked says why; publishing goes on regardless.
+func (a *App) LinkStacks() ([]StackLinked, error) {
+	if a.stackBackend() != config.StackBackendGhStack {
+		return nil, fmt.Errorf("linking stacks on GitHub needs [train] stack_backend = %q (it is %q)", config.StackBackendGhStack, a.stackBackend())
+	}
+	res, err := a.publish()
+	var out []StackLinked
+	for _, l := range res.links {
+		v := StackLinked{Tasks: l.Tasks}
+		if l.Err != nil {
+			v.Error = l.Err.Error()
+		}
+		out = append(out, v)
+	}
+	return out, err
+}

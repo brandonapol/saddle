@@ -128,7 +128,60 @@ never unstacks. Remove it in GitHub's stack UI if you want it gone.`,
 			return nil
 		}),
 	}
-	cmds := []*cobra.Command{create, add, remove, del, list, show}
+	link := &cobra.Command{
+		Use:   "link",
+		Short: "Publish the stacks and link each on GitHub as stacked PRs (gh stack link)",
+		Long: `Runs prs, then links every stack of two or more PRs on GitHub with gh stack
+link, by PR URL, bottom to top. prs and restack already do this with
+[train] stack_backend = "gh-stack"; this does it now and says how each went.`,
+		Args: cobra.NoArgs,
+		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
+			links, err := a.LinkStacks()
+			if asJSON && err == nil {
+				return writeJSON(cmd.OutOrStdout(), links)
+			}
+			out := cmd.OutOrStdout()
+			if len(links) == 0 && err == nil {
+				fmt.Fprintln(out, "no stack of two or more PRs to link")
+			}
+			for _, l := range links {
+				if l.Error != "" {
+					fmt.Fprintf(out, "%s: not linked: %s\n", strings.Join(l.Tasks, " → "), l.Error)
+				} else {
+					fmt.Fprintf(out, "%s: linked on GitHub\n", strings.Join(l.Tasks, " → "))
+				}
+			}
+			return err
+		}),
+	}
+	var method string
+	merge := &cobra.Command{
+		Use:   "merge <name|task|PR#>",
+		Short: "Merge a whole stack atomically with gh stack merge, then restack",
+		Long: `Links the stack holding the given custom stack, task or PR on GitHub and
+merges every PR in it into base in one all-or-nothing gh stack merge, then
+restacks so the merged tasks leave the PR stack. Needs [train] stack_backend
+= "gh-stack", the gh-stack extension and a repo with Stacked PRs; otherwise
+'saddle automerge on' merges stacks bottom-up.`,
+		Args: cobra.ExactArgs(1),
+		RunE: withApp(func(cmd *cobra.Command, a *app.App, args []string) error {
+			res, err := a.MergeStack(args[0], method)
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				return writeJSON(cmd.OutOrStdout(), res)
+			}
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "merged %s up to %s atomically into %s\n", strings.Join(res.Tasks, " → "), res.PR, a.Cfg.Base)
+			if res.RestackErr != "" {
+				fmt.Fprintf(out, "restack after the merge failed: %s\n", res.RestackErr)
+			}
+			return nil
+		}),
+	}
+	merge.Flags().StringVar(&method, "method", "", "merge method: squash, rebase or merge (default: the repo's)")
+	cmds := []*cobra.Command{create, add, remove, del, list, show, link, merge}
 	for _, c := range cmds {
 		c.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	}

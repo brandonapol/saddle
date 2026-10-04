@@ -186,10 +186,24 @@ type Train struct {
 	// restack, until the stack is empty. Off by default; `saddle automerge
 	// on|off` overrides it at runtime and holds keep single stacks out.
 	AutoMerge bool `toml:"auto_merge"`
+	// StackBackend is how stacks are published: "saddle" chains each PR's
+	// base onto the one below it; "gh-stack" also links every stack on
+	// GitHub as a native stacked PR with the gh-stack extension, falling
+	// back to "saddle" when it is missing or the repo lacks Stacked PRs.
+	StackBackend string `toml:"stack_backend"`
 }
 
 // Outputs are the PR layouts prs supports.
 var Outputs = []string{"stack", "single", "per-task"}
+
+// Stack backends.
+const (
+	StackBackendSaddle  = "saddle"
+	StackBackendGhStack = "gh-stack"
+)
+
+// StackBackends are the stack backends prs supports.
+var StackBackends = []string{StackBackendSaddle, StackBackendGhStack}
 
 type Test struct {
 	// Cmd runs in the task worktree after rebasing onto integration; non-zero blocks landing.
@@ -242,7 +256,7 @@ func Default() Config {
 		Spawn:        Spawn{MaxDepth: 3, MaxChildren: 8},
 		Orchestrator: Orchestrator{CompactAt: 0.7},
 		Notices:      Notices{WakeAfter: 3 * time.Minute},
-		Train:        Train{MaxAttempts: 2, Output: "stack"},
+		Train:        Train{MaxAttempts: 2, Output: "stack", StackBackend: StackBackendSaddle},
 		Usage: Usage{
 			Poll: 15 * time.Second,
 			Windows: []Window{
@@ -321,6 +335,12 @@ func Load(root string) (Config, error) {
 	if !slices.Contains(Outputs, cfg.Train.Output) {
 		return cfg, fmt.Errorf("train.output %q: want one of %s", cfg.Train.Output, strings.Join(Outputs, ", "))
 	}
+	if cfg.Train.StackBackend == "" {
+		cfg.Train.StackBackend = Default().Train.StackBackend
+	}
+	if !slices.Contains(StackBackends, cfg.Train.StackBackend) {
+		return cfg, fmt.Errorf("train.stack_backend %q: want one of %s", cfg.Train.StackBackend, strings.Join(StackBackends, ", "))
+	}
 	if cfg.Spawn.MaxDepth < 0 || cfg.Spawn.MaxChildren < 0 {
 		return cfg, fmt.Errorf("spawn: max_depth and max_children must not be negative (0 means no cap)")
 	}
@@ -389,6 +409,10 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # needs-human) and restack, until the stack is empty. Off by default;
 # saddle automerge on|off|hold|release steers it at runtime.
 # auto_merge = false
+# How stacks are published: "saddle" chains each PR's base onto the one below
+# it; "gh-stack" also links each stack on GitHub as native stacked PRs (needs
+# the gh-stack extension and Stacked PRs on the repo, else falls back to saddle).
+# stack_backend = "saddle"
 
 [spawn]
 # How deep spawn chains go below the orchestrator, and how many working
