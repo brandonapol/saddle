@@ -49,13 +49,26 @@ func sentinelCmd() *cobra.Command {
 		}),
 	}, &cobra.Command{
 		Use:   "ack",
-		Short: "Acknowledge the stack's at-risk flag so it stops holding work back",
+		Short: "Acknowledge the stack's at-risk flag and ci-red holds so they stop holding work back",
 		Long: `Acknowledges the stack sentinel's current flag when restack can't fix it: prs
 and land stop holding work back and the needs-human labels come off. The flag
-comes back if a different layer breaks; it goes once the stack checks clean.`,
+comes back if a different layer breaks; it goes once the stack checks clean.
+It also acknowledges every ci-red layer (#213): prs and land stop holding the
+work above it until that layer goes red on a new head. Auto-merge still never
+merges a red PR or one above it.`,
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
+			red, err := a.AckCIRed()
+			if err != nil {
+				return err
+			}
+			for _, l := range red {
+				fmt.Fprintf(cmd.OutOrStdout(), "acknowledged ci-red on %s: prs and land stop holding the layers above it\n", l.Task)
+			}
 			f, err := a.AckFlag()
 			if err != nil {
+				if len(red) > 0 {
+					return nil // only red CI was holding work back
+				}
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "acknowledged the flag from %s up: %s\n", f.Task, f.Cause)

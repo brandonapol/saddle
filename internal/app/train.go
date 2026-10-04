@@ -54,6 +54,8 @@ func (a *App) Land() ([]LandResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	// So does red CI: only work that would stack on a red layer (#213).
+	red, repairs := a.ciRedFrozen()
 	var out []LandResult
 	held := 0
 	for _, e := range entries {
@@ -64,6 +66,12 @@ func (a *App) Land() ([]LandResult, error) {
 			held++
 			out = append(out, LandResult{Task: e.Task, State: TrainHeld,
 				Note: "held: it changes " + f + ", which the at-risk part of the stack changed; it lands once the stack checks clean"})
+			continue
+		}
+		if f := a.touches(e.Task, red); f != "" && !repairs[e.Task] {
+			held++
+			out = append(out, LandResult{Task: e.Task, State: TrainHeld,
+				Note: "held: it changes " + f + ", so it would stack on red CI; it lands once that layer's checks pass"})
 			continue
 		}
 		r := a.landOne(e.Task)
@@ -546,6 +554,7 @@ func (a *App) publish() (published, error) {
 	}
 	var stop error
 	stopAt := len(landed)
+	ciHeld, ciSkipped := a.ciRedHeld(landed, layout), map[int]string{}
 	base, baseName := a.baseRef(), a.Cfg.Base
 	for i, l := range landed {
 		if flagged && !flag.Acked && l.ID == flag.Task {
@@ -570,6 +579,10 @@ func (a *App) publish() (published, error) {
 	done := map[int]bool{}
 	for _, i := range order {
 		if i >= stopAt {
+			continue
+		}
+		if r, ok := ciHeld[i]; ok {
+			ciSkipped[i] = r // CI is red below it (#213)
 			continue
 		}
 		if b := layout[i].Below; b >= 0 && !done[b] {
@@ -632,6 +645,9 @@ func (a *App) publish() (published, error) {
 		res.urls = append(res.urls, t.PR)
 	}
 	res.links = a.linkStacks(stack, groups)
+	if stop == nil {
+		stop = ciRedErr(ciSkipped, landed)
+	}
 	return res, stop
 }
 
