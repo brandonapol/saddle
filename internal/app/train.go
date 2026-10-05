@@ -556,6 +556,7 @@ func (a *App) publish() (published, error) {
 	stopAt := len(landed)
 	ciHeld, ciSkipped := a.ciRedHeld(landed, layout), map[int]string{}
 	base, baseName := a.baseRef(), a.Cfg.Base
+	independent := a.publishedPRs() // saddle publish put these up on their own (#220)
 	for i, l := range landed {
 		if flagged && !flag.Acked && l.ID == flag.Task {
 			stop, stopAt = flagErr(flag), i
@@ -587,6 +588,9 @@ func (a *App) publish() (published, error) {
 		}
 		if b := layout[i].Below; b >= 0 && !done[b] {
 			continue // the PR below it wasn't published
+		}
+		if _, ok := independent[landed[i].ID]; ok {
+			continue // its own PR is out; layers above wait for it to merge
 		}
 		l := landed[i]
 		t := l.Task
