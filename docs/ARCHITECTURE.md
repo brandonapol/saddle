@@ -145,6 +145,15 @@ close PRs and delete branches, and it handles those without anyone editing
   and labels until a different layer breaks. `saddle requeue <task>` puts back
   a landed task whose work integration lacks. Each has an MCP tool:
   `unstack`, `sentinel_ack`, `requeue`.
+- **Publishing outside the stack (#220).** When `prs` is blocked but one
+  task's work is fine on its own, `saddle publish <task|branch> [--base main]
+  [--branch-name name] [--draft]` replays only that task's commits (checked by
+  patch-id) onto base, pushes them to a fresh branch and opens an independent
+  PR with the repo's PR template and `Closes #N`. The saddle process pushes as
+  the train, so the ref guard allows it and the model never runs `git push`.
+  It refuses work that needs unmerged tasks below it, and prints the URL when
+  the PR exists. `prs` leaves that task's PR alone; the layers above it wait
+  until it merges.
 
 ## Agents
 
@@ -153,6 +162,12 @@ close PRs and delete branches, and it handles those without anyone editing
 - **Claude Code**: Saddle writes a per-worktree `.claude/settings.local.json`
   that wires hooks to `saddle hook` and registers `saddle mcp`. It then
   launches `claude --model <m>` with the task brief.
+  The orchestrator's settings carry an allowlist (`agent.OrchestratorAllow`)
+  so neither a prompt nor the auto-mode classifier blocks what it is meant to
+  run: `saddle` (by name and absolute path), `gh pr` and `gh issue`, `git
+  fetch` and read-only git. `git push`, `merge`, `rebase`, `reset` and
+  `checkout` are removed (`agent.OrchestratorDeny`); `saddle publish` is the
+  way to push. `saddle doctor` checks both.
 - **Grok CLI** (`harness = "grok"`): same task, worktree and tmux window.
   Saddle writes `.grok/hooks/saddle.json` and a `[mcp_servers.saddle]` block
   (both gitexcluded) and launches `grok --trust` with the brief as `--rules`.

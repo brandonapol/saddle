@@ -51,7 +51,7 @@ func Handle(a *app.App, task string, in Input) *Output {
 		if cmd, _ := in.ToolInput["command"].(string); cmd != "" {
 			if why := BypassesHooks(cmd); why != "" {
 				st.Event(task, "no_verify_denied", cmd)
-				return deny(in, why+". The repo's gate must pass: fix what it reports (run its fixer if it has one), then commit normally. done runs the same check.")
+				return deny(in, RuleNoVerify, why+". The repo's gate must pass: fix what it reports (run its fixer if it has one), then commit normally. done runs the same check.")
 			}
 		}
 		p := filePath(in.ToolInput)
@@ -62,7 +62,7 @@ func Handle(a *app.App, task string, in Input) *Output {
 		if d.Allow {
 			return nil
 		}
-		return deny(in, d.Reason)
+		return deny(in, RuleWriteGuard, d.Reason)
 
 	case "PostToolUse":
 		markActive(st, task) // a tool ran, so any prompt it was waiting on was answered
@@ -95,8 +95,17 @@ func Handle(a *app.App, task string, in Input) *Output {
 	return nil
 }
 
-// deny refuses a tool call with reason.
-func deny(in Input, reason string) *Output {
+// The rules saddle's PreToolUse hook denies by. A denial names its rule, so
+// it is never mistaken for a permission rule or Claude's auto-mode
+// classifier, whose denials name neither (#220).
+const (
+	RuleWriteGuard = "write-guard" // claims, serial files, other worktrees
+	RuleNoVerify   = "no-verify"   // skipping the repo's commit hooks
+)
+
+// deny refuses a tool call under rule with reason.
+func deny(in Input, rule, reason string) *Output {
+	reason = "denied by saddle's " + rule + " rule (PreToolUse hook): " + reason
 	out := &Output{Specific: &specific{HookEventName: "PreToolUse", PermissionDecision: "deny",
 		PermissionDecisionReason: "[saddle] " + reason}}
 	// Grok reads the top-level decision. Claude's only takes approve or

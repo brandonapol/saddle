@@ -112,6 +112,10 @@ func TestPreToolUseDeniesOtherTasksFiles(t *testing.T) {
 	if hs["permissionDecision"] != "deny" || !strings.Contains(hs["permissionDecisionReason"].(string), t1.ID) {
 		t.Fatalf("out = %v", out)
 	}
+	// #220: a denial names the rule that denied it.
+	if r := hs["permissionDecisionReason"].(string); !strings.HasPrefix(r, "[saddle] denied by saddle's "+RuleWriteGuard+" rule (PreToolUse hook): ") {
+		t.Fatalf("deny doesn't name its rule: %q", r)
+	}
 	// Claude's legacy top-level decision only takes approve/block; "deny"
 	// there can fail its output validation, so Claude gets only hookSpecificOutput.
 	if _, ok := out["decision"]; ok {
@@ -250,6 +254,9 @@ func TestPreToolUseDeniesNoVerify(t *testing.T) {
 	hs, _ := out["hookSpecificOutput"].(map[string]any)
 	if hs["permissionDecision"] != "deny" || !strings.Contains(hs["permissionDecisionReason"].(string), "--no-verify") {
 		t.Fatalf("out = %v", out)
+	}
+	if r := hs["permissionDecisionReason"].(string); !strings.Contains(r, "saddle's "+RuleNoVerify+" rule") {
+		t.Fatalf("deny doesn't name its rule: %q", r)
 	}
 	if out := run(t, a, t1.ID, map[string]any{
 		"hook_event_name": "PreToolUse", "tool_name": "Bash",

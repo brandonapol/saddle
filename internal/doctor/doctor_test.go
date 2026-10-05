@@ -34,6 +34,9 @@ type fakeEnv struct {
 	kept      int
 	leftErr   error
 	ghCalls   []string
+	trainGit  map[string]res
+	trainRuns []string
+	allow     []string
 }
 
 const repoJSON = `{"full_name":"o/r","html_url":"https://github.com/o/r","allow_merge_commit":false,"allow_squash_merge":true,"allow_rebase_merge":false}`
@@ -68,6 +71,10 @@ func healthy(t *testing.T) *fakeEnv {
 			filepath.Join(root, ".saddle"): true,
 			"/usr/bin/saddle":              true,
 		},
+		trainGit: map[string]res{
+			"push --dry-run origin HEAD:refs/heads/saddle/doctor-push-check": {out: "To github.com:o/r.git\n * [new branch] HEAD -> saddle/doctor-push-check"},
+		},
+		allow: []string{"Read", "Bash(saddle:*)", "mcp__saddle"},
 		hooks: []refguard.HookState{
 			{Name: "reference-transaction", Path: "/r/.git/hooks/reference-transaction", Present: true, Saddle: true, Bin: "/usr/bin/saddle"},
 			{Name: "pre-push", Path: "/r/.git/hooks/pre-push", Present: true, Saddle: true, Bin: "/usr/bin/saddle"},
@@ -103,6 +110,11 @@ func (f *fakeEnv) Exists(path string) bool              { return f.paths[path] }
 func (f *fakeEnv) Hooks() ([]refguard.HookState, error) { return f.hooks, f.hooksErr }
 func (f *fakeEnv) OpenStore(string) error               { return f.storeErr }
 func (f *fakeEnv) Leftovers() (int, int, error)         { return f.leftovers, f.kept, f.leftErr }
+func (f *fakeEnv) ClaudeAllow() []string                { return f.allow }
+func (f *fakeEnv) TrainGit(args ...string) (string, error) {
+	f.trainRuns = append(f.trainRuns, strings.Join(args, " "))
+	return lookup(f.trainGit, args)
+}
 
 func find(t *testing.T, rs []Result, name string) Result {
 	t.Helper()
@@ -126,7 +138,7 @@ func TestHealthyRepoAllOK(t *testing.T) {
 		t.Fatal("Failed on a healthy repo")
 	}
 	want := []string{CheckConfig, CheckRemote, CheckDefaultBranch, CheckGH, CheckMergeSettings, CheckProtection, CheckGhStack,
-		CheckTestCmd, CheckTmux, CheckClaude, CheckHooks, CheckGate, CheckIgnored, CheckStateDB, CheckLeftovers}
+		CheckTestCmd, CheckTmux, CheckClaude, CheckHooks, CheckPush, CheckOrchAllow, CheckGate, CheckIgnored, CheckStateDB, CheckLeftovers}
 	if len(rs) != len(want) {
 		t.Fatalf("got %d checks, want %d", len(rs), len(want))
 	}
@@ -152,6 +164,11 @@ func TestChecks(t *testing.T) {
 		want   Status
 		fix    string // substring of the fix message
 	}{
+		{"saddle can't push", CheckPush, func(f *fakeEnv) {
+			f.trainGit["push --dry-run origin HEAD:refs/heads/saddle/doctor-push-check"] = res{out: "Permission denied (publickey).", err: errors.New("exit status 128")}
+		}, Warn, "gh auth setup-git"},
+		{"no orchestrator allowlist", CheckOrchAllow, func(f *fakeEnv) { f.allow = []string{"Read"} }, Warn, `"Bash(saddle:*)", "mcp__saddle"`},
+
 		{"config error", CheckConfig, func(f *fakeEnv) { f.cfgErr = errors.New("train.output \"x\"") }, Fail, "config.toml"},
 
 		{"no remote", CheckRemote, func(f *fakeEnv) { f.git["remote"] = res{out: ""} }, Fail, "git remote add origin"},
@@ -455,5 +472,22 @@ func TestGhStackCheck(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// #220: the push check is a dry run as the train, so it leaves nothing on the
+// remote and the ref guard lets it through.
+func TestPushCheckOnlyDryRuns(t *testing.T) {
+	f := healthy(t)
+	if r := find(t, Run(f), CheckPush); r.Status != OK {
+		t.Fatalf("push check = %+v", r)
+	}
+	for _, c := range f.trainRuns {
+		if !strings.Contains(c, "--dry-run") {
+			t.Fatalf("doctor really pushed: %s", c)
+		}
+	}
+	if len(f.trainRuns) != 1 {
+		t.Fatalf("train git calls = %v", f.trainRuns)
 	}
 }
