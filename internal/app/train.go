@@ -679,8 +679,12 @@ type landedTask struct {
 }
 
 // stacked reports whether the task is part of the PR stack: it landed, and
-// nothing (a merge, a close, a kill, unstack) has taken it out since.
-func (l landedTask) stacked() bool { return l.State == store.TrainOK && l.Status != store.Killed }
+// nothing (a merge, a close, a kill of a published task, unstack) has taken
+// it out since. A killed task with no PR stays: its work is only on
+// integration, and dropping it there loses it (#219).
+func (l landedTask) stacked() bool {
+	return l.State == store.TrainOK && (l.Status != store.Killed || l.PR == "")
+}
 
 // rangeNote is the train note for l's landed range.
 func (l landedTask) rangeNote() string {

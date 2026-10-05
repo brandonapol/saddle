@@ -6,6 +6,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
@@ -31,6 +32,9 @@ type RestackResult struct {
 	// agent of theirs is alive: they left the stack for a repair task (#172).
 	Repairing []string `json:"repairing,omitempty"`
 	Repairs   []string `json:"repairs,omitempty"` // the repair tasks spawned
+	// Backup is the ref holding integration's tip from before the restack
+	// rewrote it; "" when integration only fast-forwarded or didn't move.
+	Backup string `json:"backup,omitempty"`
 }
 
 // restacked is a landed task's place in the rebuilt stack: NewFrom..NewTo.
@@ -158,6 +162,7 @@ func (a *App) restack() (RestackResult, error) {
 	}
 	res.Superseded = a.leaving(all, integ, inBase)
 
+	full := stack
 	plan, dropped, err := a.replay(stack, res.Base, inBase)
 	// A conflict in a task with no live agent goes to a repair task instead:
 	// that task leaves the replay and the rest of the stack moves on (#172).
@@ -192,6 +197,12 @@ func (a *App) restack() (RestackResult, error) {
 		}
 		res.Repairing = append(res.Repairing, o.l.ID)
 	}
+	// Every task still in the stack must be on the rebuilt tip before any
+	// ref moves: restack never drops landed work silently (#219).
+	if err := a.verifyKept(full, plan, res.Repairing, mb); err != nil {
+		_ = a.Notify(OrchestratorID, store.NoticeAction, err.Error())
+		return res, err
+	}
 
 	if err := a.moveStack(plan, integ, res.Base, &res); err != nil {
 		return res, err
@@ -207,6 +218,9 @@ func (a *App) restack() (RestackResult, error) {
 	}
 	if len(res.Superseded) > 0 {
 		msg += " Out of the stack, so their commits left " + a.Cfg.Integration + ": " + strings.Join(res.Superseded, ", ") + "."
+	}
+	if res.Backup != "" {
+		msg += " The old " + a.Cfg.Integration + " is kept at " + res.Backup + "."
 	}
 	if len(res.Repairing) > 0 {
 		msg += " Conflicting with no agent to resolve it, so out of the stack until a repair task re-lands their work: " + strings.Join(res.Repairing, ", ") + "."
@@ -320,6 +334,16 @@ func (a *App) replay(stack []landedTask, base string, inBase map[string]bool) ([
 			plan = append(plan, r)
 			continue
 		}
+		if from == tip && !a.anyInBase(from, l.To, inBase) {
+			// Already on the right parent: keep the commits as they are, so
+			// a restack with nothing to do moves nothing (#205).
+			if _, err := gitx.Run(dir, "checkout", "-q", "--detach", l.To); err != nil {
+				return nil, 0, err
+			}
+			r.NewFrom, r.NewTo, tip = from, l.To, l.To
+			plan = append(plan, r)
+			continue
+		}
 		commits, err := gitx.Run(a.Root, "rev-list", "--reverse", "--no-merges", from+".."+l.To)
 		if err != nil {
 			return nil, 0, err
@@ -346,6 +370,15 @@ func (a *App) replay(stack []landedTask, base string, inBase map[string]bool) ([
 	return plan, dropped, nil
 }
 
+// anyInBase reports whether a commit in from..to has a change base already has.
+func (a *App) anyInBase(from, to string, inBase map[string]bool) bool {
+	ids, err := patchIDs(a.Root, from+".."+to)
+	if err != nil {
+		return true
+	}
+	return slices.ContainsFunc(ids, func(id string) bool { return inBase[id] })
+}
+
 // alreadyApplied reports whether every file the task changed already has the
 // task's content at tip. That is how a squash merge shows up: one new commit
 // on base whose patch-id matches none of the task's.
@@ -368,13 +401,23 @@ func (a *App) pick(dir, task, c string) (empty bool, err error) {
 	}
 	conf, _ := gitx.Run(dir, "diff", "--name-only", "--diff-filter=U")
 	if conf == "" {
-		if _, e := gitx.RevParse(dir, "CHERRY_PICK_HEAD"); e == nil {
+		// Only a pick that left nothing to commit is empty. One that stopped
+		// with changes staged (rerere replaying a resolution, say) is a
+		// conflict nobody approved; skipping it would drop the commit (#219).
+		_, staged := gitx.Run(dir, "diff", "--cached", "--quiet", "HEAD")
+		_, unstaged := gitx.Run(dir, "diff", "--quiet")
+		if _, e := gitx.RevParse(dir, "CHERRY_PICK_HEAD"); e == nil && staged == nil && unstaged == nil {
 			_, err := trainGit(dir, "cherry-pick", "--skip")
 			return true, err
 		}
-		return false, err
+		conf, _ = gitx.Run(dir, "diff", "--name-only", "HEAD")
+		_, _ = trainGit(dir, "cherry-pick", "--abort")
+		if conf == "" {
+			return false, err
+		}
+	} else {
+		_, _ = trainGit(dir, "cherry-pick", "--abort")
 	}
-	_, _ = trainGit(dir, "cherry-pick", "--abort")
 	return false, &RestackConflict{Task: task, Commit: c, Files: strings.Split(conf, "\n")}
 }
 
@@ -441,10 +484,105 @@ func (a *App) moveStack(plan []restacked, integ, base string, res *RestackResult
 	if len(plan) > 0 {
 		tip = plan[len(plan)-1].NewTo
 	}
-	if tip != integ {
-		return move("", "refs/heads/"+a.Cfg.Integration, integ, tip)
+	if tip == integ {
+		return nil
 	}
-	return nil
+	if _, err := gitx.Run(a.Root, "merge-base", "--is-ancestor", integ, tip); err != nil {
+		// A rewrite, not a fast-forward: keep the old tip so recovery is
+		// one update-ref (#219).
+		backup := fmt.Sprintf("refs/saddle/integration-backups/%s-%s", time.Now().UTC().Format("20060102T150405Z"), short(integ))
+		if _, err := trainGit(a.Root, "update-ref", backup, integ, ""); err != nil {
+			return fmt.Errorf("saving %s's old tip before restack: %w", a.Cfg.Integration, err)
+		}
+		res.Backup = backup
+		a.Store.Event("", "restack_backup", backup+" "+short(integ))
+	}
+	return move("", "refs/heads/"+a.Cfg.Integration, integ, tip)
+}
+
+// verifyKept checks the rebuilt stack against the landed one before any ref
+// moves: every commit of every task that was in the stack, except those
+// leaving for a repair, must be on its task's rebuilt tip, by patch-id or,
+// when replaying changed the diff's context or a squash merge folded it into
+// one commit, because applying the commit, or the task's whole range, there
+// changes nothing. A task missing from the plan fails it outright.
+func (a *App) verifyKept(stack []landedTask, plan []restacked, repairing []string, mb string) error {
+	byID := map[string]restacked{}
+	tip := mb
+	for _, r := range plan {
+		byID[r.ID] = r
+		tip = r.NewTo
+	}
+	have, err := commitPatchIDs(a.Root, mb+".."+tip)
+	if err != nil {
+		return err
+	}
+	onTip := map[string]bool{}
+	for _, id := range have {
+		onTip[id] = true
+	}
+	var lost []string
+	for _, l := range stack {
+		if slices.Contains(repairing, l.ID) {
+			continue
+		}
+		r, ok := byID[l.ID]
+		if !ok {
+			lost = append(lost, l.ID+" (left out of the rebuilt stack)")
+			continue
+		}
+		if l.From == "" {
+			continue // an old note without a range; replay worked it out
+		}
+		ids, err := commitPatchIDs(a.Root, l.From+".."+l.To)
+		if err != nil {
+			return err
+		}
+		for c, id := range ids {
+			if !onTip[id] && !a.hasChange(r.NewTo, c+"^", c) && !a.hasChange(r.NewTo, l.From, l.To) {
+				lost = append(lost, fmt.Sprintf("%s (commit %s)", l.ID, short(c)))
+				break
+			}
+		}
+	}
+	if len(lost) == 0 {
+		return nil
+	}
+	slices.Sort(lost)
+	return fmt.Errorf("restack refused: the rebuilt %s would lose landed work of %s. Nothing was moved. "+
+		"If that work is really gone from the stack, run `saddle unstack <task>` for it and restack again",
+		a.Cfg.Integration, strings.Join(lost, ", "))
+}
+
+// commitPatchIDs maps each non-merge, non-empty commit in rng to its patch-id.
+func commitPatchIDs(dir, rng string) (map[string]string, error) {
+	log, err := gitx.Run(dir, "log", "-p", "--no-merges", "--no-color", "--no-ext-diff", rng)
+	if err != nil {
+		return nil, err
+	}
+	out, err := gitx.PatchID(dir, log)
+	if err != nil {
+		return nil, err
+	}
+	ids := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		if id, c, ok := strings.Cut(line, " "); ok {
+			ids[c] = id
+		}
+	}
+	return ids, nil
+}
+
+// hasChange reports whether applying from..to on top of tip changes nothing:
+// tip already has that change, as one commit or squashed with others.
+func (a *App) hasChange(tip, from, to string) bool {
+	tree, err := gitx.Run(a.Root, "merge-tree", "--write-tree", "--no-messages", "--merge-base="+from, tip, to)
+	if err != nil {
+		return false
+	}
+	first, _, _ := strings.Cut(tree, "\n")
+	want, err := gitx.Run(a.Root, "rev-parse", tip+"^{tree}")
+	return err == nil && first == want
 }
 
 // checkedOut reports whether t's worktree still exists with its branch checked out.
