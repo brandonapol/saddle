@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -46,6 +47,36 @@ func (s system) Exec(name string, args ...string) (string, error) {
 	cmd.Dir = string(s)
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
+}
+
+func (s system) TrainGit(args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", string(s)}, args...)...)
+	cmd.Env = append(os.Environ(), "SADDLE_TRAIN=1")
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+func (s system) ClaudeAllow() []string {
+	paths := []string{filepath.Join(string(s), ".claude", "settings.json"), filepath.Join(string(s), ".claude", "settings.local.json")}
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".claude", "settings.json"))
+	}
+	var out []string
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var st struct {
+			Permissions struct {
+				Allow []string `json:"allow"`
+			} `json:"permissions"`
+		}
+		if json.Unmarshal(b, &st) == nil {
+			out = append(out, st.Permissions.Allow...)
+		}
+	}
+	return out
 }
 
 func (s system) Exists(path string) bool {

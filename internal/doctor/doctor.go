@@ -44,6 +44,8 @@ const (
 	CheckTmux          = "tmux"
 	CheckClaude        = "claude"
 	CheckHooks         = "ref guard hooks"
+	CheckPush          = "saddle can push"
+	CheckOrchAllow     = "orchestrator allowlist"
 	CheckGate          = "lint gate"
 	CheckIgnored       = ".saddle ignored"
 	CheckStateDB       = "state.db"
@@ -73,6 +75,12 @@ type Env interface {
 	Hooks() ([]refguard.HookState, error)
 	// OpenStore opens, migrates and closes the state database at path.
 	OpenStore(path string) error
+	// TrainGit runs git in Root as the merge train (SADDLE_TRAIN=1), the
+	// way saddle itself pushes, and returns trimmed combined output.
+	TrainGit(args ...string) (string, error)
+	// ClaudeAllow is every permission allow rule in the Claude settings a
+	// session in Root reads: the user's, the repo's and the repo's local ones.
+	ClaudeAllow() []string
 	// Leftovers counts the worktrees, branches and refs saddle gc would
 	// remove, and those it would keep because they hold unmerged work.
 	Leftovers() (remove, kept int, err error)
@@ -104,7 +112,7 @@ func Run(env Env) []Result {
 		r.config(), r.gitRemote(), r.defaultBranch(), r.ghAuth(), r.mergeSettings(), r.protection(), r.ghStack(),
 		r.testCmd(), r.tool(CheckTmux, "tmux", "-V", "install tmux (e.g. `brew install tmux` or your package manager)"),
 		r.tool(CheckClaude, r.cfg.Claude.Cmd, "--version", "install Claude Code (https://claude.com/claude-code) or set [claude] cmd in .saddle/config.toml"),
-		r.hooks(), r.gate(), r.ignored(), r.stateDB(), r.leftovers(),
+		r.hooks(), r.push(), r.orchAllow(), r.gate(), r.ignored(), r.stateDB(), r.leftovers(),
 	}
 }
 
@@ -400,6 +408,61 @@ func (r *run) hooks() Result {
 		names = append(names, name)
 	}
 	return ok(CheckHooks, strings.Join(names, ", "))
+}
+
+// pushScratch is the ref the push check pretends to create. --dry-run never
+// creates it, so nothing is left behind.
+const pushScratch = "refs/heads/saddle/doctor-push-check"
+
+// push checks that the saddle process can push to the remote, as prs,
+// restack and publish do (#220): a dry-run push of a scratch ref, run as the
+// train so the ref guard's pre-push hook allows it.
+func (r *run) push() Result {
+	if r.remote == "" {
+		return warn(CheckPush, "no remote to push to", "git remote add origin <github-url>")
+	}
+	out, err := r.env.TrainGit("push", "--dry-run", r.remote, "HEAD:"+pushScratch)
+	if err != nil {
+		return warn(CheckPush, "a dry-run push to "+r.remote+" failed: "+firstLine(out),
+			"make `git push "+r.remote+"` work from this shell (gh auth setup-git, or an SSH key GitHub accepts); saddle prs, restack and publish push from here")
+	}
+	return ok(CheckPush, "dry-run push to "+r.remote+" works; saddle publish can push")
+}
+
+// orchAllowRules are what the orchestrator needs pre-approved so the
+// auto-mode classifier doesn't block it. saddle up's orchestrator gets them
+// from agent.OrchestratorAllow; a Claude session used as the orchestrator
+// (the saddle plugin) needs them in its settings.
+var orchAllowRules = []string{"Bash(saddle:*)", "mcp__saddle"}
+
+// orchAllow checks that a Claude session in the repo has the orchestrator's
+// allowlist (#220), and that it doesn't hand the model git push.
+func (r *run) orchAllow() Result {
+	have := map[string]bool{}
+	for _, a := range r.env.ClaudeAllow() {
+		have[a] = true
+	}
+	var missing []string
+	for _, rule := range orchAllowRules {
+		if !have[rule] {
+			missing = append(missing, rule)
+		}
+	}
+	if len(missing) > 0 {
+		q := make([]string, len(missing))
+		for i, m := range missing {
+			q[i] = fmt.Sprintf("%q", m)
+		}
+		return warn(CheckOrchAllow, "your Claude settings don't allow "+strings.Join(missing, ", ")+
+			", so an orchestrator in your own Claude session (the saddle plugin) can be blocked by the auto-mode classifier; saddle up's orchestrator has them",
+			`add them to .claude/settings.local.json: {"permissions": {"allow": [`+strings.Join(q, ", ")+`]}}; push through saddle publish, not git push`)
+	}
+	return ok(CheckOrchAllow, strings.Join(orchAllowRules, ", ")+" allowed; git push goes through saddle publish")
+}
+
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return line
 }
 
 // gate reports the repo's own pre-commit/lint gate (#212): what it runs,
