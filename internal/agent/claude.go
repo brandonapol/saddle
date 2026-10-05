@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -56,10 +57,24 @@ func OrchestratorDeny() []string {
 }
 
 // OrchestratorAllow lets the chat agent read the repo and GitHub, never edit.
+// The rules pre-approve what the orchestrator is meant to run, so neither a
+// permission prompt nor the auto-mode classifier blocks it (#220): saddle
+// itself (writeFiles adds the absolute binary too), gh pr and gh issue, git
+// fetch and read-only git. git push is not here and OrchestratorDeny removes
+// it: when prs is blocked, saddle publish pushes, as the saddle process.
 func OrchestratorAllow() []string {
-	return []string{"mcp__saddle", "Read", "Glob", "Grep",
-		"Bash(gh issue:*)", "Bash(gh pr:*)", "Bash(git log:*)", "Bash(git status:*)", "Bash(git diff:*)"}
+	return []string{"mcp__saddle", "Read", "Glob", "Grep", saddleAllow,
+		"Bash(gh issue:*)", "Bash(gh pr:*)", "Bash(gh pr create:*)", "Bash(gh pr edit:*)", "Bash(gh pr view:*)",
+		"Bash(gh pr list:*)", "Bash(gh pr merge:*)", "Bash(gh pr checks:*)", "Bash(gh pr diff:*)",
+		"Bash(git fetch:*)", "Bash(git log:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git show:*)",
+		"Bash(git rev-parse:*)", "Bash(git rev-list:*)", "Bash(git merge-base:*)", "Bash(git ls-files:*)",
+		"Bash(git ls-remote:*)", "Bash(git cherry:*)", "Bash(git blame:*)", "Bash(git grep:*)",
+		"Bash(git branch --list:*)", "Bash(git worktree list:*)", "Bash(git remote -v:*)"}
 }
+
+// saddleAllow pre-approves the saddle CLI by name; writeFiles adds the
+// binary's absolute path beside it.
+const saddleAllow = "Bash(saddle:*)"
 
 func (l Launch) env() map[string]string {
 	env := map[string]string{"SADDLE_ROOT": l.Root, "SADDLE_TASK": l.Task}
@@ -80,6 +95,8 @@ func (l Launch) writeFiles() error {
 	allow := l.Allow
 	if allow == nil {
 		allow = WorkerAllow(l.Bin)
+	} else if slices.Contains(allow, saddleAllow) && l.Bin != "" {
+		allow = append(slices.Clone(allow), "Bash("+l.Bin+":*)")
 	}
 	settings := map[string]any{
 		"hooks": map[string]any{
