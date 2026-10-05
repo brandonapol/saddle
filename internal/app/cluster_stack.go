@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -68,8 +69,16 @@ func (a *App) prLayout(stack []landedTask) ([]prLayer, error) {
 			return linear(), nil // nothing reliable to replay
 		}
 	}
+	files := make([][]string, n)
+	for i, l := range stack {
+		f, err := gitx.ChangedFiles(a.Root, l.From, l.To)
+		if err != nil {
+			return linear(), nil //nolint:nilerr // can't tell what it changed: publish the safe layout
+		}
+		files[i] = f
+	}
 	if a.Cfg.Train.Output != "per-task" {
-		if err := a.clusterLayers(stack, union); err != nil {
+		if err := a.clusterLayers(stack, files, union); err != nil {
 			return linear(), nil //nolint:nilerr // bad planner input: publish the safe layout
 		}
 	}
@@ -121,26 +130,62 @@ func (a *App) prLayout(stack []landedTask) ([]prLayer, error) {
 		if conflict < 0 {
 			return out, nil
 		}
-		// Its work needs what landed just before it: stack it there.
-		union(conflict, conflict-1)
+		j, ok := needs(conflict, files, find)
+		if !ok {
+			return linear(), nil
+		}
+		union(conflict, j)
 	}
 }
 
+// needs picks the earlier layer, outside i's group, that layer i's work most
+// likely needs: the latest one that changed a file i changes, else the latest
+// one (#226). ok is false when every earlier layer is already in i's group.
+func needs(i int, files [][]string, find func(int) int) (j int, ok bool) {
+	mine := make(map[string]bool, len(files[i]))
+	for _, f := range files[i] {
+		mine[f] = true
+	}
+	fallback := -1
+	for j := i - 1; j >= 0; j-- {
+		if find(j) == find(i) {
+			continue
+		}
+		if slices.ContainsFunc(files[j], func(f string) bool { return mine[f] }) {
+			return j, true
+		}
+		if fallback < 0 {
+			fallback = j
+		}
+	}
+	return fallback, fallback >= 0
+}
+
+// hubTasks is how many stacked tasks must change a file before it counts as
+// shared infrastructure (docs, registries, central config) rather than a
+// topic. Overlap on a hub doesn't link tasks; if their edits to it really
+// conflict, replay stacks them anyway (#226).
+const hubTasks = 3
+
 // clusterLayers joins the layers planner.Cluster puts in one stack: tasks
 // that changed the same files (serial files aside), a task and the stacked
-// task that spawned it, and tasks for the same issue.
-func (a *App) clusterLayers(stack []landedTask, union func(i, j int)) error {
+// task that spawned it, and tasks for the same issue. files holds what each
+// layer changed; hub files don't count as overlap.
+func (a *App) clusterLayers(stack []landedTask, files [][]string, union func(i, j int)) error {
 	idx := make(map[string]int, len(stack))
 	for i, l := range stack {
 		idx[l.ID] = i
 	}
+	touched := map[string]int{}
+	for _, fs := range files {
+		for _, f := range fs {
+			touched[f]++
+		}
+	}
 	tasks := make([]planner.Task, len(stack))
 	for i, l := range stack {
-		files, err := gitx.ChangedFiles(a.Root, l.From, l.To)
-		if err != nil {
-			return err
-		}
-		pt := planner.Task{ID: l.ID, Title: l.Title, Claims: files}
+		own := slices.DeleteFunc(slices.Clone(files[i]), func(f string) bool { return touched[f] >= hubTasks })
+		pt := planner.Task{ID: l.ID, Title: l.Title, Claims: own}
 		if j, ok := idx[l.Parent]; ok && j < i {
 			pt.After = []string{l.Parent}
 		}

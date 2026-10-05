@@ -109,7 +109,11 @@ of Opus tokens spent on merges, and the goal is to keep it at zero.
 
 **Output is stacked PRs by default.** Tasks that depend on each other, or that
 the planner clusters as the same topic, form a stack (DAG order, barriers at
-the bottom). Unrelated work gets separate stacks. Saddle restacks a stack when
+the bottom). Unrelated work gets separate stacks. A file that three or more
+stacked tasks change (docs, registries, central config) is a hub and doesn't
+link them on its own. A task whose commits don't replay without other work
+stacks on the latest earlier task that changed the same files, not on
+whatever landed just before it (#226). Saddle restacks a stack when
 a lower layer changes and retargets it when a lower layer merges.
 
 ### Stack upkeep when people use GitHub (#119, #123)

@@ -444,6 +444,14 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 			return linear() // nothing reliable to replay
 		}
 	}
+	files := make([][]string, n)
+	for i, l := range stack {
+		f, err := gitx.ChangedFiles(a.Root, l.From, l.To)
+		if err != nil {
+			return linear() //nolint:nilerr // can't tell what it changed: publish the safe layout
+		}
+		files[i] = f
+	}
 	parent := make([]int, n)
 	for i := range parent {
 		parent[i] = i
@@ -470,15 +478,17 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 	}
 	if a.Cfg.Train.Output != "per-task" {
 		var rest []landedTask
+		var restFiles [][]string
 		var at []int
 		for i, l := range stack {
 			if _, ok := inCustom[i]; !ok {
 				rest = append(rest, l)
+				restFiles = append(restFiles, files[i])
 				at = append(at, i)
 			}
 		}
 		if len(rest) >= 2 {
-			if err := a.clusterLayers(rest, func(i, j int) { union(at[i], at[j]) }); err != nil {
+			if err := a.clusterLayers(rest, restFiles, func(i, j int) { union(at[i], at[j]) }); err != nil {
 				return linear() //nolint:nilerr // bad planner input: publish the safe layout
 			}
 		}
@@ -555,11 +565,11 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 				"its commits don't apply in the stack's order, so the stack is published in train order")
 			continue
 		}
-		// Its work needs what landed just before it: stack it there.
-		if conflict == 0 || find(conflict) == find(conflict-1) {
+		j, ok := needs(conflict, files, find)
+		if !ok {
 			return linear()
 		}
-		union(conflict, conflict-1)
+		union(conflict, j)
 	}
 }
 

@@ -1,7 +1,9 @@
 package app
 
 import (
+	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -200,5 +202,59 @@ func TestRestackKeepsClusteredLayout(t *testing.T) {
 	}
 	if got := remoteRev(t, origin, t1.Branch); got != git(t, a.Root, "rev-parse", t1.Branch) {
 		t.Fatalf("t1 remote %s isn't its restacked landed commit", got)
+	}
+}
+
+// #226: a file most tasks touch is shared infrastructure, not a topic.
+// Overlap on it doesn't chain otherwise unrelated tasks into one stack when
+// their edits to it replay cleanly on their own.
+func TestPRsHubFileDoesNotChainUnrelatedTasks(t *testing.T) {
+	a := trainSetup(t)
+	lines := make([]string, 30)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i)
+	}
+	hub := func(at int, s string) string {
+		l := slices.Clone(lines)
+		l[at] = s
+		return strings.Join(l, "\n") + "\n"
+	}
+	write(t, a.Root, "ARCHITECTURE.md", hub(0, lines[0]))
+	commitAll(t, a.Root, "architecture")
+	_, ghLog := originWithGh(t, a)
+	t1 := landTask(t, a, "t1", "client: connection tests", map[string]string{"client_test.go": "c\n", "ARCHITECTURE.md": hub(2, "client")})
+	t2 := landTask(t, a, "t2", "memory: definitions", map[string]string{"memory.go": "m\n", "ARCHITECTURE.md": hub(15, "memory")})
+	t3 := landTask(t, a, "t3", "cli: flags", map[string]string{"flags.go": "f\n", "ARCHITECTURE.md": hub(28, "cli")})
+	if _, err := a.PRs(); err != nil {
+		t.Fatal(err)
+	}
+	bases := prBases(ghLog())
+	for _, tk := range []store.Task{t1, t2, t3} {
+		if bases[tk.Branch] != "main" {
+			t.Fatalf("PR bases = %v, want every task on main", bases)
+		}
+	}
+}
+
+// #226: a layer that doesn't replay on its own stacks on the earlier layer
+// that changed the same files, not on whatever landed just before it.
+func TestPRsReplayConflictStacksOnLayerItNeeds(t *testing.T) {
+	a := trainSetup(t)
+	a.Cfg.Serial = []string{"go.sum"}
+	write(t, a.Root, "go.sum", "a\n")
+	commitAll(t, a.Root, "go.sum")
+	_, ghLog := originWithGh(t, a)
+	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n", "go.sum": "a\nb\n"})
+	t2 := landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})
+	t3 := landTask(t, a, "t3", "three", map[string]string{"three.txt": "three\n", "go.sum": "a\nb\nc\n"})
+	if _, err := a.PRs(); err != nil {
+		t.Fatal(err)
+	}
+	bases := prBases(ghLog())
+	want := map[string]string{t1.Branch: "main", t2.Branch: "main", t3.Branch: t1.Branch}
+	for br, b := range want {
+		if bases[br] != b {
+			t.Fatalf("PR bases = %v, want %v", bases, want)
+		}
 	}
 }
