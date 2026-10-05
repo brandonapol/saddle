@@ -4,6 +4,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/store"
 )
 
 // t1 lands in two commits and is squash-merged into origin/main; restack must
@@ -215,5 +218,129 @@ func TestRestackRefusesUnownedIntegrationCommit(t *testing.T) {
 	}
 	if got := git(t, a.Root, "rev-parse", a.Cfg.Integration); got != before {
 		t.Fatal("integration moved despite the stray commit")
+	}
+}
+
+// #219: killing a landed task that has no PR only closes its agent. Its work
+// is on integration alone, so restack keeps it, and a later task that needs
+// it still finds it there.
+func TestRestackKeepsKilledUnpublishedTask(t *testing.T) {
+	a := trainSetup(t)
+	origin, _ := originWithGh(t, a)
+	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+	landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})
+	must(t, a.Kill("t1", false))
+	moveMain(t, origin, "news.txt")
+
+	res, err := a.Restack()
+	must(t, err)
+	if len(res.Superseded) != 0 || len(res.Merged) != 0 {
+		t.Fatalf("restack superseded %v, merged %v; want neither", res.Superseded, res.Merged)
+	}
+	if got := trainState(t, a, "t1"); got != store.TrainOK {
+		t.Fatalf("t1's train row = %q, want still in the stack", got)
+	}
+	for _, f := range []string{"one.txt", "two.txt", "news.txt"} {
+		if n := git(t, a.Root, "rev-list", "--count", a.Cfg.Integration, "--", f); n == "0" {
+			t.Errorf("integration lost %s", f)
+		}
+	}
+	if res.Backup == "" || git(t, a.Root, "rev-parse", res.Backup) == git(t, a.Root, "rev-parse", a.Cfg.Integration) {
+		t.Fatalf("no backup of the rewritten integration: %q", res.Backup)
+	}
+}
+
+// #219: with rerere replaying an old resolution, cherry-pick stops with the
+// conflict already resolved and staged. Restack used to read that as an
+// empty commit, skip it, and mark the task merged; it must stop on it as a
+// conflict, which with t1's agent gone means a repair task.
+func TestRestackDoesNotSkipRerereResolvedPick(t *testing.T) {
+	a := trainSetup(t)
+	origin, _ := originWithGh(t, a)
+	git(t, a.Root, "config", "rerere.enabled", "true")
+	git(t, a.Root, "config", "rerere.autoupdate", "true")
+	t1 := landTask(t, a, "t1", "one", map[string]string{"shared.txt": "one\n"})
+	moveMain(t, origin, "shared.txt")
+	git(t, a.Root, "fetch", "-q", "origin")
+
+	// Someone resolved this very conflict once, so rerere remembers it.
+	wt := filepath.Join(t.TempDir(), "scratch")
+	git(t, a.Root, "worktree", "add", "-q", "--detach", wt, "origin/main")
+	if _, err := gitx.Run(wt, "cherry-pick", t1.Branch); err == nil {
+		t.Fatal("the pick didn't conflict")
+	}
+	write(t, wt, "shared.txt", "main\none\n")
+	git(t, wt, "add", "shared.txt")
+	git(t, wt, "-c", "core.editor=true", "cherry-pick", "--continue")
+	git(t, a.Root, "worktree", "remove", "--force", wt)
+
+	// t1's agent is gone, so the conflict goes to a repair task (#172).
+	res, err := a.Restack()
+	must(t, err)
+	if len(res.Merged) != 0 || strings.Join(res.Repairing, ",") != "t1" {
+		t.Fatalf("restack merged %v, repairing %v; want t1 sent to a repair", res.Merged, res.Repairing)
+	}
+	if got := trainState(t, a, "t1"); got != TrainRepairing {
+		t.Fatalf("t1's train row = %q, want repairing", got)
+	}
+}
+
+// #219: the integrity check refuses a rebuilt stack that lost a task or one
+// of its commits, whatever replay did.
+func TestVerifyKeptRefusesLostWork(t *testing.T) {
+	a := trainSetup(t)
+	originWithGh(t, a)
+	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+	landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})
+	stack := mustStack(t, a)
+	base := git(t, a.Root, "rev-parse", "origin/main")
+	keep := []restacked{
+		{landedTask: stack[0], NewFrom: stack[0].From, NewTo: stack[0].To},
+		{landedTask: stack[1], NewFrom: stack[1].From, NewTo: stack[1].To},
+	}
+	must(t, a.verifyKept(stack, keep, nil, base))
+
+	if err := a.verifyKept(stack, keep[:1], nil, base); err == nil || !strings.Contains(err.Error(), "t2") {
+		t.Fatalf("t2 left out: err = %v", err)
+	}
+	if err := a.verifyKept(stack, keep[:1], []string{"t2"}, base); err != nil {
+		t.Fatalf("t2 leaving for a repair: %v", err)
+	}
+	// t2 "replayed" to an empty range on t1: its commit is gone.
+	gone := []restacked{keep[0], {landedTask: stack[1], NewFrom: stack[0].To, NewTo: stack[0].To}}
+	if err := a.verifyKept(stack, gone, nil, base); err == nil || !strings.Contains(err.Error(), "t2 (commit") {
+		t.Fatalf("t2's commit dropped: err = %v", err)
+	}
+}
+
+// #205: restack with nothing to do moves no ref, and a second restack after
+// a real one moves nothing either.
+func TestRestackMovesNothingWhenNothingMoved(t *testing.T) {
+	a := trainSetup(t)
+	origin, _ := originWithGh(t, a)
+	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+	landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})
+	_, err := a.PRs()
+	must(t, err)
+	before := git(t, a.Root, "rev-parse", a.Cfg.Integration)
+	res, err := a.Restack()
+	must(t, err)
+	if len(res.Moves) != 0 || res.Backup != "" {
+		t.Fatalf("restack with main unchanged moved %+v", res.Moves)
+	}
+	if got := git(t, a.Root, "rev-parse", a.Cfg.Integration); got != before {
+		t.Fatal("integration rewritten with nothing to do")
+	}
+
+	moveMain(t, origin, "news.txt")
+	res, err = a.Restack()
+	must(t, err)
+	if len(res.Moves) == 0 {
+		t.Fatal("restack after main moved moved nothing")
+	}
+	res, err = a.Restack()
+	must(t, err)
+	if len(res.Moves) != 0 {
+		t.Fatalf("second restack moved %+v", res.Moves)
 	}
 }

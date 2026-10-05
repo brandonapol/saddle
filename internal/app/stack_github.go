@@ -59,7 +59,7 @@ var prView = func(dir, url string) (PRInfo, error) {
 func (a *App) ghLookup(url string) (PRInfo, error) { return prView(a.Root, url) }
 
 // ReconcileStack takes the landed tasks that are done with out of the PR
-// stack, for good: killed tasks, closed PRs, and PRs merged into base (by
+// stack, for good: killed tasks with a PR, closed PRs, and PRs merged into base (by
 // merge, squash or rebase; GitHub's word is enough). A PR merged into another
 // branch of the stack instead of base, whose work base doesn't have, is
 // detached from its task so the next prs re-lands it as a fresh PR; the
@@ -77,7 +77,9 @@ func (a *App) ReconcileStack(lookup PRLookup) (map[string]PRInfo, error) {
 		if l.State != store.TrainOK {
 			continue
 		}
-		if l.Status == store.Killed {
+		// Killing a landed task with no PR only closes its agent: its work
+		// is on integration alone, so it stays in the stack (#219).
+		if l.Status == store.Killed && l.PR != "" {
 			errs = append(errs, a.leaveStack(l, TrainSuperseded, "the task was killed"))
 			continue
 		}
