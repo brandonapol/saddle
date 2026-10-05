@@ -134,7 +134,7 @@ func TestPluginHookOnlyActsWhileEngineRuns(t *testing.T) {
 
 func TestWaitNoticesReturnsOnActionWithHeldInfo(t *testing.T) {
 	a := pluginRepo(t)
-	_ = a.Notify(app.OrchestratorID, store.NoticeInfo, "t1 landed")
+	_ = a.Store.Notify(app.OrchestratorID, store.NoticeInfo, "t1 landed") // the queue as delivered; the policy would digest it (#222)
 	go func() {
 		time.Sleep(30 * time.Millisecond)
 		_ = a.Notify(app.OrchestratorID, store.NoticeAction, "t2 conflicted")
@@ -158,7 +158,7 @@ func TestWaitNoticesReturnsOnActionWithHeldInfo(t *testing.T) {
 
 func TestWaitNoticesTimesOutCleanly(t *testing.T) {
 	a := pluginRepo(t)
-	_ = a.Notify(app.OrchestratorID, store.NoticeInfo, "t1 spawned")
+	_ = a.Store.Notify(app.OrchestratorID, store.NoticeInfo, "t1 spawned")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	var out bytes.Buffer

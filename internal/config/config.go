@@ -69,6 +69,10 @@ type Notices struct {
 	// WakeAfter is how long an idle agent may sit with undelivered action
 	// notices before saddle wakes it even over what looks like a draft (#183).
 	WakeAfter time.Duration `toml:"wake_after"`
+	// DigestEvery is how often routine orchestrator notices (landed, merged,
+	// restacked, CI green) are rolled into one digest line instead of one
+	// message each (#222).
+	DigestEvery time.Duration `toml:"digest_every"`
 }
 
 // Orchestrator configures the orchestrator session.
@@ -279,7 +283,7 @@ func Default() Config {
 		CI:           CI{Interval: 10 * time.Minute, RedInterval: 2 * time.Minute, RedMaxInterval: 16 * time.Minute, RepairAttempts: 2},
 		Spawn:        Spawn{MaxDepth: 3, MaxChildren: 8},
 		Orchestrator: Orchestrator{CompactAt: 0.7},
-		Notices:      Notices{WakeAfter: 3 * time.Minute},
+		Notices:      Notices{WakeAfter: 3 * time.Minute, DigestEvery: 15 * time.Minute},
 		Train:        Train{MaxAttempts: 2, Output: "stack", StackBackend: StackBackendSaddle},
 		Usage: Usage{
 			Poll: 15 * time.Second,
@@ -377,6 +381,9 @@ func Load(root string) (Config, error) {
 	if cfg.Notices.WakeAfter <= 0 {
 		cfg.Notices.WakeAfter = Default().Notices.WakeAfter
 	}
+	if cfg.Notices.DigestEvery <= 0 {
+		cfg.Notices.DigestEvery = Default().Notices.DigestEvery
+	}
 	if cfg.CI.Interval <= 0 {
 		cfg.CI.Interval = Default().CI.Interval
 	}
@@ -472,6 +479,11 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # still haven't reached it after this long is woken anyway: saddle clears its
 # input line and types the wake-up, and logs a notice_wake event.
 # wake_after = "3m"
+# Only questions and real decisions interrupt the orchestrator. Routine news
+# (landed, merged, restacked, CI green) is rolled into one digest line at most
+# this often, sent when the orchestrator is idle and you aren't typing.
+# "saddle notices --all" lists everything, digested and silenced included.
+# digest_every = "15m"
 
 # Agent CLIs other than claude: the command and extra arguments.
 # [adapters.codex]

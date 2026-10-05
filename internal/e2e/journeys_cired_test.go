@@ -63,7 +63,14 @@ func TestJourneyCIRedHoldsAboveAndClearsWhenGreen(t *testing.T) {
 	}
 	ns, err := a.Store.TakeNotices("t0", false)
 	must(t, err)
-	if len(ns) == 0 || !slices.ContainsFunc(ns, func(n store.Notice) bool { return strings.Contains(n.Text, "CI is red on t1") }) {
+	// A red layer is routine: queued as info, or digested by the notice policy (#222).
+	digested := false
+	if log, err := a.NoticeLog(500); err == nil {
+		digested = slices.ContainsFunc(log, func(e store.Event) bool {
+			return e.Kind == app.EventNoticeDigest && strings.Contains(e.Data, "CI is red on t1")
+		})
+	}
+	if !digested && !slices.ContainsFunc(ns, func(n store.Notice) bool { return strings.Contains(n.Text, "CI is red on t1") }) {
 		t.Fatalf("orchestrator notices = %+v, want one about t1's red CI", ns)
 	}
 	for _, n := range ns {
