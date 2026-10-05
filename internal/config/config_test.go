@@ -481,3 +481,25 @@ func TestTrainLintCmd(t *testing.T) {
 		}
 	}
 }
+
+// #222: notices.digest_every defaults to 15 minutes; zero or less means the default.
+func TestNoticesDigestEvery(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notices.DigestEvery != 15*time.Minute {
+		t.Fatalf("digest_every default = %v, want 15m", cfg.Notices.DigestEvery)
+	}
+	root := t.TempDir()
+	for body, want := range map[string]time.Duration{`"5m"`: 5 * time.Minute, `"0s"`: 15 * time.Minute} {
+		writeConfig(t, root, "[notices]\ndigest_every = "+body+"\n")
+		if cfg, err = Load(root); err != nil || cfg.Notices.DigestEvery != want {
+			t.Fatalf("digest_every = %s: got %v, %v", body, cfg.Notices.DigestEvery, err)
+		}
+	}
+	if !strings.Contains(Template, `# digest_every = "15m"`) {
+		t.Error("template doesn't document notices.digest_every")
+	}
+}
