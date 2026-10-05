@@ -175,7 +175,7 @@ func TestOrchestratorHookDeliversNoticesWithoutTakingTheSession(t *testing.T) {
 	if _, err := a.EnsureOrchestrator(); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Notify(app.OrchestratorID, store.NoticeInfo, "t1 landed"); err != nil {
+	if err := a.Store.Notify(app.OrchestratorID, store.NoticeInfo, "t1 landed"); err != nil { // the policy would digest it (#222)
 		t.Fatal(err)
 	}
 	out := HandleOrchestrator(a, Input{Event: "SessionStart", SessionID: "user-session"})

@@ -148,3 +148,21 @@ func (a *App) RunDigest(ctx context.Context) {
 		}
 	}
 }
+
+// NoticeLog returns the orchestrator notices the policy saw among the last
+// n events, oldest first, with digests sent: interrupts, digest items,
+// silenced ones and digest lines.
+func (a *App) NoticeLog(n int) ([]store.Event, error) {
+	es, err := a.Store.Events(n)
+	if err != nil {
+		return nil, err
+	}
+	var out []store.Event
+	for _, e := range es {
+		switch e.Kind {
+		case EventNoticeInterrupt, EventNoticeDigest, EventNoticeSilent, EventDigestSent:
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
