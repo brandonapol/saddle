@@ -505,7 +505,7 @@ func TestNoticesDigestEvery(t *testing.T) {
 }
 
 // #223: [train] prepublish.* and stuck_after default to one layer at a time,
-// a ten-minute timeout and a thirty-minute alarm.
+// a thirty-minute timeout and a thirty-minute alarm.
 func TestTrainPrepublishAndStuckAfter(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	cfg, err := Load(t.TempDir())
@@ -513,7 +513,7 @@ func TestTrainPrepublishAndStuckAfter(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := cfg.Train.Prepublish
-	if p.Cmd != "" || p.Parallel != 1 || p.Timeout != 10*time.Minute || p.Off || cfg.Train.StuckAfter != 30*time.Minute {
+	if p.Cmd != "" || p.Parallel != 1 || p.Timeout != 30*time.Minute || p.Off || cfg.Train.StuckAfter != 30*time.Minute {
 		t.Fatalf("defaults = %+v, stuck_after %v", p, cfg.Train.StuckAfter)
 	}
 	root := t.TempDir()

@@ -305,7 +305,7 @@ func Default() Config {
 		Orchestrator: Orchestrator{CompactAt: 0.7},
 		Notices:      Notices{WakeAfter: 3 * time.Minute, DigestEvery: 15 * time.Minute},
 		Train: Train{MaxAttempts: 2, Output: "stack", StackBackend: StackBackendSaddle,
-			Prepublish: Prepublish{Parallel: 1, Timeout: 10 * time.Minute}, StuckAfter: 30 * time.Minute},
+			Prepublish: Prepublish{Parallel: 1, Timeout: 30 * time.Minute}, StuckAfter: 30 * time.Minute},
 		Usage: Usage{
 			Poll: 15 * time.Second,
 			Windows: []Window{
@@ -497,7 +497,7 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # prepublish.cmd alone on each layer it re-cut, so keep it cheap.
 # prepublish.cmd = "make check/spelling check/migrations"
 # prepublish.parallel = 1
-# prepublish.timeout = "10m"
+# prepublish.timeout = "30m"
 # prepublish.off = false
 # Interrupt the orchestrator once when a stack stays red or conflicting this
 # long with no task fixing it.
