@@ -68,6 +68,10 @@ type CIRedState struct {
 	// Explained are red heads a pending sibling PR explains (#193), as
 	// "task@head", so they are reported once.
 	Explained []string `json:"explained,omitempty"`
+	// Screened are failed checks already classified as not red, and Reruns
+	// the ones rerun once, both as "task@head@check" (#234).
+	Screened []string `json:"screened,omitempty"`
+	Reruns   []string `json:"reruns,omitempty"`
 }
 
 // Layer is the red layer of task, if it is red.
@@ -129,6 +133,138 @@ type CIPoll struct {
 	Head   string
 	Failed []string // failing checks on Head; empty when none failed
 	Green  bool     // every check on Head passed (or it has none)
+}
+
+// Not every failed check is red CI (#234). A run GitHub canceled (a newer
+// push's concurrency group, or a failed aggregate job whose upstream jobs
+// were canceled) says nothing about the code; an infra failure (runner lost,
+// a 5xx, an action that didn't resolve) or a known flaky check gets one
+// rerun before it counts. Only what is left holds layers and spawns repairs.
+
+// CI failure classes.
+const (
+	CIReal   = "real"   // red: holds layers above and gets a repair
+	CIIgnore = "ignore" // canceled or superseded: not red
+	CIRerun  = "rerun"  // infra or flaky: rerun once, then red
+)
+
+// Events of the classification.
+const (
+	EventCIIgnored = "ci_ignored"
+	EventCIRerun   = "ci_rerun"
+)
+
+// ciCanceled are log lines of a run that was canceled, not failed.
+var ciCanceled = []string{
+	"== cancelled", "== 'cancelled'", "result: cancelled", "were cancelled", "was cancelled",
+	"the operation was canceled", "the operation was cancelled", "the run was canceled",
+	"canceling since a higher priority", "higher priority waiting request",
+}
+
+// ciInfra are log lines of a failure in GitHub's infrastructure, not the code.
+var ciInfra = []string{
+	"unable to resolve action", "the runner has received a shutdown signal",
+	"lost communication with the server", "runner lost", "the hosted runner lost",
+	"the job was not acquired by runner", "internal server error", "500 internal",
+	"502 bad gateway", "503 service unavailable", "504 gateway", "http 502", "http 503",
+	"http 504", "econnreset",
+}
+
+// ciTestFailed are log lines that mean a test or build really failed, so a
+// mention of cancellation (a context canceled in a test) doesn't hide it.
+var ciTestFailed = []string{"--- fail", "fail\t", "panic:"}
+
+// ClassifyCIFailure sorts one failed check into CIReal, CIIgnore or
+// CIRerun, with why. flaky lists known flaky checks, as "workflow / job"
+// labels or bare job names.
+func ClassifyCIFailure(f CIRedFailure, flaky []string) (class, why string) {
+	log := strings.ToLower(f.LogTail)
+	tested := slices.ContainsFunc(ciTestFailed, func(s string) bool { return strings.Contains(log, s) })
+	if !tested {
+		for _, s := range ciCanceled {
+			if strings.Contains(log, s) {
+				return CIIgnore, "canceled, not failed (" + s + ")"
+			}
+		}
+	}
+	for _, s := range ciInfra {
+		if strings.Contains(log, s) {
+			return CIRerun, "infrastructure failure (" + s + ")"
+		}
+	}
+	job := f.Check
+	if i := strings.LastIndex(job, " / "); i >= 0 {
+		job = job[i+3:]
+	}
+	if slices.Contains(flaky, f.Check) || slices.Contains(flaky, job) {
+		return CIRerun, "known flaky check"
+	}
+	return CIReal, ""
+}
+
+// ciRunID is the workflow run id in an Actions run URL.
+func ciRunID(url string) string {
+	_, rest, ok := strings.Cut(url, "/actions/runs/")
+	if !ok {
+		return ""
+	}
+	id, _, _ := strings.Cut(rest, "/")
+	return id
+}
+
+// ScreenCIPoll takes out of p.Failed every failed check that is not red CI,
+// given fails, the failing checks' logs. A canceled one is dropped; an infra
+// or flaky one is rerun through rerun (gh run rerun <id> --failed) the first
+// time it fails on p.Head and dropped, so the poll reads as pending, and
+// counts the next time. A check without a log stays red. Each decision is
+// logged once as ci_ignored or ci_rerun.
+func (a *App) ScreenCIPoll(p CIPoll, fails []CIRedFailure, rerun func(runID string) error) (CIPoll, error) {
+	if len(p.Failed) == 0 {
+		return p, nil
+	}
+	s, err := a.CIRed()
+	if err != nil {
+		return p, err
+	}
+	// What was decided on the task's older heads no longer applies.
+	stale := func(k string) bool {
+		return strings.HasPrefix(k, p.Task+"@") && !strings.HasPrefix(k, p.Task+"@"+p.Head+"@")
+	}
+	s.Screened = slices.DeleteFunc(s.Screened, stale)
+	s.Reruns = slices.DeleteFunc(s.Reruns, stale)
+	var red []string
+	for _, label := range p.Failed {
+		i := slices.IndexFunc(fails, func(f CIRedFailure) bool { return f.Check == label })
+		if i < 0 {
+			red = append(red, label)
+			continue
+		}
+		key := p.Task + "@" + p.Head + "@" + label
+		switch class, why := ClassifyCIFailure(fails[i], a.Cfg.CI.Flaky); class {
+		case CIIgnore:
+			if !slices.Contains(s.Screened, key) {
+				s.Screened = append(s.Screened, key)
+				a.Store.Event(p.Task, EventCIIgnored, label+" at "+short(p.Head)+": "+why)
+			}
+		case CIRerun:
+			id := ciRunID(fails[i].RunURL)
+			if id == "" || slices.Contains(s.Reruns, key) {
+				red = append(red, label)
+				continue
+			}
+			if err := rerun(id); err != nil {
+				a.Store.Event(p.Task, EventCIRerun, label+" at "+short(p.Head)+": rerun of run "+id+" failed: "+err.Error())
+				red = append(red, label)
+				continue
+			}
+			s.Reruns = append(s.Reruns, key)
+			a.Store.Event(p.Task, EventCIRerun, label+" at "+short(p.Head)+": "+why+"; reran the failed jobs of run "+id)
+		default:
+			red = append(red, label)
+		}
+	}
+	p.Failed = red
+	return p, a.SetCIRed(s)
 }
 
 // CIRedTarget is a stacked task with a PR, for the watcher to poll.

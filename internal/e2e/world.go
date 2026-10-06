@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/e2e/fakeagent"
 	"github.com/brandonapol/saddle/internal/e2e/fakegh"
@@ -64,6 +65,8 @@ func New(t testing.TB, bins Bins, opts Options) *World {
 	must(t, os.WriteFile(filepath.Join(w.Bin, "claude"), []byte(wrapper), 0o755))
 
 	w.Tmux = NewTmux(t)
+	// Runs before NewTmux's kill-server and before t.TempDir is removed.
+	t.Cleanup(func() { stopTmux(w.Tmux) })
 	w.env = []string{
 		"HOME=" + w.Home,
 		"XDG_CONFIG_HOME=" + filepath.Join(w.Home, ".config"),
@@ -316,5 +319,20 @@ func (w *World) Diagnose() {
 	}
 	if out, err := w.Tmux.Run("list-windows", "-a"); err == nil {
 		w.T.Logf("tmux windows:\n%s", out)
+	}
+}
+
+// stopTmux kills x's server and waits (up to 5s) for every pane's session
+// to exit. An agent's hook can outlive kill-server by a moment and reopen
+// .saddle/state.db, recreating its -wal and -shm while t.TempDir is being
+// removed ("directory not empty").
+func stopTmux(x *Tmux) {
+	pids, _ := x.Run("list-panes", "-a", "-F", "#{pane_pid}")
+	_, _ = x.Run("kill-server")
+	deadline := time.Now().Add(5 * time.Second)
+	for _, pid := range strings.Fields(pids) {
+		for time.Now().Before(deadline) && exec.Command("pgrep", "-s", pid).Run() == nil {
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 }

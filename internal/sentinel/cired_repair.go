@@ -10,11 +10,7 @@ import (
 // onRed gets the failing checks' log tails for a layer that newly went red
 // and hands them to its repair; it returns what was done, for the notice.
 func (c *CIRed) onRed(ctx context.Context, l app.CIRedLayer) string {
-	var fails []app.CIRedFailure
-	for _, f := range c.logs(ctx, l.PR) {
-		fails = append(fails, app.CIRedFailure{Check: f.Check.Label(), RunURL: f.RunURL, Step: f.Step, LogTail: f.LogTail})
-	}
-	note, err := c.App.CIRedRepair(l.Task, fails)
+	note, err := c.App.CIRedRepair(l.Task, ciFailures(c.logs(ctx, l.PR)))
 	if err != nil {
 		c.App.Store.Event(l.Task, EventCIRedError, "repair: "+err.Error())
 	}
@@ -24,6 +20,25 @@ func (c *CIRed) onRed(ctx context.Context, l app.CIRedLayer) string {
 // logs fetches the failing checks of pr with their log tails: a fresh
 // ciwatch watcher reports every check failing now.
 func (c *CIRed) logs(ctx context.Context, pr string) []ciwatch.Failed {
+	if fs, ok := c.fetched[pr]; ok {
+		return fs
+	}
+	fs := c.fetchLogs(ctx, pr)
+	if c.fetched != nil {
+		c.fetched[pr] = fs
+	}
+	return fs
+}
+
+func ciFailures(fs []ciwatch.Failed) []app.CIRedFailure {
+	var out []app.CIRedFailure
+	for _, f := range fs {
+		out = append(out, app.CIRedFailure{Check: f.Check.Label(), RunURL: f.RunURL, Step: f.Step, LogTail: f.LogTail})
+	}
+	return out
+}
+
+func (c *CIRed) fetchLogs(ctx context.Context, pr string) []ciwatch.Failed {
 	if c.Logs != nil {
 		return c.Logs(ctx, pr)
 	}
