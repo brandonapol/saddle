@@ -230,7 +230,7 @@ func runInit(t *testing.T, root string, tty bool, args ...string) string {
 	var out bytes.Buffer
 	cmd := Root()
 	cmd.SetOut(&out)
-	cmd.SetArgs(append([]string{"init"}, args...))
+	cmd.SetArgs(append([]string{"init", "--trust"}, args...))
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}

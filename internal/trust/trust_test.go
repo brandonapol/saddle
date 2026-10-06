@@ -250,3 +250,14 @@ func TestCorruptStoreIsAnError(t *testing.T) {
 		t.Fatalf("after Remember over a corrupt file: ok %v err %v", ok, err)
 	}
 }
+
+func TestDevNullIsNotATerminal(t *testing.T) {
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if IsTerminal(f) {
+		t.Fatal("/dev/null counted as a terminal: the prompt would wait on it")
+	}
+}

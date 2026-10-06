@@ -43,7 +43,7 @@ func Root() *cobra.Command {
 			Run:   func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), Version) },
 		},
 		initCmd(), upCmd(), downCmd(), spawnCmd(), withTmux(statusCmd()), briefCmd(), claimCmd(), releaseCmd(), doneCmd(),
-		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(), repairCmd(), concurrencyCmd(), pluginCmd(), grokBridgeCmd(), publishCmd(), noticesCmd(),
+		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(), repairCmd(), concurrencyCmd(), pluginCmd(), grokBridgeCmd(), publishCmd(), noticesCmd(), trustCmd(), untrustCmd(),
 	)
 	return root
 }
@@ -85,25 +85,34 @@ func resolveTask(a *app.App, flag string) (string, error) {
 }
 
 func initCmd() *cobra.Command {
-	var quiet bool
+	var quiet, trusted bool
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Create .saddle/ with a config template",
-		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
-			if err := a.Init(); err != nil {
+		Long: `Creates .saddle/ with a config template and installs saddle's git hooks.
+The first time in a repo it asks whether you trust it, before writing anything.
+Without a terminal, pass --trust (or set SADDLE_TRUST=1).`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			banner.Print(cmd.OutOrStdout(), banner.Options{Quiet: quiet, IsTTY: stdoutIsTTY})
+			if err := gateTrust(cmd.OutOrStdout(), cmd.InOrStdin(), trusted); err != nil {
 				return err
 			}
-			banner.Print(cmd.OutOrStdout(), banner.Options{Quiet: quiet, IsTTY: stdoutIsTTY})
-			fmt.Fprintf(cmd.OutOrStdout(), "initialized %s/.saddle (edit .saddle/config.toml)\n", a.Root)
-			return nil
-		}),
+			return withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
+				if err := a.Init(); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "initialized %s/.saddle (edit .saddle/config.toml)\n", a.Root)
+				return nil
+			})(cmd, args)
+		},
 	}
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "don't print the howdy banner")
+	cmd.Flags().BoolVar(&trusted, "trust", false, "trust this repo without asking (remembered; see saddle trust)")
 	return cmd
 }
 
 func upCmd() *cobra.Command {
-	var skipDoctor bool
+	var skipDoctor, trusted bool
 	cmd := &cobra.Command{
 		Use:   "up [epic-file|-]",
 		Short: "Open the Saddle TUI: chat with the orchestrator, watch your agents",
@@ -113,6 +122,9 @@ Tell it what to work on, e.g. "do #46 and #47 in parallel".
 It starts agents in a hidden tmux session, watches them, and tells you when one
 needs you. Quitting leaves the agents running; run saddle up again to come back.`,
 		Args: cobra.MaximumNArgs(1),
+		PreRunE: func(cmd *cobra.Command, _ []string) error {
+			return upTrustErr(gateTrust(cmd.OutOrStdout(), cmd.InOrStdin(), trusted))
+		},
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, args []string) error {
 			if err := upDoctor(cmd.OutOrStdout(), skipDoctor, upDoctorTimeout, func() []doctor.Result {
 				return doctor.Run(doctor.System(a.Root))
@@ -152,6 +164,7 @@ needs you. Quitting leaves the agents running; run saddle up again to come back.
 		}),
 	}
 	cmd.Flags().BoolVar(&skipDoctor, "skip-doctor", false, "start without running the doctor checks")
+	cmd.Flags().BoolVar(&trusted, "trust", false, "trust this repo without asking (remembered; see saddle trust)")
 	return cmd
 }
 
