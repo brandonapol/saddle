@@ -174,7 +174,8 @@ type Report struct {
 	PRs    []string `json:"prs,omitempty"`   // PRs labeled needs-human
 }
 
-// Run checks the stack now and then every Interval until ctx ends. A failed
+// Run checks the stack now and then every Interval until ctx ends, and runs
+// the stuck-stack alarm after each check. A failed
 // check is recorded as an event (once per distinct error) and retried on the
 // next tick. A cycle skipped because the train was busy is retried after
 // BusyRetry instead.
@@ -201,6 +202,11 @@ func (s *Sentinel) Run(ctx context.Context) error {
 			if rep.Busy {
 				wait = min(busy, iv)
 			}
+		}
+		// A stack red or conflicting too long with nobody on it wakes the
+		// orchestrator once (#223).
+		if _, err := s.App.CheckStuck(time.Now().UTC()); err != nil {
+			s.App.Store.Event("", EventError, "stuck-stack alarm: "+err.Error())
 		}
 		t.Reset(wait)
 		select {
