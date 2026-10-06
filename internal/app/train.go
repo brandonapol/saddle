@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -329,7 +330,13 @@ func (a *App) landOne(id string) LandResult {
 		a.Store.Event(id, "train_regen", strings.Join(taken, "\n"))
 	}
 	if cmd := a.Cfg.Test.Cmd; cmd != NoTestCmd {
-		if out, err := runShell(t.Worktree, cmd); err != nil {
+		g := a.RunGateEnv(context.Background(), id, ShellGate(t.Worktree, cmd))
+		if g.Env != nil {
+			// Not the branch's fault (#184): it stays queued, uncharged.
+			res.State, res.Note = store.TrainError, "the gate failed on the environment ("+g.Env.Signature+"), not the branch; stays queued"
+			return res
+		}
+		if out, err := g.Output, g.Err; err != nil {
 			return fail(store.TestFailed, "tests failed", fmt.Sprintf(
 				"Your branch rebased cleanly onto %s, but `%s` failed on the result:\n%s\nFix it, commit, and call the saddle done tool again.", a.Cfg.Integration, cmd, tail(out, 40)))
 		}

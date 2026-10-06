@@ -334,3 +334,48 @@ func TestFlaggedStackFreezesPRsAndLand(t *testing.T) {
 		t.Fatalf("PRs after the flag cleared: %v", err)
 	}
 }
+
+// #184: a gate that keeps failing on the environment isn't the branch's
+// fault: the task stays queued, is not returned to its producer, isn't
+// charged an attempt, and the orchestrator hears what to free.
+func TestLandEnvironmentFailureKeepsTaskQueued(t *testing.T) {
+	a := trainSetup(t)
+	a.Cfg.Test.Cmd = "echo 'write /tmp/x: disk quota exceeded'; exit 1"
+	tk := queueTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+	before := git(t, a.Root, "rev-parse", a.Cfg.Integration)
+	rs, err := a.Land()
+	must(t, err)
+	if len(rs) != 1 || rs[0].State != store.TrainError || !strings.Contains(rs[0].Note, "environment") {
+		t.Fatalf("land = %+v, want an environment error", rs)
+	}
+	if git(t, a.Root, "rev-parse", a.Cfg.Integration) != before {
+		t.Fatal("integration moved on a red gate")
+	}
+	if got, _ := a.Store.Task(tk.ID); got.Status == store.Conflict || got.Status == store.NeedsYou {
+		t.Fatalf("task status = %s, want it left alone", got.Status)
+	}
+	es, err := a.Store.Train()
+	must(t, err)
+	for _, e := range es {
+		if e.Task == tk.ID && (e.State != store.Queued || e.Attempts != 0) {
+			t.Fatalf("train row = %+v, want queued with no attempts", e)
+		}
+	}
+	if ns, _ := a.Store.TakeNotices(tk.ID, false); len(ns) != 0 {
+		t.Fatalf("producer told: %+v", ns)
+	}
+	ns, err := a.Store.TakeNotices(OrchestratorID, false)
+	must(t, err)
+	if !slicesContainsText(ns, "disk quota exceeded") {
+		t.Fatalf("orchestrator notices = %+v, want the environment problem", ns)
+	}
+}
+
+func slicesContainsText(ns []store.Notice, s string) bool {
+	for _, n := range ns {
+		if strings.Contains(n.Text, s) {
+			return true
+		}
+	}
+	return false
+}

@@ -213,6 +213,10 @@ type Train struct {
 	// StuckAfter is how long a stack may stay red or conflicting with no task
 	// fixing it before the orchestrator is interrupted once (#223).
 	StuckAfter time.Duration `toml:"stuck_after"`
+	// Tmpdir is the disk-backed scratch dir the test gate's TMPDIR and
+	// GOTMPDIR point into, relative to the repo root; empty means .saddle/tmp
+	// (#184).
+	Tmpdir string `toml:"tmpdir"`
 }
 
 // Prepublish configures the pre-publish gate (#223). Before prs or publish
@@ -505,6 +509,11 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # Interrupt the orchestrator once when a stack stays red or conflicting this
 # long with no task fixing it.
 # stuck_after = "30m"
+# The test gate runs with TMPDIR and GOTMPDIR in a disk-backed scratch dir
+# here (relative to the repo), swept of day-old Test*/go-build* dirs before
+# each run. A gate that fails on the environment (disk quota, no space, OOM)
+# is retried and never blamed on the branch.
+# tmpdir = ".saddle/tmp"
 
 [spawn]
 # How deep spawn chains go below the orchestrator, and how many working
