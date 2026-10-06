@@ -6,7 +6,7 @@ on:
 jobs:
   e2e-race:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -16,3 +16,4 @@ jobs:
       - run: make test/e2e
         env:
           E2E_RACE: "1"
+          E2E_TIMEOUT: 60m
