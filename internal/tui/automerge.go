@@ -57,8 +57,39 @@ func (m *model) automerger() automerger {
 	return appAutomerger{m.app}
 }
 
-// amDoneMsg is an auto-merge action landing: what to flash.
-type amDoneMsg string
+// amDoneMsg is an auto-merge action landing: what to flash, and on success
+// the change it made to the auto-merge state, applied before the next
+// refresh reads it so a second key press acts on what the screen shows
+// (#207).
+type amDoneMsg struct {
+	text  string
+	apply func(*automerge.Status)
+}
+
+// released is st once stack id's own hold is lifted. A hold on one of its
+// tasks or PRs still holds it.
+func released(st *automerge.Status, id string) {
+	st.Holds = slices.DeleteFunc(st.Holds, func(h string) bool { return h == id })
+	for i, s := range st.Stacks {
+		if s.ID == id && !slices.ContainsFunc(st.Holds, func(h string) bool { return names(s, h) }) {
+			st.Stacks[i].Held = false
+		}
+	}
+}
+
+// applyAm applies an auto-merge action's change to a copy of m.am, and
+// makes refreshes that read the state before it stale.
+func (m *model) applyAm(apply func(*automerge.Status)) {
+	if apply == nil || m.am == nil {
+		return
+	}
+	st := *m.am
+	st.Holds = slices.Clone(st.Holds)
+	st.Stacks = slices.Clone(st.Stacks)
+	apply(&st)
+	m.am = &st
+	m.amGen++
+}
 
 // stackHeld reports whether s is held: the last check said so, or a hold
 // added since names it or one of its PRs.
@@ -158,7 +189,7 @@ func (m *model) mergeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		return m.amRun("turning auto-merge "+word, func(x automerger) (string, error) {
 			return "auto-merge " + word, x.SetAutomerge(on)
-		}), true
+		}, func(st *automerge.Status) { st.Enabled, st.Stopped = on, "" }), true
 	case key.Matches(k, keys.Hold):
 		s, ok := m.selectedStack()
 		if !ok {
@@ -167,11 +198,11 @@ func (m *model) mergeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 		if stackHeld(m.am, s) {
 			return m.amRun("releasing "+s.ID, func(x automerger) (string, error) {
 				return "released stack " + s.ID, x.Release(s.ID)
-			}), true
+			}, func(st *automerge.Status) { released(st, s.ID) }), true
 		}
 		return m.amRun("holding "+s.ID, func(x automerger) (string, error) {
 			return "held stack " + s.ID + "; it won't auto-merge until released", x.Hold(s.ID)
-		}), true
+		}, func(st *automerge.Status) { st.Holds = append(st.Holds, s.ID) }), true
 	case key.Matches(k, keys.Rebase):
 		s, ok := m.selectedStack()
 		if !ok {
@@ -179,15 +210,16 @@ func (m *model) mergeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		return m.amRun("rebasing "+s.ID, func(x automerger) (string, error) {
 			return x.RebaseStack(s.ID)
-		}), true
+		}, nil), true
 	}
 	return nil, false
 }
 
 func flashCmd(s string) tea.Cmd { return func() tea.Msg { return flashMsg(s) } }
 
-// amRun runs one auto-merge action off the UI goroutine, one at a time.
-func (m *model) amRun(doing string, do func(automerger) (string, error)) tea.Cmd {
+// amRun runs one auto-merge action off the UI goroutine, one at a time; on
+// success apply, if not nil, is its change to the auto-merge state.
+func (m *model) amRun(doing string, do func(automerger) (string, error), apply func(*automerge.Status)) tea.Cmd {
 	if m.amBusy != "" {
 		return flashCmd("still " + m.amBusy)
 	}
@@ -197,9 +229,9 @@ func (m *model) amRun(doing string, do func(automerger) (string, error)) tea.Cmd
 	return func() tea.Msg {
 		out, err := do(x)
 		if err != nil {
-			return amDoneMsg(doing + ": " + err.Error())
+			return amDoneMsg{text: doing + ": " + err.Error()}
 		}
-		return amDoneMsg(out)
+		return amDoneMsg{text: out, apply: apply}
 	}
 }
 

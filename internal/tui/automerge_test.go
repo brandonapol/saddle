@@ -256,3 +256,39 @@ func TestRefreshCarriesAutomergeState(t *testing.T) {
 		t.Fatalf("am = %+v", m.am)
 	}
 }
+
+// M pressed again right after the first toggle lands, before a refresh
+// reads the new state, flips what the screen shows (#207); so does h. A
+// refresh read before the toggle and landing after it does not undo it.
+func TestMergeKeysToggleAgainstFreshState(t *testing.T) {
+	m := newViewModel(120, 40)
+	f := &fakeAutomerger{}
+	m.amer = f
+	m.am = twoStacks()
+	m.Update(altKey('3'))
+
+	stale := refreshMsg{am: twoStacks()} // read while auto-merge was on
+	runKey(m, runeKey('M'))              // on → off
+	if long, _, _ := m.amHeader(); long != "auto-merge off" {
+		t.Errorf("header after M: %q", long)
+	}
+	m.refreshing = false
+	m.Update(stale)
+	runKey(m, runeKey('M')) // off → on
+	runKey(m, runeKey('j')) // t8, not held
+	runKey(m, runeKey('h')) // hold t8
+	runKey(m, runeKey('h')) // release t8
+	want := []string{"off", "on", "hold t8", "release t8"}
+	if !slices.Equal(f.calls, want) {
+		t.Errorf("calls = %q, want %q", f.calls, want)
+	}
+
+	// A failed toggle leaves the state as it was.
+	f.calls, f.err = nil, errors.New("boom")
+	runKey(m, runeKey('M'))
+	f.err = nil
+	runKey(m, runeKey('M'))
+	if want := []string{"off", "off"}; !slices.Equal(f.calls, want) {
+		t.Errorf("after a failure calls = %q, want %q", f.calls, want)
+	}
+}
