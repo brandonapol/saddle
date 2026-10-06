@@ -13,7 +13,7 @@ package lintgate
 import (
 	"os"
 	"path/filepath"
-	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -108,8 +108,6 @@ func preCommitCmd(base string) string {
 	return "pre-commit run --from-ref " + base + " --to-ref HEAD"
 }
 
-var makeRe = regexp.MustCompile(`\bmake((?:\s+-[A-Za-z]+)*)\s+([A-Za-z0-9_][A-Za-z0-9_/.-]*)`)
-
 // fromScript classifies a pre-commit hook script found at path.
 func fromScript(root, base, script, path string) Gate {
 	switch {
@@ -122,16 +120,41 @@ func fromScript(root, base, script, path string) Gate {
 			return Gate{Kind: KindHusky, Cmd: "sh .husky/pre-commit"}
 		}
 	}
-	var code []string
-	for _, line := range strings.Split(script, "\n") {
-		if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "#") {
-			code = append(code, t)
-		}
-	}
-	if m := makeRe.FindStringSubmatch(strings.Join(code, "\n")); m != nil {
-		return Gate{Kind: KindHook, Cmd: "make " + m[2]}
+	if t := hookMakeTarget(root, script); t != "" {
+		return Gate{Kind: KindHook, Cmd: "make " + t}
 	}
 	return Gate{Kind: KindHook, Cmd: shellQuote(path)}
+}
+
+// fixTargets are fixer targets, in the order makeFix prefers them.
+var fixTargets = []string{"fix", "lint/fix", "lint-fix", "fmt", "format"}
+
+// hookMakeTarget is the make target a hook script runs as its check, "" when
+// it runs none saddle can run on its own. Each make invocation is read from
+// one line, so a bare `make` never takes the next line's word as its target
+// (#228). When the repo has a makefile the target must be one of its rules.
+// A fixer the hook runs before its check (make fix && make check) isn't the
+// check.
+func hookMakeTarget(root, script string) string {
+	var targets []string
+	for _, line := range strings.Split(script, "\n") {
+		if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "#") {
+			targets = append(targets, makeTargetsIn(t)...)
+		}
+	}
+	if hasMakefile(root) {
+		known := makeTargets(root)
+		targets = slices.DeleteFunc(targets, func(t string) bool { return !slices.Contains(known, t) })
+	}
+	for _, t := range targets {
+		if !slices.Contains(fixTargets, t) {
+			return t
+		}
+	}
+	if len(targets) > 0 {
+		return targets[0]
+	}
+	return ""
 }
 
 func first(root string, names ...string) (string, bool) {
@@ -145,23 +168,12 @@ func first(root string, names ...string) (string, bool) {
 
 // makeFix is the Makefile's fixer target, if any.
 func makeFix(root string) string {
-	for _, t := range []string{"fix", "lint/fix", "lint-fix", "fmt", "format"} {
+	for _, t := range fixTargets {
 		if hasTarget(root, t) {
 			return "make " + t
 		}
 	}
 	return ""
-}
-
-// hasTarget reports whether the Makefile at root defines target. A line
-// `target:` counts; `target := value` is a variable.
-func hasTarget(root, target string) bool {
-	b, err := os.ReadFile(filepath.Join(root, "Makefile"))
-	if err != nil {
-		return false
-	}
-	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(target) + `[ \t]*:([^=]|$)`)
-	return re.Match(b)
 }
 
 func shellQuote(s string) string {

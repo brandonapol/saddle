@@ -33,6 +33,10 @@ func (a *App) Land() ([]LandResult, error) {
 	if err := a.Init(); err != nil {
 		return nil, err
 	}
+	// A long-lived saddle picks up config edits on the next land (#228).
+	if _, err := a.ReloadTrainConfig(); err != nil {
+		return nil, fmt.Errorf("reloading config: %w", err)
+	}
 	if strings.TrimSpace(a.Cfg.Test.Cmd) == "" {
 		return nil, errNoTestCmd
 	}
@@ -330,7 +334,7 @@ func (a *App) landOne(id string) LandResult {
 				"Your branch rebased cleanly onto %s, but `%s` failed on the result:\n%s\nFix it, commit, and call the saddle done tool again.", a.Cfg.Integration, cmd, tail(out, 40)))
 		}
 	}
-	if msg := a.trainLint(t.Worktree); msg != "" {
+	if msg := a.trainLint(id, t.Worktree); msg != "" {
 		return fail(store.TestFailed, "lint failed", msg)
 	}
 	head, err := gitx.RevParse(t.Worktree, "HEAD")

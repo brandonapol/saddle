@@ -2,6 +2,7 @@ package app
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -133,5 +134,45 @@ func TestLandRunsLintOnceWhenSameAsTest(t *testing.T) {
 	must(t, err)
 	if n := strings.Count(string(b), "x") - strings.Count(string(before), "x"); n != 1 {
 		t.Fatalf("the train ran it %d times", n)
+	}
+}
+
+// #228: a gate make has no rule for (`make fi`) is the gate's fault, not
+// the branch's. done and the train skip it, so it never counts toward
+// max_attempts, and the orchestrator is told how to fix it.
+func TestBrokenGateDoesNotFailTheBranch(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make not installed")
+	}
+	a := trainSetup(t)
+	write(t, a.Root, "Makefile", "check:\n\ttrue\nfix:\n\ttrue\n")
+	commitAll(t, a.Root, "makefile")
+	a.Cfg.Train.MaxAttempts = 1
+	a.Cfg.Train.Lint = config.Lint{Cmd: "make fi", Set: true}
+	tk := queueTask(t, a, "t1", "broken gate", map[string]string{"x.txt": "x\n"})
+	rs, err := a.Land()
+	must(t, err)
+	if len(rs) != 1 || rs[0].State != store.TrainOK {
+		t.Fatalf("results = %+v", rs)
+	}
+	if n := a.attempts(tk.ID); n != 0 {
+		t.Fatalf("attempts = %d", n)
+	}
+	ns, err := a.Store.TakeNotices(OrchestratorID, false)
+	must(t, err)
+	found := false
+	for _, n := range ns {
+		found = found || (strings.Contains(n.Text, "`make fi`") && strings.Contains(n.Text, "lint.cmd"))
+	}
+	if !found {
+		t.Fatalf("orchestrator notices = %+v", ns)
+	}
+
+	// A gate that is red for a real reason still refuses.
+	a.Cfg.Train.Lint = config.Lint{Cmd: "make check && false", Set: true}
+	tk2, err := a.Spawn(SpawnReq{Title: "red"})
+	must(t, err)
+	if err := a.lintDone(tk2); err == nil {
+		t.Fatal("a red gate passed")
 	}
 }
