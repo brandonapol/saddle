@@ -33,7 +33,7 @@ func TestJourneyInitDoctorFreshRepo(t *testing.T) {
 		}
 	}
 
-	r = w.MustSaddle("init")
+	r = w.MustSaddle("init", "--trust")
 	if !strings.Contains(r.Stdout, "initialized "+w.Repo+"/.saddle") {
 		t.Fatalf("init output: %s", r)
 	}
@@ -47,7 +47,7 @@ func TestJourneyInitDoctorFreshRepo(t *testing.T) {
 		}
 	}
 	// Running init again is harmless.
-	w.MustSaddle("init", "-q")
+	w.MustSaddle("init", "-q", "--trust")
 	if r := w.Saddle("doctor"); r.Code != 0 {
 		t.Fatalf("doctor after a second init: %s", r)
 	}

@@ -25,7 +25,7 @@ orchestrator explaining a stale base and asking before it acts.*
 make setup            # dev tools; asks for a Jev key / Claude login only if missing
 make install          # puts saddle on your PATH
 cd your-repo
-saddle init           # config, git exclude, ref guard hooks
+saddle init           # asks if you trust the folder, then config, git exclude, ref guard hooks
 saddle doctor         # preflight checks, each with a fix
 saddle up             # opens the TUI
 ```

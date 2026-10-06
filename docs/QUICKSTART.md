@@ -42,7 +42,10 @@ plugin's `bin/saddle-check --yes` when saddle is missing), which prints the
 command and then runs it. Dev builds (`make install`) are never flagged.
 
 The first time you use `/saddle:orchestrate` or `/saddle:status` in a repo
-that never ran `saddle init`, the plugin runs `saddle init` and
+saddle isn't trusted in, the plugin shows the same trust question as
+`saddle init` (step 3) and Claude asks it in the chat. Nothing is written
+until you answer 1; Claude then runs `saddle trust --yes` and carries on.
+In a repo that never ran `saddle init`, the plugin then runs `saddle init` and
 `saddle doctor` for you (steps 3 and 4 below) and shows the doctor table.
 It goes on only when no check fails; warnings are shown but don't block. Fix
 any failures and run the command again. It records this in
@@ -67,7 +70,26 @@ saddle init
 ```
 
 It greets you with a small howdy banner. `--quiet` or a non-terminal stdout
-hides it, and `NO_COLOR` prints it without color. It also writes
+hides it, and `NO_COLOR` prints it without color.
+
+Then, before it writes anything, it asks whether you trust the folder, the way
+Claude Code does, and lists exactly what Saddle will do there: create
+`.saddle/`, install git hooks chained with yours, write each agent worktree's
+`.claude/settings.local.json`, run agents that edit files and run commands,
+and push and merge on GitHub if auto-merge is on. Answer 1 to trust it and go
+on, or 2 to exit with nothing written. The answer is remembered in
+`~/.config/saddle/trust.json` (or `$XDG_CONFIG_HOME/saddle/`), keyed by the
+repo's path and origin URL, so moving the repo or changing its origin asks
+again. Without a terminal, pass `--trust` (remembered) or set `SADDLE_TRUST=1`
+(this run only). `saddle trust`, `saddle trust status` and `saddle untrust`
+manage the decision. Saddle's own agents never see the question: they run in
+worktrees of a repo you already trusted.
+
+**Upgrading?** Repos you set up before this existed haven't been trusted yet:
+the first `saddle up` after the upgrade asks once (or run `saddle trust`).
+Without a terminal it refuses and tells you to run `saddle trust`.
+
+Init also writes
 `.saddle/config.toml`, adds `/.saddle/` to `.git/info/exclude`, detects a
 test command (`make check`, `go test ./...`, `npm test`, `cargo test`) and
 installs the ref guard hooks, which stop anyone but the merge train from
@@ -83,8 +105,9 @@ saddle doctor --json   # the same for scripts
 It checks the git remote and the repo's default branch (detected, not assumed
 to be `main`), gh login and token scopes, repo merge settings (merge commits
 off, squash on), branch protection, `test.cmd`, tmux and claude, the ref guard
-hooks, that `.saddle/` is ignored, that `state.db` opens and migrates, and how
-many stale worktrees and branches `saddle gc` could clean up. It exits
+hooks, that `.saddle/` is ignored, that `state.db` opens and migrates, how
+many stale worktrees and branches `saddle gc` could clean up, and whether
+you trust the repo. It exits
 non-zero when any check fails. Warnings alone exit zero. Fix the failures
 before your first run.
 

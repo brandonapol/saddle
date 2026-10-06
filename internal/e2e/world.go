@@ -103,7 +103,7 @@ func New(t testing.TB, bins Bins, opts Options) *World {
 	if opts.NoInit {
 		return w
 	}
-	w.MustSaddle("init", "-q")
+	w.MustSaddle("init", "-q", "--trust")
 	w.WriteConfig(opts)
 	return w
 }
