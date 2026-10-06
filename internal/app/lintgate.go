@@ -45,7 +45,7 @@ func (a *App) lintDone(t store.Task) error {
 		return nil
 	}
 	out, err := runShell(t.Worktree, g.Cmd)
-	if err == nil {
+	if err == nil || a.brokenGate(t.ID, g, out) {
 		return nil
 	}
 	a.Store.Event(t.ID, "lint_failed", g.Cmd)
@@ -55,14 +55,41 @@ func (a *App) lintDone(t store.Task) error {
 // trainLint runs the gate on the rebased tree in dir after the tests. It
 // returns the failure message, "" when green, off, or the same command the
 // tests just ran.
-func (a *App) trainLint(dir string) string {
+func (a *App) trainLint(id, dir string) string {
 	g := a.LintGate()
 	if g.Cmd == "" || g.Cmd == strings.TrimSpace(a.Cfg.Test.Cmd) {
 		return ""
 	}
 	out, err := runShell(dir, g.Cmd)
-	if err == nil {
+	if err == nil || a.brokenGate(id, g, out) {
 		return ""
 	}
 	return lintFailure(g, out, "Your branch rebased cleanly onto "+a.Cfg.Integration+" and passed its tests, but on the result")
+}
+
+// noRule is make's complaint about a target the makefile lacks.
+const noRule = "No rule to make target"
+
+// brokenGate reports whether a red gate failed because the gate itself is
+// wrong: make has no rule for its target, as when `make fi` was detected
+// (#228). No agent can fix that by changing its branch, so it is not
+// counted against the branch (or its max_attempts). The orchestrator hears
+// about it with the way out: set [train] lint.cmd.
+func (a *App) brokenGate(id string, g lintgate.Gate, out string) bool {
+	if !strings.Contains(out, noRule) {
+		return false
+	}
+	a.Store.Event(id, "lint_gate_broken", g.Cmd)
+	_ = a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
+		"The repo's lint gate `%s` (from %s) is broken: %s, so done and the train skipped it for %s. "+
+			"Set [train] lint.cmd in .saddle/config.toml to the right command (or \"\" to turn it off); the train picks it up on its next land.\n%s",
+		g.Cmd, gateSource(g), noRule, id, tail(out, 5)))
+	return true
+}
+
+func gateSource(g lintgate.Gate) string {
+	if g.Source == "" {
+		return g.Kind
+	}
+	return g.Source
 }

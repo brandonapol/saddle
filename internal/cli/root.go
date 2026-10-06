@@ -562,6 +562,7 @@ func mcpCmd() *cobra.Command {
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			go a.ReloadOnSIGHUP(ctx) // the train's config sections; land reloads them too (#228)
 			return mcpserver.Serve(ctx, a, os.Getenv("SADDLE_TASK"))
 		}),
 	}
