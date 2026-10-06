@@ -572,16 +572,17 @@ func (q *Queue) reap(tx *sql.Tx) error {
 	return nil
 }
 
-// lockNew creates and locks path. The reaper deletes unlocked lock files
-// that have no row, so it may unlink path between our create and our flock;
-// then the lock we hold is on a dead inode and we start over.
+// lockNew creates and locks path. Another process's sweep may probe the new
+// file (holding its lock for a moment) and unlink it between our create and
+// our flock, so the flock blocks through the probe, and if the locked inode
+// is no longer the one at path we start over.
 func lockNew(path string) (*os.File, error) {
 	for range 3 {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 		if err != nil {
 			return nil, err
 		}
-		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
 			f.Close()
 			return nil, fmt.Errorf("runq: lock %s: %w", path, err)
 		}

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -613,5 +614,44 @@ func TestProcLoad(t *testing.T) {
 	}
 	if ok, _ := (LoadGate{Source: ProcLoad{Root: filepath.Join(root, "missing")}, MaxLoadPerCPU: 0.1}).Admit(); !ok {
 		t.Fatal("an unreadable probe must fail open")
+	}
+}
+
+// TestLockNewSurvivesSweeperProbe: another process's sweep may lock and
+// unlink a brand-new lock file between its creation and our flock. lockNew
+// must wait out the probe and lock a fresh file, not fail.
+func TestLockNewSurvivesSweeperProbe(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tok")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sweeper, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(sweeper.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	type res struct {
+		f   *os.File
+		err error
+	}
+	got := make(chan res, 1)
+	go func() {
+		f, err := lockNew(path)
+		got <- res{f, err}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	_ = os.Remove(path) // the sweeper removes the orphan, then lets go
+	sweeper.Close()
+	r := <-got
+	if r.err != nil {
+		t.Fatalf("lockNew: %v", r.err)
+	}
+	defer r.f.Close()
+	held, _ := r.f.Stat()
+	named, err := os.Stat(path)
+	if err != nil || !os.SameFile(held, named) {
+		t.Fatalf("lockNew holds a lock on an unlinked file: %v", err)
 	}
 }
