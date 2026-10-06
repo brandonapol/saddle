@@ -184,6 +184,15 @@ func (m *model) exitCopy() {
 
 // copyKey handles a key in copy mode. Every key stops here.
 func (m *model) copyKey(k tea.KeyMsg) tea.Cmd {
+	if k.Type == tea.KeyRunes && len(k.Runes) > 1 && !k.Paste {
+		var cmds []tea.Cmd
+		for _, r := range k.Runes {
+			if m.cp.on {
+				cmds = append(cmds, m.copyKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}, Alt: k.Alt}))
+			}
+		}
+		return tea.Batch(cmds...)
+	}
 	keys := m.keys
 	n := len(m.cp.lines)
 	move := func(d int) { m.cp.cur = min(max(m.cp.cur+d, 0), max(n-1, 0)) }

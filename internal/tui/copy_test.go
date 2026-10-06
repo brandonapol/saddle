@@ -210,3 +210,14 @@ func TestMouseDragCopiesPaneRows(t *testing.T) {
 		t.Errorf("peek drag copied %q", got)
 	}
 }
+
+// Keys typed faster than the TUI reads them arrive as one message ("Vk");
+// copy mode acts on each.
+func TestCopyModeRunsCoalescedKeys(t *testing.T) {
+	m, f := copyModel(t, 120, 40)
+	press(m, ctrlY())
+	press(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Vky")})
+	if len(f.ran) != 1 || f.ran[0] != "wl-copy<<FAIL internal/tui\nsee https://example.com/pr/9" {
+		t.Fatalf("Vky copied %q", f.ran)
+	}
+}
