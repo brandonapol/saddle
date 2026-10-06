@@ -16,4 +16,4 @@ jobs:
       - run: make test/e2e
         env:
           E2E_RACE: "1"
-          E2E_TIMEOUT: 60m
+          E2E_GO_TIMEOUT: 60m
