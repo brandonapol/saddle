@@ -349,6 +349,8 @@ func (a *App) landOne(id string) LandResult {
 	}
 	res.State, res.Note = store.TrainOK, head[:12]+regenerated
 	a.Store.Event(id, "landed", head)
+	// The pre-publish gate needn't run them again on this tree (#223).
+	a.gateSeed(head, a.Cfg.Test.Cmd, a.LintGate().Cmd)
 	if cl, err := a.Store.Claims(); err == nil && len(cl[id]) > 0 {
 		// Claims are released with the landing; keep them for the stack check.
 		a.Store.Event(id, landedClaimsEvent, strings.Join(cl[id], "\n"))

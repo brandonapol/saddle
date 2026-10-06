@@ -152,7 +152,8 @@ type gateResult struct {
 // runGate checks each job's head with checks, in the order given. A job
 // skip says to leave alone (a red layer is below it) is not checked. Up to
 // prepublish.parallel jobs run at once, each worker in its own scratch
-// worktree, reused from run to run. It returns the red jobs by index.
+// worktree, reused for every layer it checks. It returns the red jobs by
+// index.
 func (a *App) runGate(jobs []gateJob, checks []GateCheck, skip func(i int, red map[int]gateResult) bool) (map[int]gateResult, error) {
 	red := map[int]gateResult{}
 	if len(jobs) == 0 || len(checks) == 0 {
@@ -255,6 +256,9 @@ func (a *App) gateLayer(dir string, j gateJob, checks []GateCheck, passed map[st
 		if err == nil {
 			ok = append(ok, key)
 			continue
+		}
+		if c.Name == "lint" && !timedOut && a.brokenGate(j.task, a.LintGate(), out) {
+			continue // the gate itself is wrong, not the layer
 		}
 		a.Store.Event(j.task, "prepublish_red", fmt.Sprintf("%s %s: %s", short(j.head), c.Name, c.Cmd))
 		return &gateResult{job: j, check: c, out: out, timedOut: timedOut}, ok, nil
@@ -536,4 +540,27 @@ func (a *App) gateRestack(plan []restacked) []GateRed {
 			g.Task, short(g.Head), g.Check.Name, g.Check.Cmd, tail(g.Tail, 5)))
 	}
 	return reds
+}
+
+// gateSeed records that cmds just passed on head's tree, as the train's
+// tests and lint gate did when it landed head, so the gate doesn't run them
+// on that tree again.
+func (a *App) gateSeed(head string, cmds ...string) {
+	tree, err := gitx.Run(a.Root, "rev-parse", head+"^{tree}")
+	if err != nil {
+		return
+	}
+	s, err := a.Gate()
+	if err != nil {
+		return
+	}
+	if s.Passed == nil {
+		s.Passed = map[string]time.Time{}
+	}
+	for _, c := range cmds {
+		if c = strings.TrimSpace(c); c != "" && c != NoTestCmd {
+			s.Passed[tree+" "+c] = time.Now().UTC()
+		}
+	}
+	_ = a.setGate(s)
 }

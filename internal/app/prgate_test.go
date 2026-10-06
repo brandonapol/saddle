@@ -239,3 +239,23 @@ func TestRestackFlagsDuplicateMigration(t *testing.T) {
 		t.Fatalf("t1 PR %q, t3 PR %q: want t1 published and t3 held", t1.PR, t3.PR)
 	}
 }
+
+// The train just ran [test] cmd on each tree it landed; prs over those same
+// heads doesn't run it again.
+func TestPRsGateTrustsTheTrainsTests(t *testing.T) {
+	a := trainSetup(t)
+	a.Cfg.Train.Output = "single"
+	_, _ = originWithGh(t, a)
+	count := filepath.Join(t.TempDir(), "runs")
+	a.Cfg.Test.Cmd = "echo run >> " + count
+	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+	landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})
+	b, _ := os.ReadFile(count)
+	landed := strings.Count(string(b), "run")
+	if _, err := a.PRs(); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(count); strings.Count(string(b), "run") != landed {
+		t.Fatalf("prs re-ran the tests the train just passed on the same trees: %d runs, %d at land", strings.Count(string(b), "run"), landed)
+	}
+}
