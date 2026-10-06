@@ -116,7 +116,9 @@ func TestKilledHolderFreesSlotWithinOneHeartbeat(t *testing.T) {
 			bStart = s.start
 		}
 	}
-	if took := time.Unix(0, bStart).Sub(killed); took > o.Heartbeat {
+	took := time.Unix(0, bStart).Sub(killed)
+	t.Logf("b started %s after the kill", took)
+	if took > o.Heartbeat {
 		t.Fatalf("b started %s after the kill; want within one heartbeat (%s)", took, o.Heartbeat)
 	}
 	q := open(t, o)
@@ -477,7 +479,9 @@ func TestReleaseWakesWaiter(t *testing.T) {
 	time.Sleep(3 * time.Second) // backoff now well past a second
 	released := time.Now()
 	_ = h.Release()
-	if d := (<-got).Sub(released); d > time.Second {
+	d := (<-got).Sub(released)
+	t.Logf("handoff took %s", d)
+	if d > time.Second {
 		t.Fatalf("waiter woke %s after the release", d)
 	}
 }
