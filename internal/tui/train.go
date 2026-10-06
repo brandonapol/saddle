@@ -203,6 +203,21 @@ func conflictHunk(worktree string, files []string) string {
 
 func waiting(state string) bool { return state == store.Queued || state == store.OnHold }
 
+// landedState reports whether state means the task's work reached the base:
+// landed on integration, merged on GitHub, or folded into the layer it
+// repaired.
+func landedState(state string) bool {
+	return state == store.TrainOK || state == app.TrainMerged || state == app.TrainFolded
+}
+
+// settled reports whether an entry has left the train for good: landed, or
+// superseded. A settled entry is never returned and never a conflict (#206).
+func settled(state string) bool { return landedState(state) || state == app.TrainSuperseded }
+
+// trainStuck reports whether the header counts state as a conflict: any
+// entry the merge view lists under returned.
+func trainStuck(state string) bool { return state != "" && !waiting(state) && !settled(state) }
+
 func returned(state string) bool {
 	return state == store.TrainError || state == store.TestFailed || state == app.TrainEscalated
 }
@@ -231,7 +246,7 @@ func (m *model) trainSections() (queue, back, landed []store.TrainEntry) {
 		switch {
 		case waiting(e.State):
 			queue = append(queue, e)
-		case e.State == store.TrainOK:
+		case settled(e.State):
 			landed = append(landed, e)
 		default:
 			back = append(back, e)
@@ -373,7 +388,7 @@ func (m *model) viewTrain(w int) []string {
 	}
 	nLanded := 0
 	for _, e := range m.trainEntries() {
-		if e.State == store.TrainOK {
+		if landedState(e.State) {
 			nLanded++
 		}
 	}
@@ -401,7 +416,7 @@ func (m *model) viewTrain(w int) []string {
 			mark = sKey.Render("▸ ")
 		}
 		state := strings.ReplaceAll(e.State, "_", " ")
-		if e.Note != "" && e.State != store.TrainOK {
+		if e.Note != "" && !settled(e.State) {
 			state += ": " + e.Note
 		}
 		c := cDim
@@ -410,7 +425,7 @@ func (m *model) viewTrain(w int) []string {
 			c = cAccent
 		case returned(e.State):
 			c = cAlert
-		case e.State == store.TrainOK:
+		case landedState(e.State):
 			c = cDone
 			if _, to, ok := strings.Cut(e.Note, ".."); ok {
 				state += " " + to[:min(len(to), 8)]
