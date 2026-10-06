@@ -30,7 +30,8 @@ func (s system) Git(args ...string) (string, error) { return gitx.Run(string(s),
 func (s system) LookPath(name string) (string, error) {
 	return exec.LookPath(name)
 }
-func (s system) Hooks() ([]refguard.HookState, error) { return refguard.Installed(string(s)) }
+func (s system) Hooks() ([]refguard.HookState, error)    { return refguard.Installed(string(s)) }
+func (s system) RepoHooks() ([]refguard.RepoHook, error) { return refguard.RepoHooks(string(s)) }
 
 func (s system) Trust() (trust.Report, bool, error) {
 	rep, err := trust.Status(string(s), nil)
