@@ -56,7 +56,7 @@ func helperMain(mode string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	defer q.Close()
+	defer func() { _ = q.Close() }()
 	class, label := os.Getenv("RUNQ_CLASS"), os.Getenv("RUNQ_LABEL")
 	prio, _ := strconv.Atoi(os.Getenv("RUNQ_PRIO"))
 	ctx := context.Background()

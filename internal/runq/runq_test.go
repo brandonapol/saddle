@@ -21,7 +21,7 @@ func open(t *testing.T, o Options) *Queue {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { q.Close() })
+	t.Cleanup(func() { _ = q.Close() })
 	return q
 }
 
@@ -360,7 +360,7 @@ func TestBypass(t *testing.T) {
 	o := testOpts(t)
 	q := open(t, o)
 	h := acquire(t, q, Request{Class: "go-test"})
-	defer h.Release()
+	defer func() { _ = h.Release() }()
 	o.Getenv = func(k string) string {
 		if k == EnvBypass {
 			return "off"

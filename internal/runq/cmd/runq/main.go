@@ -37,7 +37,7 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	defer q.Close()
+	defer func() { _ = q.Close() }()
 	switch top.Arg(0) {
 	case "status":
 		st, err := q.Status()

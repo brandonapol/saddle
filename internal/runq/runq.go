@@ -358,7 +358,7 @@ func (q *Queue) Acquire(ctx context.Context, req Request) (*Lease, error) {
 	enqueued := q.opts.Now()
 	wake := q.watchWake()
 	if wake != nil {
-		defer wake.Close()
+		defer func() { _ = wake.Close() }()
 	}
 	backoff := q.opts.PollMin
 	var last string
@@ -834,7 +834,7 @@ func (q *Queue) watchWake() *fsnotify.Watcher {
 		return nil
 	}
 	if err := w.Add(q.wake); err != nil {
-		w.Close()
+		_ = w.Close()
 		return nil
 	}
 	return w
