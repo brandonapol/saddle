@@ -154,6 +154,12 @@ type model struct {
 
 	scrub mouseScrub // drops pieces of mouse reports split across reads
 
+	cp      copyState    // copy mode
+	bodyTop int          // the screen row the body starts on
+	clip    *clipboard   // where copies go; nil means the system's
+	panes   []screenPane // panes as last drawn, for mouse selection
+	drag    *mouseDrag   // a mouse selection in progress
+
 	term      *termpane.Term // the shell in the bottom pane; nil until opened or after it exits
 	termOpen  bool           // the pane is shown
 	termShell string         // overrides $SHELL, for tests
@@ -521,6 +527,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		m.scrub = mouseScrub{}
+		if c, ok := m.mouseSelect(msg); ok {
+			return m, c
+		}
 		if m.termMouse(msg) {
 			break
 		}
@@ -555,6 +564,13 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 	keys := m.keys
 	if !key.Matches(k, keys.Quit) {
 		m.quitArmedAt = time.Time{}
+	}
+	if m.cp.on && !key.Matches(k, keys.Quit) {
+		return m.copyKey(k), true
+	}
+	if key.Matches(k, keys.CopyMode) && !m.helpOpen && !(m.view == viewPlan && m.pl.noting) {
+		m.enterCopy()
+		return nil, true
 	}
 	if c, ok := m.routeKey(k); ok {
 		return c, true
@@ -1106,9 +1122,10 @@ func (m *model) View() string {
 	if m.term == nil {
 		termH = 0
 	}
+	m.panes, m.bodyTop = m.panes[:0], lipgloss.Height(header)
 	parts := []string{header, m.viewBody(m.width, bodyH-termH)}
 	if termH > 0 {
-		parts = append(parts, m.viewTerm(termH))
+		parts = append(parts, m.markPane("terminal", 0, m.bodyTop+bodyH-termH, m.viewTerm(termH)))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, append(parts, footer)...)
 }

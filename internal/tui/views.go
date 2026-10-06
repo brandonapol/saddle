@@ -83,19 +83,22 @@ func (m *model) viewBody(w, h int) string {
 	switch {
 	case m.helpOpen:
 		return m.viewHelp(w, h)
+	case m.cp.on:
+		return m.viewCopy(w, h)
 	case m.view == viewPlan:
-		return m.viewPlan(w, h)
+		return m.markPane("plan", 0, m.bodyTop, m.viewPlan(w, h))
 	case m.view == viewMerge:
-		return m.viewMerge(w, h)
+		return m.markPane("merge", 0, m.bodyTop, m.viewMerge(w, h))
 	}
 	if m.narrow() {
 		if m.focus == focusTasks {
-			return m.viewLeft(w, h)
+			return m.markPane("left", 0, m.bodyTop, m.viewLeft(w, h))
 		}
-		return m.viewChat(w, h)
+		return m.markPane("chat", 0, m.bodyTop, m.viewChat(w, h))
 	}
 	cw := m.chatWidth()
-	return lipgloss.JoinHorizontal(lipgloss.Top, m.viewLeft(w-cw, h), m.viewChat(cw, h))
+	left := m.markPane("left", 0, m.bodyTop, m.viewLeft(w-cw, h))
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, m.markPane("chat", w-cw, m.bodyTop, m.viewChat(cw, h)))
 }
 
 // viewHelp lists every binding by group, in columns as wide as fit.

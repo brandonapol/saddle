@@ -34,6 +34,9 @@ type keyMap struct {
 	// Plan view.
 	Approve, EditPlan, Replan, ModelUp, ModelDown, Go, PlanNext, PlanPrev, BotsUp, BotsDown key.Binding
 
+	// Copy mode.
+	CopyMode, CopySelect, CopyYank, CopyAll, CopySource, CopyTop, CopyBottom, CopyHalfDown, CopyHalfUp, CopyExit key.Binding
+
 	// Task list.
 	Up, Down, Open, Skill, Spawn, Pause, Brief, Kill, Land, Back key.Binding
 }
@@ -89,6 +92,17 @@ func newKeyMap() keyMap {
 		BotsUp:    b(">/<", "bots limit", ">", "."),
 		BotsDown:  b("<", "bots limit down", "<", ","),
 
+		CopyMode:     b("ctrl+y", "copy mode", "ctrl+y"),
+		CopySelect:   b("V", "select lines", "V", "v"),
+		CopyYank:     b("y/enter", "copy and leave", "y", "enter"),
+		CopyAll:      b("Y", "copy the whole pane", "Y"),
+		CopySource:   b("tab", "next pane", "tab", "shift+tab"),
+		CopyTop:      b("g", "top", "g", "home"),
+		CopyBottom:   b("G", "bottom", "G", "end"),
+		CopyHalfDown: b("ctrl+d/u", "half page", "ctrl+d"),
+		CopyHalfUp:   b("ctrl+u", "half page up", "ctrl+u"),
+		CopyExit:     b("esc/q", "leave copy mode", "esc", "q"),
+
 		Up:    b("k", "up", "k", "up"),
 		Down:  b("j/k", "select", "j", "down"),
 		Open:  b("enter", "open window", "enter", "a"),
@@ -118,6 +132,11 @@ func (k keyMap) groups() []keyGroup {
 		{"Plan view", []key.Binding{k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.ModelDown, k.Go, k.PlanNext, k.PlanPrev, k.BotsUp, k.BotsDown}},
 		{"Merge view", []key.Binding{k.AutoMerge, k.Hold, k.Rebase, k.QueueDown, k.QueueUp, k.TakeOver}},
 		{"Terminal", []key.Binding{k.Terminal, k.TermBack, k.TermScrollUp, k.TermScrollDown}},
+		{"Copy", []key.Binding{k.CopyMode, k.CopySelect, k.CopyYank, k.CopyAll, k.CopySource, k.CopyTop, k.CopyBottom, k.CopyHalfDown, k.CopyHalfUp, k.CopyExit,
+			// Display only: the mouse.
+			key.NewBinding(key.WithHelp("drag", "copy the rows dragged over")),
+			key.NewBinding(key.WithHelp("shift+drag", "terminal's own selection")),
+		}},
 	}
 }
 
@@ -128,23 +147,26 @@ func (m *model) help() []key.Binding {
 	if m.helpOpen {
 		return []key.Binding{withHelp(k.Help, "esc/?", "close"), k.ViewControl, k.Quit}
 	}
+	if m.cp.on {
+		return []key.Binding{withHelp(k.Down, "j/k", "move"), k.CopySelect, withHelp(k.CopyYank, "y", "copy"), k.CopyAll, k.CopySource, k.CopyExit, k.CopyTop, k.CopyBottom, k.Quit}
+	}
 	if m.focus == focusTerm {
 		return []key.Binding{withHelp(k.Terminal, "alt+`", "hide"), k.TermBack, k.TermScrollUp}
 	}
 	if m.view == viewMerge && m.tr.focus {
-		return []key.Binding{withHelp(k.Down, "j/k", "entry"), k.QueueDown, k.Hold, k.TakeOver, withHelp(k.Focus, "tab", "stacks"), k.AutoMerge, k.ViewControl, k.Help, k.Terminal, k.Quit}
+		return []key.Binding{withHelp(k.Down, "j/k", "entry"), k.QueueDown, k.Hold, k.TakeOver, withHelp(k.Focus, "tab", "stacks"), k.AutoMerge, k.ViewControl, k.Help, k.Terminal, k.CopyMode, k.Quit}
 	}
 	if m.view == viewMerge {
-		return []key.Binding{withHelp(k.Down, "j/k", "stack"), withHelp(k.Focus, "tab", "train"), k.AutoMerge, k.Hold, k.Rebase, k.ViewControl, k.Help, k.Terminal, k.Quit}
+		return []key.Binding{withHelp(k.Down, "j/k", "stack"), withHelp(k.Focus, "tab", "train"), k.AutoMerge, k.Hold, k.Rebase, k.ViewControl, k.Help, k.Terminal, k.CopyMode, k.Quit}
 	}
 	if m.view == viewPlan {
 		if m.pl.noting {
 			return []key.Binding{withHelp(k.Send, "enter", "replan"), withHelp(k.Back, "esc", "cancel"), k.ViewControl, k.Quit}
 		}
-		return []key.Binding{withHelp(k.Down, "j/k", "task"), k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.Go, k.BotsUp, k.PlanNext, k.ViewControl, k.Help, k.Terminal, k.Quit}
+		return []key.Binding{withHelp(k.Down, "j/k", "task"), k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.Go, k.BotsUp, k.PlanNext, k.ViewControl, k.Help, k.Terminal, k.CopyMode, k.Quit}
 	}
 	if m.view != viewControl {
-		return []key.Binding{k.ViewControl, k.Help, k.Terminal, k.Quit}
+		return []key.Binding{k.ViewControl, k.Help, k.Terminal, k.CopyMode, k.Quit}
 	}
 	if m.focus == focusChat {
 		hs := []key.Binding{k.Send, k.Newline}
@@ -156,9 +178,9 @@ func (m *model) help() []key.Binding {
 		default:
 			hs = append(hs, k.Complete, k.Ask)
 		}
-		return append(hs, k.NextAgent, withHelp(k.Focus, "tab", "agents"), k.ViewControl, k.Terminal, withHelp(k.Help, "f1", "keys"), k.PageUp, k.Restart, k.Quit)
+		return append(hs, k.NextAgent, withHelp(k.Focus, "tab", "agents"), k.ViewControl, k.Terminal, k.CopyMode, withHelp(k.Help, "f1", "keys"), k.PageUp, k.Restart, k.Quit)
 	}
-	return []key.Binding{k.Down, k.NextAgent, k.Open, k.Brief, k.ViewControl, m.detachHelp(), k.Skill, k.Spawn, k.Pause, k.Ask, k.Back, k.Kill, k.Land, k.Help, k.Restart, k.Quit}
+	return []key.Binding{k.Down, k.NextAgent, k.Open, k.Brief, k.ViewControl, m.detachHelp(), k.Skill, k.Spawn, k.Pause, k.Ask, k.Back, k.Kill, k.Land, k.CopyMode, k.Help, k.Restart, k.Quit}
 }
 
 func withHelp(b key.Binding, h, desc string) key.Binding {
