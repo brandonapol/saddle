@@ -515,7 +515,8 @@ func overlaps(wt, base string, files []string) bool {
 // the PR below. Tasks GitHub says are done leave the stack first (see
 // ReconcileStack). Layers below the first broken or flagged one are
 // published; from there up nothing is pushed or changed, and the error says
-// why.
+// why. Each layer must pass the pre-publish gate at its own head first (see
+// prgate.go): a red one and those above it stay unpublished.
 func (a *App) PRs() ([]string, error) {
 	res, err := a.publish()
 	return res.urls, err
@@ -579,12 +580,25 @@ func (a *App) publish() (published, error) {
 		a.warnOutsideClaims(l, base)
 		base, baseName = l.To, l.ID+"'s branch"
 	}
+	// Every layer about to go out passes the repo's checks at its own head
+	// first (#223).
+	gateHeld, gateStop := a.prGate(landed, layout, order, func(i int) bool {
+		_, held := ciHeld[i]
+		_, own := independent[landed[i].ID]
+		return i < stopAt && !held && !own
+	})
+	if gateHeld == nil && gateStop != nil {
+		return res, gateStop
+	}
 	var stack []store.Task
 	var groups []int
 	done := map[int]bool{}
 	for _, i := range order {
 		if i >= stopAt {
 			continue
+		}
+		if _, ok := gateHeld[i]; ok {
+			continue // its own head, or one below it, is red (#223)
 		}
 		if r, ok := ciHeld[i]; ok {
 			ciSkipped[i] = r // CI is red below it (#213)
@@ -656,7 +670,7 @@ func (a *App) publish() (published, error) {
 	if stop == nil {
 		stop = ciRedErr(ciSkipped, landed)
 	}
-	return res, stop
+	return res, errors.Join(stop, gateStop)
 }
 
 // prBase is the branch layer i's PR targets: base, or the branch of the
