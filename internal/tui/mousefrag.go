@@ -13,16 +13,20 @@ import (
 // alone those runes land in the input box. mouseScrub spots the pieces and
 // drops them.
 //
-// A real alt+[ looks like the start of a report (#201), so mouseScrub holds
-// it until the next key decides what it was, or a timer says nothing
-// followed.
+// The same cut splits alt+<key> (ESC then the key) into esc and the key
+// (#200), and a real alt+[ looks like the start of a report (#201). So
+// mouseScrub holds a bare esc (when wait is set) and an alt+[ until the next
+// key decides what they were, or a timer says nothing followed.
 type mouseScrub struct {
 	state int
-	held  *tea.KeyMsg // the alt+[ waiting for the next key
-	seq   int         // tells a stale timer from the current one
+	wait  time.Duration // how long a bare esc waits for a rune to join; 0 sends it at once
+	held  *tea.KeyMsg   // the esc or alt+[ waiting for the next key
+	seq   int           // tells a stale timer from the current one
 }
 
-// escWait is how long a held key waits for the next one.
+// escWait is how long the TUI holds a bare esc, as Bubble Tea v2 and vim's
+// esckeys do: long enough for the second read of a split ESC <key>, too
+// short for a person to notice.
 const escWait = 25 * time.Millisecond
 
 // escFlushMsg is a held key's timer firing.
@@ -59,12 +63,18 @@ func (s *mouseScrub) feed(k tea.KeyMsg) ([]tea.KeyMsg, tea.Cmd) {
 				s.report(rest)
 				return nil, nil
 			}
+			// Bubble Tea queues keys and timers in the order they happen,
+			// so a key that gets here before the timer came within the wait,
+			// however long the UI took to get to it.
+			if isEsc(h) && len(k.Runes) == 1 {
+				return s.feed(tea.KeyMsg{Type: tea.KeyRunes, Runes: k.Runes, Alt: true})
+			}
 		}
 		s.state = scrubIdle
 		out, c := s.feed(k)
 		return append([]tea.KeyMsg{h}, out...), c
 	}
-	if isAltBracket(k) {
+	if isAltBracket(k) || (isEsc(k) && s.wait > 0) {
 		return nil, s.hold(k)
 	}
 	if isEsc(k) {
@@ -98,8 +108,11 @@ func (s *mouseScrub) feed(k tea.KeyMsg) ([]tea.KeyMsg, tea.Cmd) {
 func (s *mouseScrub) hold(k tea.KeyMsg) tea.Cmd {
 	s.held = &k
 	s.seq++
-	seq := s.seq
-	return tea.Tick(escWait, func(time.Time) tea.Msg { return escFlushMsg{seq} })
+	seq, wait := s.seq, s.wait
+	if wait == 0 {
+		wait = escWait
+	}
+	return tea.Tick(wait, func(time.Time) tea.Msg { return escFlushMsg{seq} })
 }
 
 // flush releases the held key when timer seq is the current one. Pieces of a

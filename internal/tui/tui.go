@@ -217,7 +217,7 @@ func Run(a *app.App, first string) error {
 	if err != nil {
 		return err
 	}
-	m := &model{app: a, launch: l, prev: map[string]string{}, screens: map[string]*screenState{}, follow: true, keys: newKeyMap(), prefix: tmuxPrefix()}
+	m := &model{app: a, launch: l, prev: map[string]string{}, screens: map[string]*screenState{}, follow: true, keys: newKeyMap(), prefix: tmuxPrefix(), scrub: mouseScrub{wait: escWait}}
 	if !a.Cfg.Triage.Disabled {
 		m.jev = triage.FromEnv()
 	}
