@@ -568,7 +568,7 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 	if m.cp.on && !key.Matches(k, keys.Quit) {
 		return m.copyKey(k), true
 	}
-	if key.Matches(k, keys.CopyMode) && !m.helpOpen && !(m.view == viewPlan && m.pl.noting) {
+	if key.Matches(k, keys.CopyMode) && !m.helpOpen && (m.view != viewPlan || !m.pl.noting) {
 		m.enterCopy()
 		return nil, true
 	}
