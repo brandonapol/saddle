@@ -44,8 +44,13 @@ func TestJourneyLintDetectMakeFi(t *testing.T) {
 		t.Fatalf("doctor's lint gate:\n%s", out)
 	}
 
+	// Spawning installs the repo's hook for every worktree (#223), so the
+	// agent's own commit is refused; the second commit skips hooks, as an
+	// agent whose hooks don't run would, to reach the train's gate.
 	w.Spawn("t1", "Loose", []string{"LOOSE"},
-		fa.Write("LOOSE", "x\n"), fa.Commit("loose"),
+		fa.Write("LOOSE", "x\n"),
+		fa.Run("git add -A && ! git commit -q -m loose"),
+		fa.Run("git -c core.hooksPath=/dev/null commit -q -m loose"),
 		fa.Done("Adds LOOSE."),
 		fa.Wait("passed its tests, but"),
 		fa.Run("make fix"), fa.Commit("make fix"),
