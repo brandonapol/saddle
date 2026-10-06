@@ -138,6 +138,7 @@ type model struct {
 	am        *automerge.Status                            // auto-merge as last saved; nil until read
 	amer      automerger                                   // the merge view's actions; nil means the app's
 	amBusy    string                                       // the auto-merge action running, if any
+	amGen     int                                          // bumped by each auto-merge change the TUI made
 	conc      *app.Concurrency                             // the bots limit as last read; nil until read
 	concSet   func(n int) (app.Concurrency, error)         // sets the bots limit; nil means the app's
 	stackSel  string                                       // the merge view's selected stack
@@ -192,6 +193,7 @@ type (
 		stats   map[string]agentStats
 		graph   *usageGraph
 		am      *automerge.Status
+		amGen   int // m.amGen when the refresh started
 		conc    *app.Concurrency
 	}
 	flashMsg   string
@@ -215,7 +217,7 @@ func Run(a *app.App, first string) error {
 	if err != nil {
 		return err
 	}
-	m := &model{app: a, launch: l, prev: map[string]string{}, screens: map[string]*screenState{}, follow: true, keys: newKeyMap(), prefix: tmuxPrefix()}
+	m := &model{app: a, launch: l, prev: map[string]string{}, screens: map[string]*screenState{}, follow: true, keys: newKeyMap(), prefix: tmuxPrefix(), scrub: mouseScrub{wait: escWait}}
 	if !a.Cfg.Triage.Disabled {
 		m.jev = triage.FromEnv()
 	}
@@ -329,7 +331,7 @@ func (m *model) refresh() tea.Cmd {
 	if m.sel < len(m.tasks) {
 		sel = m.tasks[m.sel].ID
 	}
-	a := m.app
+	a, amGen := m.app, m.amGen
 	return func() tea.Msg {
 		all, err := mcpserver.Tasks(a)
 		if err != nil {
@@ -362,7 +364,7 @@ func (m *model) refresh() tea.Cmd {
 		msg := refreshMsg{tasks: ts, peek: peek, screens: screens, stats: readStats(a, time.Now())}
 		msg.limits, msg.graph = readUsage(a, time.Now())
 		if st, err := a.AutomergeState(); err == nil {
-			msg.am = &st
+			msg.am, msg.amGen = &st, amGen
 		}
 		if c, err := a.Concurrency(); err == nil {
 			msg.conc = &c
@@ -470,7 +472,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.conc != nil {
 			m.conc = msg.conc
 		}
-		if msg.am != nil {
+		// A state read before the TUI's own last change would undo it.
+		if msg.am != nil && msg.amGen == m.amGen {
 			m.am = msg.am
 		}
 		m.sel = 0
@@ -522,11 +525,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case amDoneMsg:
 		m.amBusy = ""
-		m.flash, m.flashAt = string(msg), time.Now()
+		m.applyAm(msg.apply)
+		m.flash, m.flashAt = msg.text, time.Now()
 		cmds = append(cmds, m.refresh())
 
 	case tea.MouseMsg:
-		m.scrub = mouseScrub{}
+		if keys := m.scrub.release(); keys != nil {
+			cmds = append(cmds, m.press(keys, nil))
+		}
+		m.scrub.state = scrubIdle
 		if c, ok := m.mouseSelect(msg); ok {
 			return m, c
 		}
@@ -540,21 +547,40 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, c
 
 	case tea.KeyMsg:
-		if m.scrub.drop(msg) {
-			return m, nil
-		}
-		if c, handled := m.key(msg); handled {
-			return m, c
-		}
-		if m.focus == focusChat {
-			var c tea.Cmd
-			m.input, c = m.input.Update(msg)
-			cmds = append(cmds, c)
-		}
+		keys, c := m.scrub.feed(msg)
+		return m, m.press(keys, c)
+
+	case escFlushMsg:
+		return m, m.press(m.scrub.flush(msg.seq), nil)
 	}
 	m.renderChat()
 	m.drafting.Store(strings.TrimSpace(m.input.Value()) != "")
 	return m, tea.Batch(cmds...)
+}
+
+// press acts on the keys the scrubber let through, in order, then runs c. A
+// key nothing handled goes to the chat input when it has focus.
+func (m *model) press(keys []tea.KeyMsg, c tea.Cmd) tea.Cmd {
+	cmds := []tea.Cmd{c}
+	typed := false
+	for _, k := range keys {
+		if c, handled := m.key(k); handled {
+			cmds = append(cmds, c)
+			continue
+		}
+		typed = true
+		// alt+[ means nothing to chat; the textarea would type a "[".
+		if m.focus == focusChat && !isAltBracket(k) {
+			var c tea.Cmd
+			m.input, c = m.input.Update(k)
+			cmds = append(cmds, c)
+		}
+	}
+	if typed {
+		m.renderChat()
+		m.drafting.Store(strings.TrimSpace(m.input.Value()) != "")
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {

@@ -17,11 +17,10 @@ func (m *model) viewHeader() string {
 	queued, stuck := 0, 0
 	for _, t := range m.tasks {
 		counts[t.Status]++
-		switch firstWord(t.Train) {
-		case "", store.TrainOK:
-		case store.Queued, store.OnHold:
+		switch state := firstWord(t.Train); {
+		case waiting(state):
 			queued++
-		default:
+		case trainStuck(state):
 			stuck++
 		}
 	}

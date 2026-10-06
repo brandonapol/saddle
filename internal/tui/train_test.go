@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -275,5 +276,34 @@ func TestHeaderCountsHeldAsQueued(t *testing.T) {
 	h := m.viewHeader()
 	if !strings.Contains(h, "train 2 queued") || strings.Contains(h, "conflict") {
 		t.Errorf("header: %q", h)
+	}
+}
+
+// A merged or superseded entry has left the stack for good (#206): the
+// header counts neither as a conflict, and the merge view lists merged as
+// landed and superseded with the settled entries, never as returned.
+func TestMergedAndSupersededAreNotReturned(t *testing.T) {
+	m := newViewModel(160, 30)
+	m.tasks = []mcpserver.TaskView{
+		{ID: "t1", Title: "a", Status: store.Landed, Train: "merged: aaa..bbb"},
+		{ID: "t2", Title: "b", Status: store.Landed, Train: "superseded: ccc..ddd"},
+		{ID: "t3", Title: "c", Status: store.Done, Train: "queued"},
+	}
+	if h := m.viewHeader(); !strings.Contains(h, "train 1 queued") || strings.Contains(h, "conflict") {
+		t.Errorf("header: %q", h)
+	}
+	m.view = viewMerge
+	m.Update(trainLoadedMsg{entries: []store.TrainEntry{
+		{Task: "t1", State: app.TrainMerged, Note: "aaa..bbb"},
+		{Task: "t2", State: app.TrainSuperseded, Note: "ccc..ddd"},
+		{Task: "t3", State: store.Queued},
+	}})
+	q, back, landed := m.trainSections()
+	if len(q) != 1 || len(back) != 0 || len(landed) != 2 {
+		t.Errorf("sections: queue %v back %v landed %v", q, back, landed)
+	}
+	text := flat(strings.Join(m.viewTrain(120), "\n"))
+	if strings.Contains(text, "returned") || !strings.Contains(text, "1 landed") {
+		t.Errorf("train panel:\n%s", text)
 	}
 }

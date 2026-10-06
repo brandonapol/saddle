@@ -134,3 +134,82 @@ func TestRenderChatReusesRenderedLines(t *testing.T) {
 		t.Fatal("a width change kept renderings for the old width")
 	}
 }
+
+func altRune(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}, Alt: true} }
+
+// alt+[ is held until the next key decides it: "<" and report parameters
+// make it a split mouse report, anything else releases it ahead of that key
+// (#201). Alone, the timer releases it.
+func TestMouseScrubReleasesAltBracket(t *testing.T) {
+	runes := func(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+	var s mouseScrub
+	if out, c := s.feed(altRune('[')); out != nil || c == nil {
+		t.Fatalf("alt+[ should be held with a timer, got %v", out)
+	}
+	if out, _ := s.feed(runes("x")); len(out) != 2 || out[0].String() != "alt+[" || out[1].String() != "x" {
+		t.Errorf("alt+[ x: got %v", out)
+	}
+	s.feed(altRune('['))
+	if out, _ := s.feed(runes("<65;1")); out != nil {
+		t.Errorf("alt+[ <65;1 is a report, got %v", out)
+	}
+	if out, _ := s.feed(runes("2;3M")); out != nil {
+		t.Errorf("report tail got through: %v", out)
+	}
+	_, c := s.feed(altRune('['))
+	msg := c()
+	if out := s.flush(msg.(escFlushMsg).seq); len(out) != 1 || out[0].String() != "alt+[" {
+		t.Errorf("timer released %v", out)
+	}
+	if out := s.flush(msg.(escFlushMsg).seq); out != nil {
+		t.Errorf("a second flush released %v", out)
+	}
+}
+
+// With a wait set, a bare esc is held: a lone rune right behind it joins it
+// into alt+<rune>, as when ESC ` arrives in two reads (#200). Once the timer
+// fires, esc goes on its own and the next rune is just a rune.
+func TestMouseScrubJoinsSplitAlt(t *testing.T) {
+	runes := func(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+	s := mouseScrub{wait: escWait}
+	if out, c := s.feed(escKey()); out != nil || c == nil {
+		t.Fatalf("esc should be held with a timer, got %v", out)
+	}
+	if out, _ := s.feed(runes("`")); len(out) != 1 || out[0].String() != "alt+`" {
+		t.Errorf("esc ` split: got %v", out)
+	}
+
+	_, c := s.feed(escKey())
+	if out := s.flush(c().(escFlushMsg).seq); len(out) != 1 || out[0].String() != "esc" {
+		t.Errorf("timer released %v", out)
+	}
+	if out, _ := s.feed(runes("j")); len(out) != 1 || out[0].String() != "j" {
+		t.Errorf("j after the timer: got %v", out)
+	}
+
+	// esc then a whole report is dropped, esc and all.
+	s.feed(escKey())
+	if out, _ := s.feed(runes("[<65;1;2M")); out != nil {
+		t.Errorf("esc + report: got %v", out)
+	}
+	// esc esc: the first goes, the second waits.
+	s.feed(escKey())
+	if out, c := s.feed(escKey()); len(out) != 1 || out[0].String() != "esc" || c == nil {
+		t.Errorf("esc esc: got %v", out)
+	}
+}
+
+// Through the real parser: ESC and ` in separate reads still toggle the
+// pane closed, and nothing reaches chat.
+func TestSplitAltBacktickTogglesTerminal(t *testing.T) {
+	msgs := parse(t, "\x1b", "`")
+	m := newTermModel(t)
+	m.scrub.wait = escWait
+	openShell(t, m)
+	for _, msg := range msgs {
+		m.Update(msg)
+	}
+	if m.termOpen || m.input.Value() != "" {
+		t.Errorf("parsed %v: pane open %v, chat input %q", msgs, m.termOpen, m.input.Value())
+	}
+}
