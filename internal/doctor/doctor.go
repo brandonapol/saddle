@@ -20,6 +20,7 @@ import (
 	"github.com/brandonapol/saddle/internal/ghstack"
 	"github.com/brandonapol/saddle/internal/lintgate"
 	"github.com/brandonapol/saddle/internal/refguard"
+	"github.com/brandonapol/saddle/internal/trust"
 )
 
 // Status is a check's outcome. Only Fail makes saddle doctor exit non-zero.
@@ -50,6 +51,7 @@ const (
 	CheckIgnored       = ".saddle ignored"
 	CheckStateDB       = "state.db"
 	CheckLeftovers     = "leftovers"
+	CheckTrust         = "trust"
 )
 
 // Result is one check's outcome. Fix is set whenever Status isn't OK.
@@ -108,12 +110,41 @@ type run struct {
 // Run runs every check in order.
 func Run(env Env) []Result {
 	r := &run{env: env}
-	return []Result{
+	rs := []Result{
 		r.config(), r.gitRemote(), r.defaultBranch(), r.ghAuth(), r.mergeSettings(), r.protection(), r.ghStack(),
 		r.testCmd(), r.tool(CheckTmux, "tmux", "-V", "install tmux (e.g. `brew install tmux` or your package manager)"),
 		r.tool(CheckClaude, r.cfg.Claude.Cmd, "--version", "install Claude Code (https://claude.com/claude-code) or set [claude] cmd in .saddle/config.toml"),
 		r.hooks(), r.push(), r.orchAllow(), r.gate(), r.ignored(), r.stateDB(), r.leftovers(),
 	}
+	if te, ok := env.(TrustEnv); ok {
+		rs = append(rs, trustCheck(te))
+	}
+	return rs
+}
+
+// TrustEnv is an Env that knows whether the user trusts the repo (#215).
+// The check is skipped for envs without it.
+type TrustEnv interface {
+	// Trust returns the recorded decision and whether this process is
+	// trusted regardless (a saddle agent, or SADDLE_TRUST=1).
+	Trust() (rep trust.Report, inherited bool, err error)
+}
+
+func trustCheck(te TrustEnv) Result {
+	rep, inherited, err := te.Trust()
+	if err != nil {
+		return fail(CheckTrust, err.Error(), "run `saddle trust` to rewrite the decision")
+	}
+	switch {
+	case rep.State == trust.StateTrusted:
+		return ok(CheckTrust, "trusted since "+rep.Recorded.TrustedAt.Format("2006-01-02"))
+	case inherited:
+		return ok(CheckTrust, string(rep.State)+", but this run is trusted (SADDLE_TASK or SADDLE_TRUST=1)")
+	case rep.State == trust.StateOriginChanged:
+		return fail(CheckTrust, fmt.Sprintf("origin changed: trusted with %s, now %s", rep.Recorded.Origin, rep.Repo.Origin),
+			"run `saddle trust` to review and trust the new origin; saddle up refuses until then")
+	}
+	return fail(CheckTrust, "not trusted: saddle up and the plugin won't start here", "run `saddle trust` to review what saddle does here and trust it")
 }
 
 func ok(name, detail string) Result { return Result{Name: name, Status: OK, Detail: detail} }

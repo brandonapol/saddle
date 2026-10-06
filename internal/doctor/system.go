@@ -16,6 +16,7 @@ import (
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/trust"
 )
 
 // System is the real Env for the repo whose main checkout is root.
@@ -30,6 +31,11 @@ func (s system) LookPath(name string) (string, error) {
 	return exec.LookPath(name)
 }
 func (s system) Hooks() ([]refguard.HookState, error) { return refguard.Installed(string(s)) }
+
+func (s system) Trust() (trust.Report, bool, error) {
+	rep, err := trust.Status(string(s), nil)
+	return rep, trust.Inherited(), err
+}
 
 func (s system) GH(args ...string) (string, error) {
 	cmd := exec.Command("gh", args...)
