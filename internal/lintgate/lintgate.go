@@ -69,7 +69,8 @@ func detect(root, base string, git Git) Gate {
 		if _, err := os.Stat(path + ChainSuffix); err == nil {
 			script = path + ChainSuffix
 		}
-		if b, err := os.ReadFile(script); err == nil {
+		// saddle's wrapper of a repo hook runs the hook the repo ships, found below.
+		if b, err := os.ReadFile(script); err == nil && !isRepoHook(string(b)) {
 			g := fromScript(root, base, string(b), script)
 			g.Source, g.Hook = script, path
 			return g

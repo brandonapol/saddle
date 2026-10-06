@@ -503,3 +503,33 @@ func TestNoticesDigestEvery(t *testing.T) {
 		t.Error("template doesn't document notices.digest_every")
 	}
 }
+
+// #223: [train] prepublish.* and stuck_after default to one layer at a time,
+// a thirty-minute timeout and a thirty-minute alarm.
+func TestTrainPrepublishAndStuckAfter(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := cfg.Train.Prepublish
+	if p.Cmd != "" || p.Parallel != 1 || p.Timeout != 30*time.Minute || p.Off || cfg.Train.StuckAfter != 30*time.Minute {
+		t.Fatalf("defaults = %+v, stuck_after %v", p, cfg.Train.StuckAfter)
+	}
+	root := t.TempDir()
+	writeConfig(t, root, "[train]\nprepublish.cmd = \"make check/spelling\"\nprepublish.parallel = 3\nprepublish.timeout = \"2m\"\nstuck_after = \"5m\"\n")
+	if cfg, err = Load(root); err != nil {
+		t.Fatal(err)
+	}
+	p = cfg.Train.Prepublish
+	if p.Cmd != "make check/spelling" || p.Parallel != 3 || p.Timeout != 2*time.Minute || cfg.Train.StuckAfter != 5*time.Minute {
+		t.Fatalf("set = %+v, stuck_after %v", p, cfg.Train.StuckAfter)
+	}
+	writeConfig(t, root, "[train]\nprepublish.parallel = 0\nprepublish.off = true\n")
+	if cfg, err = Load(root); err != nil || cfg.Train.Prepublish.Parallel != 1 || !cfg.Train.Prepublish.Off {
+		t.Fatalf("parallel 0 / off: %+v, %v", cfg.Train.Prepublish, err)
+	}
+	if !strings.Contains(Template, "prepublish.cmd") || !strings.Contains(Template, "stuck_after") {
+		t.Error("template lacks prepublish.cmd or stuck_after")
+	}
+}

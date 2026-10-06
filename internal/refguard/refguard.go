@@ -72,7 +72,8 @@ func Actor(getenv func(string) string) string {
 // <name>.pre-saddle (a symlink stays a symlink, so a repo's tracked hook is
 // never written through) and saddle's hook runs it after its own check, with
 // the same arguments and stdin; its failure still blocks (#212). When that
-// slot is taken too, nothing is written and the error says so.
+// slot is taken too, nothing is written and the error says so. Then it
+// installs wrappers for the hooks the repo ships (see InstallRepoHooks).
 func Install(root, bin string) error {
 	hooks, err := hooksDir(root)
 	if err != nil {
@@ -129,7 +130,9 @@ func Install(root, bin string) error {
 			return err
 		}
 	}
-	return nil
+	// The repo's own hooks run in every worktree too (#223).
+	_, err = InstallRepoHooks(root)
+	return err
 }
 
 func hooksDir(root string) (string, error) {

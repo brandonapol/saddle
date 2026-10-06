@@ -588,3 +588,32 @@ func TestGHComments(t *testing.T) {
 		}
 	}
 }
+
+// #223: each sentinel cycle runs the stuck-stack alarm.
+func TestSentinelRunRaisesStuckStackAlarm(t *testing.T) {
+	a, _ := setup(t)
+	newFakeGH(t)
+	landTask(t, a, "t1", "one")
+	a.Cfg.Train.StuckAfter = time.Minute
+	must(t, a.SetCIRed(app.CIRedState{Red: []app.CIRedLayer{{Task: "t1", Head: "abc", Checks: []string{"CI / test"}, Since: time.Now().Add(-time.Hour)}}}))
+	s := New(a)
+	s.Interval = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = s.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		ns, err := a.Store.PeekNotices(app.OrchestratorID, false)
+		must(t, err)
+		for _, n := range ns {
+			if strings.HasPrefix(n.Text, "Stuck stack:") && strings.Contains(n.Text, "layer t1") {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no stuck-stack alarm from the sentinel: %+v", ns)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

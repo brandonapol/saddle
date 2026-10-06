@@ -144,6 +144,9 @@ func (a *App) Publish(req PublishReq) (PublishResult, error) {
 		}
 	}
 	res.Commits = len(got)
+	if err := a.gatePublish(dir, t.ID, req.Target, head); err != nil {
+		return res, err
+	}
 
 	title, body, err := a.publishText(t, isTask, base, head)
 	if err != nil {

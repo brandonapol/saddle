@@ -35,6 +35,9 @@ type RestackResult struct {
 	// Backup is the ref holding integration's tip from before the restack
 	// rewrote it; "" when integration only fast-forwarded or didn't move.
 	Backup string `json:"backup,omitempty"`
+	// GateRed are re-cut layers whose new tip fails [train] prepublish.cmd
+	// (#223): prs holds them and the layers above them until they pass.
+	GateRed []string `json:"gate_red,omitempty"`
 }
 
 // restacked is a landed task's place in the rebuilt stack: NewFrom..NewTo.
@@ -207,6 +210,11 @@ func (a *App) restack() (RestackResult, error) {
 	if err := a.moveStack(plan, integ, res.Base, &res); err != nil {
 		return res, err
 	}
+	// Re-cutting changes what each tip holds (spelling words, migration
+	// numbers), so the cheap checks run again on every layer that moved.
+	for _, g := range a.gateRestack(plan) {
+		res.GateRed = append(res.GateRed, g.Task)
+	}
 	if err := a.republish(plan, &res); err != nil {
 		return res, err
 	}
@@ -221,6 +229,9 @@ func (a *App) restack() (RestackResult, error) {
 	}
 	if res.Backup != "" {
 		msg += " The old " + a.Cfg.Integration + " is kept at " + res.Backup + "."
+	}
+	if len(res.GateRed) > 0 {
+		msg += " Their new tips fail [train] prepublish.cmd, so prs holds them: " + strings.Join(res.GateRed, ", ") + "."
 	}
 	if len(res.Repairing) > 0 {
 		msg += " Conflicting with no agent to resolve it, so out of the stack until a repair task re-lands their work: " + strings.Join(res.Repairing, ", ") + "."

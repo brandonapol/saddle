@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/lintgate"
 	"github.com/brandonapol/saddle/internal/refguard"
 )
 
@@ -489,5 +490,62 @@ func TestPushCheckOnlyDryRuns(t *testing.T) {
 	}
 	if len(f.trainRuns) != 1 {
 		t.Fatalf("train git calls = %v", f.trainRuns)
+	}
+}
+
+// hooksEnv is fakeEnv that also reports the hooks the repo ships.
+type hooksEnv struct {
+	*fakeEnv
+	repo []refguard.RepoHook
+}
+
+func (h hooksEnv) RepoHooks() ([]refguard.RepoHook, error) { return h.repo, nil }
+
+func shippedHook(name string, active bool) refguard.RepoHook {
+	return refguard.RepoHook{Shipped: lintgate.Shipped{Name: name, Rel: "git/hooks/" + name, Kind: lintgate.KindHook, Source: "git/hooks/" + name},
+		Path: "/r/.git/hooks/" + name, Active: active, Wrapper: active}
+}
+
+// #223: git/hooks/* that agent commits don't run is a precise warning with
+// the exact fix.
+func TestDoctorRepoHooks(t *testing.T) {
+	f := healthy(t)
+	env := hooksEnv{f, []refguard.RepoHook{shippedHook("commit-msg", false), shippedHook("pre-commit", false)}}
+	r := find(t, Run(env), CheckRepoHooks)
+	if r.Status != Warn {
+		t.Fatalf("inactive hooks: %+v", r)
+	}
+	for _, want := range []string{"git/hooks/commit-msg, git/hooks/pre-commit", "/r/.git/hooks/commit-msg, /r/.git/hooks/pre-commit"} {
+		if !strings.Contains(r.Detail, want) {
+			t.Errorf("detail lacks %q: %s", want, r.Detail)
+		}
+	}
+	if !strings.Contains(r.Fix, "saddle init") || !strings.Contains(r.Fix, "SADDLE_FAST_HOOK=1") || !strings.Contains(r.Fix, "core.hooksPath") {
+		t.Errorf("fix = %s", r.Fix)
+	}
+
+	env.repo = []refguard.RepoHook{shippedHook("commit-msg", true), shippedHook("pre-commit", true)}
+	if r := find(t, Run(env), CheckRepoHooks); r.Status != OK || !strings.Contains(r.Detail, "every worktree") {
+		t.Fatalf("active hooks: %+v", r)
+	}
+
+	// Active in the main checkout, but an agent worktree looks elsewhere.
+	wt := filepath.Join(f.root, ".saddle", "worktrees", "t1-x")
+	f.git["worktree list --porcelain"] = res{out: "worktree " + f.root + "\n\nworktree " + wt + "\n"}
+	f.git["-C "+wt+" rev-parse --path-format=absolute --git-path hooks/pre-commit"] = res{out: wt + "/git/hooks/pre-commit"}
+	f.git["-C "+wt+" rev-parse --path-format=absolute --git-path hooks/commit-msg"] = res{out: "/r/.git/hooks/commit-msg"}
+	if r := find(t, Run(env), CheckRepoHooks); r.Status != Warn || !strings.Contains(r.Detail, wt+"/git/hooks/pre-commit") || strings.Contains(r.Detail, "commit-msg") {
+		t.Fatalf("relative hooksPath: %+v", r)
+	}
+
+	env.repo = nil
+	if r := find(t, Run(env), CheckRepoHooks); r.Status != OK {
+		t.Fatalf("no shipped hooks: %+v", r)
+	}
+	// Envs that can't read them skip the check.
+	for _, r := range Run(f) {
+		if r.Name == CheckRepoHooks {
+			t.Fatal("repo hooks checked without RepoHooksEnv")
+		}
 	}
 }

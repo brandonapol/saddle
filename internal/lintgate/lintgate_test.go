@@ -184,3 +184,44 @@ func TestDetectNoGitFallsBackToFiles(t *testing.T) {
 		t.Fatalf("%+v", g)
 	}
 }
+
+// #223: saddle's wrapper of the repo's own hook is not the gate; the hook it
+// runs is.
+func TestDetectLooksPastRepoHookWrapper(t *testing.T) {
+	r := newRepo(t)
+	r.write("Makefile", makefile)
+	r.write("git/hooks/pre-commit", "#!/bin/sh\nmake check\n")
+	r.write(".git/hooks/pre-commit", "#!/bin/sh\n"+RepoHookMarker+": runs git/hooks/pre-commit\nexec sh git/hooks/pre-commit\n")
+	if g := r.detect(); g.Cmd != "make check" || g.Shipped != "git/hooks/pre-commit" {
+		t.Fatalf("%+v", g)
+	}
+}
+
+func TestShippedHooks(t *testing.T) {
+	r := newRepo(t)
+	r.write("git/hooks/pre-commit", "#!/bin/sh\nmake check\n")
+	r.write("git/hooks/commit-msg", "#!/bin/sh\n")
+	r.write("git/hooks/README.md", "docs\n")
+	r.write("git/hooks/pre-push.sample", "\n")
+	got := ShippedHooks(r.root)
+	if len(got) != 2 || got[0].Name != "commit-msg" || got[1].Rel != "git/hooks/pre-commit" || got[1].Kind != KindHook {
+		t.Fatalf("hooks dir: %+v", got)
+	}
+	if run := got[1].Run(); !strings.Contains(run, "'git/hooks/pre-commit' \"$@\"") {
+		t.Fatalf("run = %s", run)
+	}
+
+	h := newRepo(t)
+	h.write(".husky/pre-commit", "npm test\n")
+	if got := ShippedHooks(h.root); len(got) != 1 || got[0].Kind != KindHusky || got[0].Run() != `sh '.husky/pre-commit' "$@"` {
+		t.Fatalf("husky: %+v", got)
+	}
+	l := newRepo(t)
+	l.write("lefthook.yml", "pre-commit:\n  commands:\n    lint:\n      run: make lint\ncommit-msg:\n  scripts: {}\nskip_output: [meta]\n")
+	if got := ShippedHooks(l.root); len(got) != 2 || got[0].Run() != `lefthook run pre-commit "$@"` || got[1].Name != "commit-msg" {
+		t.Fatalf("lefthook: %+v", got)
+	}
+	if got := ShippedHooks(newRepo(t).root); got != nil {
+		t.Fatalf("none: %+v", got)
+	}
+}

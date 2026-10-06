@@ -48,6 +48,7 @@ const (
 	CheckPush          = "saddle can push"
 	CheckOrchAllow     = "orchestrator allowlist"
 	CheckGate          = "lint gate"
+	CheckRepoHooks     = "repo hooks"
 	CheckIgnored       = ".saddle ignored"
 	CheckStateDB       = "state.db"
 	CheckLeftovers     = "leftovers"
@@ -116,10 +117,61 @@ func Run(env Env) []Result {
 		r.tool(CheckClaude, r.cfg.Claude.Cmd, "--version", "install Claude Code (https://claude.com/claude-code) or set [claude] cmd in .saddle/config.toml"),
 		r.hooks(), r.push(), r.orchAllow(), r.gate(), r.ignored(), r.stateDB(), r.leftovers(),
 	}
+	if he, ok := env.(RepoHooksEnv); ok {
+		rs = append(rs, r.repoHooks(he))
+	}
 	if te, ok := env.(TrustEnv); ok {
 		rs = append(rs, trustCheck(te))
 	}
 	return rs
+}
+
+// RepoHooksEnv is an Env that can read the hooks the repo ships (#223). The
+// check is skipped for envs without it.
+type RepoHooksEnv interface {
+	RepoHooks() ([]refguard.RepoHook, error)
+}
+
+// repoHooks warns when the repo ships git hooks (git/hooks/*, .githooks,
+// husky, lefthook) that agent commits don't run, naming each and where git
+// looks for it.
+func (r *run) repoHooks(he RepoHooksEnv) Result {
+	hs, err := he.RepoHooks()
+	if err != nil {
+		return warn(CheckRepoHooks, "could not read: "+err.Error(), "run saddle init inside the repo")
+	}
+	if len(hs) == 0 {
+		return ok(CheckRepoHooks, "the repo ships no git hooks")
+	}
+	wt := r.agentWorktree()
+	var on, off, where []string
+	for _, h := range hs {
+		active := h.Active
+		if active && wt != "" && filepath.Base(h.Path) == h.Name {
+			// A relative core.hooksPath sends each worktree to its own copy.
+			if p, err := r.env.Git("-C", wt, "rev-parse", "--path-format=absolute", "--git-path", "hooks/"+h.Name); err == nil && p != h.Path && !r.env.Exists(p) {
+				active, h.Path = false, p
+			}
+		}
+		name := h.Source
+		if h.Kind == lintgate.KindLefthook {
+			name = h.Name + " (" + h.Source + ")"
+		}
+		if active {
+			on = append(on, name)
+			continue
+		}
+		off = append(off, name)
+		where = append(where, h.Path)
+	}
+	if len(off) == 0 {
+		return ok(CheckRepoHooks, strings.Join(on, ", ")+" run on agent commits in every worktree")
+	}
+	return warn(CheckRepoHooks,
+		fmt.Sprintf("%s ship with the repo but don't run on agent commits: git looks for %s and finds nothing", strings.Join(off, ", "), strings.Join(where, ", ")),
+		"run `saddle init`: it installs a wrapper per hook in the shared hooks directory that runs each worktree's own copy, "+
+			"the heavy ones (pre-commit, pre-push) one at a time across worktrees; SADDLE_FAST_HOOK=1 skips a tree that just passed. "+
+			"Don't set core.hooksPath to the repo's hooks directory instead: that turns off saddle's ref guard")
 }
 
 // TrustEnv is an Env that knows whether the user trusts the repo (#215).
