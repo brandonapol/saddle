@@ -134,7 +134,10 @@ What the spike taught:
   prevents starvation, and the test now checks it.
 - **Orphan lock files are real.** The first crash test left one behind, so
   the reaper now sweeps them. `lockNew` re-checks that the locked inode is
-  still the one at the path, which closes the sweep-versus-create race.
+  still the one at the path, which closes the sweep-versus-create race. Its
+  flock also waits out another process's brief probe instead of failing.
+  `make check` load exposed that race, and `TestLockNewSurvivesSweeperProbe`
+  now covers it.
 
 ## Questions answered
 
