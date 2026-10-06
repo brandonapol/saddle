@@ -201,3 +201,41 @@ func TestGateRestackFlagsRecutLayer(t *testing.T) {
 		t.Fatalf("a red re-cut layer is %s, want an interrupt", class)
 	}
 }
+
+// #223 item 2 through Restack: main gains migration 0002 while t2, stacked,
+// adds its own 0002. Restack re-cuts t2 onto main cleanly, but its new tip
+// has two 0002 migrations: the cheap check flags t2, and prs then holds t2
+// and t3 above it while t1 goes out.
+func TestRestackFlagsDuplicateMigration(t *testing.T) {
+	a := trainSetup(t)
+	a.Cfg.Train.Output = "single"
+	origin, _ := originWithGh(t, a)
+	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+	landTask(t, a, "t2", "two", map[string]string{"migrations/0002_two.sql": "two\n"})
+	landTask(t, a, "t3", "three", map[string]string{"three.txt": "three\n"})
+	a.Cfg.Train.Prepublish.Cmd = `d=$(ls migrations 2>/dev/null | cut -c1-4 | sort | uniq -d); [ -z "$d" ] || { echo "duplicate migration $d"; exit 1; }`
+
+	other := filepath.Join(t.TempDir(), "other")
+	git(t, a.Root, "clone", "-q", origin, other)
+	write(t, other, "migrations/0002_main.sql", "main\n")
+	git(t, other, "add", "-A")
+	git(t, other, "commit", "-qm", "main migration")
+	git(t, other, "push", "-q", "origin", "main")
+
+	res, err := a.Restack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(res.GateRed, []string{"t2"}) {
+		t.Fatalf("restack gate red = %v, want [t2]", res.GateRed)
+	}
+	_, err = a.PRs()
+	if err == nil || !strings.Contains(err.Error(), "layer t2") || !strings.Contains(err.Error(), "duplicate migration 0002") {
+		t.Fatalf("prs after a red restack: %v", err)
+	}
+	t1, _ := a.Store.Task("t1")
+	t3, _ := a.Store.Task("t3")
+	if t1.PR == "" || t3.PR != "" {
+		t.Fatalf("t1 PR %q, t3 PR %q: want t1 published and t3 held", t1.PR, t3.PR)
+	}
+}

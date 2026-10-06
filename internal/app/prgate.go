@@ -174,13 +174,12 @@ func (a *App) runGate(jobs []gateJob, checks []GateCheck, skip func(i int, red m
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			dir, err := a.gateWorktree(w)
-			if err != nil {
-				mu.Lock()
-				errs = append(errs, err)
-				mu.Unlock()
-				return
-			}
+			dir := ""
+			defer func() {
+				if dir != "" {
+					_ = gitx.WorktreeRemove(a.Root, dir)
+				}
+			}()
 			for {
 				mu.Lock()
 				if next >= len(jobs) {
@@ -194,7 +193,15 @@ func (a *App) runGate(jobs []gateJob, checks []GateCheck, skip func(i int, red m
 					continue
 				}
 				mu.Unlock()
-				r, passed, err := a.gateLayer(dir, j, checks, s.Passed, &mu)
+				var r *gateResult
+				var passed []string
+				var err error
+				if dir == "" {
+					dir, err = a.gateWorktree(w)
+				}
+				if err == nil {
+					r, passed, err = a.gateLayer(dir, j, checks, s.Passed, &mu)
+				}
 				mu.Lock()
 				if err != nil {
 					errs = append(errs, err)
@@ -255,15 +262,11 @@ func (a *App) gateLayer(dir string, j gateJob, checks []GateCheck, passed map[st
 	return nil, ok, nil
 }
 
-// gateWorktree is worker w's scratch worktree, made once and reused: each
-// layer is a checkout away, so build caches the repo ignores survive.
+// gateWorktree makes worker w's scratch worktree. A worker reuses it for
+// every layer it checks in one run, each a checkout away, so build output
+// the repo ignores carries over; the run removes it at the end.
 func (a *App) gateWorktree(w int) (string, error) {
 	dir := a.stateDir("prgate", strconv.Itoa(w))
-	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-		if _, err := gitx.Run(dir, "rev-parse", "--git-dir"); err == nil {
-			return dir, nil
-		}
-	}
 	_ = os.RemoveAll(dir)
 	_, _ = gitx.Run(a.Root, "worktree", "prune")
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
@@ -487,7 +490,7 @@ func (a *App) gatePublish(dir, task, target, head string) error {
 }
 
 // gateRestack runs the cheap checks (prepublish.cmd) on each layer restack
-// re-cut, records the red ones and tells the orchestrator. Layers restack
+// re-cut, records the lowest red one and tells the orchestrator. Layers restack
 // left as they were keep what the gate knew of them.
 func (a *App) gateRestack(plan []restacked) []GateRed {
 	checks := a.GateChecks(true)
@@ -500,7 +503,17 @@ func (a *App) gateRestack(plan []restacked) []GateRed {
 			jobs = append(jobs, gateJob{i: i, task: r.ID, head: r.NewTo})
 		}
 	}
-	red, err := a.runGate(jobs, checks, nil)
+	// Integration is linear, so every tip above a red one holds its change
+	// too: only the lowest red layer is flagged, and prs holds the rest.
+	redBelow := func(i int, red map[int]gateResult) bool {
+		for r := range red {
+			if r < i {
+				return true
+			}
+		}
+		return false
+	}
+	red, err := a.runGate(jobs, checks, redBelow)
 	if err != nil {
 		a.Store.Event("", "prepublish_error", "restack: "+err.Error())
 		return nil
@@ -509,7 +522,7 @@ func (a *App) gateRestack(plan []restacked) []GateRed {
 	checked := map[string]bool{}
 	for _, j := range jobs {
 		checked[j.task] = true
-		if r, ok := red[j.i]; ok {
+		if r, ok := red[j.i]; ok && !redBelow(j.i, red) {
 			reds = append(reds, GateRed{Task: j.task, Head: j.head, Check: r.check, Tail: tail(r.out, gateTailLines), TimedOut: r.timedOut})
 		}
 	}
