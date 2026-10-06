@@ -129,7 +129,7 @@ func (s *Store) save(f file) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name()) // no-op after the rename
+	defer func() { _ = os.Remove(tmp.Name()) }() // no-op after the rename
 	if err := tmp.Chmod(0o600); err != nil {
 		tmp.Close()
 		return err
