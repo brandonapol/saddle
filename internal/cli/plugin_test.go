@@ -16,6 +16,7 @@ import (
 	"github.com/brandonapol/saddle/internal/banner"
 	"github.com/brandonapol/saddle/internal/doctor"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/trust"
 )
 
 // pluginRepo returns a git repo with saddle initialized and the orchestrator
@@ -29,6 +30,7 @@ func pluginRepo(t *testing.T) *app.App {
 	t.Setenv("SADDLE_ROOT", "")
 	t.Setenv("SADDLE_TASK", "")
 	t.Setenv("SADDLE_TRAIN", "")
+	t.Setenv(trust.EnvTrust, "1") // trust_test.go covers untrusted repos
 	t.Setenv("GIT_AUTHOR_NAME", "t")
 	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
 	t.Setenv("GIT_COMMITTER_NAME", "t")
@@ -207,6 +209,7 @@ func bareRepo(t *testing.T) string {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("SADDLE_ROOT", "")
 	t.Setenv("SADDLE_TASK", "")
+	t.Setenv(trust.EnvTrust, "1") // trust_test.go covers untrusted repos
 	t.Setenv("GIT_AUTHOR_NAME", "t")
 	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
 	t.Setenv("GIT_COMMITTER_NAME", "t")

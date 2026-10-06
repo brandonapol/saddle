@@ -185,3 +185,65 @@ func TestTrustCommands(t *testing.T) {
 		t.Fatalf("interactive trust: %v\n%s", err, out)
 	}
 }
+
+func TestPluginOnboardAsksTrustInChatFirst(t *testing.T) {
+	root := untrustedRepo(t, false)
+	doc := &fakeDoctor{}
+	var out bytes.Buffer
+	if onboard(&out, root, doc.run) {
+		t.Fatalf("untrusted first use went on:\n%s", out.String())
+	}
+	got := out.String()
+	for _, want := range []string{"Howdy", "Do you trust", ".claude/settings.local.json", "1. Yes, trust this folder", "2. No, exit", "Ask the user", "saddle trust --yes"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("plugin trust prompt lacks %q:\n%s", want, got)
+		}
+	}
+	if banner, prompt := strings.Index(got, "Howdy"), strings.Index(got, "Do you trust"); banner > prompt {
+		t.Errorf("banner after the prompt:\n%s", got)
+	}
+	if doc.runs != 0 {
+		t.Fatal("doctor ran before trust")
+	}
+	noSaddleDir(t, root)
+	if trusted(t, root) {
+		t.Fatal("onboarding recorded trust without the user's answer")
+	}
+
+	// The user said yes in chat; the session ran saddle trust --yes.
+	if out, err := runIn(t, "", "trust", "--yes"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	out.Reset()
+	if !onboard(&out, root, doc.run) || doc.runs != 1 {
+		t.Fatalf("trusted first use: runs %d\n%s", doc.runs, out.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, ".saddle", "config.toml")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPluginOnboardAsksInAnInitializedUntrustedRepo(t *testing.T) {
+	root := untrustedRepo(t, false)
+	t.Setenv(trust.EnvTrust, "1")
+	if out, err := runIn(t, "", "init", "-q"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Setenv(trust.EnvTrust, "")
+	var out bytes.Buffer
+	if onboard(&out, root, (&fakeDoctor{}).run) || !strings.Contains(out.String(), "Do you trust") || strings.Contains(out.String(), "Howdy") {
+		t.Fatalf("initialized, untrusted:\n%s", out.String())
+	}
+}
+
+func TestPluginEngineRefusesUntrustedRepo(t *testing.T) {
+	untrustedRepo(t, false)
+	t.Setenv(trust.EnvTrust, "1")
+	if out, err := runIn(t, "", "init", "-q"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Setenv(trust.EnvTrust, "")
+	if out, err := runIn(t, "", "plugin", "engine"); err == nil || !strings.Contains(err.Error(), "saddle trust") {
+		t.Fatalf("engine in an untrusted repo: %v\n%s", err, out)
+	}
+}

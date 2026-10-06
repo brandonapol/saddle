@@ -24,6 +24,7 @@ import (
 	"github.com/brandonapol/saddle/internal/hook"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/trust"
 	"github.com/spf13/cobra"
 )
 
@@ -80,7 +81,9 @@ func saddleRoot(dir string) string {
 const onboardMarker = "plugin-onboarded"
 
 // onboard sets saddle up the first time a plugin command is used in a repo
-// that never ran saddle init: it greets the user, runs init and the doctor,
+// that never ran saddle init. First, in any repo saddle isn't trusted in, it
+// prints the trust prompt for the session to ask in chat and stops (see
+// writePluginTrust). Then it greets the user, runs init and the doctor,
 // and shows the doctor table. It reports whether the command may go on: only
 // when no check fails (warnings are shown, not blocking). While a check
 // fails, each later use reruns just the doctor. Repos that were already
@@ -95,16 +98,27 @@ func onboard(w io.Writer, dir string, runDoctor func(root string) []doctor.Resul
 	if root == "" {
 		root = saddleRoot(dir)
 	}
-	if root != "" {
+	first := root == ""
+	if first {
+		var err error
+		if root, err = gitx.Root(dir); err != nil {
+			return true // openPlugin explains that saddle needs a git repo
+		}
+	}
+	if err := trust.Gate(root, trust.Options{}); err != nil {
+		if first {
+			fmt.Fprint(w, banner.Howdy())
+			fmt.Fprintln(w)
+		}
+		writePluginTrust(w, root, err)
+		return false
+	}
+	if !first {
 		b, _ := os.ReadFile(filepath.Join(root, ".saddle", onboardMarker))
 		if strings.TrimSpace(string(b)) != "pending" {
 			return true
 		}
 	} else {
-		var err error
-		if root, err = gitx.Root(dir); err != nil {
-			return true // openPlugin explains that saddle needs a git repo
-		}
 		fmt.Fprint(w, banner.Howdy()) // captured by Claude Code: never colored
 		fmt.Fprintf(w, "\nFirst use of saddle in %s: running saddle init and saddle doctor.\n\n", root)
 		if err := initRepo(root); err != nil {
@@ -128,6 +142,23 @@ func onboard(w io.Writer, dir string, runDoctor func(root string) []doctor.Resul
 		return false
 	}
 	return true
+}
+
+// writePluginTrust is the trust prompt for the plugin: Claude Code captures
+// the output, so the session asks the user in chat and records a yes with
+// saddle trust --yes (#215). Nothing has been written yet.
+func writePluginTrust(w io.Writer, root string, err error) {
+	if !errors.Is(err, trust.ErrUntrusted) {
+		fmt.Fprintln(w, "saddle could not check whether this repo is trusted:", err)
+		return
+	}
+	fmt.Fprint(w, trust.Prompt(root))
+	fmt.Fprintf(w, `
+Saddle hasn't written anything here yet. Ask the user the question above, with
+both options, and wait for their answer in chat. Don't answer it for them.
+- If they choose 1, run `+"`saddle trust --yes`"+` in %s, then run this command again.
+- If they choose 2, stop: saddle won't run here.
+`, root)
 }
 
 func initRepo(root string) error {
@@ -323,6 +354,9 @@ this repo's orchestrating Claude Code session. It can't run alongside saddle up.
 				return errors.New(why)
 			}
 			defer a.Close()
+			if err := trust.Gate(a.Root, trust.Options{}); err != nil {
+				return fmt.Errorf("the saddle engine won't run in a repo you haven't trusted; run `saddle trust` in %s first: %w", a.Root, err)
+			}
 			if _, err := a.EnsureOrchestrator(); err != nil {
 				return err
 			}
