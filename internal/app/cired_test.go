@@ -105,3 +105,88 @@ func TestCIRedOwnsOnlyStackedLandedTasks(t *testing.T) {
 		t.Fatal("ci-red owns a task that isn't stacked")
 	}
 }
+
+// #234: only real failures are red. Canceled and superseded runs are
+// ignored, infra failures and known flaky checks are rerun once.
+func TestClassifyCIFailure(t *testing.T) {
+	flaky := []string{"CI / e2e", "race"}
+	for _, c := range []struct {
+		f    CIRedFailure
+		want string
+	}{
+		{CIRedFailure{Check: "CI / ci", LogTail: "--- FAIL: TestThing\nFAIL\tdemo/alpha"}, CIReal},
+		{CIRedFailure{Check: "CI / Check every suite passed", LogTail: "needs.test.result == cancelled\nProcess completed with exit code 1."}, CIIgnore},
+		{CIRedFailure{Check: "CI / ci", LogTail: "Canceling since a higher priority waiting request for 'CI-refs/heads/x' exists"}, CIIgnore},
+		{CIRedFailure{Check: "CI / ci", LogTail: "##[error]The operation was canceled."}, CIIgnore},
+		{CIRedFailure{Check: "CI / ci", LogTail: "Error: Unable to resolve action `actions/setup-go@v9`"}, CIRerun},
+		{CIRedFailure{Check: "CI / ci", LogTail: "The runner has received a shutdown signal."}, CIRerun},
+		{CIRedFailure{Check: "CI / ci", LogTail: "fetch: 502 Bad Gateway"}, CIRerun},
+		{CIRedFailure{Check: "CI / e2e", LogTail: "--- FAIL: TestJourney"}, CIRerun},
+		{CIRedFailure{Check: "CI / race", LogTail: "--- FAIL: TestRace"}, CIRerun},
+		// A real test failure that mentions cancellation is still real.
+		{CIRedFailure{Check: "CI / ci", LogTail: "--- FAIL: TestCancel\n    context canceled"}, CIReal},
+	} {
+		if got, why := ClassifyCIFailure(c.f, flaky); got != c.want {
+			t.Errorf("%s %q: class = %s (%s), want %s", c.f.Check, c.f.LogTail, got, why, c.want)
+		}
+	}
+}
+
+func ciEvents(t *testing.T, a *App, kind string) []string {
+	t.Helper()
+	es, err := a.Store.Events(500)
+	must(t, err)
+	var out []string
+	for _, e := range es {
+		if e.Kind == kind {
+			out = append(out, e.Task+" "+e.Data)
+		}
+	}
+	return out
+}
+
+// #234: a canceled run is not red and spawns nothing; an infra failure is
+// rerun once (gh run rerun --failed) and only counts when it fails again.
+func TestScreenCIPollIgnoresCanceledAndRerunsInfraOnce(t *testing.T) {
+	a, _ := setup(t)
+	var reruns []string
+	rerun := func(run string) error { reruns = append(reruns, run); return nil }
+	runURL := "https://github.com/o/r/actions/runs/42"
+
+	p := CIPoll{Task: "t1", PR: "1", Head: "aaa", Failed: []string{"CI / all"}}
+	fails := []CIRedFailure{{Check: "CI / all", RunURL: runURL, LogTail: "needs.test.result == cancelled"}}
+	got, err := a.ScreenCIPoll(p, fails, rerun)
+	must(t, err)
+	if len(got.Failed) != 0 || got.Green || len(reruns) != 0 {
+		t.Fatalf("canceled run: poll = %+v, reruns %v; want nothing failed, not green, no rerun", got, reruns)
+	}
+	// Seen again, it is not logged twice.
+	_, _ = a.ScreenCIPoll(p, fails, rerun)
+	if ev := ciEvents(t, a, EventCIIgnored); len(ev) != 1 || !strings.Contains(ev[0], "CI / all") {
+		t.Fatalf("ci_ignored events = %v, want one naming the check", ev)
+	}
+
+	p = CIPoll{Task: "t1", PR: "1", Head: "bbb", Failed: []string{"CI / ci"}}
+	fails = []CIRedFailure{{Check: "CI / ci", RunURL: runURL, LogTail: "Unable to resolve action actions/checkout@v9"}}
+	got, err = a.ScreenCIPoll(p, fails, rerun)
+	must(t, err)
+	if len(got.Failed) != 0 || got.Green || !slices.Equal(reruns, []string{"42"}) {
+		t.Fatalf("infra failure: poll = %+v, reruns %v; want it rerun once, not red", got, reruns)
+	}
+	if ev := ciEvents(t, a, EventCIRerun); len(ev) != 1 {
+		t.Fatalf("ci_rerun events = %v, want one", ev)
+	}
+	// It fails the same way after the rerun: now it counts.
+	got, err = a.ScreenCIPoll(p, fails, rerun)
+	must(t, err)
+	if !slices.Equal(got.Failed, []string{"CI / ci"}) || len(reruns) != 1 {
+		t.Fatalf("after one rerun: poll = %+v, reruns %v; want it red, no second rerun", got, reruns)
+	}
+
+	// A real failure is red straight away.
+	p = CIPoll{Task: "t2", PR: "2", Head: "ccc", Failed: []string{"CI / ci"}}
+	fails = []CIRedFailure{{Check: "CI / ci", RunURL: runURL, LogTail: "--- FAIL: TestThing"}}
+	if got, _ = a.ScreenCIPoll(p, fails, rerun); !slices.Equal(got.Failed, []string{"CI / ci"}) {
+		t.Fatalf("real failure screened out: %+v", got)
+	}
+}

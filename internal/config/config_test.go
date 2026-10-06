@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -121,7 +122,7 @@ func TestCIDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.CI != (CI{Interval: 10 * time.Minute, RedInterval: 2 * time.Minute, RedMaxInterval: 16 * time.Minute, RepairAttempts: 2}) {
+	if !reflect.DeepEqual(cfg.CI, CI{Interval: 10 * time.Minute, RedInterval: 2 * time.Minute, RedMaxInterval: 16 * time.Minute, RepairAttempts: 2}) {
 		t.Fatalf("ci defaults: %+v", cfg.CI)
 	}
 }
@@ -132,7 +133,7 @@ func TestCIConfig(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".saddle"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body := "[ci]\ninterval = \"3m\"\ndisabled = true\nred_interval = \"30s\"\nred_max_interval = \"5m\"\nrepair_attempts = 3\n"
+	body := "[ci]\ninterval = \"3m\"\ndisabled = true\nred_interval = \"30s\"\nred_max_interval = \"5m\"\nrepair_attempts = 3\nflaky = [\"CI / e2e\"]\n"
 	if err := os.WriteFile(filepath.Join(root, ".saddle", "config.toml"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +141,7 @@ func TestCIConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.CI != (CI{Interval: 3 * time.Minute, Disabled: true, RedInterval: 30 * time.Second, RedMaxInterval: 5 * time.Minute, RepairAttempts: 3}) {
+	if !reflect.DeepEqual(cfg.CI, CI{Interval: 3 * time.Minute, Disabled: true, RedInterval: 30 * time.Second, RedMaxInterval: 5 * time.Minute, RepairAttempts: 3, Flaky: []string{"CI / e2e"}}) {
 		t.Fatalf("ci: %+v", cfg.CI)
 	}
 }

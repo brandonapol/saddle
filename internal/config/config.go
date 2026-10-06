@@ -124,6 +124,9 @@ type CI struct {
 	// RepairAttempts is how many repair tasks a red layer gets before the
 	// orchestrator is asked to step in.
 	RepairAttempts int `toml:"repair_attempts"`
+	// Flaky are known flaky checks, as "workflow / job" labels or bare job
+	// names. A failure of one is rerun once before it counts as red (#234).
+	Flaky []string `toml:"flaky"`
 }
 
 // Sweeper configures `saddle sweep`, which merges open saddle PRs that are
@@ -567,6 +570,10 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # red_interval = "2m"
 # red_max_interval = "16m"
 # repair_attempts = 2
+# Known flaky checks ("workflow / job" or a job name): a failure of one is
+# rerun once before it counts as red. Canceled, skipped and superseded runs
+# never count; infra failures (runner lost, 5xx) are rerun once.
+# flaky = []
 
 [usage]
 # Plan-limit bars are estimates: set cap to your plan's token budget for each

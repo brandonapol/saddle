@@ -37,6 +37,9 @@ type CIRed struct {
 	Logs    func(ctx context.Context, pr string) []ciwatch.Failed
 	labeled bool // the ci-red label exists
 	lastErr string
+	// fetched holds this cycle's failing-check logs by PR, so screening and
+	// the repair share one fetch.
+	fetched map[string][]ciwatch.Failed
 }
 
 // NewCIRed returns the ci-red watcher for a, talking to GitHub through gh.
@@ -119,6 +122,23 @@ func (c *CIRed) Check(ctx context.Context) (CIRedReport, error) {
 	if len(errs) > 0 && len(polls) == 0 && len(targets) > 0 {
 		return rep, errors.Join(errs...)
 	}
+	// Canceled runs are not red, and infra or flaky failures get one rerun
+	// first (#234). Only a head that newly failed costs a log fetch.
+	c.fetched = map[string][]ciwatch.Failed{}
+	if known, err := a.CIRed(); err == nil {
+		for i, p := range polls {
+			if l, ok := known.Layer(p.Task); len(p.Failed) == 0 || ok && l.Head == p.Head && slices.Equal(l.Checks, p.Failed) {
+				continue
+			}
+			polls[i], err = a.ScreenCIPoll(p, ciFailures(c.logs(ctx, p.PR)), func(run string) error {
+				_, err := c.GH(ctx, "run", "rerun", run, "--failed")
+				return err
+			})
+			if err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
 	// A PR whose poll failed keeps what was known about it.
 	ch, err := a.ApplyCIRed(polls)
 	if err != nil {
@@ -157,6 +177,7 @@ type rollup struct {
 	Conclusion string `json:"conclusion"`
 	Context    string `json:"context"`
 	State      string `json:"state"`
+	StartedAt  string `json:"startedAt"`
 }
 
 func (r rollup) label() string {
@@ -187,6 +208,25 @@ func (r rollup) verdict() string {
 	return "pass" // success, neutral, skipped, cancelled
 }
 
+// latest keeps the newest run of each check: a failed run that a newer run
+// of the same check on the same head superseded is not red (#234).
+func latest(rs []rollup) []rollup {
+	var out []rollup
+	at := map[string]int{}
+	for _, r := range rs {
+		k := r.Typename + "\x00" + r.label()
+		if i, ok := at[k]; ok {
+			if r.StartedAt >= out[i].StartedAt { // RFC 3339 sorts as text
+				out[i] = r
+			}
+			continue
+		}
+		at[k] = len(out)
+		out = append(out, r)
+	}
+	return out
+}
+
 // poll asks GitHub for one PR's head and checks: one gh call.
 func (c *CIRed) poll(ctx context.Context, t app.CIRedTarget) (app.CIPoll, bool, error) {
 	p := app.CIPoll{Task: t.Task, PR: t.PR}
@@ -206,7 +246,7 @@ func (c *CIRed) poll(ctx context.Context, t app.CIRedTarget) (app.CIPoll, bool, 
 		return p, false, nil // the stack sentinel takes it out of the stack
 	}
 	p.Head, p.Green = v.Head, true
-	for _, r := range v.Checks {
+	for _, r := range latest(v.Checks) {
 		switch r.verdict() {
 		case "fail":
 			p.Failed = append(p.Failed, r.label())
