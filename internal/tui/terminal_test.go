@@ -357,3 +357,14 @@ func parseRaw(t *testing.T, s string) []tea.Msg {
 	}
 	return r.msgs
 }
+
+// alt+[ reaches the shell when the next key shows it is no mouse report
+// (#201).
+func TestTerminalGetsAltBracket(t *testing.T) {
+	m := newTermModel(t)
+	openShell(t, m)
+	typeText(m, "cat -v\r")
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("["), Alt: true})
+	typeText(m, "x\r")
+	waitScreen(t, m.term, "^[[x")
+}

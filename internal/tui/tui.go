@@ -530,7 +530,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.refresh())
 
 	case tea.MouseMsg:
-		m.scrub = mouseScrub{}
+		if keys := m.scrub.release(); keys != nil {
+			cmds = append(cmds, m.press(keys, nil))
+		}
+		m.scrub.state = scrubIdle
 		if c, ok := m.mouseSelect(msg); ok {
 			return m, c
 		}
@@ -544,21 +547,40 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, c
 
 	case tea.KeyMsg:
-		if m.scrub.drop(msg) {
-			return m, nil
-		}
-		if c, handled := m.key(msg); handled {
-			return m, c
-		}
-		if m.focus == focusChat {
-			var c tea.Cmd
-			m.input, c = m.input.Update(msg)
-			cmds = append(cmds, c)
-		}
+		keys, c := m.scrub.feed(msg)
+		return m, m.press(keys, c)
+
+	case escFlushMsg:
+		return m, m.press(m.scrub.flush(msg.seq), nil)
 	}
 	m.renderChat()
 	m.drafting.Store(strings.TrimSpace(m.input.Value()) != "")
 	return m, tea.Batch(cmds...)
+}
+
+// press acts on the keys the scrubber let through, in order, then runs c. A
+// key nothing handled goes to the chat input when it has focus.
+func (m *model) press(keys []tea.KeyMsg, c tea.Cmd) tea.Cmd {
+	cmds := []tea.Cmd{c}
+	typed := false
+	for _, k := range keys {
+		if c, handled := m.key(k); handled {
+			cmds = append(cmds, c)
+			continue
+		}
+		typed = true
+		// alt+[ means nothing to chat; the textarea would type a "[".
+		if m.focus == focusChat && !isAltBracket(k) {
+			var c tea.Cmd
+			m.input, c = m.input.Update(k)
+			cmds = append(cmds, c)
+		}
+	}
+	if typed {
+		m.renderChat()
+		m.drafting.Store(strings.TrimSpace(m.input.Value()) != "")
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
