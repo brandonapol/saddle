@@ -32,6 +32,11 @@ BUILD_DIR  := ./build
 EXE        := $(BUILD_DIR)/$(BIN)
 ENTRYPOINT := ./cmd/saddle
 
+# go test's -timeout for the whole e2e suite (E2E_TIMEOUT is the per-wait
+# timeout the journeys read). A race build (E2E_RACE=1) runs them
+# several times slower, so the nightly raises it.
+E2E_GO_TIMEOUT := $(or $(E2E_GO_TIMEOUT),15m)
+
 # The version is the git description of HEAD: a tag when one points at it,
 # otherwise the commit, with -dirty for uncommitted changes. A dev build never
 # claims a released version. Override with VERSION=X.Y.Z.
@@ -109,7 +114,7 @@ test/e2e: ## Run the end-to-end journeys (RUN=Journey to pick some; needs tmux)
 	# Builds saddle, a fake gh and a fake agent, then drives the real binary in
 	# hermetic temp repos with a private tmux server. See internal/e2e.
 	# E2E_RACE=1 also race-builds saddle itself (slow: minutes, not seconds).
-	E2E_GO_TAGS='$(GO_TAGS)' $(GO) test -tags '$(GO_TAGS) e2e' -race -count=1 -timeout 15m $(if $(RUN),-run '$(RUN)') ./internal/e2e/...
+	E2E_GO_TAGS='$(GO_TAGS)' $(GO) test -tags '$(GO_TAGS) e2e' -race -count=1 -timeout $(E2E_GO_TIMEOUT) $(if $(RUN),-run '$(RUN)') ./internal/e2e/...
 
 .PHONY: test/scripts
 test/scripts: ## Test the shell scripts (scripts/upgrade.sh)
