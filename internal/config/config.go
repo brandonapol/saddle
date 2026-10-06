@@ -205,6 +205,26 @@ type Train struct {
 	StackBackend string `toml:"stack_backend"`
 	// Lint is the repo's own pre-commit/lint gate, written `lint.cmd`.
 	Lint Lint `toml:"lint"`
+	// Prepublish is the pre-publish gate, written `prepublish.cmd` and so on.
+	Prepublish Prepublish `toml:"prepublish"`
+	// StuckAfter is how long a stack may stay red or conflicting with no task
+	// fixing it before the orchestrator is interrupted once (#223).
+	StuckAfter time.Duration `toml:"stuck_after"`
+}
+
+// Prepublish configures the pre-publish gate (#223). Before prs or publish
+// pushes a layer, saddle checks out that layer's own tip in a scratch
+// worktree and runs lint.cmd, [test] cmd and Cmd there, bottom to top; a red
+// layer and everything above it stay unpublished. Restack runs only Cmd on
+// each layer it re-cut, so keep it cheap (spelling, migration numbers).
+type Prepublish struct {
+	Cmd string `toml:"cmd"`
+	// Parallel is how many layers are checked at once; 1 by default.
+	Parallel int `toml:"parallel"`
+	// Timeout caps each check on each layer; a check that runs over is red.
+	Timeout time.Duration `toml:"timeout"`
+	// Off turns the gate off: prs publishes without checking each layer.
+	Off bool `toml:"off"`
 }
 
 // Lint configures the repo's own pre-commit/lint gate (#212). The train runs
@@ -284,7 +304,8 @@ func Default() Config {
 		Spawn:        Spawn{MaxDepth: 3, MaxChildren: 8},
 		Orchestrator: Orchestrator{CompactAt: 0.7},
 		Notices:      Notices{WakeAfter: 3 * time.Minute, DigestEvery: 15 * time.Minute},
-		Train:        Train{MaxAttempts: 2, Output: "stack", StackBackend: StackBackendSaddle},
+		Train: Train{MaxAttempts: 2, Output: "stack", StackBackend: StackBackendSaddle,
+			Prepublish: Prepublish{Parallel: 1, Timeout: 10 * time.Minute}, StuckAfter: 30 * time.Minute},
 		Usage: Usage{
 			Poll: 15 * time.Second,
 			Windows: []Window{
@@ -371,6 +392,15 @@ func Load(root string) (Config, error) {
 	}
 	if !slices.Contains(StackBackends, cfg.Train.StackBackend) {
 		return cfg, fmt.Errorf("train.stack_backend %q: want one of %s", cfg.Train.StackBackend, strings.Join(StackBackends, ", "))
+	}
+	if cfg.Train.Prepublish.Parallel < 1 {
+		cfg.Train.Prepublish.Parallel = 1
+	}
+	if cfg.Train.Prepublish.Timeout <= 0 {
+		cfg.Train.Prepublish.Timeout = Default().Train.Prepublish.Timeout
+	}
+	if cfg.Train.StuckAfter <= 0 {
+		cfg.Train.StuckAfter = Default().Train.StuckAfter
 	}
 	if cfg.Spawn.MaxDepth < 0 || cfg.Spawn.MaxChildren < 0 {
 		return cfg, fmt.Errorf("spawn: max_depth and max_children must not be negative (0 means no cap)")
@@ -461,6 +491,17 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # Unset, saddle detects it (pre-commit hook, pre-commit, lefthook, husky,
 # make check/lint; saddle doctor shows what it found); "" turns it off.
 # lint.cmd = "make check"
+# The pre-publish gate: before prs pushes a layer, saddle checks out that
+# layer's own tip and runs lint.cmd, [test] cmd and prepublish.cmd there, bottom
+# to top. A red layer and those above it stay unpublished. Restack re-runs
+# prepublish.cmd alone on each layer it re-cut, so keep it cheap.
+# prepublish.cmd = "make check/spelling check/migrations"
+# prepublish.parallel = 1
+# prepublish.timeout = "10m"
+# prepublish.off = false
+# Interrupt the orchestrator once when a stack stays red or conflicting this
+# long with no task fixing it.
+# stuck_after = "30m"
 
 [spawn]
 # How deep spawn chains go below the orchestrator, and how many working
