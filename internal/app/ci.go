@@ -17,6 +17,10 @@ import (
 // in the CI watcher.
 const EventCIError = "ci_error"
 
+// EventCIExplained is logged instead of spawning a fix when a pending
+// sibling's unmerged work explains a CI failure (#193).
+const EventCIExplained = "ci_explained"
+
 // CIWatcher polls the checks on saddle PRs and routes changes: a failure
 // goes to the owning task if it is still active, else to a fix task it
 // spawns, and always to the orchestrator; a recovery goes out as info. What
@@ -97,6 +101,9 @@ func (a *App) ciFailed(f ciwatch.Failed) error {
 	if err != nil {
 		return a.Notify(OrchestratorID, store.NoticeAction, f.Report())
 	}
+	if a.CIRedOwns(owner.ID) {
+		return nil // the ci-red watcher holds, repairs and reports it
+	}
 	a.Store.Event(owner.ID, "ci_failed", f.Check.Label()+" "+f.RunURL)
 	about := fmt.Sprintf("%s %q: %s", owner.ID, owner.Title, f.Report())
 	if owner.Active() {
@@ -110,6 +117,12 @@ func (a *App) ciFailed(f ciwatch.Failed) error {
 			return err
 		}
 		return a.Notify(OrchestratorID, store.NoticeAction, about+"\n"+fix.ID+" is already fixing it.")
+	}
+	if sib, thing, ok := a.dependencyExplains(owner.ID, f.Step+"\n"+f.LogTail); ok {
+		a.Store.Event(owner.ID, EventCIExplained, fmt.Sprintf("%s: %s adds %s", f.Check.Label(), sib, thing))
+		return a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
+			"%s\n%s adds %s and hasn't merged, which explains it (#193), so no fix task was spawned. "+
+				"Once %s merges and CI re-runs, a run still red gets one.", about, sib, thing, sib))
 	}
 	fix, err := a.Spawn(SpawnReq{
 		Title:  ciFixTitle(owner),

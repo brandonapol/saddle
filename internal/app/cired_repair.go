@@ -46,9 +46,18 @@ type CIRedFailure struct {
 }
 
 // CIRedExplained reports a pending sibling whose unmerged work explains the
-// failures of task's red head (#193). The dependency work of #193 may swap
-// in a sharper test; the default is siblingExplains.
+// failures of task's red head (#193): first the sharp test, a sibling that
+// adds the make target, file or symbol the log says is missing, then
+// siblingExplains.
 var CIRedExplained = func(a *App, task string, fails []CIRedFailure) (string, bool) {
+	var log strings.Builder
+	for _, f := range fails {
+		log.WriteString(f.Step + "\n" + f.LogTail + "\n")
+	}
+	if sib, thing, ok := a.dependencyExplains(task, log.String()); ok {
+		a.Store.Event(task, "ci_red_sibling", sib+": "+thing)
+		return sib, true
+	}
 	return a.siblingExplains(task, fails)
 }
 
