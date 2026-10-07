@@ -26,9 +26,9 @@ const quarkHook = "#!/bin/sh\n# Run the repo's checks before every commit.\nif [
 // runs a bare `make` inside an if block, and a Makefile with check and fix
 // targets. saddle used to detect the gate as `make fi` and fail every land
 // with "No rule to make target". Now doctor reports the hook itself as the
-// gate (never `make fi`) with `make fix` as the fixer; the train runs it on
-// the rebased tree, returns the red check to the producer with its output,
-// and lands the branch once the agent runs the fixer.
+// gate (never `make fi`) with `make fix` as the fixer; done runs it in the
+// agent's worktree and refuses with the red check's output (#212), and the
+// branch lands once the agent runs the fixer.
 func TestJourneyLintDetectMakeFi(t *testing.T) {
 	w := world(t, Options{Tables: "[train]\nno_auto_rebase = true\n"})
 	w.WriteFile("Makefile", checkFixMakefile)
@@ -46,27 +46,23 @@ func TestJourneyLintDetectMakeFi(t *testing.T) {
 
 	// Spawning installs the repo's hook for every worktree (#223), so the
 	// agent's own commit is refused; the second commit skips hooks, as an
-	// agent whose hooks don't run would, to reach the train's gate.
+	// agent whose hooks don't run would, and done's gate catches it.
 	w.Spawn("t1", "Loose", []string{"LOOSE"},
 		fa.Write("LOOSE", "x\n"),
 		fa.Run("git add -A && ! git commit -q -m loose"),
 		fa.Run("git -c core.hooksPath=/dev/null commit -q -m loose"),
-		fa.Done("Adds LOOSE."),
-		fa.Wait("passed its tests, but"),
+		fa.Step{Done: "Adds LOOSE.", Optional: true}, // refused: the gate is red
 		fa.Run("make fix"), fa.Commit("make fix"),
 		fa.Done("Adds nothing loose."))
-	w.WaitTask("t1", "queued", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
-
-	r := w.Saddle("land")
-	if v := w.Task("t1"); v.Status != "conflict" {
-		t.Fatalf("t1 after a red gate = %+v\n%s", v, r)
+	w.WaitAgentLog("t1", "idle: script finished")
+	log := w.AgentLog("t1")
+	if !strings.Contains(log, "done refused") || !strings.Contains(log, "check: LOOSE found") {
+		t.Fatalf("done didn't refuse with the gate's output:\n%s", log)
 	}
-	w.WaitAgentLog("t1", "check: LOOSE found")
-	if log := w.AgentLog("t1"); strings.Contains(log, "No rule to make target") {
+	if strings.Contains(log, "No rule to make target") {
 		t.Fatalf("the gate ran a target the Makefile lacks:\n%s", log)
 	}
-	w.WaitAgentLog("t1", "idle: script finished")
-	w.WaitTask("t1", "queued again", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
+	w.WaitTask("t1", "queued", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
 	if r := w.MustSaddle("land"); w.Task("t1").Status != "landed" {
 		t.Fatalf("t1 didn't land after make fix: %s", r)
 	}
