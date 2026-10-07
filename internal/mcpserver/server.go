@@ -93,6 +93,8 @@ type StatusOut struct {
 	Integration string     `json:"integration"`
 	Warnings    []string   `json:"warnings,omitempty"`
 	StackAtRisk *StackRisk `json:"stack_at_risk,omitempty"`
+	// CIRed lists the PRs whose CI is red and the layers each holds back.
+	CIRed []app.CIRedHold `json:"ci_red,omitempty"`
 	// OrchestratorContext is how full the orchestrator's context is; absent
 	// before its transcript has a reading.
 	OrchestratorContext *OrchContext `json:"orchestrator_context,omitempty"`
@@ -121,6 +123,14 @@ type StackRisk struct {
 const StackFix = "run restack to rebuild the stack; don't fix it with git or a worker. " +
 	"prs and land hold back only what depends on the broken layers until it checks clean, then the flag and labels clear by themselves. " +
 	"If restack can't fix it, unstack drops a task from the stack and sentinel_ack acknowledges the flag; never edit state.db"
+
+// PublishIn is one publish; see app.PublishReq.
+type PublishIn struct {
+	Target     string `json:"target" jsonschema:"the task id (or branch) whose own commits to publish"`
+	Base       string `json:"base,omitempty" jsonschema:"the branch the PR targets; defaults to the configured base"`
+	BranchName string `json:"branch_name,omitempty" jsonschema:"the branch to push; defaults to saddle/<slug of the title>"`
+	Draft      bool   `json:"draft,omitempty" jsonschema:"open the PR as a draft"`
+}
 
 // AutomergeIn steers the auto-merge watcher.
 type AutomergeIn struct {
@@ -247,6 +257,9 @@ func Status(a *app.App) (StatusOut, error) {
 	if flagged {
 		out.StackAtRisk = &StackRisk{Task: f.Task, Cause: f.Cause, PRs: f.PRs, Acked: f.Acked, Fix: StackFix}
 	}
+	if out.CIRed, err = a.CIRedHolds(); err != nil {
+		return out, err
+	}
 	if u, err := a.OrchestratorContext(); err == nil && u.Prompt > 0 {
 		out.OrchestratorContext = &OrchContext{Percent: int(math.Round(u.Fraction() * 100)), Tokens: u.Prompt,
 			Window: u.Window, CompactAt: int(math.Round(a.CompactAt() * 100)), Model: u.Model}
@@ -307,10 +320,13 @@ func ServeIdle(ctx context.Context, why string) error {
 	return s.Run(ctx, &mcp.StdioTransport{})
 }
 
+const serverInstructions = "Saddle coordinates parallel coding agents. Use spawn for disjoint sub-work, claim before large edits, and done when your branch is committed and tested. " +
+	"When prs is blocked (the stack is flagged, or GitHub refuses a base change) but a task's work stands on its own, publish is the escape hatch: it opens that task's PR against base. Never git push or gh pr create by hand."
+
 // New builds the MCP server for task without starting it.
 func New(a *app.App, task string) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "saddle", Version: "0.1.0"}, &mcp.ServerOptions{
-		Instructions: "Saddle coordinates parallel coding agents. Use spawn for disjoint sub-work, claim before large edits, and done when your branch is committed and tested.",
+		Instructions: serverInstructions,
 	})
 	self := func() error {
 		if task == "" {
@@ -408,6 +424,18 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, PRsOut{PRs: urls}, err
 		})
 
+	mcp.AddTool(s, &mcp.Tool{Name: "publish", Description: "Publish one task's own commits, and nothing else, as an independent PR against base, outside the stack: the escape hatch when prs is blocked (stack flagged, or GitHub refuses a base change) but this task's work stands on its own. Saddle pushes a fresh branch itself; never git push or gh pr create by hand. It refuses when the commits need unmerged work from tasks below it."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in PublishIn) (*mcp.CallToolResult, OK, error) {
+			res, err := a.Publish(app.PublishReq{Target: in.Target, Base: in.Base, BranchName: in.BranchName, Draft: in.Draft})
+			if err != nil {
+				return nil, OK{}, err
+			}
+			if res.Existing {
+				return nil, OK{Message: "PR already open: " + res.URL}, nil
+			}
+			return nil, OK{Message: fmt.Sprintf("Published %s as %s: %s", in.Target, res.Branch, res.URL)}, nil
+		})
+
 	mcp.AddTool(s, &mcp.Tool{Name: "restack", Description: "Rebuild the landed stack on origin's base after the base moved, a bottom PR merged, or the stack sentinel flagged the stack (stack_at_risk in status): rebases in train order, moves the branches, pushes and retargets PRs. A conflict moves nothing and goes back to the task that owns the commit. A broken stack is fixed with restack, never with git or a worker."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, RestackOut, error) {
 			res, err := a.Restack()
@@ -434,14 +462,26 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, OK{Message: fmt.Sprintf("%s is out of the PR stack; run restack to drop its commits from integration.", t.ID)}, nil
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "sentinel_ack", Description: "Acknowledge the stack sentinel's current at-risk flag when restack can't fix it: prs and land stop holding work back and the needs-human labels come off, until a different layer breaks or the stack checks clean. Never edit state.db instead."},
+	mcp.AddTool(s, &mcp.Tool{Name: "sentinel_ack", Description: "Acknowledge the stack sentinel's current at-risk flag and every ci-red hold when restack and repairs can't fix them: prs and land stop holding work back and the needs-human labels come off, until a different layer breaks, a layer goes red on a new head, or the stack checks clean. Auto-merge still never merges a red PR. Never edit state.db instead."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, OK, error) {
-			f, err := a.AckFlag()
+			red, err := a.AckCIRed()
 			if err != nil {
 				return nil, OK{}, err
 			}
+			var msg []string
+			for _, l := range red {
+				msg = append(msg, fmt.Sprintf("Acknowledged ci-red on %s: prs and land stop holding the layers above it.", l.Task))
+			}
+			f, err := a.AckFlag()
+			if err != nil {
+				if len(red) > 0 {
+					return nil, OK{Message: strings.Join(msg, "\n")}, nil // only red CI was holding work back
+				}
+				return nil, OK{}, err
+			}
 			_, _ = sentinel.New(a).Check() // take the labels off now
-			return nil, OK{Message: fmt.Sprintf("Acknowledged the flag from %s up (%s).", f.Task, f.Cause)}, nil
+			msg = append(msg, fmt.Sprintf("Acknowledged the flag from %s up (%s).", f.Task, f.Cause))
+			return nil, OK{Message: strings.Join(msg, "\n")}, nil
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "requeue", Description: "Put a landed task whose work is missing from integration back in the merge train, recreating its branch and worktree if needed; run land afterwards. Never edit state.db instead."},

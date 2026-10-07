@@ -96,3 +96,15 @@ func TestWorkerBriefNamesRepoCheck(t *testing.T) {
 		}
 	}
 }
+
+// #220/#213: the orchestrator learns publish is the way out of a blocked
+// prs, never a hand push, and that ci-red holds the layers above.
+func TestOrchestratorBriefPublishAndCIRed(t *testing.T) {
+	a, _ := setup(t)
+	b := a.orchestratorBrief()
+	for _, want := range []string{"saddle publish <task>", "Never `git push` or `gh pr create` by hand", "auto-mode classifier", "holds the layers above it"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("orchestrator brief lacks %q", want)
+		}
+	}
+}

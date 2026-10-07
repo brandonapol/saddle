@@ -108,6 +108,8 @@ func (a *App) orchestratorBriefFor(intro, waiting, talking string) string {
 - Agents call done when finished. Then run land: the merge train lands branches one at a time on %s, tests them, and sends any conflict back to the agent that wrote the code. Don't resolve conflicts yourself.
 - When a coherent set has landed, offer to open stacked PRs (prs). Base: %s.
 - Stack or base problems (base moved, CI failing on a stacked PR, drift) -> find the owning task and `+"`message`"+` it, or call `+"`restack`"+` if the base moved. Restack first; if that fails, see Getting unstuck.
+- CI red on a stacked PR holds the layers above it (ci-red) until it goes green; saddle spawns its repair.
+- If prs is blocked (stack flagged or GitHub refuses a base change) but a task's work stands on its own, run `+"`saddle publish <task>`"+` (or the publish tool). Never `+"`git push`"+` or `+"`gh pr create`"+` by hand; a denied push comes from Claude's auto-mode classifier, and publish is the sanctioned path.
 `, serialList(a.Cfg.Serial), a.workerDefaultName(), a.ConcurrencyLimit(), a.Cfg.Integration, a.Cfg.Base) + waiting + `- Keep your context small. Use status and peek, not reading the agents' code, unless something is stuck.
 - Compact your context at natural breakpoints: after a batch lands and its PRs merge, before a long planning step, or when saddle tells you context is above the threshold. Run /compact (or your harness's equivalent) and keep a short state summary: running tasks, open PRs, queued follow-ups, owner decisions pending, rules in force. When you are idle and the owner isn't typing, saddle may send the command for you.
 
