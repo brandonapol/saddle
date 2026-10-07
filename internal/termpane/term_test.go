@@ -38,7 +38,10 @@ func startSh(t *testing.T, cols, rows int) *Term {
 
 func TestStartRunsShellInDirWithPty(t *testing.T) {
 	dir := t.TempDir()
-	tm, err := Start("/bin/sh", dir, 80, 10)
+	// Wide enough that pwd's line never wraps: the gate's TMPDIR can be
+	// long (a per-run dir under the user cache dir), and a wrapped path
+	// doesn't match.
+	tm, err := Start("/bin/sh", dir, len(dir)+80, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
