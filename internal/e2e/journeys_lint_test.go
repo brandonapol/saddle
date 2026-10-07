@@ -20,9 +20,6 @@ const gofmtMakefile = "lint:\n\t@out=\"$$(gofmt -l .)\"; if [ -n \"$$out\" ]; th
 // Makefile) and refuses with gofmt's output; the agent runs the repo's
 // fixer, commits and calls done again; the branch lands formatted.
 func TestJourneyLintDoneRefusedThenLands(t *testing.T) {
-	// App.Done lives in internal/app/app.go, held by t76; the call to
-	// lintDone lands right after it. Until then done doesn't run the gate.
-	t.Skip("needs App.Done to call a.lintDone (internal/app/app.go, after t76 lands)")
 	if _, err := exec.LookPath("gofmt"); err != nil {
 		t.Skip("gofmt not installed")
 	}

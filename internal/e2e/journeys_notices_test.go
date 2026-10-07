@@ -12,10 +12,6 @@ import (
 	"github.com/brandonapol/saddle/internal/store"
 )
 
-// needsAdmitHook is why these journeys skip until App.Notify calls the
-// notice policy; the wiring task un-skips them (#222).
-const needsAdmitHook = "needs `if !a.admitNotice(task, kind, text) { return nil }` at the top of App.Notify (internal/app/app.go, held by t76)"
-
 // orchNotices lists the orchestrator's undelivered notices.
 func orchNotices(t *testing.T, a *app.App) []store.Notice {
 	t.Helper()
@@ -28,7 +24,6 @@ func orchNotices(t *testing.T, a *app.App) []store.Notice {
 // in one window. None of it interrupts the orchestrator; it gets one digest
 // line naming all three once the window has passed.
 func TestJourneyNoticesDigestAutomerges(t *testing.T) {
-	t.Skip(needsAdmitHook)
 	w := world(t, Options{})
 	urls := landThree(t, w)
 	must(t, w.GH.SetAllChecks(fakegh.Pass))
@@ -79,7 +74,6 @@ func TestJourneyNoticesDigestAutomerges(t *testing.T) {
 // on needs the owner, so it reaches the orchestrator at once as an action
 // notice, without waiting for the digest window.
 func TestJourneyNoticesConflictInterrupts(t *testing.T) {
-	t.Skip(needsAdmitHook)
 	w := world(t, Options{Tables: "[train]\nno_auto_rebase = true\nmax_attempts = 1\n"})
 	conflictSetup(t, w)
 	if r := w.Saddle("land"); !strings.Contains(r.Stdout, "escalated") {
