@@ -62,9 +62,11 @@ func envOf(env []string, k string) string {
 
 // #184: a gate that hits the disk quota once, then passes, passes: the
 // branch isn't blamed and nothing is counted against it. The gate's TMPDIR
-// and GOTMPDIR are a per-run dir under .saddle that is gone afterwards.
+// and GOTMPDIR are a per-run dir under the user cache dir, gone afterwards.
 func TestRunGateEnvRetriesEnvironmentFailure(t *testing.T) {
 	a, _ := setup(t)
+	cache := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cache)
 	g := &fakeGate{outs: []string{"open /tmp/TestX/db: disk quota exceeded"}}
 	res := a.RunGateEnv(context.Background(), "t1", g.run)
 	if res.Err != nil || res.Env != nil || res.Retries != 1 || g.runs != 2 {
@@ -80,8 +82,8 @@ func TestRunGateEnvRetriesEnvironmentFailure(t *testing.T) {
 			t.Fatalf("per-run tmpdir %s left behind (%v)", tmp, err)
 		}
 	}
-	if !strings.HasPrefix(base, a.stateDir()) {
-		t.Fatalf("default tmpdir %s is not under .saddle", base)
+	if !strings.HasPrefix(base, filepath.Join(cache, "saddle", "tmp")+string(filepath.Separator)) {
+		t.Fatalf("default tmpdir %s is not under the user cache dir", base)
 	}
 	es, err := a.Store.Events(100)
 	must(t, err)
@@ -134,10 +136,10 @@ func TestRunGateEnvEscalatesAfterTwoRetries(t *testing.T) {
 // before a run; fresh ones and anything else stay.
 func TestRunGateEnvSweepsStaleTempDirs(t *testing.T) {
 	a, _ := setup(t)
-	a.Cfg.Train.Tmpdir = "scratch"
+	a.Cfg.Train.Tmpdir = filepath.Join(t.TempDir(), "scratch")
 	base := a.GateTmpdir()
-	if base != filepath.Join(a.Root, "scratch") {
-		t.Fatalf("tmpdir = %s, want it relative to the repo", base)
+	if base != a.Cfg.Train.Tmpdir {
+		t.Fatalf("tmpdir = %s, want %s", base, a.Cfg.Train.Tmpdir)
 	}
 	old := time.Now().Add(-25 * time.Hour)
 	for _, d := range []string{"TestOld123", "go-build456", "TestFresh789", "keep"} {
@@ -155,5 +157,77 @@ func TestRunGateEnvSweepsStaleTempDirs(t *testing.T) {
 		if (err == nil) != want {
 			t.Errorf("%s exists = %v, want %v", d, err == nil, want)
 		}
+	}
+}
+
+// The gate's scratch dir is never inside the repo: a test temp dir there
+// sits under the repo's .saddle/config.toml, and the plugin's walk up to
+// find a saddle repo found the real one, so internal/cli failed the gate
+// with the trust prompt for the owner's checkout. An in-repo [train] tmpdir
+// falls back to the default.
+func TestGateTmpdirStaysOutOfTheRepo(t *testing.T) {
+	a, _ := setup(t)
+	cache := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cache)
+	def := a.GateTmpdir()
+	if !strings.HasPrefix(def, filepath.Join(cache, "saddle", "tmp")+string(filepath.Separator)) {
+		t.Fatalf("default tmpdir %s, want one under %s", def, cache)
+	}
+	for _, d := range []string{".saddle/tmp", filepath.Join(a.Root, "scratch"), a.Root} {
+		a.Cfg.Train.Tmpdir = d
+		if got := a.GateTmpdir(); got != def {
+			t.Errorf("[train] tmpdir %q: gate tmpdir %s, want the default %s", d, got, def)
+		}
+	}
+	out := filepath.Join(t.TempDir(), "gate")
+	a.Cfg.Train.Tmpdir = out
+	if got := a.GateTmpdir(); got != out {
+		t.Fatalf("[train] tmpdir %q: gate tmpdir %s", out, got)
+	}
+}
+
+// The train runs inside the orchestrator's saddle mcp (SADDLE_TASK=t0,
+// SADDLE_ROOT, CLAUDE_PROJECT_DIR) and sometimes under git (GIT_DIR). A gate
+// run through RunGateEnv in a task's worktree sees none of it, and its
+// TMPDIR has no saddle repo above it, even with [train] tmpdir in the repo.
+func TestRunGateEnvHostileEnvInWorktree(t *testing.T) {
+	a, _ := setup(t)
+	must(t, a.Init())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	wt := filepath.Join(a.Root, ".saddle", "worktrees", "t1")
+	git(t, a.Root, "worktree", "add", "-q", "-b", "saddle/t1", wt)
+	t.Setenv("GIT_DIR", filepath.Join(a.Root, ".git"))
+	t.Setenv("GIT_WORK_TREE", a.Root)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(a.Root, ".git", "index"))
+	t.Setenv("SADDLE_TASK", "t0")
+	t.Setenv("SADDLE_ROOT", a.Root)
+	t.Setenv("CLAUDE_PROJECT_DIR", a.Root)
+	t.Setenv("TMPDIR", filepath.Join(a.Root, ".saddle", "tmp"))
+	a.Cfg.Train.Tmpdir = ".saddle/tmp"
+
+	gate := `set -e
+for v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE SADDLE_TASK SADDLE_ROOT CLAUDE_PROJECT_DIR; do
+  eval "x=\${$v:-}"; [ -z "$x" ] || { echo "$v inherited: $x"; exit 1; }
+done
+top=$(git rev-parse --show-toplevel)
+[ "$top" = "$PWD" ] || { echo "git toplevel $top, want $PWD"; exit 1; }
+d=$TMPDIR
+while :; do
+  [ ! -e "$d/.saddle/config.toml" ] || { echo "TMPDIR $TMPDIR is inside saddle repo $d"; exit 1; }
+  [ "$d" != / ] || break
+  d=$(dirname "$d")
+done
+echo gate ok`
+	res := a.RunGateEnv(context.Background(), "t1", ShellGate(wt, gate))
+	if res.Err != nil || !strings.Contains(res.Output, "gate ok") {
+		t.Fatalf("gate in a hostile env: %v\n%s", res.Err, res.Output)
+	}
+}
+
+func TestGateEnvironDropsTheTrainsVars(t *testing.T) {
+	got := GateEnviron([]string{"PATH=/bin", "GIT_DIR=/r/.git", "SADDLE_TASK=t0", "SADDLE_TRUST_FILE=/x",
+		"GIT_AUTHOR_NAME=t", "CLAUDE_PROJECT_DIR=/r", "HOME=/h"})
+	if want := []string{"PATH=/bin", "GIT_AUTHOR_NAME=t", "HOME=/h"}; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("GateEnviron = %q, want %q", got, want)
 	}
 }

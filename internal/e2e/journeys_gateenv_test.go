@@ -16,8 +16,8 @@ import (
 
 // TestJourneyGateEnvFailureDoesNotBounce (#184): the test gate hits "disk
 // quota exceeded" once, then passes. The gate is the environment's
-// problem, not t1's: `saddle land` retries it with its temp dirs under
-// .saddle/tmp, t1 is never returned to its producer or charged an attempt,
+// problem, not t1's: `saddle land` retries it with its temp dirs outside
+// the repo (under the user cache dir), t1 is never returned to its producer or charged an attempt,
 // and it lands.
 func TestJourneyGateEnvFailureDoesNotBounce(t *testing.T) {
 	scratch := t.TempDir()
@@ -35,8 +35,15 @@ func TestJourneyGateEnvFailureDoesNotBounce(t *testing.T) {
 	a := w.App()
 	b, err := os.ReadFile(seen)
 	must(t, err)
-	if dir := strings.TrimSpace(string(b)); !strings.HasPrefix(dir, filepath.Join(w.Repo, ".saddle", "tmp")+string(filepath.Separator)) {
-		t.Fatalf("gate TMPDIR = %q, want a dir under .saddle/tmp", dir)
+	// A temp dir inside the repo sits under its .saddle/config.toml, where
+	// tests that look for a saddle repo find the real one.
+	for _, dir := range strings.Fields(string(b)) {
+		if rel, err := filepath.Rel(w.Repo, dir); err != nil || !strings.HasPrefix(rel, "..") {
+			t.Fatalf("gate TMPDIR = %q, inside the repo %s", dir, w.Repo)
+		}
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("gate TMPDIR %s left behind (%v)", dir, err)
+		}
 	}
 	es, err := a.Store.Train()
 	must(t, err)

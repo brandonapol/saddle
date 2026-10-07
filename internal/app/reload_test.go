@@ -93,3 +93,17 @@ func TestReloadOnSignal(t *testing.T) {
 		t.Fatalf("lint = %+v", a.Cfg.Train.Lint)
 	}
 }
+
+// The hand fix for a gate nested in the repo was [train] tmpdir, applied
+// with SIGHUP, but the reload skipped it and the train kept .saddle/tmp.
+func TestReloadTrainConfigAppliesTmpdir(t *testing.T) {
+	a := trainSetup(t)
+	must(t, a.Init())
+	_, err := a.ReloadTrainConfig() // baseline
+	must(t, err)
+	dir := t.TempDir()
+	write(t, a.Root, ".saddle/config.toml", "[train]\ntmpdir = \""+dir+"\"\n")
+	if changed, err := a.ReloadTrainConfig(); err != nil || !changed || a.Cfg.Train.Tmpdir != dir || a.GateTmpdir() != dir {
+		t.Fatalf("tmpdir edit: changed=%v err=%v tmpdir=%q gate=%q", changed, err, a.Cfg.Train.Tmpdir, a.GateTmpdir())
+	}
+}

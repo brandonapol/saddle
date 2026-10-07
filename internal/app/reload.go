@@ -22,11 +22,12 @@ type trainSections struct {
 	MaxAttempts  int
 	NoAutoRebase bool
 	Regen        []config.Regen
+	Tmpdir       string
 }
 
 func sectionsOf(c config.Config) trainSections {
 	return trainSections{Test: c.Test, Lint: c.Train.Lint, MaxAttempts: c.Train.MaxAttempts,
-		NoAutoRebase: c.Train.NoAutoRebase, Regen: c.Regen}
+		NoAutoRebase: c.Train.NoAutoRebase, Regen: c.Regen, Tmpdir: c.Train.Tmpdir}
 }
 
 // processStart is when this saddle started. A config file older than that
@@ -40,7 +41,7 @@ var seenSections = struct {
 }{m: map[*App]trainSections{}}
 
 // ReloadTrainConfig re-reads the train's config sections ([test], [train]
-// lint.cmd, max_attempts, no_auto_rebase, [[regen]]) from the config files
+// lint.cmd, max_attempts, no_auto_rebase, tmpdir, [[regen]]) from the config files
 // and applies the ones that changed since saddle last read them. Only
 // changes are applied, so a setting made in memory (by a test, say) stands
 // until the file changes it. It reports whether anything changed.
@@ -80,6 +81,7 @@ func (a *App) ReloadTrainConfig() (bool, error) {
 	apply(now.MaxAttempts != seen.MaxAttempts, func() { a.Cfg.Train.MaxAttempts = now.MaxAttempts })
 	apply(now.NoAutoRebase != seen.NoAutoRebase, func() { a.Cfg.Train.NoAutoRebase = now.NoAutoRebase })
 	apply(!reflect.DeepEqual(now.Regen, seen.Regen), func() { a.Cfg.Regen = now.Regen })
+	apply(now.Tmpdir != seen.Tmpdir, func() { a.Cfg.Train.Tmpdir = now.Tmpdir })
 	return changed, nil
 }
 
