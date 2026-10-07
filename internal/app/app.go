@@ -616,6 +616,9 @@ func (a *App) CheckWrite(task, abs string) Decision {
 // typing into its window; info notices arrive with its next tool call. The
 // orchestrator is never typed at: the TUI delivers its notices.
 func (a *App) Notify(task, kind, text string) error {
+	if !a.admitNotice(task, kind, text) {
+		return nil
+	}
 	if err := a.Store.Notify(task, kind, text); err != nil {
 		return err
 	}
@@ -670,6 +673,9 @@ func (a *App) Done(task, summary string) error {
 	}
 	if n == 0 {
 		return errors.New("branch has no commits beyond the integration branch; nothing to land")
+	}
+	if err := a.lintDone(t); err != nil {
+		return err
 	}
 	if summary != "" {
 		if err := a.Store.SetField(task, "summary", summary); err != nil {
