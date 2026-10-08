@@ -437,6 +437,9 @@ func (a *App) Orchestrator() (agent.Launch, string, error) {
 		return agent.Launch{}, "", err
 	}
 	l := a.newLaunch(t, a.Root, a.orchModel(), a.orchestratorBrief(), "", agent.OrchestratorAllow(), agent.OrchestratorDeny())
+	if err := a.applyAdvisor(&l); err != nil {
+		return agent.Launch{}, "", err
+	}
 	return l, t.SessionID, nil
 }
 

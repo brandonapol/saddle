@@ -180,3 +180,81 @@ func TestLaunchesKeepSkills(t *testing.T) {
 		t.Error("the orchestrator's Skill tool calls need a permission prompt it can't answer")
 	}
 }
+
+// fakeClaude writes a script standing in for claude: it rejects --subagents
+// and bad advisor models the way claude 2.1.287 does, and otherwise stops at
+// the missing --print input.
+func fakeClaude(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "claude")
+	script := `#!/bin/sh
+case "$1" in
+--subagents) echo "error: unknown option '--subagents'" >&2; echo "(Did you mean --agents?)" >&2; exit 1 ;;
+--advisor) if [ "$2" = nope ]; then echo "Error: The model \"nope\" cannot be used as an advisor." >&2; exit 1; fi ;;
+esac
+echo "Error: Input must be provided either through stdin or as a prompt argument when using --print" >&2
+exit 1
+`
+	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// #257: the probe accepts a flag claude parses and names one it rejects.
+func TestProbeFlag(t *testing.T) {
+	bin := fakeClaude(t)
+	if err := ProbeFlag(bin, "--advisor", "opus"); err != nil {
+		t.Errorf("--advisor opus: %v", err)
+	}
+	for flag, value := range map[string]string{"--subagents": "haiku", "--advisor": "nope"} {
+		err := ProbeFlag(bin, flag, value)
+		if err == nil || !strings.Contains(err.Error(), flag) {
+			t.Errorf("%s %s: err = %v, want one naming the flag", flag, value, err)
+		}
+	}
+	if err := ProbeFlag(filepath.Join(t.TempDir(), "missing"), "--advisor", "opus"); err == nil {
+		t.Error("missing binary passed the probe")
+	}
+}
+
+// #257: advisor fields reach both the headless and the tmux launch; empty
+// fields add nothing.
+func TestAdvisorLaunchArgs(t *testing.T) {
+	l := Launch{Bin: "/bin/saddle", Task: "t0", Cmd: "claude", Model: "sonnet", RunDir: t.TempDir(),
+		Effort: "high", Advisor: "opus", SubagentModel: "haiku"}
+	cmd, err := l.Headless("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Join(cmd.Args, " ")
+	if !strings.Contains(args, "--model sonnet --effort high --advisor opus") {
+		t.Errorf("headless args: %s", args)
+	}
+	if !slices.Contains(cmd.Env, SubagentModelEnv+"=haiku") {
+		t.Errorf("headless env lacks %s", SubagentModelEnv)
+	}
+	sh, err := l.Write()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := os.ReadFile(strings.Trim(strings.TrimPrefix(sh, "bash "), "'"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--model 'sonnet' '--effort' 'high' '--advisor' 'opus'", "export " + SubagentModelEnv + "='haiku'"} {
+		if !strings.Contains(string(script), want) {
+			t.Errorf("launch.sh lacks %q:\n%s", want, script)
+		}
+	}
+
+	l.Effort, l.Advisor, l.SubagentModel = "", "", ""
+	cmd, err = l.Headless("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args = strings.Join(cmd.Args, " ")
+	if strings.Contains(args, "--effort") || strings.Contains(args, "--advisor") || slices.Contains(cmd.Env, SubagentModelEnv+"=haiku") {
+		t.Errorf("empty advisor fields changed the launch: %s", args)
+	}
+}
