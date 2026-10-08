@@ -187,6 +187,15 @@ Sub-agents spawned through MCP are ordinary tasks with a `parent_task`. Each
 gets its own worktree, window and claims, and the train lands it before its
 parent. Spawn depth and fan-out are capped.
 
+The orchestrator can run as a hierarchical advisor (`[claude.advisor]`, #257),
+off by default. When on, the lead model (`sonnet`) drives the session at high
+effort, Claude Code subagents (`haiku`, via `CLAUDE_CODE_SUBAGENT_MODEL`) swarm
+read-only lookups, and `claude --advisor opus` keeps the advisor on call. The
+brief allows it at three checkpoints only: before a plan locks, when the same
+failure repeats, and before done. Opus is never the synchronizer. Saddle
+probes each flag before launch and fails, naming the flag, if `claude`
+rejects it. Workers are unaffected.
+
 ## Narrator and usage
 
 The narrator (`claude-haiku-4-5`) reads compact event deltas, never raw pane
