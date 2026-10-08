@@ -43,7 +43,7 @@ func runTests(m *testing.M) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	defer os.RemoveAll(tmp)
+	defer func() { _ = os.RemoveAll(tmp) }()
 	for k, v := range map[string]string{
 		"XDG_CONFIG_HOME": filepath.Join(tmp, "config"),
 		// Tests act as nobody in particular unless they say otherwise; the
