@@ -207,3 +207,12 @@ func describe(cmd *exec.Cmd) string {
 	}
 	return s
 }
+
+// Exec runs cmd without the queue, forwarding signals from sigs: the
+// fail-open path when the queue itself can't be opened.
+func Exec(cmd *exec.Cmd, sigs <-chan os.Signal) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return waitForwarding(cmd, sigs)
+}
