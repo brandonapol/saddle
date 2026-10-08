@@ -537,3 +537,41 @@ func TestTrainPrepublishAndStuckAfter(t *testing.T) {
 		t.Error("template lacks prepublish.cmd or stuck_after")
 	}
 }
+
+func TestDefaultSessionName(t *testing.T) {
+	for in, want := range map[string]string{
+		"quark":          "saddle-quark",
+		"my.repo":        "saddle-my-repo",
+		"a:b.c":          "saddle-a-b-c",
+		"my repo":        "saddle-my-repo",
+		"a..b::c":        "saddle-a-b-c",
+		".hidden.":       "saddle-hidden",
+		"autobutler.org": "saddle-autobutler-org",
+		"":               "saddle",
+		"...":            "saddle",
+	} {
+		if got := DefaultSession(filepath.Join("/x", in)); got != want {
+			t.Errorf("DefaultSession(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestLoadSanitizesDefaultSession(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "autobutler.org")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Session != "saddle-autobutler-org" {
+		t.Fatalf("session = %q", cfg.Session)
+	}
+}
+
+func TestTemplateTmpdirNotInRepo(t *testing.T) {
+	if strings.Contains(Template, ".saddle/tmp") {
+		t.Error("template still documents the in-repo .saddle/tmp default")
+	}
+}
