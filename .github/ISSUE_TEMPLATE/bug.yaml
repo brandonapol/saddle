@@ -1,0 +1,117 @@
+name: Bug Report
+description: Something saddle does is wrong. Include a repro and the model that should fix it.
+title: "[Bug] "
+labels: ["bug"]
+type: Bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The orchestrator reads **Model scope** before it spawns. Sonnet when the fix below is mechanical and the spec is complete. Opus when finding the cause needs diagnosis.
+
+        Add the matching `area:*` label if you can. If a real saddle run went wrong, also add `incident`.
+  - type: dropdown
+    id: model-scope
+    attributes:
+      label: Model scope
+      description: Which model should implement the fix.
+      options:
+        - Sonnet
+        - Opus
+    validations:
+      required: true
+  - type: textarea
+    id: why-model
+    attributes:
+      label: Why this model
+      description: One or two sentences. This is the line after "Model scope" the orchestrator reads.
+      placeholder: The repro is known and the fix is local to the tmux session-name sanitizer.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Where the bug lives. Names match the area labels.
+      multiple: true
+      options:
+        - area:core
+        - area:runner
+        - area:coord
+        - area:merge
+        - area:planner
+        - area:dispatch
+        - area:tui
+        - area:narrator
+        - plugin
+        - documentation
+    validations:
+      required: true
+  - type: dropdown
+    id: harness
+    attributes:
+      label: Harness
+      description: Which agent runtime showed it. Pick "Not agent-specific" for train, config, or CLI bugs.
+      options:
+        - Claude Code
+        - Grok
+        - Codex
+        - Plugin session (this Claude Code is the orchestrator)
+        - Not agent-specific
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What saddle did, and what you expected instead. Name the task, command, or file.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Commands, in order. A failing test is better than a narrative.
+      placeholder: |
+        1. Repo directory name contains a dot.
+        2. saddle up
+        3. Spawn a second task.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Saddle version
+      description: Output of `saddle version`, plus the commit if you are on main.
+      placeholder: "saddle version"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The error, the notice, or the relevant pane. Pasted as-is.
+      render: shell
+  - type: textarea
+    id: fix
+    attributes:
+      label: Suspected fix
+      description: Optional. File and approach, if you already know it. Say what must not change.
+  - type: checkboxes
+    id: flags
+    attributes:
+      label: Flags
+      options:
+        - label: Found by a real saddle run that went wrong (add the `incident` label)
+        - label: Blocks the merge train or a running task
+        - label: Workaround exists (describe it above)
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: How we know it is fixed. A regression test, written failing first, belongs here.
+      placeholder: |
+        - A config test that a repo root ending in `autobutler.org` yields a session name with no `.` or `:`.
+        - `make check` passes.
+    validations:
+      required: true

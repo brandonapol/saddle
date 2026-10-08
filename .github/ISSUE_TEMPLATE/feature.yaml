@@ -1,0 +1,86 @@
+name: Feature Request
+description: New behavior. Say the goal, the scope, and what done looks like.
+title: "[Feature] "
+labels: ["enhancement"]
+type: Feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Write this so a worker can implement it without asking. The orchestrator reads **Model scope** first. Sonnet when the spec below is complete. Opus when the design still has a policy call (when an expensive model wakes, what the train is allowed to do, what the owner must confirm).
+
+        Off by default unless you say otherwise. Do not widen the change into worker models, the narrator, or the merge train unless that is the feature.
+
+        Add the matching `area:*` label if you can.
+  - type: dropdown
+    id: model-scope
+    attributes:
+      label: Model scope
+      description: Which model should implement this.
+      options:
+        - Sonnet
+        - Opus
+    validations:
+      required: true
+  - type: textarea
+    id: why-model
+    attributes:
+      label: Why this model
+      description: One or two sentences on why that model, not the other one.
+      placeholder: Wiring an on-call model into the orchestrator is a policy call. Getting the silence rules wrong burns Opus on routine bash.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - area:core
+        - area:runner
+        - area:coord
+        - area:merge
+        - area:planner
+        - area:dispatch
+        - area:tui
+        - area:narrator
+        - plugin
+        - documentation
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What the owner can do after this that they cannot do now. One paragraph.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: The concrete change. Config keys, commands, files, and the default. Say what this does not change.
+      placeholder: |
+        - Config, default off.
+        - Launch args when on.
+        - Brief text when on.
+        - Do not change worker model defaults.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: Tests and checks. Name them. `make check` is the floor.
+      placeholder: |
+        - Option off: launch args unchanged. A unit test locks that.
+        - Option on: brief names the checkpoints. A unit test locks that.
+        - `make check` passes.
+    validations:
+      required: true
+  - type: textarea
+    id: related
+    attributes:
+      label: Related
+      description: Issues, docs, or a design note this follows. Optional.
+      placeholder: "Follows #236. Design in docs/runq.md."

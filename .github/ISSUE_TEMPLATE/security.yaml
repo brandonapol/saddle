@@ -1,0 +1,72 @@
+name: Security Issue
+description: Hardening or a non-exploitable concern. Vulnerabilities go to a private advisory, not here.
+title: "security: "
+labels: ["security"]
+type: Bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **If this can be exploited** to read another task's worktree, push code, leak a token, or escape a claim, stop. File a [private security advisory](https://github.com/brandonapol/saddle/security/advisories/new) instead. Do not paste a proof of concept here.
+
+        This form is for hardening, defense in depth, and concerns that are not exploitable on their own. Hooks fail open by design; a change to that is a feature, and it belongs in the description.
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Low (hardening / defense in depth)
+        - Medium (exploitable only with an extra condition you will describe)
+        - High (stop — use a private advisory instead)
+    validations:
+      required: true
+  - type: dropdown
+    id: model-scope
+    attributes:
+      label: Model scope
+      description: Opus if the fix changes what a hook, claim, or the train is allowed to do. Sonnet for a mechanical pin or a dependency bump.
+      options:
+        - Sonnet
+        - Opus
+    validations:
+      required: true
+  - type: textarea
+    id: why-model
+    attributes:
+      label: Why this model
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Claims / hooks (area:coord)
+        - Merge train / push (area:merge)
+        - Orchestrator allowlist (area:runner)
+        - Config / state store (area:core)
+        - Dependencies
+        - CI / supply chain
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What can go wrong, and the condition required. No exploit steps for a High finding.
+    validations:
+      required: true
+  - type: textarea
+    id: suggested-fix
+    attributes:
+      label: Suggested fix
+      description: The mitigation, and what must keep working (fail-open hooks, `saddle publish` as the only push path, orchestrator denylist).
+  - type: input
+    id: version
+    attributes:
+      label: Saddle version
+      description: Output of `saddle version`.
+    validations:
+      required: true

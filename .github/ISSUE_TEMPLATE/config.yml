@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/brandonapol/saddle/security/advisories/new
+    about: For an exploitable vulnerability, file a private advisory. Do not post details on a public issue.

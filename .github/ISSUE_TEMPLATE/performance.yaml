@@ -1,0 +1,92 @@
+name: Performance Issue
+description: Something is slow, uses too much memory, or wakes a bigger model than it should.
+title: "perf: "
+labels: ["performance"]
+type: Bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Numbers first. A feeling that it is slow is not enough to spawn a worker.
+
+        Sonnet when the hot path is known and the budget is a number. Opus when the cost is a model being consulted that should have stayed quiet.
+  - type: dropdown
+    id: model-scope
+    attributes:
+      label: Model scope
+      options:
+        - Sonnet
+        - Opus
+    validations:
+      required: true
+  - type: textarea
+    id: why-model
+    attributes:
+      label: Why this model
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - area:core
+        - area:runner
+        - area:coord
+        - area:merge
+        - area:planner
+        - area:dispatch
+        - area:tui
+        - area:narrator
+        - plugin
+    validations:
+      required: true
+  - type: dropdown
+    id: perf-type
+    attributes:
+      label: Type of issue
+      multiple: true
+      options:
+        - Slow command
+        - Hook or MCP latency
+        - High CPU
+        - High memory
+        - Too many model tokens
+        - Train or rebase time
+        - TUI jank
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What's slow or heavy?
+      description: What you were doing, and what it cost (a stalled task, a burned plan limit, a wedged box).
+    validations:
+      required: true
+  - type: textarea
+    id: measurements
+    attributes:
+      label: Measurements
+      description: Times, RSS, token counts, `saddle runq stats` if you have them, how many agents were running.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Saddle version
+      description: Output of `saddle version`.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: The number that counts as fixed, and the test or bench that locks it.
+      placeholder: |
+        - Hook stays under 5ms on a light command.
+        - A unit test locks the budget.
+        - `make check` passes.
+    validations:
+      required: true
