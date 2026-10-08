@@ -1,5 +1,5 @@
-// Package runq is a prototype of the heavy-run scheduler (#236): a
-// cross-process lease queue that makes CPU-heavy commands (flutter test,
+// Package runq is the heavy-run scheduler (#236, #238): a cross-process
+// lease queue that makes CPU-heavy commands (flutter test,
 // golangci-lint, make check) from many agents, sessions and repos take turns.
 // See docs/runq.md for the design.
 //
@@ -12,7 +12,8 @@
 // contender can reap a dead holder on its next poll without trusting PIDs.
 // Heartbeats are the fallback for holders the flock can't vouch for.
 //
-// Nothing outside this package uses it yet.
+// The queue starts in observe mode: every run is recorded in history but
+// none waits, so slots can be sized from real data before enforcing them.
 package runq
 
 import (
@@ -41,9 +42,43 @@ const (
 	// that finds a live lease here runs nested inside it instead of queueing,
 	// so a pre-commit hook's `make check` inside a held run can't deadlock.
 	EnvLease = "SADDLE_RUNQ_LEASE"
-	// EnvBypass set to "off" skips the queue entirely (owner escape hatch).
+	// EnvBypass picks the mode and wins over config: "off" skips the queue
+	// entirely (owner escape hatch), "observe" records without waiting,
+	// "enforce" (or "on") waits for a slot.
 	EnvBypass = "SADDLE_RUNQ"
+	// EnvPath overrides the queue file (DefaultPath).
+	EnvPath = "SADDLE_RUNQ_DB"
 )
+
+// Mode is how the queue treats a run.
+type Mode string
+
+const (
+	ModeOff     Mode = "off"     // no queue: run at once, record nothing
+	ModeObserve Mode = "observe" // record the run but never wait (the default)
+	ModeEnforce Mode = "enforce" // wait for a slot
+)
+
+// ParseMode reads a mode name; "on" means enforce.
+func ParseMode(s string) (Mode, error) {
+	switch m := Mode(strings.ToLower(strings.TrimSpace(s))); m {
+	case ModeOff, ModeObserve, ModeEnforce:
+		return m, nil
+	case "on":
+		return ModeEnforce, nil
+	}
+	return "", fmt.Errorf("runq: unknown mode %q (want off, observe or enforce)", s)
+}
+
+// DefaultClasses are the built-in classes and their slots, used when no
+// config names any.
+var DefaultClasses = map[string]int{
+	"flutter-test":  1,
+	"golangci-lint": 1,
+	"go-test":       2,
+	"e2e":           1,
+	"generic-heavy": 2,
+}
 
 // Priorities. Waiting AgingStep raises a waiter's priority by one, so a
 // background run outranks a fresh worker run after 10 steps.
@@ -56,7 +91,8 @@ const (
 // Options configure a Queue. Zero values take the defaults noted.
 type Options struct {
 	Path         string         // the database file; DefaultPath() when empty
-	Slots        map[string]int // slots per class, written when a class is first seen
+	Mode         Mode           // observe when empty; EnvBypass overrides it
+	Slots        map[string]int // slots per class, written when a class is first seen (DefaultClasses when nil)
 	DefaultSlots int            // slots for classes not in Slots (1)
 	Heartbeat    time.Duration  // how often holders and waiters check in (2s)
 	StaleAfter   time.Duration  // a lease without a heartbeat this long is dead (15s)
@@ -69,12 +105,24 @@ type Options struct {
 	Now          func() time.Time
 }
 
-// DefaultPath is the per-user, per-machine queue: $XDG_STATE_HOME/saddle/runq.db.
-func DefaultPath() string {
-	dir := os.Getenv("XDG_STATE_HOME")
+// DefaultPath is the per-user, per-machine queue:
+// $XDG_STATE_HOME/saddle/runq.db, or ~/.local/state/saddle/runq.db.
+// SADDLE_RUNQ_DB overrides it.
+func DefaultPath() string { return defaultPath(os.Getenv) }
+
+func defaultPath(getenv func(string) string) string {
+	if p := getenv(EnvPath); p != "" {
+		return p
+	}
+	dir := getenv("XDG_STATE_HOME")
 	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".local", "state")
+		if home := getenv("HOME"); home != "" {
+			dir = filepath.Join(home, ".local", "state")
+		} else {
+			// A shell without HOME still shares the machine's queue with
+			// every other HOME-less shell of this user.
+			dir = filepath.Join(os.TempDir(), fmt.Sprintf("saddle-%d", os.Getuid()), "state")
+		}
 	}
 	return filepath.Join(dir, "saddle", "runq.db")
 }
@@ -104,7 +152,8 @@ CREATE TABLE IF NOT EXISTS leases(
   host TEXT NOT NULL,
   enqueued INTEGER NOT NULL,
   granted INTEGER NOT NULL DEFAULT 0,
-  heartbeat INTEGER NOT NULL
+  heartbeat INTEGER NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'enforce'
 );
 CREATE INDEX IF NOT EXISTS leases_class ON leases(class, state);
 CREATE TABLE IF NOT EXISTS history(
@@ -114,9 +163,35 @@ CREATE TABLE IF NOT EXISTS history(
   waited_ms INTEGER NOT NULL,
   held_ms INTEGER NOT NULL,
   ended INTEGER NOT NULL,
-  how TEXT NOT NULL
+  how TEXT NOT NULL,
+  cpu_ms INTEGER NOT NULL DEFAULT 0,
+  max_rss_kb INTEGER NOT NULL DEFAULT 0,
+  mode TEXT NOT NULL DEFAULT 'enforce'
 );
 `
+
+// migrations add columns a queue file written by an older saddle lacks.
+var migrations = []struct{ table, column, def string }{
+	{"leases", "mode", "TEXT NOT NULL DEFAULT 'enforce'"},
+	{"history", "cpu_ms", "INTEGER NOT NULL DEFAULT 0"},
+	{"history", "max_rss_kb", "INTEGER NOT NULL DEFAULT 0"},
+	{"history", "mode", "TEXT NOT NULL DEFAULT 'enforce'"},
+}
+
+func migrate(db *sql.DB) error {
+	for _, m := range migrations {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, m.table, m.column).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, m.table, m.column, m.def)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 
 // Open opens (creating if needed) the queue. A database file SQLite can't
 // read is moved aside and replaced: queue state is ephemeral, and a corrupt
@@ -172,12 +247,22 @@ func openDB(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("runq: schema: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("runq: migrate: %w", err)
+	}
 	return db, nil
 }
 
 func withDefaults(o Options) Options {
 	if o.Path == "" {
 		o.Path = DefaultPath()
+	}
+	if o.Mode == "" {
+		o.Mode = ModeObserve
+	}
+	if o.Slots == nil {
+		o.Slots = DefaultClasses
 	}
 	if o.DefaultSlots <= 0 {
 		o.DefaultSlots = 1
@@ -219,6 +304,17 @@ func (q *Queue) Close() error { return q.db.Close() }
 // Path is the database file.
 func (q *Queue) Path() string { return q.opts.Path }
 
+// Mode is the mode runs get now: SADDLE_RUNQ when it names one, else the
+// configured mode.
+func (q *Queue) Mode() Mode {
+	if v := q.opts.Getenv(EnvBypass); v != "" {
+		if m, err := ParseMode(v); err == nil {
+			return m
+		}
+	}
+	return q.opts.Mode
+}
+
 // Request asks for a slot.
 type Request struct {
 	Class string
@@ -235,7 +331,9 @@ type Wait struct {
 	Position int // 1 is next in line
 	Waiters  int
 	Holders  []Entry
-	Gated    string // why the load gate holds the run, if it does
+	Gated    string        // why the load gate holds the run, if it does
+	Drained  bool          // the class has 0 slots (saddle runq drain)
+	ETA      time.Duration // class median run time × turns ahead; 0 without history
 	Since    time.Time
 }
 
@@ -249,10 +347,24 @@ func (w Wait) String() string {
 		}
 		s += ", holder " + strings.Join(hs, ", ")
 	}
+	if w.Drained {
+		s += fmt.Sprintf(", class drained (saddle runq slots %s N resumes it)", w.Class)
+	}
 	if w.Gated != "" {
 		s += ", waiting on load: " + w.Gated
 	}
-	return s
+	if w.ETA > 0 {
+		s += ", ~" + roughDuration(w.ETA)
+	}
+	return s + " (starts automatically; this command may take a while)"
+}
+
+// roughDuration rounds d for humans: seconds under a minute, else minutes.
+func roughDuration(d time.Duration) string {
+	if d < time.Minute {
+		return d.Round(time.Second).String()
+	}
+	return fmt.Sprintf("%dm", int(d.Round(time.Minute)/time.Minute))
 }
 
 // Lease is a held slot (or a nested or bypassed stand-in for one).
@@ -264,6 +376,9 @@ type Lease struct {
 	cmd      string
 	nested   bool
 	bypassed bool
+	mode     Mode
+	cpu      time.Duration // the command's CPU time, set by RunWith
+	maxRSSKB int64
 	waited   time.Duration
 	granted  time.Time
 	lock     *os.File
@@ -308,7 +423,8 @@ func (l *Lease) end(how string) error {
 			if n, _ := res.RowsAffected(); n == 0 {
 				return nil // reaped or killed; nothing to record
 			}
-			return q.record(tx, l.class, l.label, l.cmd, l.waited, q.opts.Now().Sub(l.granted), how)
+			return q.record(tx, hist{class: l.class, label: l.label, cmd: l.cmd, waited: l.waited,
+				held: q.opts.Now().Sub(l.granted), how: how, cpu: l.cpu, maxRSSKB: l.maxRSSKB, mode: l.mode})
 		})
 		_ = os.Remove(l.lock.Name())
 		l.lock.Close()
@@ -317,22 +433,37 @@ func (l *Lease) end(how string) error {
 	return err
 }
 
-func (q *Queue) record(tx *sql.Tx, class, label, cmd string, waited, held time.Duration, how string) error {
-	_, err := tx.Exec(`INSERT INTO history(class, label, cmd, waited_ms, held_ms, ended, how) VALUES(?,?,?,?,?,?,?)`,
-		class, label, cmd, waited.Milliseconds(), held.Milliseconds(), q.opts.Now().UnixMilli(), how)
+// hist is one history row.
+type hist struct {
+	class, label, cmd string
+	waited, held, cpu time.Duration
+	maxRSSKB          int64
+	how               string
+	mode              Mode
+}
+
+func (q *Queue) record(tx *sql.Tx, h hist) error {
+	if h.mode == "" {
+		h.mode = ModeEnforce
+	}
+	_, err := tx.Exec(`INSERT INTO history(class, label, cmd, waited_ms, held_ms, ended, how, cpu_ms, max_rss_kb, mode) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		h.class, h.label, h.cmd, h.waited.Milliseconds(), h.held.Milliseconds(), q.opts.Now().UnixMilli(), h.how,
+		h.cpu.Milliseconds(), h.maxRSSKB, string(h.mode))
 	return err
 }
 
 // Acquire queues for a slot in req.Class and returns once it holds one, ctx
 // ends, or the queue fails. It never spins: between attempts it sleeps with
 // bounded backoff (PollMin doubling to PollMax) and wakes early when another
-// lease is released.
+// lease is released. In observe mode it takes the slot at once, over the
+// class's count if need be, so the run is recorded but never waits.
 func (q *Queue) Acquire(ctx context.Context, req Request) (*Lease, error) {
 	if req.Class == "" {
 		return nil, errors.New("runq: empty class")
 	}
-	if strings.EqualFold(q.opts.Getenv(EnvBypass), "off") {
-		return &Lease{q: q, class: req.Class, bypassed: true, lost: make(chan struct{})}, nil
+	mode := q.Mode()
+	if mode == ModeOff {
+		return &Lease{q: q, class: req.Class, bypassed: true, mode: mode, lost: make(chan struct{})}, nil
 	}
 	if req.Label == "" {
 		req.Label = q.opts.Getenv("SADDLE_TASK")
@@ -351,11 +482,16 @@ func (q *Queue) Acquire(ctx context.Context, req Request) (*Lease, error) {
 		// A stale token (the outer run ended or died): queue normally.
 	}
 
-	l, err := q.enqueue(req)
+	l, err := q.enqueue(req, mode)
 	if err != nil {
 		return nil, err
 	}
 	enqueued := q.opts.Now()
+	if mode == ModeObserve {
+		l.granted = enqueued
+		l.startHeartbeat()
+		return l, nil
+	}
 	wake := q.watchWake()
 	if wake != nil {
 		defer func() { _ = wake.Close() }()
@@ -409,7 +545,8 @@ func waitKey(w Wait) string {
 	return k
 }
 
-func (q *Queue) enqueue(req Request) (*Lease, error) {
+// enqueue inserts req's row: waiting, or already running in observe mode.
+func (q *Queue) enqueue(req Request, mode Mode) (*Lease, error) {
 	token, err := newToken()
 	if err != nil {
 		return nil, err
@@ -421,12 +558,16 @@ func (q *Queue) enqueue(req Request) (*Lease, error) {
 		return nil, err
 	}
 	now := q.opts.Now().UnixMilli()
+	state, granted := "waiting", int64(0)
+	if mode == ModeObserve {
+		state, granted = "running", now
+	}
 	err = q.tx(func(tx *sql.Tx) error {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO classes(name, slots) VALUES(?, ?)`, req.Class, q.slotsFor(req.Class)); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`INSERT INTO leases(token, class, prio, state, label, cmd, pid, host, enqueued, heartbeat)
-			VALUES(?,?,?,?,?,?,?,?,?,?)`, token, req.Class, req.Prio, "waiting", req.Label, req.Cmd, os.Getpid(), q.host, now, now)
+		_, err := tx.Exec(`INSERT INTO leases(token, class, prio, state, label, cmd, pid, host, enqueued, granted, heartbeat, mode)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, token, req.Class, req.Prio, state, req.Label, req.Cmd, os.Getpid(), q.host, now, granted, now, string(mode))
 		return err
 	})
 	if err != nil {
@@ -434,7 +575,7 @@ func (q *Queue) enqueue(req Request) (*Lease, error) {
 		f.Close()
 		return nil, err
 	}
-	return &Lease{q: q, token: token, class: req.Class, label: req.Label, cmd: req.Cmd, lock: f,
+	return &Lease{q: q, token: token, class: req.Class, label: req.Label, cmd: req.Cmd, lock: f, mode: mode,
 		stop: make(chan struct{}), lost: make(chan struct{})}, nil
 }
 
@@ -480,11 +621,19 @@ func (q *Queue) try(l *Lease, req Request, gatedSince *time.Time) (granted bool,
 		if err != nil {
 			return err
 		}
-		w = Wait{Class: req.Class, Waiters: len(cs.Waiters), Holders: cs.Holders}
+		w = Wait{Class: req.Class, Waiters: len(cs.Waiters), Holders: cs.Holders, Drained: cs.Slots == 0}
 		for _, e := range cs.Waiters {
 			if e.Token == l.token {
 				w.Position = e.Position
 			}
+		}
+		if cs.Slots > 0 && w.Position > 0 {
+			med, err := medianHeld(tx, req.Class)
+			if err != nil {
+				return err
+			}
+			turns := (w.Position + cs.Slots - 1) / cs.Slots
+			w.ETA = med * time.Duration(turns)
 		}
 		free := cs.Slots - len(cs.Holders)
 		if w.Position == 0 || w.Position > free {
@@ -511,33 +660,73 @@ func (q *Queue) try(l *Lease, req Request, gatedSince *time.Time) (granted bool,
 	return granted, w, err
 }
 
-// reap deletes leases whose process is gone: their lock file is free (the
+// medianHeld is the median run time of class's last 50 finished runs.
+func medianHeld(tx *sql.Tx, class string) (time.Duration, error) {
+	rows, err := tx.Query(`SELECT held_ms FROM history WHERE class=? AND how='ok' ORDER BY ended DESC, rowid DESC LIMIT 50`, class)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var ms []int64
+	for rows.Next() {
+		var v int64
+		if err := rows.Scan(&v); err != nil {
+			return 0, err
+		}
+		ms = append(ms, v)
+	}
+	if len(ms) == 0 {
+		return 0, rows.Err()
+	}
+	sort.Slice(ms, func(i, j int) bool { return ms[i] < ms[j] })
+	return time.Duration(ms[len(ms)/2]) * time.Millisecond, rows.Err()
+}
+
+// Reap removes leases whose process is gone and orphaned lock files, and
+// reports how many leases it removed. Every attempt reaps anyway; saddle up
+// calls this at start so a crash's leftovers are gone before anyone waits.
+func (q *Queue) Reap() (int, error) {
+	var n int
+	err := q.tx(func(tx *sql.Tx) error {
+		var err error
+		n, err = q.reapN(tx)
+		return err
+	})
+	return n, err
+}
+
+func (q *Queue) reap(tx *sql.Tx) error {
+	_, err := q.reapN(tx)
+	return err
+}
+
+// reapN deletes leases whose process is gone: their lock file is free (the
 // kernel released it when the process died) or, for leases this host can't
 // check, their heartbeat is older than StaleAfter.
-func (q *Queue) reap(tx *sql.Tx) error {
-	rows, err := tx.Query(`SELECT token, host, heartbeat, class, label, cmd, enqueued, granted FROM leases`)
+func (q *Queue) reapN(tx *sql.Tx) (int, error) {
+	rows, err := tx.Query(`SELECT token, host, heartbeat, class, label, cmd, enqueued, granted, mode FROM leases`)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	type row struct {
-		token, host, class, label, cmd string
-		hb, enq, granted               int64
+		token, host, class, label, cmd, mode string
+		hb, enq, granted                     int64
 	}
 	var all []row
 	for rows.Next() {
 		var r row
-		if err := rows.Scan(&r.token, &r.host, &r.hb, &r.class, &r.label, &r.cmd, &r.enq, &r.granted); err != nil {
+		if err := rows.Scan(&r.token, &r.host, &r.hb, &r.class, &r.label, &r.cmd, &r.enq, &r.granted, &r.mode); err != nil {
 			rows.Close()
-			return err
+			return 0, err
 		}
 		all = append(all, r)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return err
+		return 0, err
 	}
 	now := q.opts.Now()
-	reaped := false
+	reaped := 0
 	live := map[string]bool{}
 	for _, r := range all {
 		live[r.token] = true
@@ -555,21 +744,22 @@ func (q *Queue) reap(tx *sql.Tx) error {
 			continue
 		}
 		if _, err := tx.Exec(`DELETE FROM leases WHERE token=?`, r.token); err != nil {
-			return err
+			return 0, err
 		}
 		if r.granted > 0 {
 			waited := time.Duration(r.granted-r.enq) * time.Millisecond
-			if err := q.record(tx, r.class, r.label, r.cmd, waited, now.Sub(time.UnixMilli(r.granted)), "reaped"); err != nil {
-				return err
+			if err := q.record(tx, hist{class: r.class, label: r.label, cmd: r.cmd, waited: waited,
+				held: now.Sub(time.UnixMilli(r.granted)), how: "reaped", mode: Mode(r.mode)}); err != nil {
+				return 0, err
 			}
 		}
 		_ = os.Remove(filepath.Join(q.locks, r.token))
-		reaped = true
+		reaped++
 	}
-	if reaped {
+	if reaped > 0 {
 		q.notify()
 	}
-	return nil
+	return reaped, nil
 }
 
 // lockNew creates and locks path. Another process's sweep may probe the new
@@ -785,6 +975,21 @@ func (q *Queue) classStatus(tx *sql.Tx, class string, now time.Time) (ClassStatu
 func (q *Queue) SetSlots(class string, n int) error {
 	err := q.tx(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`INSERT INTO classes(name, slots) VALUES(?, ?) ON CONFLICT(name) DO UPDATE SET slots=excluded.slots`, class, n)
+		return err
+	})
+	q.notify()
+	return err
+}
+
+// Drain sets class's slots to 0 (every class when class is empty): running
+// work finishes, nothing new starts, and waiters say the class is drained.
+// SetSlots undoes it.
+func (q *Queue) Drain(class string) error {
+	if class != "" {
+		return q.SetSlots(class, 0)
+	}
+	err := q.tx(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE classes SET slots=0`)
 		return err
 	})
 	q.notify()
