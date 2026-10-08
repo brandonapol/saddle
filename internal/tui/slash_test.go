@@ -25,7 +25,7 @@ func slashModel(t *testing.T) *model {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 	m.app.Store = st
 	m.focus = focusChat
 	m.launch.Deny = agent.OrchestratorDeny()
