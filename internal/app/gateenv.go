@@ -56,6 +56,8 @@ var gateEnvSignatures = []GateEnvProblem{
 	{"cannot create temporary", "temp space: make TMPDIR writable and free space on it"},
 	{"signal: killed", "memory: the gate was killed, likely by the OOM killer; stop other heavy jobs"},
 	{"cannot allocate memory", "memory: stop other heavy jobs"},
+	// Another worktree's golangci-lint, run outside saddle's queue (#271).
+	{"parallel golangci-lint is running", "another golangci-lint: let it finish, and run heavy checks one at a time"},
 }
 
 // ClassifyGateOutput reports whether gate output shows an environment
