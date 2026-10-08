@@ -19,74 +19,9 @@ func BypassesHooks(cmd string) string {
 	return ""
 }
 
-// segments splits a shell command into simple commands' words, honoring
-// quotes and backslashes and breaking at ; & | ( ) and newlines.
-func segments(cmd string) [][]string {
-	var (
-		out        [][]string
-		seg        []string
-		word       strings.Builder
-		inWord     bool
-		sq, dq, bs bool
-	)
-	endWord := func() {
-		if inWord {
-			seg = append(seg, word.String())
-			word.Reset()
-			inWord = false
-		}
-	}
-	endSeg := func() {
-		endWord()
-		if len(seg) > 0 {
-			out = append(out, seg)
-			seg = nil
-		}
-	}
-	for _, r := range cmd {
-		switch {
-		case bs:
-			word.WriteRune(r)
-			bs = false
-		case sq:
-			if r == '\'' {
-				sq = false
-			} else {
-				word.WriteRune(r)
-			}
-		case dq:
-			switch r {
-			case '"':
-				dq = false
-			case '\\':
-				bs = true
-			default:
-				word.WriteRune(r)
-			}
-		case r == '\\':
-			bs, inWord = true, true
-		case r == '\'':
-			sq, inWord = true, true
-		case r == '"':
-			dq, inWord = true, true
-		case r == ' ' || r == '\t':
-			endWord()
-		case strings.ContainsRune(";&|()\n", r):
-			endSeg()
-		default:
-			word.WriteRune(r)
-			inWord = true
-		}
-	}
-	endSeg()
-	return out
-}
-
 // gitBypass checks one simple command's words.
 func gitBypass(w []string) string {
-	for len(w) > 0 && strings.Contains(w[0], "=") && !strings.HasPrefix(w[0], "-") {
-		w = w[1:] // VAR=value prefixes
-	}
+	w = w[assignments(w):] // VAR=value prefixes
 	if len(w) == 0 || filepath.Base(w[0]) != "git" {
 		return ""
 	}
