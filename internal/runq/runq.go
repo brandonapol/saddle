@@ -24,7 +24,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -48,6 +50,9 @@ const (
 	EnvBypass = "SADDLE_RUNQ"
 	// EnvPath overrides the queue file (DefaultPath).
 	EnvPath = "SADDLE_RUNQ_DB"
+	// EnvProcRoot points the configured load gate at a fixture directory
+	// holding proc/loadavg and proc/pressure/cpu instead of "/" (tests).
+	EnvProcRoot = "SADDLE_RUNQ_PROC"
 )
 
 // Mode is how the queue treats a run.
@@ -90,17 +95,25 @@ const (
 
 // Options configure a Queue. Zero values take the defaults noted.
 type Options struct {
-	Path         string         // the database file; DefaultPath() when empty
-	Mode         Mode           // observe when empty; EnvBypass overrides it
-	Slots        map[string]int // slots per class, written when a class is first seen (DefaultClasses when nil)
-	DefaultSlots int            // slots for classes not in Slots (1)
-	Heartbeat    time.Duration  // how often holders and waiters check in (2s)
-	StaleAfter   time.Duration  // a lease without a heartbeat this long is dead (15s)
-	PollMin      time.Duration  // first wait between attempts (50ms)
-	PollMax      time.Duration  // longest wait between attempts (Heartbeat/2)
-	AgingStep    time.Duration  // waiting this long adds one priority (30s)
-	Gate         Gate           // optional load gate consulted before a grant
-	GateMaxWait  time.Duration  // admit anyway after the gate held a run this long (10m)
+	Path         string                       // the database file; DefaultPath() when empty
+	Mode         Mode                         // observe when empty; EnvBypass overrides it
+	Slots        map[string]int               // slots per class, written when a class is first seen (DefaultClasses when nil)
+	DefaultSlots int                          // slots for classes not in Slots (1)
+	Heartbeat    time.Duration                // how often holders and waiters check in (2s)
+	StaleAfter   time.Duration                // a lease without a heartbeat this long is dead (15s)
+	PollMin      time.Duration                // first wait between attempts (50ms)
+	PollMax      time.Duration                // longest wait between attempts (Heartbeat/2)
+	AgingStep    time.Duration                // waiting this long adds one priority (30s)
+	Gate         Gate                         // optional load gate consulted before a grant
+	GateMaxWait  time.Duration                // admit anyway after the gate held a run this long (10m)
+	Nice         int                          // run children at this nice increment (0: as is)
+	IOIdle       bool                         // run children in the idle I/O class (Linux, ionice -c3)
+	Scope        string                       // ScopeSystemd runs children in a user systemd scope
+	CPUWeight    int                          // the scope's CPUWeight (DefaultCPUWeight)
+	CPUQuota     string                       // the scope's CPUQuota, e.g. "400%"; "" for none
+	TargetUtil   float64                      // > 0 turns on adaptive slots aiming at this share of CPUs
+	CPUs         int                          // cores, for adaptive slots (runtime.NumCPU())
+	LookPath     func(string) (string, error) // exec.LookPath when nil
 	Getenv       func(string) string
 	Now          func() time.Time
 }
@@ -156,6 +169,7 @@ CREATE TABLE IF NOT EXISTS leases(
   mode TEXT NOT NULL DEFAULT 'enforce'
 );
 CREATE INDEX IF NOT EXISTS leases_class ON leases(class, state);
+CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS history(
   class TEXT NOT NULL,
   label TEXT NOT NULL,
@@ -223,6 +237,11 @@ func Open(opts Options) (*Queue, error) {
 		}
 	}
 	q.db = db
+	if opts.TargetUtil > 0 {
+		// Adaptive slots are an optimization: a failure keeps the
+		// current slots rather than blocking the run.
+		_, _ = q.Adapt()
+	}
 	return q, nil
 }
 
@@ -311,6 +330,15 @@ func withDefaults(o Options) Options {
 	}
 	if o.Now == nil {
 		o.Now = time.Now
+	}
+	if o.CPUs <= 0 {
+		o.CPUs = runtime.NumCPU()
+	}
+	if o.LookPath == nil {
+		o.LookPath = exec.LookPath
+	}
+	if o.Scope == ScopeSystemd && o.CPUWeight <= 0 {
+		o.CPUWeight = DefaultCPUWeight
 	}
 	return o
 }
@@ -555,8 +583,11 @@ func (q *Queue) Acquire(ctx context.Context, req Request) (*Lease, error) {
 	}
 }
 
+// waitKey changes when the agent should see a new line. The gate's reason
+// counts only by kind ("load", "cpu pressure"): its figures move on every
+// probe, and a line per probe would flood the agent's context.
 func waitKey(w Wait) string {
-	k := fmt.Sprintf("%d/%d/%s", w.Position, w.Waiters, w.Gated)
+	k := fmt.Sprintf("%d/%d/%s", w.Position, w.Waiters, gateKind(w.Gated))
 	for _, h := range w.Holders {
 		k += "/" + h.Token
 	}
@@ -1077,4 +1108,12 @@ func newToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// gateKind is a gate reason up to its first figure.
+func gateKind(why string) string {
+	if i := strings.IndexAny(why, "0123456789"); i >= 0 {
+		return why[:i]
+	}
+	return why
 }
