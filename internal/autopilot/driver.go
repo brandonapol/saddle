@@ -303,6 +303,17 @@ func (d *Driver) Tick() (Report, error) {
 			busy = busy || mine[t.ID]
 		}
 	}
+	// What this run spawned counts even when a task doesn't record its issue.
+	for _, s := range st.Spawned {
+		if _, ok := byIssue[s.Issue]; !ok {
+			i := slices.IndexFunc(tasks, func(t Task) bool { return t.ID == s.Task })
+			if i < 0 {
+				byIssue[s.Issue] = Task{ID: s.Task}
+			} else {
+				byIssue[s.Issue] = tasks[i]
+			}
+		}
+	}
 
 	sleeping := d.sleep(&st, now, use)
 	inQueue := map[int]bool{}

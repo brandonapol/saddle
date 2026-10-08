@@ -456,3 +456,17 @@ func TestSpawnErrorSkipsOnlyThatIssue(t *testing.T) {
 		t.Fatalf("spawned %v skips %v", got, rep.Skipped)
 	}
 }
+
+// An issue this run spawned is never spawned again, even when the task
+// doesn't record its issue.
+func TestNeverRespawnsAnIssue(t *testing.T) {
+	r := newRig(t, 4, claimed(1, "a/**"))
+	r.on(Options{})
+	r.tick()
+	r.env.tasks[0].Issue = 0
+	r.env.tasks[0].Live = false
+	rep := r.tick()
+	if len(r.env.spawns) != 1 || !strings.Contains(rep.Skipped[1], "t1") {
+		t.Fatalf("respawned #1: %v, skips %v", r.env.spawned(), rep.Skipped)
+	}
+}
