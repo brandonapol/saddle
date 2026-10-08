@@ -1,0 +1,72 @@
+name: Question / Discussion
+description: A design question, or a check that something is intentional, before anyone builds it.
+title: "question: "
+labels: ["question"]
+type: Task
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a decision or a "is this intentional?" check. If you already know what to build, use Feature or Epic. If something is broken, use Bug.
+
+        Model scope is optional here. Set it when the answer should be turned into an implementation issue by that model.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of question
+      options:
+        - Design / architecture decision
+        - Is this a bug or intentional?
+        - How do I do this?
+        - Should we do this at all?
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - area:core
+        - area:runner
+        - area:coord
+        - area:merge
+        - area:planner
+        - area:dispatch
+        - area:tui
+        - area:narrator
+        - plugin
+        - documentation
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: What's the question?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What you were doing, what you already read (`docs/ARCHITECTURE.md`, an issue), and what you tried.
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options
+      description: If this is a design decision, the approaches and what each gives up.
+  - type: dropdown
+    id: model-scope
+    attributes:
+      label: Model scope
+      description: Only if a worker should turn the answer into a change.
+      options:
+        - Not an implementation issue
+        - Sonnet
+        - Opus
+    validations:
+      required: true

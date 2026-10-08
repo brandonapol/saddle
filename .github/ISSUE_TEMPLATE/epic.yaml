@@ -1,0 +1,78 @@
+name: Epic
+description: A group of issues. The outcome, the slices, and the order.
+title: "[EPIC] "
+labels: ["epic"]
+type: Task
+body:
+  - type: markdown
+    attributes:
+      value: |
+        An epic is a track of issues, not the work itself. Slice it into bugs, features, and chores that each name a model scope. This issue stays open until those land.
+
+        Sonnet if the breakdown is already decided. Opus if the cut between issues is still a design call.
+  - type: dropdown
+    id: model-scope
+    attributes:
+      label: Model scope
+      description: Which model should break this down, or land the first slice.
+      options:
+        - Sonnet
+        - Opus
+    validations:
+      required: true
+  - type: textarea
+    id: why-model
+    attributes:
+      label: Why this model
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Every area a child issue is likely to touch.
+      multiple: true
+      options:
+        - area:core
+        - area:runner
+        - area:coord
+        - area:merge
+        - area:planner
+        - area:dispatch
+        - area:tui
+        - area:narrator
+        - plugin
+        - documentation
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: What is true when this epic is done, in a few sentences. Not a list of tasks yet.
+    validations:
+      required: true
+  - type: textarea
+    id: slices
+    attributes:
+      label: Slices
+      description: Child issues, in the order they should land. Note which are blocked on which.
+      placeholder: |
+        1. Store and config (#238) — blocks the rest
+        2. Lease CLI
+        3. Hook rewrite and PATH shims
+        4. e2e journeys — depends on the three above
+    validations:
+      required: true
+  - type: textarea
+    id: non-goals
+    attributes:
+      label: Not in this epic
+      description: Nearby work that looks related and is not.
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: The check that closes the epic. Usually "every slice has landed" plus one end-to-end proof.
+    validations:
+      required: true

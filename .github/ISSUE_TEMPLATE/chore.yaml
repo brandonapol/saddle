@@ -1,0 +1,85 @@
+name: Chore / Maintenance
+description: Dependencies, refactors, CI, tooling, cleanup. No user-facing behavior change.
+title: "chore: "
+labels: ["chore"]
+type: Task
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Internal work that keeps saddle healthy. If behavior changes, use Bug or Feature instead.
+
+        Most chores are Sonnet. Use Opus only when the cleanup can change a guarantee (claim enforcement, what the train will replay, what a hook fails open on).
+  - type: dropdown
+    id: model-scope
+    attributes:
+      label: Model scope
+      options:
+        - Sonnet
+        - Opus
+    validations:
+      required: true
+  - type: textarea
+    id: why-model
+    attributes:
+      label: Why this model
+    validations:
+      required: true
+  - type: dropdown
+    id: chore-type
+    attributes:
+      label: Type of chore
+      options:
+        - Dependency update
+        - Refactor / cleanup
+        - CI / tooling
+        - Documentation
+        - Test coverage
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - area:core
+        - area:runner
+        - area:coord
+        - area:merge
+        - area:planner
+        - area:dispatch
+        - area:tui
+        - area:narrator
+        - plugin
+        - documentation
+        - CI / workflows
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What needs doing?
+      description: The work, and where it stops. Link the changelog, PR, or failure that triggered it.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why now?
+      description: Blocking a task, routine hygiene, or a supply-chain concern. Optional.
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      placeholder: |
+        - `make check` passes.
+        - No behavior change. Existing tests cover it.
+    validations:
+      required: true
+  - type: textarea
+    id: avoid
+    attributes:
+      label: Do not touch
+      description: Files, guarantees, or issues this chore must leave alone.
