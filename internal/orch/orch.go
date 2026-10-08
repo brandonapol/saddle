@@ -87,7 +87,9 @@ func Start(cmd *exec.Cmd) (*Proc, error) {
 	_, _ = stdin.Write(initRequest)
 	var tail strings.Builder
 	var tailMu sync.Mutex
+	stderrDone := make(chan struct{})
 	go func() {
+		defer close(stderrDone)
 		sc := bufio.NewScanner(stderr)
 		for sc.Scan() {
 			tailMu.Lock()
@@ -106,6 +108,7 @@ func Start(cmd *exec.Cmd) (*Proc, error) {
 				p.events <- e
 			}
 		}
+		<-stderrDone // Wait closes the pipe; drain it first or the tail can be lost
 		err := cmd.Wait()
 		p.busy.Store(false)
 		tailMu.Lock()
