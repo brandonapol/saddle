@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/app"
 	fa "github.com/brandonapol/saddle/internal/e2e/fakeagent"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/usage"
@@ -82,6 +83,20 @@ func TestJourneyResumeAfterTmuxServerDies(t *testing.T) {
 	must(t, os.MkdirAll(filepath.Dir(p), 0o755))
 	must(t, os.WriteFile(p, []byte("{}\n"), 0o644))
 	startEngine(w)
+	// Its startup pass is done, so only the periodic watch can notice.
+	a := w.App()
+	Eventually(t, "the resume watcher to start", func() error {
+		es, err := a.Store.Events(500)
+		if err != nil {
+			return err
+		}
+		for _, e := range es {
+			if e.Kind == app.EventResumeWatch {
+				return nil
+			}
+		}
+		return errorf("no %s event", app.EventResumeWatch)
+	})
 
 	rescript(w, "t1", finished("alpha", "alpha\n")...)
 	rescript(w, "t2", finished("beta", "beta\n")...)

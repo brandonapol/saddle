@@ -29,6 +29,9 @@ const StatusOrphaned = "orphaned"
 // event from its hooks) before it is shown as orphaned.
 var OrphanAfter = 10 * time.Minute
 
+// EventResumeWatch is logged once the resume watcher's startup pass is done.
+const EventResumeWatch = "resume_watch"
+
 // ResumeEvery is how often saddle up looks for tasks whose window vanished.
 var ResumeEvery = 15 * time.Second
 
@@ -220,6 +223,7 @@ func (a *App) RunResumeWatcher(ctx context.Context) {
 		}
 	}
 	tick(true)
+	a.Store.Event("", EventResumeWatch, "every "+ResumeEvery.String())
 	tk := time.NewTicker(ResumeEvery)
 	defer tk.Stop()
 	for {
