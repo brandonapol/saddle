@@ -2,7 +2,9 @@ package tui
 
 import (
 	"io"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -211,5 +213,118 @@ func TestSplitAltBacktickTogglesTerminal(t *testing.T) {
 	}
 	if m.termOpen || m.input.Value() != "" {
 		t.Errorf("parsed %v: pane open %v, chat input %q", msgs, m.termOpen, m.input.Value())
+	}
+}
+
+// ttyReader plays chunks as a terminal delivers them: each arrives at its
+// offset from the first Read, and Read blocks until the next one has.
+// pending reports a chunk that has arrived but not been read, as FIONREAD
+// does on a tty.
+type ttyReader struct {
+	mu     sync.Mutex
+	start  time.Time
+	chunks []string
+	at     []time.Duration
+}
+
+func (r *ttyReader) Read(p []byte) (int, error) {
+	r.mu.Lock()
+	if r.start.IsZero() {
+		r.start = time.Now()
+	}
+	if len(r.chunks) == 0 {
+		r.mu.Unlock()
+		select {} // block until the program quits
+	}
+	due := r.start.Add(r.at[0])
+	r.mu.Unlock()
+	time.Sleep(time.Until(due))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := copy(p, r.chunks[0])
+	r.chunks, r.at = r.chunks[1:], r.at[1:]
+	return n, nil
+}
+
+func (r *ttyReader) drained() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.start.IsZero() && len(r.chunks) == 0
+}
+
+func (r *ttyReader) pending() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.start.IsZero() && len(r.chunks) > 0 && time.Since(r.start) >= r.at[0]
+}
+
+// scrubbed runs keys through a mouseScrub the way the TUI does and keeps
+// what comes out. It quits once r is read and nothing is held.
+type scrubbed struct {
+	s    mouseScrub
+	r    *ttyReader
+	keys []string
+}
+
+func (m *scrubbed) Init() tea.Cmd { return nil }
+func (m *scrubbed) View() string  { return "" }
+func (m *scrubbed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var out []tea.KeyMsg
+	var c tea.Cmd
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		out, c = m.s.feed(msg)
+	case escFlushMsg:
+		out = m.s.flush(msg.seq)
+	}
+	for _, k := range out {
+		m.keys = append(m.keys, k.String())
+	}
+	if m.s.held == nil && m.r.drained() {
+		return m, tea.Quit
+	}
+	return m, c
+}
+
+// spin keeps every CPU busy, several goroutines each, until stop closes.
+func spin(stop <-chan struct{}) {
+	for range 4 * runtime.GOMAXPROCS(0) {
+		go func() {
+			for x := 0; ; x++ {
+				if x%1024 == 0 {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+				}
+			}
+		}()
+	}
+}
+
+// #249: ESC and ` written back to back but read apart, on a machine too
+// busy to read the second half within escWait, still make alt+`. The hold
+// ends when the input goes idle, not on a fixed timer.
+func TestSplitAltUnderLoad(t *testing.T) {
+	if testing.Short() {
+		t.Skip("stress test")
+	}
+	stop := make(chan struct{})
+	defer close(stop)
+	spin(stop)
+	for i := range 50 {
+		r := &ttyReader{chunks: []string{"\x1b", "`"}, at: []time.Duration{0, time.Millisecond}}
+		m := &scrubbed{s: mouseScrub{wait: escWait, pending: r.pending}, r: r}
+		p := tea.NewProgram(m, tea.WithInput(r), tea.WithOutput(io.Discard), tea.WithoutSignals())
+		timer := time.AfterFunc(10*time.Second, p.Quit)
+		_, err := p.Run()
+		timer.Stop()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(m.keys, " "); got != "alt+`" {
+			t.Fatalf("run %d: keys = %q, want alt+`", i, got)
+		}
 	}
 }

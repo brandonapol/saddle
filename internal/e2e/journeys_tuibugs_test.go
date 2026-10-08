@@ -8,14 +8,14 @@ import (
 	"time"
 )
 
-// sendHexApart writes first and then second to the TUI's terminal as two
-// writes 10ms apart, so they reach saddle in separate reads the way a slow
-// terminal, ssh or tmux can deliver them. tmux runs the three commands in
-// order, so the gap does not depend on how fast tmux starts.
-func (u *TUI) sendHexApart(first, second string) {
+// sendHexSplit writes first and then second to the TUI's terminal as two
+// writes back to back, as a terminal, ssh or tmux can deliver one key. They
+// may reach saddle in one read or two; either way it must see one key. No
+// gap between them: a gap is a wall-clock race a loaded machine loses
+// (#249). The caller waits on the screen for the result.
+func (u *TUI) sendHexSplit(first, second string) {
 	u.w.T.Helper()
 	_, err := u.w.Tmux.Run("send-keys", "-t", u.Target, "-H", first, ";",
-		"run-shell", "sleep 0.01", ";",
 		"send-keys", "-t", u.Target, "-H", second)
 	must(u.w.T, err)
 }
@@ -49,7 +49,7 @@ func (u *TUI) altBracketThenX() {
 //   - #207: M pressed again right after the first toggle lands flips what the
 //     screen shows, not the state the last refresh read;
 //   - #201: alt+[ reaches the terminal pane's shell;
-//   - #200: alt+` whose ESC and backtick arrive in separate reads still
+//   - #200: alt+` whose ESC and backtick arrive in separate writes still
 //     toggles the pane, and no backtick reaches chat.
 func TestJourneyTUIBugs(t *testing.T) {
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
@@ -97,8 +97,8 @@ func TestJourneyTUIBugs(t *testing.T) {
 	u.altBracketThenX()
 	u.Keys("C-c")
 
-	// #200: ESC and ` in separate reads hide the pane, and type nothing.
-	u.sendHexApart("1b", "60")
+	// #200: ESC and ` in separate writes hide the pane, and type nothing.
+	u.sendHexSplit("1b", "60")
 	u.WaitGone("TERMINAL")
 	u.waitNoStrayBacktick()
 	u.Quit()

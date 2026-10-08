@@ -16,18 +16,29 @@ import (
 // The same cut splits alt+<key> (ESC then the key) into esc and the key
 // (#200), and a real alt+[ looks like the start of a report (#201). So
 // mouseScrub holds a bare esc (when wait is set) and an alt+[ until the next
-// key decides what they were, or a timer says nothing followed.
+// key decides what they were, or the input has been idle for the wait.
+//
+// Idle, not just quiet on the clock (#249): on a loaded machine the second
+// half of ESC <key> can sit unread in the terminal for longer than the wait
+// while Bubble Tea's reader waits for a CPU. The hold lasts until no unread
+// input has been seen for a whole wait. Once the reader has the bytes it
+// hands their keys over at once, so they reach Update ahead of the flush.
 type mouseScrub struct {
-	state int
-	wait  time.Duration // how long a bare esc waits for a rune to join; 0 sends it at once
-	held  *tea.KeyMsg   // the esc or alt+[ waiting for the next key
-	seq   int           // tells a stale timer from the current one
+	state   int
+	wait    time.Duration // how long a bare esc waits for a rune to join; 0 sends it at once
+	held    *tea.KeyMsg   // the esc or alt+[ waiting for the next key
+	seq     int           // tells a stale timer from the current one
+	pending func() bool   // input has arrived but not been read; nil if unknown
 }
 
 // escWait is how long the TUI holds a bare esc, as Bubble Tea v2 and vim's
 // esckeys do: long enough for the second read of a split ESC <key>, too
 // short for a person to notice.
 const escWait = 25 * time.Millisecond
+
+// maxHold bounds a hold that unread input keeps extending, should the input
+// never be read.
+const maxHold = 2 * time.Second
 
 // escFlushMsg is a held key's timer firing.
 type escFlushMsg struct{ seq int }
@@ -108,11 +119,35 @@ func (s *mouseScrub) feed(k tea.KeyMsg) ([]tea.KeyMsg, tea.Cmd) {
 func (s *mouseScrub) hold(k tea.KeyMsg) tea.Cmd {
 	s.held = &k
 	s.seq++
-	seq, wait := s.seq, s.wait
+	seq, wait, pending := s.seq, s.wait, s.pending
 	if wait == 0 {
 		wait = escWait
 	}
-	return tea.Tick(wait, func(time.Time) tea.Msg { return escFlushMsg{seq} })
+	return func() tea.Msg {
+		idleWait(wait, maxHold, pending)
+		return escFlushMsg{seq}
+	}
+}
+
+// idleWait returns once pending has been false for wait, polling it, or
+// after limit. A nil pending makes it a plain sleep of wait.
+func idleWait(wait, limit time.Duration, pending func() bool) {
+	start := time.Now()
+	quiet := start
+	for {
+		if pending != nil && pending() {
+			quiet = time.Now()
+		}
+		now := time.Now()
+		if now.Sub(quiet) >= wait || now.Sub(start) >= limit {
+			return
+		}
+		step := wait - now.Sub(quiet)
+		if pending != nil {
+			step = min(step, time.Millisecond)
+		}
+		time.Sleep(step)
+	}
 }
 
 // flush releases the held key when timer seq is the current one. Pieces of a

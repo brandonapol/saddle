@@ -143,8 +143,19 @@ func TestWaitLineETAAndHint(t *testing.T) {
 	defer func() { _ = h.Release() }()
 	lines := make(chan Wait, 4)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _, _ = q.Acquire(ctx, Request{Class: "go-test", OnWait: func(w Wait) { lines <- w }}) }()
+	gone := make(chan struct{})
+	// The waiter writes to the queue's files; it must be gone before
+	// TempDir's cleanup removes them.
+	defer func() { cancel(); <-gone }()
+	go func() {
+		defer close(gone)
+		_, _ = q.Acquire(ctx, Request{Class: "go-test", OnWait: func(w Wait) {
+			select {
+			case lines <- w:
+			case <-ctx.Done():
+			}
+		}})
+	}()
 	w := <-lines
 	if w.ETA != 2*time.Minute {
 		t.Fatalf("ETA %s, want the 2m median", w.ETA)
@@ -169,8 +180,19 @@ func TestDrainShowsInWaitLine(t *testing.T) {
 	}
 	lines := make(chan string, 4)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _, _ = q.Acquire(ctx, Request{Class: "go-test", OnWait: func(w Wait) { lines <- w.String() }}) }()
+	gone := make(chan struct{})
+	// The waiter writes to the queue's files; it must be gone before
+	// TempDir's cleanup removes them.
+	defer func() { cancel(); <-gone }()
+	go func() {
+		defer close(gone)
+		_, _ = q.Acquire(ctx, Request{Class: "go-test", OnWait: func(w Wait) {
+			select {
+			case lines <- w.String():
+			case <-ctx.Done():
+			}
+		}})
+	}()
 	if l := <-lines; !strings.Contains(l, "drained") || !strings.Contains(l, "saddle runq slots go-test") {
 		t.Fatalf("line %q", l)
 	}
