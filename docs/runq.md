@@ -1,6 +1,8 @@
 # Heavy-run scheduler (runq)
 
-Status: core shipped as `saddle run` and `saddle runq` (#238) in observe mode; design in #236.
+Status: core shipped as `saddle run` and `saddle runq` (#238) in observe mode;
+agent interception (the PreToolUse rewrite and PATH shims, #240) shipped;
+design in #236.
 The train's test gate and the pre-publish checks take a lease at `PrioGate` (#239): the
 class is the first `[classes]` pattern (in class-name order) that `test.cmd` matches, else
 `default`, and the gate's children get `SADDLE_RUNQ_LEASE` and `SADDLE_RUNQ_DB`.
@@ -141,6 +143,92 @@ What the spike taught:
   flock also waits out another process's brief probe instead of failing.
   `make check` load exposed that race, and `TestLockNewSurvivesSweeperProbe`
   now covers it.
+
+## How agents' heavy runs are intercepted (#240)
+
+Two layers, both reading the same class patterns (`match` in
+`.saddle/runq.toml` and `~/.config/saddle/runq.toml`, else
+`runq.DefaultMatch`):
+
+```
+go-test        go test*, make check, make test*
+golangci-lint  golangci-lint run*, make lint*
+flutter-test   flutter test*, dart test*, make test-flutter*
+generic-heavy  flutter analyze*, dart analyze*
+```
+
+A pattern's words match argv one for one, with shell globs; the first word
+matches the command's base name. A trailing `*` also takes any further
+arguments, so `go test*` matches `go test -race ./...` but `make check`
+matches only `make check`. The longest matching pattern wins. A class's
+`match` in config replaces its defaults, and `match = []` turns them off.
+
+### The PreToolUse rewrite (`internal/hook/runq.go`)
+
+A Bash command that runs a heavy tool comes back as `updatedInput`:
+
+```
+make check                     → saddle run --class go-test --prio worker -- make check
+go test ./... 2>&1 | tail -50  → saddle run --class go-test --prio worker -- bash -c 'go test ./... 2>&1 | tail -50'
+```
+
+A single simple command gets the prefix. Anything else (pipes, `&&`,
+`VAR=value` prefixes, `time`) is wrapped whole in `bash -c`, so the line
+takes one lease.
+
+- **The rewrite is pre-approved.** Claude Code ignores an `updatedInput`
+  unless it comes with `allow` or `ask`, and `ask` would stop an autonomous
+  agent at a prompt. So the hook returns `allow`; deny and ask rules still
+  apply to the rewritten command. Because of that, the hook only rewrites a
+  line it can vouch for. Every simple command in it must be a heavy tool,
+  one of the repo's tools (a command some pattern starts with: `go`, `make`,
+  …) or a read-only helper (`cd`, `tail`, `head`, `grep`, `cat`, `wc`, …).
+  It rejects command or process substitution, redirections other than fd
+  duplication and `/dev/null`, `&`, subshells and heredocs. Such a line keeps
+  its own permission check, and the shims still queue the heavy tools inside
+  it.
+- **It leaves a command alone** when the command is light, already runs
+  `saddle run`, or sets `SADDLE_RUNQ=off`. It also does nothing when the
+  agent's environment has `SADDLE_RUNQ=off` or a lease, when the config's
+  mode is `off`, in plan mode, and for Grok.
+- `--no-verify` is checked first, so a heavy line that skips hooks is still
+  denied. Each rewrite logs a `runq_rewrite` event.
+- The command parser (`parseShell`) is shared with the `--no-verify` check
+  (#212). It knows quotes, comments, list and pipe operators, parentheses
+  and redirections, and nothing more.
+
+### PATH shims (`internal/runq/shim.go`)
+
+Every spawn rewrites `.saddle/shims/` (`App.WriteShims`), with one shim per
+tool that a pattern names and that is installed. Agents' panes get that
+directory first on PATH, ahead of saddle's own bin dir, which may hold a
+real `golangci-lint`.
+
+- **Where the shims live.** They sit in the repo's `.saddle`, not
+  `$XDG_STATE_HOME`, because the patterns baked into them are the repo's.
+  They go away with the repo, and tests stay hermetic.
+- **What a shim does.** A shim is a `/bin/sh` script, because saddle's own
+  start-up costs about 25ms in package init alone:
+  1. It finds the real tool on PATH, skipping its own directory, every
+     directory holding a `.saddle-shims` marker (another repo's shims) and
+     duplicate or trailing-slash entries. It never runs itself.
+  2. It execs the real tool at once when `SADDLE_RUNQ_LEASE` is set, when
+     `SADDLE_RUNQ=off`, or when argv matches no class (`go version`,
+     `go build`, `flutter doctor`). That is one shell start, and it opens no
+     db.
+  3. Otherwise it runs `saddle run --class C --prio worker -- <real> args`.
+     Its `case` tests mirror `Matcher.Class` rule for rule.
+  4. If the real tool is gone, it exits 127 naming the tool.
+- **Rewriting the shims.** A shim is only rewritten when its content
+  changes, and then through a rename. Shims for tools no pattern names are
+  removed. Other files in the directory are left alone.
+- **`saddle doctor`** checks that each shim resolves to a real tool and that
+  nothing earlier on PATH shadows it. Inside a pane it checks the pane's own
+  PATH; elsewhere, the PATH a pane would get.
+
+Together they make an agent's `make check` one lease. The rewrite takes it,
+and `make`, `go`, `golangci-lint` and a git pre-commit hook's `flutter test`
+under it pass through their shims on the token.
 
 ## Questions answered
 
