@@ -267,10 +267,23 @@ type Test struct {
 }
 
 type Claude struct {
-	Cmd               string `toml:"cmd"`
-	Model             string `toml:"model"`
-	OrchestratorModel string `toml:"orchestrator_model"`
-	PermissionMode    string `toml:"permission_mode"`
+	Cmd               string  `toml:"cmd"`
+	Model             string  `toml:"model"`
+	OrchestratorModel string  `toml:"orchestrator_model"`
+	PermissionMode    string  `toml:"permission_mode"`
+	Advisor           Advisor `toml:"advisor"`
+}
+
+// Advisor is the opt-in hierarchical orchestrator (#257): a lead model drives
+// the orchestrator session, cheap subagents swarm lookups, and an expensive
+// advisor model is consulted only at fixed checkpoints. Off by default; it
+// never touches workers.
+type Advisor struct {
+	Enabled   bool   `toml:"enabled"`
+	Lead      string `toml:"lead"`      // empty falls back to orchestrator_model
+	Subagents string `toml:"subagents"` // model for the session's Claude Code subagents
+	Advisor   string `toml:"advisor"`
+	Workers   int    `toml:"workers"` // parallel subagents the brief asks for
 }
 
 // Grok configures the Grok CLI (`grok`), used when Harness is HarnessGrok.
@@ -299,6 +312,7 @@ func Default() Config {
 			Model:             "opus",
 			OrchestratorModel: "sonnet",
 			PermissionMode:    "auto",
+			Advisor:           Advisor{Lead: "sonnet", Subagents: "haiku", Advisor: "opus", Workers: 3},
 		},
 		Grok: Grok{
 			Cmd:            "grok",
@@ -376,6 +390,12 @@ func Load(root string) (Config, error) {
 	}
 	if cfg.Harness != HarnessClaude && cfg.Harness != HarnessGrok {
 		return cfg, fmt.Errorf("harness %q: want %q or %q", cfg.Harness, HarnessClaude, HarnessGrok)
+	}
+	if cfg.Claude.Advisor.Lead == "" {
+		cfg.Claude.Advisor.Lead = cfg.Claude.OrchestratorModel
+	}
+	if cfg.Claude.Advisor.Workers < 1 {
+		cfg.Claude.Advisor.Workers = Default().Claude.Advisor.Workers
 	}
 	if cfg.Grok.Cmd == "" {
 		cfg.Grok.Cmd = "grok"
@@ -579,6 +599,19 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # model = "opus"                 # workers
 # orchestrator_model = "sonnet"  # the chat agent in the TUI
 # permission_mode = "auto"
+
+[claude.advisor]
+# Opt-in hierarchical orchestrator (#257). When enabled, the TUI orchestrator
+# runs the lead model at high effort, its Claude Code subagents on the
+# subagents model, and passes --advisor so the advisor model is consulted only
+# before a plan locks, when the same failure repeats, and before done. The
+# advisor is never the synchronizer. Workers are unaffected. Launch fails if
+# the installed claude rejects --advisor.
+# enabled = false
+# lead = "sonnet"       # effort high; empty falls back to orchestrator_model
+# subagents = "haiku"   # file discovery, AST summaries, doc lookup
+# advisor = "opus"
+# workers = 3           # parallel subagents
 
 [grok]
 # Used when harness = "grok". Workers run the grok CLI in tmux; the

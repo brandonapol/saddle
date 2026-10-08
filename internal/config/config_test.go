@@ -579,3 +579,62 @@ func TestTemplateTmpdirNotInRepo(t *testing.T) {
 		t.Error("template still documents the in-repo .saddle/tmp default")
 	}
 }
+
+func writeRepoConfig(t *testing.T, body string) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".saddle"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".saddle", "config.toml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// The hierarchical advisor (#257) is off by default, and a config without the
+// block loads cleanly with the documented defaults.
+func TestAdvisorDefaults(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(writeRepoConfig(t, "[claude]\nmodel = \"opus\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Advisor{Enabled: false, Lead: "sonnet", Subagents: "haiku", Advisor: "opus", Workers: 3}
+	if cfg.Claude.Advisor != want {
+		t.Fatalf("advisor defaults: %+v, want %+v", cfg.Claude.Advisor, want)
+	}
+	if cfg.Claude.Model != "opus" || cfg.Claude.OrchestratorModel != "sonnet" {
+		t.Fatalf("claude models changed: %+v", cfg.Claude)
+	}
+}
+
+func TestAdvisorOverrides(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(writeRepoConfig(t, `
+[claude]
+orchestrator_model = "opus"
+[claude.advisor]
+enabled = true
+lead = ""
+subagents = "sonnet"
+workers = 0
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := cfg.Claude.Advisor
+	// An empty lead falls back to orchestrator_model; workers below 1 to the default.
+	if !a.Enabled || a.Lead != "opus" || a.Subagents != "sonnet" || a.Advisor != "opus" || a.Workers != 3 {
+		t.Fatalf("advisor: %+v", a)
+	}
+}
+
+func TestTemplateDocumentsAdvisor(t *testing.T) {
+	for _, k := range []string{"[claude.advisor]", "# enabled = false", `# lead = "sonnet"`,
+		`# subagents = "haiku"`, `# advisor = "opus"`, "# workers = 3"} {
+		if !strings.Contains(Template, k) {
+			t.Errorf("template lacks %q", k)
+		}
+	}
+}
