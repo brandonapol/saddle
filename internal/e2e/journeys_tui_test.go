@@ -262,8 +262,7 @@ func TestJourneyTUIMergeViewKeys(t *testing.T) {
 // TestJourneyRebaseStackIsIdempotent (#205): r in the merge view
 // (saddle stack rebase) on a stack already on main must move nothing and
 // say so. Today every call rebuilds every branch with new SHAs, so each
-// press force-moves the PR heads (restarting their CI) and "already on main"
-// never shows. Fixed by #219.
+// press force-moved the PR heads (restarting their CI). Fixed by #219.
 func TestJourneyRebaseStackIsIdempotent(t *testing.T) {
 	w := world(t, Options{})
 	landThree(t, w)
@@ -271,7 +270,7 @@ func TestJourneyRebaseStackIsIdempotent(t *testing.T) {
 	w.MustSaddle("stack", "rebase", "t2")
 	branch := w.Task("t2").Branch
 	before := w.Git(w.Repo, "rev-parse", branch)
-	if r := w.MustSaddle("stack", "rebase", "t2"); !strings.Contains(r.Stdout, "already on main") {
+	if r := w.MustSaddle("stack", "rebase", "t2"); !strings.Contains(r.Stdout, "nothing in it moved") {
 		t.Errorf("second rebase of a stack on main: %s", r)
 	}
 	if after := w.Git(w.Repo, "rev-parse", branch); after != before {
