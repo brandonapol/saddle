@@ -367,7 +367,14 @@ func (a *App) Leftovers() ([]Leftover, error) {
 	}
 	for _, r := range strings.Fields(refs) {
 		if !owned(filepath.Base(r)) {
-			out = append(out, Leftover{Kind: "ref", Name: r})
+			l := Leftover{Kind: "ref", Name: r}
+			// A snapshot of uncommitted work (#254) stays until that work lands.
+			if strings.HasPrefix(r, wipRef("")) {
+				if why := a.unmerged(r, task(filepath.Base(r)), base); why != "" {
+					l.Keep = "snapshot of uncommitted work; delete with git update-ref -d"
+				}
+			}
+			out = append(out, l)
 		}
 	}
 	return out, nil
@@ -433,6 +440,9 @@ func (a *App) GC() ([]Leftover, error) {
 		if l.Keep == "" {
 			switch l.Kind {
 			case "worktree":
+				if id := taskIDRe.FindString(filepath.Base(l.Name)); id != "" {
+					a.snapshotWIP(id, l.Name)
+				}
 				err = gitx.WorktreeRemove(a.Root, l.Name)
 			case "branch":
 				_, err = gitx.Run(a.Root, "branch", "-D", l.Name)

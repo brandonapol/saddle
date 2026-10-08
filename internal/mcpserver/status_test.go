@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -114,5 +115,41 @@ func TestStatusShowsOrchestratorContext(t *testing.T) {
 	c := callStatus(t, a).OrchestratorContext
 	if c == nil || c.Percent != 45 || c.Tokens != 90_000 || c.Window != 200_000 || c.CompactAt != 70 {
 		t.Fatalf("orchestrator_context = %+v, want 45%% of 200000 with compact_at 70", c)
+	}
+}
+
+// #254: a running task with no window and no heartbeat shows as orphaned,
+// with what to do about it.
+func TestStatusShowsOrphans(t *testing.T) {
+	a, _ := stackSetup(t)
+	tk, err := a.Spawn(app.SpawnReq{Title: "lost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ft := a.Tmux.(*fakeTmux)
+	a.Tmux = namedTmux{ft, map[string]string{tk.Window: tk.ID + "-lost"}}
+	old := app.OrphanAfter
+	app.OrphanAfter = -time.Minute
+	t.Cleanup(func() { app.OrphanAfter = old })
+	find := func() TaskView {
+		ts, err := Tasks(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range ts {
+			if v.ID == tk.ID {
+				return v
+			}
+		}
+		t.Fatalf("%s missing", tk.ID)
+		return TaskView{}
+	}
+	if v := find(); v.Status != "running" {
+		t.Fatalf("with its window: %+v", v)
+	}
+	ft.windows = map[string]bool{}
+	v := find()
+	if v.Status != app.StatusOrphaned || !strings.Contains(v.Reason, "saddle rescue "+tk.ID) {
+		t.Fatalf("without its window: %+v", v)
 	}
 }

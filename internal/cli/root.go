@@ -43,7 +43,7 @@ func Root() *cobra.Command {
 			Run:   func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), Version) },
 		},
 		initCmd(), upCmd(), downCmd(), spawnCmd(), withTmux(statusCmd()), briefCmd(), claimCmd(), releaseCmd(), doneCmd(),
-		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(), repairCmd(), concurrencyCmd(), pluginCmd(), grokBridgeCmd(), publishCmd(), noticesCmd(), trustCmd(), untrustCmd(),
+		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(), repairCmd(), concurrencyCmd(), pluginCmd(), grokBridgeCmd(), publishCmd(), noticesCmd(), trustCmd(), untrustCmd(), resumeCmd(), rescueCmd(),
 	)
 	return root
 }
@@ -153,9 +153,16 @@ needs you. Quitting leaves the agents running; run saddle up again to come back.
 				}
 				first = "Here is an epic. Plan it and show me the plan.\n\n" + string(b)
 			}
+			term := make(chan os.Signal, 1)
+			signal.Notify(term, syscall.SIGTERM) // Bubble Tea quits on it too
+			defer signal.Stop(term)
 			stop := startWatchers(cmd.Context(), a)
 			err = tui.Run(a, first)
 			stop()
+			if paused, perr := pauseOnTerm(term, a); perr != nil || paused != nil {
+				writePaused(cmd.OutOrStdout(), paused)
+				return errors.Join(err, perr)
+			}
 			if err != nil {
 				return err
 			}
@@ -170,7 +177,8 @@ needs you. Quitting leaves the agents running; run saddle up again to come back.
 
 // startWatchers starts the background loops that live as long as saddle up:
 // the stack sentinel, the auto-merge watcher (which merges nothing unless
-// on), the orchestrator compact watcher, the notice digest and, unless ci.disabled, the CI and
+// on), the orchestrator compact watcher, the notice digest, the resume
+// watcher and, unless ci.disabled, the CI and
 // ci-red watchers. Short-lived commands never
 // start them. The returned func stops them and waits until they have.
 func startWatchers(ctx context.Context, a *app.App) (stop func()) {
@@ -182,6 +190,7 @@ func startWatchers(ctx context.Context, a *app.App) (stop func()) {
 	wg.Go(func() { _ = a.NewAutomerge(nil).Run(ctx) })   // merges only when on; failures are events
 	wg.Go(func() { _ = a.NewCompactWatcher().Run(ctx) }) // notices and compacts; failures are events
 	wg.Go(func() { a.RunDigest(ctx) })                   // routine notices as one digest line; failures are events
+	wg.Go(func() { a.RunResumeWatcher(ctx) })            // new windows for tasks that lost theirs (#254); failures are events
 	if !a.Cfg.CI.Disabled {
 		wg.Go(func() { _ = sentinel.NewCIRed(a).Run(ctx) }) // holds layers above red CI; errors are events
 		if ci, err := a.NewCIWatcher(ciwatch.ExecRunner(a.Root)); err == nil {
@@ -197,13 +206,13 @@ func startWatchers(ctx context.Context, a *app.App) (stop func()) {
 func downCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "down",
-		Short: "Stop every agent (worktrees and branches are kept)",
+		Short: "Stop every agent; running tasks are paused and saddle up resumes them",
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
-			n, err := a.Down()
+			paused, err := a.Down()
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "stopped %d agents\n", n)
+			writePaused(cmd.OutOrStdout(), paused)
 			left, _, err := a.GCCounts()
 			if err != nil {
 				return err
