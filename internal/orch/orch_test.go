@@ -70,6 +70,23 @@ func TestMain(m *testing.M) {
 			} `json:"request"`
 		}
 		_ = json.Unmarshal(sc.Bytes(), &l)
+		switch os.Getenv("ORCH_FAKE") {
+		case "turn":
+			// A user message starts a turn that sits in a tool call until
+			// an interrupt arrives, as a long Bash call would.
+			if l.Type == "user" {
+				_ = enc.Encode(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{
+					map[string]any{"type": "tool_use", "name": "Bash", "input": map[string]any{"command": "sleep 600"}}}}})
+			}
+			if l.Type == "control_request" && l.Request.Subtype == "interrupt" {
+				_ = enc.Encode(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": l.RequestID}})
+				_ = enc.Encode(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "result": ""})
+			}
+			continue
+		case "deaf":
+			// Ignores control requests, like grok-bridge.
+			continue
+		}
 		if l.Type == "control_request" && l.Request.Subtype == "initialize" {
 			_ = enc.Encode(map[string]any{"type": "control_response", "response": map[string]any{
 				"subtype": "success", "request_id": l.RequestID,
@@ -138,5 +155,92 @@ func TestProbeReportsEarlyExit(t *testing.T) {
 	_, err := Probe(context.Background(), exec.Command("sh", "-c", "echo not logged in >&2; exit 3"))
 	if err == nil || !strings.Contains(err.Error(), "not logged in") {
 		t.Fatalf("Probe err = %v", err)
+	}
+}
+
+// next returns the next event that isn't a commands listing.
+func next(t *testing.T, p *Proc) Event {
+	t.Helper()
+	for {
+		select {
+		case e := <-p.Events():
+			if e.Kind != Commands {
+				return e
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("no event")
+		}
+	}
+}
+
+// An interrupt stops the turn mid tool call with a control request, keeps the
+// process and session, and reports the turn as interrupted, not as an error.
+func TestInterruptStopsTurnInToolCall(t *testing.T) {
+	p, err := Start(fake(t, "turn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if err := p.Interrupt(); !errors.Is(err, ErrIdle) {
+		t.Fatalf("Interrupt while idle = %v, want ErrIdle", err)
+	}
+	if err := p.Send("run the long thing"); err != nil {
+		t.Fatal(err)
+	}
+	if e := next(t, p); e.Kind != Tool {
+		t.Fatalf("event = %+v, want the tool call", e)
+	}
+	if err := p.Interrupt(); err != nil {
+		t.Fatal(err)
+	}
+	if !p.Interrupting() {
+		t.Fatal("Interrupting() is false right after Interrupt")
+	}
+	if e := next(t, p); e.Kind != Interrupted {
+		t.Fatalf("event = %+v, want Interrupted", e)
+	}
+	if p.Busy() || p.Interrupting() {
+		t.Fatalf("after the interrupt: busy=%v interrupting=%v", p.Busy(), p.Interrupting())
+	}
+	// The session lives on.
+	if err := p.Send("again"); err != nil {
+		t.Fatal(err)
+	}
+	if e := next(t, p); e.Kind != Tool {
+		t.Fatalf("event after interrupt = %+v, want a new turn", e)
+	}
+}
+
+// A process that ignores the control request gets SIGINT.
+func TestInterruptFallsBackToSignal(t *testing.T) {
+	defer func(d time.Duration) { interruptWait = d }(interruptWait)
+	interruptWait = 200 * time.Millisecond
+	p, err := Start(fake(t, "deaf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	_ = p.Send("hello")
+	if err := p.Interrupt(); err != nil {
+		t.Fatal(err)
+	}
+	if e := next(t, p); e.Kind != Exit {
+		t.Fatalf("event = %+v, want Exit after SIGINT", e)
+	}
+}
+
+// An error result ends the turn too; the session must not stay busy.
+func TestErrorResultClearsBusy(t *testing.T) {
+	p, err := Start(exec.Command("sh", "-c", `read l; read l; echo '{"type":"result","subtype":"error","is_error":true,"result":"API down"}'; sleep 5`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	_ = p.Send("hi")
+	if e := next(t, p); e.Kind != Error {
+		t.Fatalf("event = %+v", e)
+	}
+	if p.Busy() {
+		t.Fatal("an error result left the session busy")
 	}
 }

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
+	"time"
 )
 
 // Event kinds.
@@ -34,7 +36,21 @@ const (
 	Local = "local"
 	// Denied: the turn's tool calls that permissions refused; Text names them.
 	Denied = "denied"
+	// Interrupted: the turn ended because Interrupt stopped it.
+	Interrupted = "interrupted"
+
+	// ack and nack answer a control request; Text is its request id. The
+	// reader consumes them.
+	ack  = "ack"
+	nack = "nack"
 )
+
+// ErrIdle is Interrupt's answer when no turn is running.
+var ErrIdle = errors.New("the orchestrator is idle")
+
+// interruptWait is how long Interrupt waits for the process to acknowledge
+// the control request before sending SIGINT instead.
+var interruptWait = 3 * time.Second
 
 // Event is one thing the session did. Result's Text is the turn's final
 // text, which the assistant events usually showed already.
@@ -61,6 +77,12 @@ type Proc struct {
 	events chan Event
 	busy   atomic.Bool
 	mu     sync.Mutex
+
+	// interrupting is the request id of an interrupt not yet answered by
+	// the turn's end, or "".
+	interrupting atomic.Value
+	acked        atomic.Bool // the process acknowledged the interrupt
+	irqN         atomic.Int64
 }
 
 // Start launches cmd (built by agent.Launch.Headless) and begins streaming its events.
@@ -81,6 +103,7 @@ func Start(cmd *exec.Cmd) (*Proc, error) {
 		return nil, err
 	}
 	p := &Proc{cmd: cmd, stdin: stdin, events: make(chan Event, 256)}
+	p.interrupting.Store("")
 	// Claude Code sends system/init only after the first user message; the
 	// initialize request gets the commands now, without a model call.
 	// grok-bridge ignores it.
@@ -102,8 +125,21 @@ func Start(cmd *exec.Cmd) (*Proc, error) {
 		sc.Buffer(make([]byte, 1<<20), 64<<20)
 		for sc.Scan() {
 			for _, e := range parse(sc.Bytes()) {
-				if e.Kind == Result {
+				switch e.Kind {
+				case ack, nack:
+					if id := p.interrupting.Load().(string); id != "" && e.Text == id {
+						if e.Kind == nack {
+							p.signal()
+						} else {
+							p.acked.Store(true)
+						}
+					}
+					continue
+				case Result, Error:
 					p.busy.Store(false)
+					if p.interrupting.Swap("").(string) != "" {
+						e = Event{Kind: Interrupted, Text: e.Text, SessionID: e.SessionID, CostUSD: e.CostUSD}
+					}
 				}
 				p.events <- e
 			}
@@ -111,6 +147,7 @@ func Start(cmd *exec.Cmd) (*Proc, error) {
 		<-stderrDone // Wait closes the pipe; drain it first or the tail can be lost
 		err := cmd.Wait()
 		p.busy.Store(false)
+		p.interrupting.Store("")
 		tailMu.Lock()
 		msg := strings.TrimSpace(tail.String())
 		tailMu.Unlock()
@@ -179,6 +216,57 @@ func (p *Proc) Send(text string) error {
 	return err
 }
 
+// Interrupting reports whether an interrupt was sent and the turn hasn't
+// ended yet.
+func (p *Proc) Interrupting() bool { return p.interrupting.Load().(string) != "" }
+
+// Interrupt stops the current turn, tool calls included, and keeps the
+// session. It sends Claude Code's interrupt control request, as the Agent
+// SDK does; the turn's result then arrives as an Interrupted event. A
+// process that refuses the request, or doesn't answer within interruptWait
+// (grok-bridge ignores control requests), gets SIGINT.
+func (p *Proc) Interrupt() error {
+	if !p.busy.Load() {
+		return ErrIdle
+	}
+	id := fmt.Sprintf("saddle-interrupt-%d", p.irqN.Add(1))
+	b, err := json.Marshal(map[string]any{
+		"type": "control_request", "request_id": id,
+		"request": map[string]any{"subtype": "interrupt"},
+	})
+	if err != nil {
+		return err
+	}
+	p.acked.Store(false)
+	p.interrupting.Store(id)
+	p.mu.Lock()
+	_, err = p.stdin.Write(append(b, '\n'))
+	p.mu.Unlock()
+	if err != nil {
+		p.interrupting.Store("")
+		return err
+	}
+	time.AfterFunc(interruptWait, func() {
+		if p.interrupting.Load().(string) == id && !p.acked.Load() {
+			p.signal()
+		}
+	})
+	return nil
+}
+
+// signal sends SIGINT to the process, or to its group when it leads one.
+func (p *Proc) signal() {
+	if p.cmd.Process == nil {
+		return
+	}
+	pid := p.cmd.Process.Pid
+	if pg, err := syscall.Getpgid(pid); err == nil && pg == pid {
+		_ = syscall.Kill(-pid, syscall.SIGINT)
+		return
+	}
+	_ = p.cmd.Process.Signal(syscall.SIGINT)
+}
+
 // Close ends the session: stdin closes, and the process is killed if it lingers.
 func (p *Proc) Close() {
 	p.mu.Lock()
@@ -205,8 +293,9 @@ type line struct {
 		Input json.RawMessage `json:"tool_input"`
 	} `json:"permission_denials"`
 	Response struct {
-		Subtype  string `json:"subtype"`
-		Response struct {
+		Subtype   string `json:"subtype"`
+		RequestID string `json:"request_id"`
+		Response  struct {
 			Commands []wireCommand `json:"commands"`
 		} `json:"response"`
 	} `json:"response"`
@@ -303,6 +392,12 @@ func parse(b []byte) []Event {
 	case "control_response":
 		if l.Response.Subtype == "success" && l.Response.Response.Commands != nil {
 			return []Event{{Kind: Commands, Commands: commands(l.Response.Response.Commands)}}
+		}
+		if strings.HasPrefix(l.Response.RequestID, "saddle-interrupt-") {
+			if l.Response.Subtype == "success" {
+				return []Event{{Kind: ack, Text: l.Response.RequestID}}
+			}
+			return []Event{{Kind: nack, Text: l.Response.RequestID}}
 		}
 	case "user":
 		for _, c := range blocks(l.Message.Content) {

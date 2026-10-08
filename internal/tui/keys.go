@@ -23,7 +23,7 @@ type keyMap struct {
 	Terminal, TermBack, TermScrollUp, TermScrollDown key.Binding
 
 	// Chat.
-	Send, Newline, Complete, Untarget key.Binding
+	Send, Newline, Complete, Untarget, Interrupt key.Binding
 
 	// Narrator questions.
 	Ask, AskScreen key.Binding
@@ -70,6 +70,8 @@ func newKeyMap() keyMap {
 		Newline:  b("alt+enter", "newline", "alt+enter", "ctrl+j"),
 		Complete: b("/ tab", "skills & commands (↑↓ pick, tab completes)", "tab"),
 		Untarget: b("esc", "back to orchestrator", "esc"),
+		// Esc in the chat, or the first ctrl+c anywhere, while the orchestrator works.
+		Interrupt: b("esc", "interrupt the orchestrator's turn", "esc"),
 
 		Ask:       b("alt+a", "ask narrator", "alt+a"),
 		AskScreen: b("alt+s", "send agent's screen", "alt+s"),
@@ -127,7 +129,7 @@ type keyGroup struct {
 func (k keyMap) groups() []keyGroup {
 	return []keyGroup{
 		{"Anywhere", []key.Binding{k.ViewControl, k.ViewPlan, k.ViewMerge, k.Help, k.NextAgent, k.PrevAgent, k.Focus, k.PageUp, k.PageDown, k.Restart, k.Quit}},
-		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget, k.Ask, k.AskScreen}},
+		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget, k.Interrupt, k.Ask, k.AskScreen}},
 		{"Agents", []key.Binding{k.Down, k.Up, k.Open, k.Skill, k.Spawn, k.Pause, k.Brief, k.Kill, k.Land, k.Back}},
 		{"Plan view", []key.Binding{k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.ModelDown, k.Go, k.PlanNext, k.PlanPrev, k.BotsUp, k.BotsDown}},
 		{"Merge view", []key.Binding{k.AutoMerge, k.Hold, k.Rebase, k.QueueDown, k.QueueUp, k.TakeOver}},
@@ -175,6 +177,8 @@ func (m *model) help() []key.Binding {
 			hs = append(hs, k.AskScreen, k.Untarget)
 		case m.target != "":
 			hs = append(hs, k.Untarget)
+		case m.proc != nil && m.proc.Busy():
+			hs = append(hs, withHelp(k.Interrupt, "esc", "interrupt"), withHelp(k.Complete, "/", "skills"))
 		default:
 			hs = append(hs, withHelp(k.Complete, "/", "skills"), k.Ask)
 		}

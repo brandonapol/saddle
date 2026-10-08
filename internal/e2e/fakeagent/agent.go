@@ -382,7 +382,9 @@ func (a *Agent) wait(match string) error {
 // for the TUI's orchestrator: it acknowledges every message. Like Claude
 // Code it lists the user's and the project's skills (in init and in reply to
 // an initialize control request) and "runs" a typed /skill, answering
-// "fake skill <name> ran with: <args>".
+// "fake skill <name> ran with: <args>". A message starting "slow:" starts
+// a turn that sits in a tool call until an interrupt control request ends
+// it, as Claude Code's does.
 func (a *Agent) headless() int {
 	f, err := os.OpenFile(OrchestratorLog(a.Dir), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -401,6 +403,7 @@ func (a *Agent) headless() int {
 		"slash_commands": names, "skills": names})
 	sc := bufio.NewScanner(a.In)
 	sc.Buffer(make([]byte, 1<<20), 16<<20)
+	inTurn := false
 	for sc.Scan() {
 		var m struct {
 			Type      string `json:"type"`
@@ -422,10 +425,20 @@ func (a *Agent) headless() int {
 				resp["response"] = map[string]any{"commands": cmds}
 			}
 			_ = enc.Encode(map[string]any{"type": "control_response", "response": resp})
+			if m.Request.Subtype == "interrupt" && inTurn {
+				inTurn = false
+				_ = enc.Encode(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "result": "", "session_id": "fake-orchestrator"})
+			}
 			continue
 		}
 		text := fmt.Sprint(m.Message.Content)
 		fmt.Fprintln(f, "user: "+strings.ReplaceAll(text, "\n", " | "))
+		if strings.HasPrefix(text, "slow:") {
+			inTurn = true
+			_ = enc.Encode(map[string]any{"type": "assistant", "message": map[string]any{
+				"content": []any{map[string]any{"type": "tool_use", "name": "Bash", "input": map[string]any{"command": "sleep 600"}}}}})
+			continue
+		}
 		reply := ""
 		if name, args, ok := strings.Cut(strings.TrimPrefix(text, "/")+" ", " "); ok && strings.HasPrefix(text, "/") && slices.Contains(names, name) {
 			reply = "fake skill " + name + " ran with: " + strings.TrimSpace(args)

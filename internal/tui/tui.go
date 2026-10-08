@@ -610,6 +610,8 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		if m.quitArmed() {
 			return tea.Quit, true
 		}
+		// While a turn runs, the first ctrl+c also stops it.
+		m.interrupt()
 		m.quitArmedAt = time.Now()
 		at := m.quitArmedAt
 		return tea.Tick(quitWindow, func(time.Time) tea.Msg { return quitExpiry(at) }), true
@@ -669,6 +671,9 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		if key.Matches(k, keys.Untarget) && m.target != "" {
 			m.input.Reset()
 			m.unaim()
+			return nil, true
+		}
+		if key.Matches(k, keys.Interrupt) && m.interrupt() {
 			return nil, true
 		}
 		if key.Matches(k, keys.Send) {
@@ -793,6 +798,19 @@ func (m *model) sendUser(text string) {
 	}
 }
 
+// interrupt stops the orchestrator's running turn. It reports whether one
+// was running.
+func (m *model) interrupt() bool {
+	if m.proc == nil || !m.proc.Busy() || m.proc.Interrupting() {
+		return false
+	}
+	if err := m.proc.Interrupt(); err != nil {
+		m.flash, m.flashAt = "interrupt: "+err.Error(), time.Now()
+		return false
+	}
+	return true
+}
+
 func (m *model) addChat(role, text string) {
 	m.chat = append(m.chat, chatLine{role: role, text: text})
 	_ = m.app.Store.AddChat(role, text)
@@ -851,6 +869,14 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 		if e.SessionID != "" {
 			_ = m.app.Store.SetField(app.OrchestratorID, "session_id", e.SessionID)
 		}
+		m.deliver()
+	case orch.Interrupted:
+		if part := strings.TrimSpace(m.streaming.String()); part != "" {
+			m.addChat(store.ChatAssistant, part)
+		}
+		m.streaming.Reset()
+		m.turnText = false
+		m.addChat(store.ChatEvent, "Interrupted. The orchestrator is idle; the conversation is kept.")
 		m.deliver()
 	case orch.Error:
 		m.streaming.Reset()
@@ -1117,8 +1143,10 @@ func (m *model) renderChat() {
 	if m.streaming.Len() > 0 {
 		b.WriteString(renderLine(chatLine{role: store.ChatAssistant, text: m.streaming.String()}, w, wrap))
 		b.WriteString("\n")
+	} else if m.proc != nil && m.proc.Interrupting() {
+		b.WriteString(sDim.Render("  interrupting…") + "\n")
 	} else if m.proc != nil && m.proc.Busy() {
-		b.WriteString(sDim.Render("  thinking…") + "\n")
+		b.WriteString(sDim.Render("  thinking… (esc to interrupt)") + "\n")
 	}
 	m.vp.SetContent(b.String())
 	if m.follow {
@@ -1192,7 +1220,11 @@ func (m *model) viewFooter() string {
 		line = " " + lipgloss.NewStyle().Foreground(cAccent).Render(m.flash)
 	}
 	if m.quitArmed() {
-		line = " " + lipgloss.NewStyle().Foreground(cAccent).Render("Press Ctrl+C again to quit")
+		hint := "Press Ctrl+C again to quit"
+		if m.proc != nil && m.proc.Interrupting() {
+			hint = "Interrupting the orchestrator. " + hint
+		}
+		line = " " + lipgloss.NewStyle().Foreground(cAccent).Render(hint)
 	}
 	if m.limits != nil && hasUsage(*m.limits) {
 		line = usageStrip(*m.limits, m.width) + "\n" + line
