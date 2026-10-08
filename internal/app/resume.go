@@ -309,7 +309,7 @@ func snapshotCommit(dir, msg string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(tmp)
+	defer func() { _ = os.RemoveAll(tmp) }()
 	env := append(os.Environ(), "GIT_INDEX_FILE="+filepath.Join(tmp, "index"))
 	g := func(args ...string) (string, error) {
 		cmd := exec.Command("git", append([]string{"-c", "user.name=saddle", "-c", "user.email=saddle@localhost"}, args...)...)
