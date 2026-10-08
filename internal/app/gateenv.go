@@ -348,24 +348,40 @@ func within(root, p string) bool {
 }
 
 // RunGateEnv runs task's gate through run with its temp dirs under
-// GateTmpdir, retrying an environment failure up to twice. After the
-// retries it interrupts the orchestrator and returns the failure with Env
-// set.
+// GateTmpdir, holding a heavy-run slot (gaterunq.go), retrying an
+// environment failure up to twice. After the retries it interrupts the
+// orchestrator and returns the failure with Env set.
 func (a *App) RunGateEnv(ctx context.Context, task string, run GateRun) GateEnvResult {
 	return a.runGateEnv(ctx, task, run, true)
 }
 
-// runGateEnv is RunGateEnv; notify false leaves telling anyone about an
-// environment failure to the caller, as the pre-publish gate reports it in
-// its own error (#274).
-func (a *App) runGateEnv(ctx context.Context, task string, run GateRun, notify bool) GateEnvResult {
-	var res GateEnvResult
+// runGateEnv is RunGateEnv; notify false is the pre-publish gate, which
+// tells about an environment failure in its own error (#274) and has no
+// train entry to show its wait for a slot in.
+func (a *App) runGateEnv(ctx context.Context, task string, run GateRun, notify bool) (res GateEnvResult) {
 	base := a.GateTmpdir()
 	sweepStaleTemp(base, time.Now().Add(-gateStaleAge))
+	lease := a.gateLease(ctx, task, notify)
+	defer func() { lease.release(a, task, res.Err) }()
 	for attempt := 0; ; attempt++ {
-		res.Output, res.Err = a.gateOnce(ctx, base, run)
+		res.Output, res.Err = a.gateOnce(ctx, base, run, lease)
 		var timedOut *GateTimeoutError
 		if res.Err == nil || errors.As(res.Err, &timedOut) || errors.Is(res.Err, ErrGateInterrupted) {
+			return res
+		}
+		if lease.isLost() {
+			// The queue stopped the gate: not the branch's fault, and not
+			// retried, since the owner or the reaper took the slot away.
+			lost := gateLeaseLost
+			res.Env = &lost
+			a.Store.Event(task, EventGateEnv, gateLeaseLost.Signature+"; the gate was stopped, "+task+" stays queued")
+			if notify {
+				if err := a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
+					"The test gate for %s was stopped because its heavy-run lease was killed or reaped. "+
+						"%s stays queued and nothing was counted against it; land again to rerun it.", task, task)); err != nil {
+					res.Output += "\n(orchestrator not notified: " + err.Error() + ")"
+				}
+			}
 			return res
 		}
 		p, env := ClassifyGateOutput(res.Output)
@@ -396,8 +412,9 @@ func (a *App) runGateEnv(ctx context.Context, task string, run GateRun, notify b
 }
 
 // gateOnce runs the gate once in a fresh per-run temp dir, removed after
-// along with base when nothing else is left in it.
-func (a *App) gateOnce(ctx context.Context, base string, run GateRun) (string, error) {
+// along with base when nothing else is left in it. The gate rides on lease
+// and is stopped if the queue takes it away.
+func (a *App) gateOnce(ctx context.Context, base string, run GateRun, lease *gateLease) (string, error) {
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		return "", fmt.Errorf("gate tmpdir: %w", err)
 	}
@@ -410,7 +427,22 @@ func (a *App) gateOnce(ctx context.Context, base string, run GateRun) (string, e
 		_ = os.RemoveAll(dir)
 		_ = os.Remove(base) // only if empty: the default lives in the user's cache dir
 	}()
-	return run(ctx, []string{"TMPDIR=" + dir, "GOTMPDIR=" + dir})
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if lost := lease.lost(); lost != nil {
+		go func() {
+			select {
+			case <-lost:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
+	env := []string{"TMPDIR=" + dir, "GOTMPDIR=" + dir}
+	if lease != nil {
+		env = append(env, lease.env...)
+	}
+	return run(ctx, env)
 }
 
 // sweepStaleTemp removes Test*, go-build* and leftover gate-* dirs in base
