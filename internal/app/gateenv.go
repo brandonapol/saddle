@@ -270,6 +270,10 @@ func onStopSignal(sigs chan os.Signal) {
 	if s, ok := sig.(syscall.Signal); ok {
 		_ = syscall.Kill(os.Getpid(), s)
 	}
+	// Still here: something else handles the signal and carries on, so
+	// later gates must run.
+	time.Sleep(2 * gateKillGrace)
+	g.stopping.Store(false)
 }
 
 // pidAlive reports whether process pid exists.
