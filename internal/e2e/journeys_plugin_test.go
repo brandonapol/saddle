@@ -13,6 +13,13 @@ import (
 
 const howdyLine = "Howdy, partner!"
 
+// trustRepo answers saddle's trust prompt (#215) with yes, as a user does
+// before a first plugin command or init can set the repo up.
+func (w *World) trustRepo() {
+	w.T.Helper()
+	w.MustSaddle("trust", "--yes")
+}
+
 // marker is the plugin's onboarding marker, "" when missing.
 func (w *World) marker() string {
 	b, _ := os.ReadFile(filepath.Join(w.Repo, ".saddle", "plugin-onboarded"))
@@ -33,6 +40,7 @@ func TestJourneyPluginOnboarding(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(w.Repo, ".saddle")); err == nil {
 		t.Fatal("the plugin hook created .saddle in a repo that never ran saddle init")
 	}
+	w.trustRepo()
 
 	r := w.MustSaddle("plugin", "setup")
 	for _, want := range []string{howdyLine, "First use of saddle in " + w.Repo, "STATUS", "CHECK", "Saddle is set up in " + w.Repo} {
@@ -73,6 +81,7 @@ func TestJourneyPluginOnboardingBlockedByFailingDoctor(t *testing.T) {
 		s.Repo.AllowMerge = true // stacked PRs need linear history: a hard fail
 		return nil
 	}))
+	w.trustRepo()
 
 	r := w.MustSaddle("plugin", "brief")
 	for _, want := range []string{howdyLine, "First use of saddle", "merge commits are allowed", "saddle doctor found failing checks"} {
@@ -110,11 +119,13 @@ func TestJourneyPluginOnboardingBlockedByFailingDoctor(t *testing.T) {
 // in color, and prints no banner into a pipe or with --quiet.
 func TestJourneyInitBannerOnlyOnTTY(t *testing.T) {
 	w := world(t, Options{NoInit: true})
+	w.trustRepo()
 	if r := w.MustSaddle("init"); strings.Contains(r.Stdout, howdyLine) {
 		t.Fatalf("saddle init printed the banner into a pipe:\n%s", r.Stdout)
 	}
 
 	w2 := world(t, Options{NoInit: true})
+	w2.trustRepo()
 	must(t, w2.Tmux.NewSession("init", 100, 30, w2.Repo, shq(w2.Bins.Saddle)+` init; echo "[init exited $?]"; exec cat`))
 	Eventually(t, "saddle init on a terminal to greet", func() error {
 		s, err := w2.Tmux.Capture("init:0")
@@ -133,6 +144,7 @@ func TestJourneyInitBannerOnlyOnTTY(t *testing.T) {
 	}
 
 	w3 := world(t, Options{NoInit: true})
+	w3.trustRepo()
 	must(t, w3.Tmux.NewSession("init", 100, 30, w3.Repo, shq(w3.Bins.Saddle)+` init --quiet; echo "[init exited $?]"; exec cat`))
 	Eventually(t, "saddle init --quiet to finish", func() error {
 		s, err := w3.Tmux.Capture("init:0")
