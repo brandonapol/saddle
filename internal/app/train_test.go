@@ -3,9 +3,12 @@ package app
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/gitx"
@@ -378,4 +381,127 @@ func slicesContainsText(ns []store.Notice, s string) bool {
 		}
 	}
 	return false
+}
+
+// #269: a hung test gate times out, fails the branch with its output tail
+// and how long it ran, and lets go of train.lock for the next land.
+func TestLandTimesOutAHungGate(t *testing.T) {
+	a := trainSetup(t)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	tk := queueTask(t, a, "t1", "hang", map[string]string{"x.go": "x\n"})
+	setGateTimeout(t, "300ms")
+	a.Cfg.Test.Cmd = "echo started; sleep 600"
+	rs, err := a.Land()
+	must(t, err)
+	if len(rs) != 1 || rs[0].State != store.TestFailed {
+		t.Fatalf("results = %+v", rs)
+	}
+	ns, err := a.Store.TakeNotices(tk.ID, false)
+	must(t, err)
+	if len(ns) == 0 || !strings.Contains(ns[len(ns)-1].Text, "started") || !strings.Contains(ns[len(ns)-1].Text, "gate timed out after 300ms") {
+		t.Fatalf("notices = %+v", ns)
+	}
+	unlock, ok, err := a.TryLockTrain()
+	must(t, err)
+	if !ok {
+		t.Fatal("train.lock still held after the gate timed out")
+	}
+	unlock()
+}
+
+// holdTrainLock takes train.lock on a separate open file, as another
+// process would, with holder pid since the given time. It returns the file.
+func holdTrainLock(t *testing.T, a *App, pid int, since time.Time) *os.File {
+	t.Helper()
+	f, err := os.OpenFile(a.stateDir("train.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	must(t, err)
+	t.Cleanup(func() { f.Close() })
+	must(t, syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB))
+	_, err = fmt.Fprintf(f, "%d %d\n", pid, since.UnixNano())
+	must(t, err)
+	return f
+}
+
+func lockStolen(t *testing.T, a *App) bool {
+	t.Helper()
+	evs, err := a.Store.Events(100)
+	must(t, err)
+	for _, e := range evs {
+		if e.Kind == EventTrainLockStolen {
+			return true
+		}
+	}
+	return false
+}
+
+// #269 watchdog: a train.lock whose holder is dead (its lock kept by a
+// leaked descriptor) is stolen, with an event.
+func TestLockTrainStealsFromADeadHolder(t *testing.T) {
+	a := trainSetup(t)
+	c := exec.Command("true")
+	must(t, c.Run())
+	holdTrainLock(t, a, c.Process.Pid, time.Now())
+	done := make(chan error, 1)
+	go func() {
+		unlock, err := a.lockTrain()
+		if err == nil {
+			unlock()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		must(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("lockTrain waited on a dead holder")
+	}
+	if !lockStolen(t, a) {
+		t.Fatal("no event for the stolen lock")
+	}
+}
+
+// #269 watchdog: a live holder that has had train.lock for over twice
+// [train] gate_timeout is stuck past any gate; it is stopped and the lock
+// stolen.
+func TestLockTrainStealsFromAnOverdueHolder(t *testing.T) {
+	a := trainSetup(t)
+	setGateTimeout(t, "300ms")
+	holder := exec.Command("sleep", "600")
+	must(t, holder.Start())
+	exited := make(chan struct{})
+	go func() { _ = holder.Wait(); close(exited) }()
+	t.Cleanup(func() { _ = holder.Process.Kill() })
+	holdTrainLock(t, a, holder.Process.Pid, time.Now())
+	unlock, err := a.lockTrain()
+	must(t, err)
+	unlock()
+	select {
+	case <-exited:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the overdue holder was left running")
+	}
+	if !lockStolen(t, a) {
+		t.Fatal("no event for the stolen lock")
+	}
+}
+
+// A holder within its time keeps the lock.
+func TestLockTrainWaitsOnALiveHolder(t *testing.T) {
+	a := trainSetup(t)
+	f := holdTrainLock(t, a, os.Getpid(), time.Now())
+	_, ok, err := a.TryLockTrain()
+	must(t, err)
+	if ok {
+		t.Fatal("took a lock a live holder has")
+	}
+	must(t, syscall.Flock(int(f.Fd()), syscall.LOCK_UN))
+	unlock, ok, err := a.TryLockTrain()
+	must(t, err)
+	if !ok {
+		t.Fatal("lock free but not taken")
+	}
+	unlock()
+	if lockStolen(t, a) {
+		t.Fatal("stole a live holder's lock")
+	}
 }

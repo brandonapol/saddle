@@ -1,16 +1,24 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
+
+	"github.com/BurntSushi/toml"
 
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -65,15 +73,207 @@ func ClassifyGateOutput(out string) (GateEnvProblem, bool) {
 // GateRun runs the gate once with env added to its environment.
 type GateRun func(ctx context.Context, env []string) (string, error)
 
-// ShellGate is the GateRun of a shell command in dir, in GateEnviron.
-func ShellGate(dir, cmd string) GateRun {
+// ShellGate is the GateRun of a shell command in dir, in GateEnviron, killed
+// with everything it started once it runs past timeout (#269).
+func ShellGate(dir, cmd string, timeout time.Duration) GateRun {
 	return func(ctx context.Context, env []string) (string, error) {
-		c := exec.CommandContext(ctx, "sh", "-c", cmd)
-		c.Dir = dir
-		c.Env = append(GateEnviron(os.Environ()), env...)
-		out, err := c.CombinedOutput()
-		return string(out), err
+		return runGroup(ctx, dir, cmd, append(GateEnviron(os.Environ()), env...), timeout)
 	}
+}
+
+// DefaultGateTimeout is [train] gate_timeout when it is unset.
+const DefaultGateTimeout = 20 * time.Minute
+
+// gateKillGrace is how long a gate's group has between SIGTERM and SIGKILL.
+const gateKillGrace = 3 * time.Second
+
+// GateTimeout is [train] gate_timeout: how long the train's test and lint
+// gates and done's lint gate may run before they are killed. It is read
+// from the config files here until config.Train carries it.
+func (a *App) GateTimeout() time.Duration {
+	var d time.Duration
+	paths := []string{filepath.Join(a.Root, ".saddle", "config.toml")}
+	if home, err := os.UserConfigDir(); err == nil {
+		paths = append([]string{filepath.Join(home, "saddle", "config.toml")}, paths...)
+	}
+	for _, p := range paths {
+		var c struct {
+			Train struct {
+				GateTimeout time.Duration `toml:"gate_timeout"`
+			} `toml:"train"`
+		}
+		if _, err := toml.DecodeFile(p, &c); err == nil && c.Train.GateTimeout > 0 {
+			d = c.Train.GateTimeout
+		}
+	}
+	if d <= 0 {
+		return DefaultGateTimeout
+	}
+	return d
+}
+
+// GateTimeoutError is a gate killed for running past its timeout. It is the
+// branch's failure, not the environment's: a hung test hangs again.
+type GateTimeoutError struct{ After time.Duration }
+
+func (e *GateTimeoutError) Error() string { return fmt.Sprintf("gate timed out after %s", e.After) }
+
+// ErrGateInterrupted is a gate killed because saddle was told to stop. Not
+// the branch's fault: it stays queued for the next land.
+var ErrGateInterrupted = errors.New("gate interrupted: saddle was told to stop")
+
+// runGroup runs cmd under sh in dir in its own process group, with env
+// (nil inherits saddle's). It returns as soon as the shell exits, even when
+// something it started still holds its output. When ctx is done or timeout
+// passes, or saddle is told to stop, the whole group gets SIGTERM, then
+// SIGKILL, before it returns.
+func runGroup(ctx context.Context, dir, cmd string, env []string, timeout time.Duration) (string, error) {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	c := exec.CommandContext(ctx, "sh", "-c", cmd)
+	c.Dir, c.Env = dir, env
+	// A file, not a pipe: a helper the gate leaves running mustn't hold Wait.
+	// With no temp space it is a pipe, and WaitDelay stops the wait.
+	var buf bytes.Buffer
+	if f, err := os.CreateTemp("", "saddle-gate-*.log"); err == nil {
+		defer func() {
+			f.Close()
+			_ = os.Remove(f.Name())
+		}()
+		c.Stdout, c.Stderr = f, f
+	} else {
+		c.Stdout, c.Stderr = &buf, &buf
+	}
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.Cancel = func() error { return syscall.Kill(-c.Process.Pid, syscall.SIGTERM) }
+	c.WaitDelay = gateKillGrace
+	if err := c.Start(); err != nil {
+		return err.Error(), err
+	}
+	pgid := c.Process.Pid
+	stop := watchGroup(pgid)
+	err := c.Wait()
+	stop()
+	if ctx.Err() != nil {
+		killGroup(pgid)
+	}
+	if gateGroups.stopping.Load() {
+		killGroup(pgid)
+		return "", ErrGateInterrupted
+	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil // the shell passed; a helper held its output
+	}
+	out := buf.String()
+	if f, ok := c.Stdout.(*os.File); ok {
+		b, _ := os.ReadFile(f.Name())
+		out = string(b)
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		te := &GateTimeoutError{After: timeout}
+		return strings.TrimRight(out, "\n") + "\n" + te.Error(), te
+	}
+	if err == nil && ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	return out, err
+}
+
+// killGroup stops process group pgid: SIGTERM, then SIGKILL for whatever is
+// left after gateKillGrace.
+func killGroup(pgid int) {
+	if syscall.Kill(-pgid, syscall.SIGTERM) != nil {
+		return // already gone
+	}
+	for end := time.Now().Add(gateKillGrace); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		if syscall.Kill(-pgid, 0) != nil {
+			return
+		}
+	}
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+}
+
+// gateGroups are the gate process groups running now, so a saddle told to
+// stop (Ctrl-C, a tool timeout's SIGTERM) takes them down with it instead
+// of orphaning them.
+var gateGroups struct {
+	sync.Mutex
+	pgids map[int]bool
+	sigs  chan os.Signal
+	// stopping is set once a stop signal arrived, before any group is
+	// killed, so a gate that dies of it isn't taken for a red one.
+	stopping atomic.Bool
+}
+
+// watchGroup registers pgid until the returned func is called.
+func watchGroup(pgid int) (stop func()) {
+	g := &gateGroups
+	g.Lock()
+	defer g.Unlock()
+	if g.pgids == nil {
+		g.pgids = map[int]bool{}
+	}
+	if len(g.pgids) == 0 {
+		g.sigs = make(chan os.Signal, 1)
+		for _, sig := range []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
+			// An ignored signal (nohup) stays ignored: it mustn't kill the gate.
+			if !signal.Ignored(sig) {
+				signal.Notify(g.sigs, sig)
+			}
+		}
+		go onStopSignal(g.sigs)
+	}
+	g.pgids[pgid] = true
+	return func() {
+		g.Lock()
+		defer g.Unlock()
+		delete(g.pgids, pgid)
+		if len(g.pgids) == 0 && g.sigs != nil {
+			signal.Stop(g.sigs)
+			close(g.sigs)
+			g.sigs = nil
+		}
+	}
+}
+
+// onStopSignal kills every running gate group when saddle is told to stop,
+// then lets the signal do what it would have.
+func onStopSignal(sigs chan os.Signal) {
+	sig, ok := <-sigs
+	if !ok {
+		return
+	}
+	g := &gateGroups
+	g.stopping.Store(true)
+	g.Lock()
+	pgids := make([]int, 0, len(g.pgids))
+	for p := range g.pgids {
+		pgids = append(pgids, p)
+	}
+	if g.sigs == sigs {
+		signal.Stop(sigs)
+		g.sigs = nil
+		g.pgids = map[int]bool{}
+	}
+	g.Unlock()
+	var wg sync.WaitGroup
+	for _, p := range pgids {
+		wg.Add(1)
+		go func() { defer wg.Done(); killGroup(p) }()
+	}
+	wg.Wait()
+	if s, ok := sig.(syscall.Signal); ok {
+		_ = syscall.Kill(os.Getpid(), s)
+	}
+}
+
+// pidAlive reports whether process pid exists.
+func pidAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // GateEnvResult is how a gate run under RunGateEnv went.
@@ -151,7 +351,8 @@ func (a *App) RunGateEnv(ctx context.Context, task string, run GateRun) GateEnvR
 	sweepStaleTemp(base, time.Now().Add(-gateStaleAge))
 	for attempt := 0; ; attempt++ {
 		res.Output, res.Err = a.gateOnce(ctx, base, run)
-		if res.Err == nil {
+		var timedOut *GateTimeoutError
+		if res.Err == nil || errors.As(res.Err, &timedOut) || errors.Is(res.Err, ErrGateInterrupted) {
 			return res
 		}
 		p, env := ClassifyGateOutput(res.Output)

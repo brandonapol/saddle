@@ -176,3 +176,21 @@ func TestBrokenGateDoesNotFailTheBranch(t *testing.T) {
 		t.Fatal("a red gate passed")
 	}
 }
+
+// #269: done's lint gate times out like the train's, killing what it
+// started, and refuses with the output tail.
+func TestLintDoneTimesOut(t *testing.T) {
+	a := trainSetup(t)
+	setGateTimeout(t, "300ms")
+	pidf := filepath.Join(t.TempDir(), "child")
+	a.Cfg.Train.Lint = config.Lint{Cmd: "sleep 600 & echo $! > " + pidf + "; echo linting; wait", Set: true}
+	tk, err := a.Spawn(SpawnReq{Title: "lint"})
+	must(t, err)
+	write(t, tk.Worktree, "x.go", "x\n")
+	commitAll(t, tk.Worktree, "x")
+	err = a.lintDone(tk)
+	if err == nil || !strings.Contains(err.Error(), "linting") || !strings.Contains(err.Error(), "gate timed out after 300ms") {
+		t.Fatalf("done on a hung gate: %v", err)
+	}
+	gone(t, pidf)
+}

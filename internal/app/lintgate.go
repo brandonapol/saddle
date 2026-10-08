@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -44,7 +45,10 @@ func (a *App) lintDone(t store.Task) error {
 	if g.Cmd == "" {
 		return nil
 	}
-	out, err := runShell(t.Worktree, g.Cmd)
+	out, err := runGroup(context.Background(), t.Worktree, g.Cmd, nil, a.GateTimeout())
+	if errors.Is(err, ErrGateInterrupted) {
+		return err
+	}
 	if err == nil || a.brokenGate(t.ID, g, out) {
 		return nil
 	}
@@ -54,17 +58,20 @@ func (a *App) lintDone(t store.Task) error {
 
 // trainLint runs the gate on the rebased tree in dir after the tests. It
 // returns the failure message, "" when green, off, or the same command the
-// tests just ran.
-func (a *App) trainLint(id, dir string) string {
+// tests just ran, and ErrGateInterrupted when saddle was told to stop.
+func (a *App) trainLint(id, dir string) (string, error) {
 	g := a.LintGate()
 	if g.Cmd == "" || g.Cmd == strings.TrimSpace(a.Cfg.Test.Cmd) {
-		return ""
+		return "", nil
 	}
-	out, err := runShell(dir, g.Cmd)
+	out, err := runGroup(context.Background(), dir, g.Cmd, nil, a.GateTimeout())
+	if errors.Is(err, ErrGateInterrupted) {
+		return "", err
+	}
 	if err == nil || a.brokenGate(id, g, out) {
-		return ""
+		return "", nil
 	}
-	return lintFailure(g, out, "Your branch rebased cleanly onto "+a.Cfg.Integration+" and passed its tests, but on the result")
+	return lintFailure(g, out, "Your branch rebased cleanly onto "+a.Cfg.Integration+" and passed its tests, but on the result"), nil
 }
 
 // noRule is make's complaint about a target the makefile lacks.
