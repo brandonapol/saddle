@@ -83,6 +83,7 @@ func (e *autopilotEnv) Tasks() ([]autopilot.Task, error) {
 			ID: t.ID, Issue: t.Issue, Claims: all[t.ID],
 			Live:   liveStatus(t.Status) || t.Status == StatusPaused,
 			Queued: t.Status == store.Done,
+			Paused: t.Status == StatusPaused,
 		})
 	}
 	return out, nil
@@ -201,6 +202,24 @@ func (e *autopilotEnv) Notify(interrupt bool, text string) {
 }
 
 func (e *autopilotEnv) Event(kind, data string) { e.a.Store.Event("", kind, data) }
+
+// Park stops every live worker the way saddle down does: work snapshotted,
+// claims and worktrees kept, status paused.
+func (e *autopilotEnv) Park() ([]string, error) { return e.a.Pause() }
+
+// Unpark resumes a parked task in a new window; one whose window outlived
+// the park just goes back to running.
+func (e *autopilotEnv) Unpark(task string) error {
+	t, err := e.a.Store.Task(task)
+	if err != nil {
+		return err
+	}
+	if t.Status == StatusPaused && t.Window != "" && e.a.ownWindow(t) {
+		return e.a.Store.SetStatus(task, store.Running)
+	}
+	_, err = e.a.Resume(task)
+	return err
+}
 
 // closesRef finds the issues a PR body closes.
 var closesRef = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d+)`)

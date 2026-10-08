@@ -34,6 +34,8 @@ const (
 	EventSkip    = "autopilot_skip" // a spawn failed; the issue waits
 	EventSleep   = "autopilot_sleep"
 	EventWake    = "autopilot_wake"
+	EventPark    = "autopilot_park"   // infinite mode parked tasks at the plan limit
+	EventUnpark  = "autopilot_unpark" // and resumed them after the reset
 	EventNudge   = "autopilot_nudge"
 	EventStopped = "autopilot_stopped" // the final summary
 	EventError   = "autopilot_error"
@@ -52,6 +54,7 @@ type Task struct {
 	Claims []string // nil means it declared none: it may touch anything
 	Live   bool     // an agent works on it (running, idle, needs you, conflict, paused)
 	Queued bool     // done, waiting in the merge train
+	Paused bool     // live but parked: its agent was stopped and resumes later
 }
 
 // Usage is plan-limit pressure now.
@@ -90,6 +93,11 @@ type Env interface {
 	Backlog() (since time.Time, ok bool)
 	Notify(interrupt bool, text string)
 	Event(kind, data string)
+	// Park stops every running worker cleanly (work snapshotted, claims
+	// and worktree kept) and returns the tasks it parked.
+	Park() ([]string, error)
+	// Unpark resumes a parked task.
+	Unpark(task string) error
 }
 
 // Driver runs autopilot ticks against Env. Tests call Tick with an injected clock.
@@ -135,6 +143,7 @@ type Report struct {
 type Options struct {
 	Stop       Stop
 	ReadyLabel string
+	Infinite   bool // see State.Infinite; Stop is ignored
 }
 
 // Status reads the state file.
@@ -146,11 +155,37 @@ func (d *Driver) Enable(o Options) (State, error) {
 	if err != nil {
 		return old, err
 	}
-	st := State{Gen: old.Gen + 1, On: true, Stop: o.Stop, ReadyLabel: o.ReadyLabel, Started: d.now()}
+	st := State{Gen: old.Gen + 1, On: true, Stop: o.Stop, ReadyLabel: o.ReadyLabel, Infinite: o.Infinite, Started: d.now()}
+	if o.Infinite {
+		st.Stop = Stop{}
+	}
 	if err := st.Save(d.Path); err != nil {
 		return st, err
 	}
-	d.Env.Event(EventOn, fmt.Sprintf("ready label %s, %s", st.Label(), st.Stop))
+	d.Env.Event(EventOn, fmt.Sprintf("ready label %s, %s", st.Label(), st.Goal()))
+	return st, nil
+}
+
+// SetInfinite turns infinite mode on or off (#285). On over a running
+// bounded run keeps the run and drops its stop condition; on with nothing
+// running starts one. Off ends an infinite run like Disable; it leaves a
+// bounded run alone.
+func (d *Driver) SetInfinite(on bool) (State, error) {
+	st, err := Load(d.Path)
+	if err != nil {
+		return st, err
+	}
+	switch {
+	case on && !st.On:
+		return d.Enable(Options{ReadyLabel: st.ReadyLabel, Infinite: true})
+	case on && !st.Infinite:
+		st.Gen++
+		st.Infinite, st.Stop, st.Draining = true, Stop{}, ""
+		d.Env.Event(EventOn, "infinite mode over the running run")
+		return st, st.Save(d.Path)
+	case !on && st.On && st.Infinite:
+		return d.Disable()
+	}
 	return st, nil
 }
 
@@ -316,6 +351,9 @@ func (d *Driver) Tick() (Report, error) {
 	}
 
 	sleeping := d.sleep(&st, now, use)
+	if st.Infinite && sleeping {
+		d.park(&st, tasks)
+	}
 	inQueue := map[int]bool{}
 	for _, is := range issues {
 		inQueue[is.Number] = true
@@ -400,7 +438,7 @@ func (d *Driver) Tick() (Report, error) {
 	switch {
 	case st.Draining != "" && !busy:
 		d.finish(&st, st.Draining, now, true)
-	case st.Draining == "" && ready == 0 && !busy:
+	case st.Draining == "" && ready == 0 && !busy && !st.Infinite:
 		d.finish(&st, "queue empty", now, true)
 	}
 	if !st.On {
@@ -425,7 +463,10 @@ func (d *Driver) Tick() (Report, error) {
 		rep.Decision = digest
 	}
 
-	stalled := !sleeping && st.Draining == "" && ready > 0 && len(rep.Spawned) == 0 && running < limit
+	// In infinite mode an empty queue below the cap is a stall too: the
+	// orchestrator is asked to find more work.
+	empty := st.Infinite && ready == 0 && len(rep.Spawned) == 0
+	stalled := !sleeping && st.Draining == "" && (ready > 0 || empty) && len(rep.Spawned) == 0 && running < limit
 	if !stalled {
 		st.StallSince = time.Time{}
 	} else if st.StallSince.IsZero() {
@@ -433,6 +474,11 @@ func (d *Driver) Tick() (Report, error) {
 	}
 	reason, why := "", ""
 	switch {
+	case st.Infinite && sleeping:
+		// Parked at the plan limit: a nudge would only spend what's left.
+	case stalled && empty && now.Sub(st.StallSince) >= orDefault(d.StallAfter, DefaultStallAfter):
+		reason, why = "empty", fmt.Sprintf("the ready queue is empty (%d/%d running). Infinite mode is on: find more work "+
+			"(audit docs, flaky or missing tests, follow-ups from recent PRs) and open it as issues labelled %s, or spawn it", running, limit, st.Label())
 	case stalled && now.Sub(st.StallSince) >= orDefault(d.StallAfter, DefaultStallAfter):
 		reason, why = "stalled", fmt.Sprintf("%d ready but none can start (%s)", ready, whyStuck)
 	default:
@@ -484,12 +530,13 @@ func (d *Driver) blocked(is Issue, byIssue map[int]Task, inQueue map[int]bool) (
 	return "", after
 }
 
-// sleep decides whether a usage pause holds spawns this tick.
+// sleep decides whether a usage pause holds spawns this tick. In infinite
+// mode a full window is a pause even if launches aren't set to pause.
 func (d *Driver) sleep(st *State, now time.Time, use Usage) bool {
 	switch {
 	case now.Before(st.SleepUntil):
 		return true
-	case use.Pause:
+	case use.Pause || st.Infinite && use.Percent >= 1:
 		st.SleepUntil = resetOr(use.ResetsAt, now)
 		msg := fmt.Sprintf("plan limit at %.0f%%: no new tasks until %s; running work goes on", use.Percent*100, clock(st.SleepUntil))
 		d.Env.Event(EventSleep, msg)
@@ -498,8 +545,47 @@ func (d *Driver) sleep(st *State, now time.Time, use Usage) bool {
 	case !st.SleepUntil.IsZero():
 		st.SleepUntil = time.Time{}
 		d.Env.Event(EventWake, "plan limit reset; topping up again")
+		d.unpark(st)
 	}
 	return false
+}
+
+// park stops the running workers at the plan limit, once: tasks already
+// parked, queued or never launched are left alone.
+func (d *Driver) park(st *State, tasks []Task) {
+	if !slices.ContainsFunc(tasks, func(t Task) bool { return t.Live && !t.Paused && !slices.Contains(st.Parked, t.ID) }) {
+		return
+	}
+	ids, err := d.Env.Park()
+	if err != nil {
+		d.Env.Event(EventError, "park: "+err.Error())
+	}
+	for _, id := range ids {
+		if !slices.Contains(st.Parked, id) {
+			st.Parked = append(st.Parked, id)
+		}
+	}
+	if len(ids) > 0 {
+		msg := fmt.Sprintf("parked %s at the plan limit, resuming at %s", strings.Join(ids, ", "), clock(st.SleepUntil))
+		d.Env.Event(EventPark, msg)
+		d.Env.Notify(false, "Infinite mode "+msg+".")
+	}
+}
+
+// unpark resumes what park stopped.
+func (d *Driver) unpark(st *State) {
+	var done []string
+	for _, id := range st.Parked {
+		if err := d.Env.Unpark(id); err != nil {
+			d.Env.Event(EventError, "unpark "+id+": "+err.Error())
+			continue
+		}
+		done = append(done, id)
+	}
+	st.Parked = nil
+	if len(done) > 0 {
+		d.Env.Event(EventUnpark, "resumed "+strings.Join(done, ", ")+" after the plan-limit reset")
+	}
 }
 
 func resetOr(at, now time.Time) time.Time {
@@ -526,7 +612,7 @@ func stopReason(st State, now time.Time, use Usage) string {
 // finish ends the run and writes its summary; notify interrupts the
 // orchestrator with it.
 func (d *Driver) finish(st *State, reason string, now time.Time, notify bool) {
-	st.On, st.Paused, st.Stopped, st.Draining = false, false, reason, ""
+	st.On, st.Paused, st.Stopped, st.Draining, st.Infinite = false, false, reason, "", false
 	st.SleepUntil, st.StallSince = time.Time{}, time.Time{}
 	var ids []string
 	for _, s := range st.Spawned {
@@ -536,6 +622,10 @@ func (d *Driver) finish(st *State, reason string, now time.Time, notify bool) {
 		reason, clock(st.Started), clock(now), len(ids), plural(len(ids), "task"))
 	if len(ids) > 0 {
 		sum += ": " + strings.Join(ids, ", ")
+	}
+	if len(st.Parked) > 0 {
+		sum += fmt.Sprintf(". Parked %s stay paused: saddle resume <task> continues one", strings.Join(st.Parked, ", "))
+		st.Parked = nil
 	}
 	st.Summary = sum + "."
 	d.Env.Event(EventStopped, st.Summary)

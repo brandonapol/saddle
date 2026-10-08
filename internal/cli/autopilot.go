@@ -86,6 +86,33 @@ with a summary event and a notice. Merging stays with 'saddle automerge'.`,
 	f.StringVar(&label, "ready-label", autopilot.DefaultReadyLabel, "label of the issues autopilot may pick up")
 
 	cmd.AddCommand(on, &cobra.Command{
+		Use:   "infinite on|off",
+		Short: "Infinite mode: run until the plan limit, park there, resume on reset (the TUI's alt+i)",
+		Long: `Infinite mode is autopilot with no stop condition. When the ready queue
+is empty it asks the orchestrator to find more work instead of ending the
+run. When a plan-limit window is full it parks the running tasks and
+resumes them once the window resets. Holds, ci-red and the sentinels still
+apply. On over a running bounded run keeps that run; off ends the run.`,
+		Args:      cobra.ExactArgs(1),
+		ValidArgs: []string{"on", "off"},
+		RunE: withApp(func(cmd *cobra.Command, a *app.App, args []string) error {
+			if args[0] != "on" && args[0] != "off" {
+				return fmt.Errorf("infinite %q: want on or off", args[0])
+			}
+			st, err := a.NewAutopilot(nil).SetInfinite(args[0] == "on")
+			switch {
+			case err != nil:
+				return err
+			case st.Infinite:
+				fmt.Fprintf(cmd.OutOrStdout(), "infinite mode is on: issues labelled %s, %s; it runs while saddle up does\n", st.Label(), st.Goal())
+			case st.Summary != "" && !st.On:
+				fmt.Fprintln(cmd.OutOrStdout(), st.Summary)
+			default:
+				fmt.Fprintln(cmd.OutOrStdout(), "infinite mode is off")
+			}
+			return nil
+		}),
+	}, &cobra.Command{
 		Use:   "off",
 		Short: "End the run now and write its summary; running tasks go on",
 		Args:  cobra.NoArgs,
@@ -142,10 +169,13 @@ func writeAutopilot(out io.Writer, st autopilot.State) {
 		return
 	}
 	state := "on"
+	if st.Infinite {
+		state = "∞ on"
+	}
 	if st.Paused {
 		state = "paused"
 	}
-	fmt.Fprintf(out, "autopilot: %s (%s), ready label %s, since %s\n", state, st.Stop, st.Label(), hm(st.Started))
+	fmt.Fprintf(out, "autopilot: %s (%s), ready label %s, since %s\n", state, st.Goal(), st.Label(), hm(st.Started))
 	if len(st.Spawned) > 0 {
 		var ids []string
 		for _, s := range st.Spawned {
@@ -158,6 +188,9 @@ func writeAutopilot(out io.Writer, st autopilot.State) {
 	}
 	if !st.SleepUntil.IsZero() {
 		fmt.Fprintf(out, "sleeping until %s for plan limits\n", hm(st.SleepUntil))
+	}
+	if len(st.Parked) > 0 {
+		fmt.Fprintf(out, "parked until the reset: %s\n", strings.Join(st.Parked, ", "))
 	}
 	if st.LastTick.IsZero() {
 		fmt.Fprintln(out, "no tick yet: it runs while saddle up does")

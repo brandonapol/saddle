@@ -67,6 +67,10 @@ type State struct {
 	Paused     bool   `json:"paused,omitempty"`
 	Stop       Stop   `json:"stop"`
 	ReadyLabel string `json:"ready_label,omitempty"`
+	// Infinite is infinite mode (#285): no stop condition, an empty queue
+	// asks the orchestrator for more work instead of ending the run, and
+	// at the plan limit running tasks are parked until the reset.
+	Infinite bool `json:"infinite,omitempty"`
 
 	Started time.Time `json:"started,omitzero"`
 	Spawned []Spawned `json:"spawned,omitempty"`
@@ -75,6 +79,9 @@ type State struct {
 	Draining string `json:"draining,omitempty"`
 	// SleepUntil is the plan-limit reset a usage pause waits for.
 	SleepUntil time.Time `json:"sleep_until,omitzero"`
+	// Parked are the tasks infinite mode parked at the plan limit; they
+	// resume when it resets.
+	Parked []string `json:"parked,omitempty"`
 
 	LastTick     time.Time `json:"last_tick,omitzero"`
 	LastDecision string    `json:"last_decision,omitempty"`
@@ -96,6 +103,14 @@ func (s State) Label() string {
 		return DefaultReadyLabel
 	}
 	return s.ReadyLabel
+}
+
+// Goal says how long the run goes on.
+func (s State) Goal() string {
+	if s.Infinite {
+		return "infinite: until the plan limit, resuming on reset"
+	}
+	return s.Stop.String()
 }
 
 // Load reads the state file; a missing one is off.

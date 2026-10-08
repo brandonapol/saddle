@@ -26,6 +26,29 @@ type fakeEnv struct {
 	busy               bool
 	notices            []string
 	events             []string
+	parks, unparked    []string
+}
+
+func (f *fakeEnv) Park() ([]string, error) {
+	var out []string
+	for i, t := range f.tasks {
+		if t.Live && !t.Paused {
+			f.tasks[i].Paused = true
+			out = append(out, t.ID)
+		}
+	}
+	f.parks = append(f.parks, strings.Join(out, ","))
+	return out, nil
+}
+
+func (f *fakeEnv) Unpark(id string) error {
+	for i, t := range f.tasks {
+		if t.ID == id {
+			f.tasks[i].Paused = false
+		}
+	}
+	f.unparked = append(f.unparked, id)
+	return nil
 }
 
 func (f *fakeEnv) Tasks() ([]Task, error) { return slices.Clone(f.tasks), nil }

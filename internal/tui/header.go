@@ -97,6 +97,18 @@ func (m *model) viewHeader() string {
 			line += "  " + color(amColor, "%s", amShort)
 		}
 	}
+	// Infinite mode leads everything: it acts on its own around the clock.
+	if apLong, apShort := m.apHeader(); apLong != "" {
+		style := lipgloss.NewStyle().Foreground(cAccent).Bold(true)
+		switch {
+		case fits(apLong):
+			line += "  " + style.Render(apLong)
+		case fits(apShort):
+			line += "  " + style.Render(apShort)
+		default:
+			line += " " + style.Render("∞")
+		}
+	}
 	if amFirst {
 		// Auto-merge that acts on its own outranks even the orchestrator's state.
 		reserve := short

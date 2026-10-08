@@ -19,6 +19,9 @@ type keyMap struct {
 	// Views and the help overlay.
 	ViewControl, ViewPlan, ViewMerge, Help key.Binding
 
+	// Infinite mode (#285), from any view.
+	Infinite key.Binding
+
 	// Terminal pane.
 	Terminal, TermBack, TermScrollUp, TermScrollDown key.Binding
 
@@ -61,6 +64,7 @@ func newKeyMap() keyMap {
 		ViewPlan:    pair("alt+2"),
 		ViewMerge:   pair("alt+3"),
 		Help:        b("?", "keys", "?", "f1"),
+		Infinite:    infiniteBinding(),
 
 		// Terminals send alt+` as ESC ` and ctrl+` as NUL, which bubbletea
 		// names ctrl+@.
@@ -131,7 +135,7 @@ type keyGroup struct {
 // fails if a binding is added to keyMap but not here.
 func (k keyMap) groups() []keyGroup {
 	return []keyGroup{
-		{"Anywhere", []key.Binding{k.ViewControl, k.ViewPlan, k.ViewMerge, k.Help, k.NextAgent, k.PrevAgent, k.Focus, k.PageUp, k.PageDown, k.Restart, k.Quit}},
+		{"Anywhere", []key.Binding{k.ViewControl, k.ViewPlan, k.ViewMerge, k.Infinite, k.Help, k.NextAgent, k.PrevAgent, k.Focus, k.PageUp, k.PageDown, k.Restart, k.Quit}},
 		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget, k.Interrupt, k.Ask, k.AskScreen}},
 		{"Agents", []key.Binding{k.Down, k.Up, k.Open, k.Skill, k.Spawn, k.Pause, k.Brief, k.Kill, k.Land, k.Back}},
 		{"Plan view", []key.Binding{k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.ModelDown, k.Go, k.PlanNext, k.PlanPrev, k.BotsUp, k.BotsDown}},
@@ -185,9 +189,9 @@ func (m *model) help() []key.Binding {
 		default:
 			hs = append(hs, withHelp(k.Complete, "/", "skills"), k.Ask)
 		}
-		return append(hs, k.NextAgent, withHelp(k.Focus, "tab", "agents"), k.ViewControl, k.Terminal, k.CopyMode, withHelp(k.Help, "f1", "keys"), k.PageUp, k.Restart, k.Quit)
+		return append(hs, k.NextAgent, withHelp(k.Focus, "tab", "agents"), k.ViewControl, k.Infinite, k.Terminal, k.CopyMode, withHelp(k.Help, "f1", "keys"), k.PageUp, k.Restart, k.Quit)
 	}
-	return []key.Binding{k.Down, k.NextAgent, k.Open, k.Brief, k.ViewControl, m.detachHelp(), k.Skill, k.Spawn, k.Pause, k.Ask, k.Back, k.Kill, k.Land, k.CopyMode, k.Help, k.Restart, k.Quit}
+	return []key.Binding{k.Down, k.NextAgent, k.Open, k.Brief, k.ViewControl, k.Infinite, m.detachHelp(), k.Skill, k.Spawn, k.Pause, k.Ask, k.Back, k.Kill, k.Land, k.CopyMode, k.Help, k.Restart, k.Quit}
 }
 
 func withHelp(b key.Binding, h, desc string) key.Binding {
