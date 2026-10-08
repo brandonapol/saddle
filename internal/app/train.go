@@ -64,6 +64,8 @@ func (a *App) Land() ([]LandResult, error) {
 	red, repairs := a.ciRedFrozen()
 	var out []LandResult
 	held := 0
+	run := &landRun{}
+	defer a.flushLandRun(run)
 	for _, e := range entries {
 		if e.State != store.Queued || !a.stillQueued(e.Task) {
 			continue
@@ -80,7 +82,7 @@ func (a *App) Land() ([]LandResult, error) {
 				Note: "held: it changes " + f + ", so it would stack on red CI; it lands once that layer's checks pass"})
 			continue
 		}
-		r := a.landOne(e.Task)
+		r := a.landOne(e.Task, run)
 		out = append(out, r)
 	}
 	if held > 0 && held == len(out) {
@@ -379,7 +381,7 @@ func flagErr(f StackFlag) error {
 		f.Task, f.Cause, f.Task)
 }
 
-func (a *App) landOne(id string) LandResult {
+func (a *App) landOne(id string, run *landRun) LandResult {
 	res := LandResult{Task: id}
 	fail := func(state, note, msg string) LandResult {
 		res.State, res.Note = state, note
@@ -500,7 +502,7 @@ func (a *App) landOne(id string) LandResult {
 		res.Note += " (landed, but state not saved: " + err.Error() + ")"
 	}
 
-	if err := a.broadcastLanding(t, old, head); err != nil {
+	if err := a.broadcastLanding(t, old, head, run); err != nil {
 		res.Note += " (broadcast incomplete: " + err.Error() + ")"
 	}
 
@@ -557,10 +559,58 @@ func (a *App) escalate(res LandResult, n int, state, msg string) LandResult {
 	return res
 }
 
+// landRun collects, for the tasks waiting in the train while a land runs,
+// the landings they missed, so each hears about them once at the end (#268).
+type landRun struct {
+	order   []string
+	waiting map[string][]string
+}
+
+func (r *landRun) add(task, line string) {
+	if r.waiting == nil {
+		r.waiting = map[string][]string{}
+	}
+	if _, ok := r.waiting[task]; !ok {
+		r.order = append(r.order, task)
+	}
+	r.waiting[task] = append(r.waiting[task], line)
+}
+
+// flushLandRun sends each task still waiting in the train one notice listing
+// what landed ahead of it. A task that landed in the same run needs none.
+func (a *App) flushLandRun(run *landRun) {
+	for _, id := range run.order {
+		t, err := a.Store.Task(id)
+		if err != nil || !t.Active() {
+			continue
+		}
+		lines := run.waiting[id]
+		msg := fmt.Sprintf("While your branch waited in the train, %s landed on %s:\n  %s\nThe train rebases your branch onto it when its turn comes; nothing for you to do.",
+			plural(len(lines), "task"), a.Cfg.Integration, strings.Join(lines, "\n  "))
+		_ = a.Notify(id, store.NoticeInfo, msg)
+	}
+}
+
+// waitingInTrain is the set of tasks whose entry is queued or held: the train
+// rebases them on their turn, so a landing needn't (#268).
+func (a *App) waitingInTrain() map[string]bool {
+	es, err := a.Store.Train()
+	if err != nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, e := range es {
+		if e.State == store.Queued || e.State == store.OnHold {
+			out[e.Task] = true
+		}
+	}
+	return out
+}
+
 // broadcastLanding records renames, remaps the other tasks' claims through
 // them, rebases every live agent's clean worktree onto the new head, and
 // tells each agent what moved under it.
-func (a *App) broadcastLanding(landed store.Task, old, head string) error {
+func (a *App) broadcastLanding(landed store.Task, old, head string, run *landRun) error {
 	grs, _ := gitx.Renames(a.Root, old, head)
 	changed, _ := gitx.ChangedFiles(a.Root, old, head)
 	var srs []store.Rename
@@ -579,8 +629,18 @@ func (a *App) broadcastLanding(landed store.Task, old, head string) error {
 	if err != nil {
 		return errors.Join(append(errs, err)...)
 	}
+	waiting := a.waitingInTrain()
 	for _, t := range ts {
 		if t.ID == landed.ID || t.Role != store.RoleWorker || !t.Active() {
+			continue
+		}
+		if waiting[t.ID] {
+			// Its own turn rebases it; one notice at the end of the run.
+			line := fmt.Sprintf("%s %q (%d files changed)", landed.ID, landed.Title, len(changed))
+			if r := a.remapClaims(t.ID, all[t.ID], crs, &errs); len(r) > 0 {
+				line += "; your claims were remapped: " + strings.Join(r, ", ")
+			}
+			run.add(t.ID, line)
 			continue
 		}
 		var msg strings.Builder
@@ -595,16 +655,7 @@ func (a *App) broadcastLanding(landed store.Task, old, head string) error {
 				fmt.Fprintf(&msg, "\n  %s → %s", r.Old, r.New)
 			}
 		}
-		var remapped []string
-		for _, c := range all[t.ID] {
-			if nc := claims.Remap(c, crs); nc != c {
-				if err := a.Store.ReplaceClaim(t.ID, c, nc); err != nil {
-					errs = append(errs, err)
-					continue
-				}
-				remapped = append(remapped, c+" → "+nc)
-			}
-		}
+		remapped := a.remapClaims(t.ID, all[t.ID], crs, &errs)
 		if len(remapped) > 0 {
 			msg.WriteString("\nYour claims were remapped: " + strings.Join(remapped, ", ") + ".")
 		}
@@ -1393,4 +1444,20 @@ func (a *App) detectTestCmd() error {
 	}
 	a.Cfg.Test.Cmd = cmd
 	return nil
+}
+
+// remapClaims moves task's claims through a landing's renames and lists the
+// ones it changed as "old → new".
+func (a *App) remapClaims(task string, cs []string, crs []claims.Rename, errs *[]error) []string {
+	var remapped []string
+	for _, c := range cs {
+		if nc := claims.Remap(c, crs); nc != c {
+			if err := a.Store.ReplaceClaim(task, c, nc); err != nil {
+				*errs = append(*errs, err)
+				continue
+			}
+			remapped = append(remapped, c+" → "+nc)
+		}
+	}
+	return remapped
 }

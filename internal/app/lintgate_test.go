@@ -307,3 +307,36 @@ func TestLintDoneRetriesParallelLint(t *testing.T) {
 	must(t, err)
 	must(t, a.lintDone(tk))
 }
+
+// #270: the repo's hook runs make through a variable ("${MAKE}" check, as
+// quark's does) and [test] cmd is make check. The gate is the same check, so
+// a landing runs it once, and the pre-publish gate lists it once.
+func TestLandRunsMakeVariableHookOnceWhenSameAsTest(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make not installed")
+	}
+	a := trainSetup(t)
+	count := filepath.Join(t.TempDir(), "count")
+	write(t, a.Root, "Makefile", "check:\n\techo x >> "+count+"\n")
+	write(t, a.Root, "git/hooks/pre-commit", "#!/bin/sh\nMAKE=make\n\"${MAKE}\" check\n")
+	commitAll(t, a.Root, "repo gate")
+	a.Cfg.Test.Cmd = "make  check"
+	if g := a.LintGate(); g.Cmd != "make check" {
+		t.Fatalf("gate = %+v", g)
+	}
+	if cs := a.GateChecks(false); len(cs) != 1 {
+		t.Fatalf("pre-publish checks = %+v", cs)
+	}
+	queueTask(t, a, "t1", "once", map[string]string{"x.txt": "x\n"})
+	before, _ := os.ReadFile(count)
+	rs, err := a.Land()
+	must(t, err)
+	if len(rs) != 1 || rs[0].State != store.TrainOK {
+		t.Fatalf("results = %+v", rs)
+	}
+	b, err := os.ReadFile(count)
+	must(t, err)
+	if n := strings.Count(string(b), "x") - strings.Count(string(before), "x"); n != 1 {
+		t.Fatalf("the train ran make check %d times", n)
+	}
+}

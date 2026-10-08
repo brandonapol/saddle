@@ -6,16 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/lintgate"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -121,7 +120,7 @@ func (a *App) GateChecks(cheap bool) []GateCheck {
 	var out []GateCheck
 	add := func(name, cmd string) {
 		cmd = strings.TrimSpace(cmd)
-		if cmd == "" || cmd == NoTestCmd || slices.ContainsFunc(out, func(c GateCheck) bool { return c.Cmd == cmd }) {
+		if cmd == "" || cmd == NoTestCmd || slices.ContainsFunc(out, func(c GateCheck) bool { return lintgate.SameCmd(c.Cmd, cmd) }) {
 			return
 		}
 		out = append(out, GateCheck{Name: name, Cmd: cmd})
@@ -141,12 +140,14 @@ type gateJob struct {
 	head string
 }
 
-// gateResult is a red job, nil for a green or skipped one.
+// gateResult is a red job, nil for a green or skipped one. env is set when
+// the check failed on the environment, not the layer, after its retries.
 type gateResult struct {
 	job      gateJob
 	check    GateCheck
 	out      string
 	timedOut bool
+	env      *GateEnvProblem
 }
 
 // runGate checks each job's head with checks, in the order given. A job
@@ -230,7 +231,9 @@ func (a *App) runGate(jobs []gateJob, checks []GateCheck, skip func(i int, red m
 
 // gateLayer runs checks on j's head in dir, stopping at the first red one.
 // It returns that failure, or nil, and the cache keys of the checks that
-// passed. Checks the cache knows passed on the same tree are not run.
+// passed. Checks the cache knows passed on the same tree are not run. Each
+// runs through runGateEnv, so a full disk is retried, and if it persists
+// comes back with env set rather than as the layer's failure (#274).
 func (a *App) gateLayer(dir string, j gateJob, checks []GateCheck, passed map[string]time.Time, mu *sync.Mutex) (*gateResult, []string, error) {
 	tree, err := gitx.Run(a.Root, "rev-parse", j.head+"^{tree}")
 	if err != nil {
@@ -252,11 +255,20 @@ func (a *App) gateLayer(dir string, j gateJob, checks []GateCheck, passed map[st
 			}
 			checkedOut = true
 		}
-		out, timedOut, err := runGateCmd(dir, c.Cmd, a.Cfg.Train.Prepublish.Timeout)
+		g := a.runGateEnv(context.Background(), j.task, ShellGate(dir, c.Cmd, a.Cfg.Train.Prepublish.Timeout), false)
+		out, err := g.Output, g.Err
+		if errors.Is(err, ErrGateInterrupted) {
+			return nil, nil, err
+		}
 		if err == nil {
 			ok = append(ok, key)
 			continue
 		}
+		if g.Env != nil {
+			return &gateResult{job: j, check: c, out: out, env: g.Env}, ok, nil
+		}
+		var te *GateTimeoutError
+		timedOut := errors.As(err, &te)
 		if c.Name == "lint" && !timedOut && a.brokenGate(j.task, a.LintGate(), out) {
 			continue // the gate itself is wrong, not the layer
 		}
@@ -292,27 +304,6 @@ func gateCheckout(dir, head string) error {
 	return err
 }
 
-// runGateCmd runs cmd in dir under sh, killing it and everything it started
-// when it runs past timeout.
-func runGateCmd(dir, cmd string, timeout time.Duration) (string, bool, error) {
-	ctx := context.Background()
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
-	c := exec.CommandContext(ctx, "sh", "-c", cmd)
-	c.Dir = dir
-	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	c.Cancel = func() error { return syscall.Kill(-c.Process.Pid, syscall.SIGKILL) }
-	c.WaitDelay = 5 * time.Second
-	out, err := c.CombinedOutput()
-	if ctx.Err() == context.DeadlineExceeded {
-		return string(out) + fmt.Sprintf("\n(killed after %s: [train] prepublish.timeout)", timeout), true, ctx.Err()
-	}
-	return string(out), false, err
-}
-
 // prGate is the publish hook: it checks every layer prs would publish (in
 // order, the layout's order, skipping those want leaves out) at its own head
 // and returns the layers to hold, each mapped to the red layer it is held
@@ -344,9 +335,21 @@ func (a *App) prGate(landed []landedTask, layout []prLayer, order []int, want fu
 	}
 	held := map[int]string{}
 	var reds []GateRed
+	var envs []gateResult
 	for _, i := range order {
 		r, ok := red[i]
 		if !ok || redBelow(i, red) {
+			continue
+		}
+		if r.env != nil {
+			// Not the layer's fault: hold it and what's above, flag nothing.
+			held[i] = landed[i].ID
+			for j := range landed {
+				if j != i && above(layout, j, i) {
+					held[j] = landed[i].ID
+				}
+			}
+			envs = append(envs, r)
 			continue
 		}
 		g := GateRed{Task: landed[i].ID, Head: layout[i].Head, Check: r.check, Tail: tail(r.out, gateTailLines),
@@ -362,12 +365,38 @@ func (a *App) prGate(landed []landedTask, layout []prLayer, order []int, want fu
 	}
 	checked := map[string]bool{}
 	for _, j := range jobs {
-		checked[j.task] = true
+		if r, ok := red[j.i]; !ok || r.env == nil {
+			checked[j.task] = true // an environment failure proved nothing
+		}
 	}
 	if err := a.recordGate(reds, checked, GateSourcePRs); err != nil {
 		return nil, err
 	}
-	return held, gateErr(reds, landed, held)
+	return held, errors.Join(gateErr(reds, landed, held), gateEnvErr(envs, landed, layout))
+}
+
+// gateEnvErr explains the layers the gate held because their checks failed
+// on the environment, not on the layer (#274).
+func gateEnvErr(envs []gateResult, landed []landedTask, layout []prLayer) error {
+	if len(envs) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	for _, r := range envs {
+		var held []string
+		for j := range landed {
+			if j != r.job.i && above(layout, j, r.job.i) {
+				held = append(held, landed[j].ID)
+			}
+		}
+		aboveIt := ""
+		if len(held) > 0 {
+			aboveIt = " or the layers above it (" + strings.Join(held, ", ") + ")"
+		}
+		fmt.Fprintf(&b, "pre-publish gate hit the environment (%s), not the layer: %s check (`%s`) on %s's tip %s failed after %d retries, so %s%s was not published. Nothing was marked red.\nFree %s, then run prs again.\nLast lines:\n%s\n",
+			r.env.Signature, r.check.Name, r.check.Cmd, r.job.task, short(r.job.head), gateEnvRetries, r.job.task, aboveIt, r.env.Free, tail(r.out, 5))
+	}
+	return errors.New(strings.TrimRight(b.String(), "\n"))
 }
 
 // recordGate saves reds and drops the older red records of the tasks
@@ -488,6 +517,10 @@ func (a *App) gatePublish(dir, task, target, head string) error {
 	if r == nil {
 		return nil
 	}
+	if r.env != nil {
+		return fmt.Errorf("pre-publish gate hit the environment (%s), not %s: its %s check (`%s`) failed after %d retries, so nothing was pushed. Free %s, then publish again.\n%s",
+			r.env.Signature, target, r.check.Name, r.check.Cmd, gateEnvRetries, r.env.Free, tail(r.out, 5))
+	}
 	return fmt.Errorf("pre-publish gate: %s replayed onto its base at %s fails its %s check (`%s`), so nothing was pushed.\nLast %d lines:\n%s\n"+
 		"Fix it and publish again; [train] prepublish.off = true turns the gate off",
 		target, short(head), r.check.Name, r.check.Cmd, gateTailLines, tail(r.out, gateTailLines))
@@ -525,8 +558,13 @@ func (a *App) gateRestack(plan []restacked) []GateRed {
 	var reds []GateRed
 	checked := map[string]bool{}
 	for _, j := range jobs {
+		r, ok := red[j.i]
+		if ok && r.env != nil {
+			a.Store.Event(j.task, "prepublish_env", r.env.Signature)
+			continue // proved nothing about the layer (#274)
+		}
 		checked[j.task] = true
-		if r, ok := red[j.i]; ok && !redBelow(j.i, red) {
+		if ok && !redBelow(j.i, red) {
 			reds = append(reds, GateRed{Task: j.task, Head: j.head, Check: r.check, Tail: tail(r.out, gateTailLines), TimedOut: r.timedOut})
 		}
 	}
