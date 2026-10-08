@@ -3,6 +3,8 @@
 package agent
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Kind selects which CLI a launch drives. Empty means Claude Code.
@@ -37,6 +40,23 @@ type Launch struct {
 	Args     []string // extra CLI arguments (Codex and Grok adapters)
 	Resume   string   // Claude session to resume in the window; empty starts a new one
 	ExtraEnv map[string]string
+
+	// The hierarchical advisor (#257). Empty fields add nothing to the launch.
+	Effort        string // claude --effort
+	Advisor       string // claude --advisor model
+	SubagentModel string // SubagentModelEnv
+}
+
+// claudeExtras are the advisor-mode arguments, in launch order.
+func (l Launch) claudeExtras() []string {
+	var args []string
+	if l.Effort != "" {
+		args = append(args, "--effort", l.Effort)
+	}
+	if l.Advisor != "" {
+		args = append(args, "--advisor", l.Advisor)
+	}
+	return args
 }
 
 // WorkerAllow pre-approves edits and routine git: saddle's PreToolUse hook is
@@ -165,12 +185,18 @@ func (l Launch) writeClaude() (string, error) {
 	for _, k := range []string{"SADDLE_ROOT", "SADDLE_TASK"} {
 		fmt.Fprintf(&sh, "export %s=%s\n", k, shellQuote(env[k]))
 	}
+	if l.SubagentModel != "" {
+		fmt.Fprintf(&sh, "export %s=%s\n", SubagentModelEnv, shellQuote(l.SubagentModel))
+	}
 	fmt.Fprintf(&sh, "export PATH=%s:\"$PATH\"\n", shellQuote(filepath.Dir(l.Bin)))
 	fmt.Fprintf(&sh, "cd %s || exit 1\n", shellQuote(l.Dir))
 	fmt.Fprintf(&sh, "run=%s\n", shellQuote(l.RunDir))
 	args := []string{shellQuote(l.Cmd)}
 	if l.Model != "" {
 		args = append(args, "--model", shellQuote(l.Model))
+	}
+	for _, a := range l.claudeExtras() {
+		args = append(args, shellQuote(a))
 	}
 	if l.Mode != "" {
 		args = append(args, "--permission-mode", shellQuote(l.Mode))
@@ -201,6 +227,36 @@ func (l Launch) writeClaude() (string, error) {
 	return "bash " + shellQuote(launch), nil
 }
 
+// SubagentModelEnv is the variable Claude Code reads for its subagents'
+// model. claude has no --subagents flag (2.1.287 rejects it).
+const SubagentModelEnv = "CLAUDE_CODE_SUBAGENT_MODEL"
+
+// FlagProbe reports an error, naming flag, when the claude binary cmd does
+// not accept flag with value.
+type FlagProbe func(cmd, flag, value string) error
+
+// ProbeFlag runs cmd with flag, --print and no input, which exits right after
+// option parsing without starting a session. claude --help cannot be used:
+// it hides some options (--advisor) and short-circuits before validation.
+func ProbeFlag(cmd, flag, value string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := exec.CommandContext(ctx, cmd, flag, value, "--print")
+	c.Stdin = strings.NewReader("")
+	out, err := c.CombinedOutput()
+	if err == nil || bytes.Contains(out, []byte("Input must be provided")) {
+		return nil
+	}
+	msg := strings.TrimSpace(string(out))
+	if i := strings.IndexByte(msg, '\n'); i >= 0 {
+		msg = msg[:i]
+	}
+	if msg == "" {
+		msg = err.Error()
+	}
+	return fmt.Errorf("%s rejected %s %s: %s", cmd, flag, value, msg)
+}
+
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
@@ -221,6 +277,7 @@ func (l Launch) headlessClaude(resume string) (*exec.Cmd, error) {
 	if l.Model != "" {
 		args = append(args, "--model", l.Model)
 	}
+	args = append(args, l.claudeExtras()...)
 	if l.Mode != "" {
 		args = append(args, "--permission-mode", l.Mode)
 	}
@@ -235,6 +292,9 @@ func (l Launch) headlessClaude(resume string) (*exec.Cmd, error) {
 	cmd.Env = os.Environ()
 	for k, v := range l.env() {
 		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	if l.SubagentModel != "" {
+		cmd.Env = append(cmd.Env, SubagentModelEnv+"="+l.SubagentModel)
 	}
 	cmd.Env = append(cmd.Env, "PATH="+filepath.Dir(l.Bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return cmd, nil

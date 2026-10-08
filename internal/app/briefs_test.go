@@ -119,3 +119,46 @@ func TestOrchestratorBriefAutopilot(t *testing.T) {
 		}
 	}
 }
+
+// #257: with [claude.advisor] off, neither orchestrator brief mentions the
+// advisor, and turning it on only inserts the advisor section: removing that
+// section gives back the off brief byte for byte.
+func TestOrchestratorBriefAdvisorOffGolden(t *testing.T) {
+	a, _ := setup(t)
+	for name, brief := range map[string]func() string{"tui": a.orchestratorBrief, "plugin": a.PluginBrief} {
+		a.Cfg.Claude.Advisor.Enabled = false
+		off := brief()
+		if strings.Contains(strings.ToLower(off), "advisor") {
+			t.Errorf("%s brief mentions the advisor while it is off", name)
+		}
+		a.Cfg.Claude.Advisor.Enabled = true
+		on := brief()
+		sec := a.advisorBrief()
+		if sec == "" || !strings.Contains(on, sec) {
+			t.Fatalf("%s brief lacks the advisor section", name)
+		}
+		if got := strings.Replace(on, sec, "", 1); got != off {
+			t.Errorf("%s brief: advisor on changed more than its section", name)
+		}
+	}
+}
+
+// #257: with the advisor on, the brief names the three checkpoints, keeps the
+// Haiku swarm read-only with structured summaries, and keeps Opus silent on
+// routine bash and digest traffic.
+func TestOrchestratorBriefAdvisorOn(t *testing.T) {
+	a, _ := setup(t)
+	a.Cfg.Claude.Advisor.Enabled = true
+	for name, brief := range map[string]string{"tui": a.orchestratorBrief(), "plugin": a.PluginBrief()} {
+		for _, want := range []string{
+			"Before a plan locks", "When the same failure repeats", "failed twice", "Before calling done",
+			"structured summaries only", "never edit", "claimed",
+			"silent", "routine bash", "landed / merged / CI-green", "digest",
+			"haiku", "opus", "3 ", "never the synchronizer",
+		} {
+			if !strings.Contains(brief, want) {
+				t.Errorf("%s brief missing %q", name, want)
+			}
+		}
+	}
+}

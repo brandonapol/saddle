@@ -112,7 +112,7 @@ func (a *App) orchestratorBriefFor(intro, waiting, talking string) string {
 - If prs is blocked (stack flagged or GitHub refuses a base change) but a task's work stands on its own, run `+"`saddle publish <task>`"+` (or the publish tool). Never `+"`git push`"+` or `+"`gh pr create`"+` by hand; a denied push comes from Claude's auto-mode classifier, and publish is the sanctioned path.
 `, serialList(a.Cfg.Serial), a.workerDefaultName(), a.ConcurrencyLimit(), a.Cfg.Integration, a.Cfg.Base) + waiting + `- Keep your context small. Use status and peek, not reading the agents' code, unless something is stuck.
 - Compact your context at natural breakpoints: after a batch lands and its PRs merge, before a long planning step, or when saddle tells you context is above the threshold. Run /compact (or your harness's equivalent) and keep a short state summary: running tasks, open PRs, queued follow-ups, owner decisions pending, rules in force. When you are idle and the owner isn't typing, saddle may send the command for you.
-
+` + a.advisorBrief() + `
 ## Getting unstuck
 The goal is getting work done, not needing manual intervention. When a tool is stuck you may hand-fix it: edit ` + "`.saddle/state.db`" + ` (back it up first), recreate branches, spawn a repair worker, re-land work as fresh PRs, even using git yourself, unless the owner forbade it. Every hand fix must be followed in the same session by (1) a regression test that reproduces the failure, written failing-first, and (2) a GitHub issue designing a better system, recording the exact fix. Tell the user what you did in a sentence or two.
 - Prefer the escape hatches over editing state.db: ` + "`unstack`" + ` <task|pr> detaches a task or PR from a broken stack (CLI: saddle unstack); ` + "`sentinel_ack`" + ` clears a guard or freeze sentinel that blocks work (saddle sentinel ack); ` + "`requeue`" + ` puts a failed or stuck task back in the landing queue (saddle requeue).
@@ -122,6 +122,26 @@ The goal is getting work done, not needing manual intervention. When a tool is s
 
 ## Talking
 ` + talking
+}
+
+// advisorBrief is the hierarchical advisor section (#257), empty when off.
+// The plugin session gets it too: it cannot be relaunched with --advisor, so
+// it reaches the advisor model through a one-off subagent instead.
+func (a *App) advisorBrief() string {
+	if !a.advisorOn() {
+		return ""
+	}
+	ad := a.Cfg.Claude.Advisor
+	return fmt.Sprintf(`
+## Advisor
+This session runs as a hierarchy. You are the lead: you plan, drive saddle and run the loop. The advisor is never the synchronizer.
+- Subagents: for file discovery, AST summaries and spec or API doc lookup, run up to %d Claude Code subagents (Agent tool, model %q) in parallel. They return structured summaries only (paths, symbols, short snippets, findings), never raw dumps into your context, and they never edit files, least of all files a task has claimed.
+- Advisor: %q is on call. Consult it (the advisor tool, or a one-off %q subagent if this session has none) at exactly three checkpoints:
+  1. Before a plan locks: before you finalize a multi-file plan or a spawn wave. Ask whether it misses an auth invariant, a schema contract or a serial-file claim.
+  2. When the same failure repeats: the same test or compiler error has failed twice (a task's test loop or the train gate). Ask: root cause, or a rabbit hole? This pairs with the train's escalate-after-two-attempts rule; it does not replace it.
+  3. Before calling done: before you treat a task as finished or stage a commit. Ask whether the diff hides a regression or breaks a pre-flight rule.
+- Otherwise the advisor stays silent. Never consult it on routine bash, status checks, or routine landed / merged / CI-green traffic; that stays on the digest.
+`, ad.Workers, ad.Subagents, ad.Advisor, ad.Advisor)
 }
 
 func (a *App) harnessName() string {
