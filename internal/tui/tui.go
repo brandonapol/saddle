@@ -110,19 +110,19 @@ type model struct {
 	prompts map[string]string // task prompts for the brief pane, read once
 	prev    map[string]string // last seen status per task, for attention events
 
-	chat      []chatLine
-	streaming strings.Builder
-	follow    bool
-	vp        viewport.Model
-	input     textarea.Model
-	drafting  atomic.Bool // input holds text; read by the compact watcher off the UI goroutine
-	target    string      // task whose pane gets the next /command, if not the orchestrator
+	chat       []chatLine
+	streaming  strings.Builder
+	follow     bool
+	vp         viewport.Model
+	input      textarea.Model
+	drafting   atomic.Bool  // input holds text; read by the compact watcher off the UI goroutine
+	target     string       // task whose pane gets the next /command, if not the orchestrator
 	commands   []slashEntry // the orchestrator's slash commands, as its session reports them
 	diskSkills []string     // skills found on disk, until the session reports; read on first use
 	slashSel   int          // the / menu's pick
 	turnText   bool         // the current turn showed text, so its result needn't
-	keys      keyMap
-	prefix    string // the user's tmux prefix, for help text
+	keys       keyMap
+	prefix     string // the user's tmux prefix, for help text
 
 	screens map[string]*screenState // recent screen per live worker, to spot stuck prompts
 
