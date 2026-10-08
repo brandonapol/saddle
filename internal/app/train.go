@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/claims"
 	"github.com/brandonapol/saddle/internal/config"
@@ -151,41 +152,164 @@ func (a *App) touches(task string, frozen map[string]string) string {
 }
 
 // lockTrain takes the train lock, which serialises everything that moves the
-// integration branch or landed task branches.
+// integration branch or landed task branches. While it waits, a holder that
+// is dead or stuck past any gate loses the lock (stealTrainLock).
 func (a *App) lockTrain() (unlock func(), err error) {
-	lock, err := os.OpenFile(a.stateDir("train.lock"), os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return nil, err
+	for wait := 50 * time.Millisecond; ; wait = min(2*wait, time.Second) {
+		unlock, ok, err := a.TryLockTrain()
+		if err != nil || ok {
+			return unlock, err
+		}
+		a.stealTrainLock()
+		time.Sleep(wait)
 	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		lock.Close()
-		return nil, err
-	}
-	// Closing the file also drops the lock, so a failed unlock is harmless.
-	return func() {
-		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-		lock.Close()
-	}, nil
 }
+
+// EventTrainLockStolen records train.lock taken from a dead or stuck holder.
+const EventTrainLockStolen = "train_lock_stolen"
 
 // TryLockTrain takes the train lock if nobody holds it. ok is false when the
 // train is busy, so a watcher can skip a cycle instead of waiting out a land.
+// The holder writes its pid and when it took the lock into the file, for
+// stealTrainLock.
 func (a *App) TryLockTrain() (unlock func(), ok bool, err error) {
-	lock, err := os.OpenFile(a.stateDir("train.lock"), os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return nil, false, err
-	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		lock.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, false, nil
+	path := a.stateDir("train.lock")
+	for {
+		lock, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+		if err != nil {
+			return nil, false, err
 		}
-		return nil, false, err
+		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			lock.Close()
+			if errors.Is(err, syscall.EWOULDBLOCK) {
+				return nil, false, nil
+			}
+			return nil, false, err
+		}
+		if !sameFile(lock, path) {
+			lock.Close() // stolen while we opened it: lock the new file
+			continue
+		}
+		_ = lock.Truncate(0)
+		_, _ = lock.WriteAt(fmt.Appendf(nil, "%d %d\n", os.Getpid(), time.Now().UnixNano()), 0)
+		// Closing the file also drops the lock, so a failed unlock is harmless.
+		return func() {
+			_ = lock.Truncate(0)
+			_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+			lock.Close()
+		}, true, nil
 	}
-	return func() {
-		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-		lock.Close()
-	}, true, nil
+}
+
+// sameFile reports whether f is still the file at path.
+func sameFile(f *os.File, path string) bool {
+	a, err1 := f.Stat()
+	b, err2 := os.Stat(path)
+	return err1 == nil && err2 == nil && os.SameFile(a, b)
+}
+
+// trainHolder reads who holds train.lock; ok is false when the file names
+// nobody (free, or an older saddle that writes nothing).
+func (a *App) trainHolder() (holder string, pid int, since time.Time, ok bool) {
+	b, err := os.ReadFile(a.stateDir("train.lock"))
+	if err != nil {
+		return "", 0, time.Time{}, false
+	}
+	var ns int64
+	if _, err := fmt.Sscan(string(b), &pid, &ns); err != nil || pid <= 0 {
+		return "", 0, time.Time{}, false
+	}
+	return string(b), pid, time.Unix(0, ns), true
+}
+
+// stealTrainLock takes train.lock from a holder that can't let go, so one
+// wedged land never stops the train for good (#269): one whose pid is dead
+// (the lock kept by a descriptor something leaked), or one that has held it
+// for over twice [train] gate_timeout, stuck past any gate, which is stopped
+// first. The lock file is replaced, so whatever still holds the old one
+// holds nothing. Never this process: its own other land just waits.
+func (a *App) stealTrainLock() {
+	holder, pid, since, ok := a.trainHolder()
+	if !ok || pid == os.Getpid() {
+		return
+	}
+	var why string
+	switch limit := 2 * a.GateTimeout(); {
+	case !pidAlive(pid) || startedAfter(pid, since):
+		why = fmt.Sprintf("its holder, pid %d, is gone", pid)
+	case time.Since(since) > limit:
+		why = fmt.Sprintf("its holder, pid %d, held it for %s, over twice [train] gate_timeout (%s); stopped it", pid, time.Since(since).Round(time.Second), limit/2)
+		stopProcess(pid)
+	default:
+		return
+	}
+	// Only if nobody took it meanwhile.
+	if h, _, _, _ := a.trainHolder(); h != holder {
+		return
+	}
+	path := a.stateDir("train.lock")
+	if err := os.Rename(path, path+".stolen"); err != nil {
+		return
+	}
+	a.Store.Event("", EventTrainLockStolen, "train.lock taken: "+why)
+}
+
+// startedAfter reports whether process pid started after t, so the pid in
+// train.lock was reused by another process. It reports false where /proc
+// can't tell.
+func startedAfter(pid int, t time.Time) bool {
+	start, ok := procStart(pid)
+	return ok && start.After(t.Add(2*time.Second))
+}
+
+// procStart is when process pid started, from /proc.
+func procStart(pid int) (time.Time, bool) {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return time.Time{}, false
+	}
+	// Fields after the command, which may hold spaces, in parens.
+	i := bytes.LastIndexByte(b, ')')
+	if i < 0 {
+		return time.Time{}, false
+	}
+	f := strings.Fields(string(b[i+1:]))
+	if len(f) < 20 {
+		return time.Time{}, false
+	}
+	ticks, err := strconv.ParseInt(f[19], 10, 64) // field 22, starttime
+	if err != nil {
+		return time.Time{}, false
+	}
+	st, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return time.Time{}, false
+	}
+	for _, l := range strings.Split(string(st), "\n") {
+		if v, ok := strings.CutPrefix(l, "btime "); ok {
+			boot, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+			if err != nil {
+				return time.Time{}, false
+			}
+			// USER_HZ is 100 on every Linux userspace ABI.
+			return time.Unix(boot, 0).Add(time.Duration(ticks) * 10 * time.Millisecond), true
+		}
+	}
+	return time.Time{}, false
+}
+
+// stopProcess sends pid SIGTERM, then SIGKILL if it is still there after
+// gateKillGrace plus a moment to take its gate down.
+func stopProcess(pid int) {
+	if syscall.Kill(pid, syscall.SIGTERM) != nil {
+		return
+	}
+	for end := time.Now().Add(2 * gateKillGrace); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		if !pidAlive(pid) {
+			return
+		}
+	}
+	_ = syscall.Kill(pid, syscall.SIGKILL)
 }
 
 // StackFlag marks the PR stack as at risk. While it is set, prs and land
@@ -330,7 +454,11 @@ func (a *App) landOne(id string) LandResult {
 		a.Store.Event(id, "train_regen", strings.Join(taken, "\n"))
 	}
 	if cmd := a.Cfg.Test.Cmd; cmd != NoTestCmd {
-		g := a.RunGateEnv(context.Background(), id, ShellGate(t.Worktree, cmd))
+		g := a.RunGateEnv(context.Background(), id, ShellGate(t.Worktree, cmd, a.GateTimeout()))
+		if errors.Is(g.Err, ErrGateInterrupted) {
+			res.State, res.Note = store.TrainError, "the gate was interrupted; stays queued"
+			return res
+		}
 		if g.Env != nil {
 			// Not the branch's fault (#184): it stays queued, uncharged.
 			res.State, res.Note = store.TrainError, "the gate failed on the environment ("+g.Env.Signature+"), not the branch; stays queued"
@@ -341,7 +469,10 @@ func (a *App) landOne(id string) LandResult {
 				"Your branch rebased cleanly onto %s, but `%s` failed on the result:\n%s\nFix it, commit, and call the saddle done tool again.", a.Cfg.Integration, cmd, tail(out, 40)))
 		}
 	}
-	if msg := a.trainLint(id, t.Worktree); msg != "" {
+	if msg, err := a.trainLint(id, t.Worktree); err != nil {
+		res.State, res.Note = store.TrainError, "the lint gate was interrupted; stays queued"
+		return res
+	} else if msg != "" {
 		return fail(store.TestFailed, "lint failed", msg)
 	}
 	head, err := gitx.RevParse(t.Worktree, "HEAD")

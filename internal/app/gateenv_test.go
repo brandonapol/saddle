@@ -3,9 +3,11 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -219,7 +221,7 @@ for t in "$TMPDIR" "$GOTMPDIR"; do
   case "$t/" in "$ROOT"/*) echo "temp dir $t is inside the repo $ROOT"; exit 1;; esac
 done
 echo gate ok`
-	res := a.RunGateEnv(context.Background(), "t1", ShellGate(wt, gate))
+	res := a.RunGateEnv(context.Background(), "t1", ShellGate(wt, gate, time.Minute))
 	if res.Err != nil || !strings.Contains(res.Output, "gate ok") {
 		t.Fatalf("gate in a hostile env: %v\n%s", res.Err, res.Output)
 	}
@@ -234,3 +236,94 @@ func TestGateEnvironDropsTheTrainsVars(t *testing.T) {
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// setGateTimeout sets [train] gate_timeout in the user config setup points
+// XDG_CONFIG_HOME at.
+func setGateTimeout(t *testing.T, d string) {
+	t.Helper()
+	dir := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "saddle")
+	must(t, os.MkdirAll(dir, 0o755))
+	must(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[train]\ngate_timeout = \""+d+"\"\n"), 0o644))
+}
+
+// gone waits for the process pid wrote to file to be gone.
+func gone(t *testing.T, file string) {
+	t.Helper()
+	b, err := os.ReadFile(file)
+	must(t, err)
+	var pid int
+	if _, err := fmt.Sscan(string(b), &pid); err != nil || pid <= 0 {
+		t.Fatalf("pid file %s: %q", file, b)
+	}
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		if !pidAlive(pid) {
+			return
+		}
+	}
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	t.Fatalf("the gate's child %d outlived it", pid)
+}
+
+// #269: a hung gate is killed with everything it started once it runs past
+// [train] gate_timeout, and the timeout is the branch's failure, not the
+// environment's: nothing is retried.
+func TestRunGateEnvTimeoutKillsTheGroup(t *testing.T) {
+	a, _ := setup(t)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	setGateTimeout(t, "300ms")
+	if got := a.GateTimeout(); got != 300*time.Millisecond {
+		t.Fatalf("GateTimeout = %s", got)
+	}
+	pidf := filepath.Join(t.TempDir(), "child")
+	start := time.Now()
+	res := a.RunGateEnv(context.Background(), "t1", ShellGate(a.Root, "sleep 600 & echo $! > "+pidf+"; echo hanging; trap '' TERM; wait", a.GateTimeout()))
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("gate took %s", took)
+	}
+	if res.Err == nil || res.Env != nil || res.Retries != 0 {
+		t.Fatalf("timeout: %+v", res)
+	}
+	var to *GateTimeoutError
+	if !errors.As(res.Err, &to) {
+		t.Fatalf("err = %v, want a GateTimeoutError", res.Err)
+	}
+	for _, want := range []string{"hanging", "gate timed out after 300ms"} {
+		if !strings.Contains(res.Output, want) {
+			t.Errorf("output %q lacks %q", res.Output, want)
+		}
+	}
+	gone(t, pidf)
+}
+
+// #269: a gate that leaves a helper holding its stdout returns when its
+// shell exits, not when the helper does.
+func TestShellGateReturnsWhenTheShellExits(t *testing.T) {
+	start := time.Now()
+	out, err := ShellGate(t.TempDir(), "(sleep 20; echo helper-exit) & echo gate-ok", time.Minute)(context.Background(), nil)
+	if err != nil || !strings.Contains(out, "gate-ok") {
+		t.Fatalf("gate: %v\n%s", err, out)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("gate took %s: it waited on its helper", took)
+	}
+}
+
+// #269: when the gate's caller gives up (land is interrupted), the gate's
+// whole group goes with it.
+func TestShellGateCancelKillsTheGroup(t *testing.T) {
+	pidf := filepath.Join(t.TempDir(), "child")
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+			if b, _ := os.ReadFile(pidf); len(b) > 0 {
+				break
+			}
+		}
+		cancel()
+	}()
+	_, err := ShellGate(t.TempDir(), "sleep 600 & echo $! > "+pidf+"; wait", time.Hour)(ctx, nil)
+	if err == nil {
+		t.Fatal("a cancelled gate passed")
+	}
+	gone(t, pidf)
+}

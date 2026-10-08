@@ -5,9 +5,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -175,4 +178,132 @@ func TestBrokenGateDoesNotFailTheBranch(t *testing.T) {
 	if err := a.lintDone(tk2); err == nil {
 		t.Fatal("a red gate passed")
 	}
+}
+
+// #269: done's lint gate times out like the train's, killing what it
+// started, and refuses with the output tail.
+func TestLintDoneTimesOut(t *testing.T) {
+	a := trainSetup(t)
+	setGateTimeout(t, "300ms")
+	pidf := filepath.Join(t.TempDir(), "child")
+	a.Cfg.Train.Lint = config.Lint{Cmd: "sleep 600 & echo $! > " + pidf + "; echo linting; wait", Set: true}
+	tk, err := a.Spawn(SpawnReq{Title: "lint"})
+	must(t, err)
+	write(t, tk.Worktree, "x.go", "x\n")
+	commitAll(t, tk.Worktree, "x")
+	err = a.lintDone(tk)
+	if err == nil || !strings.Contains(err.Error(), "linting") || !strings.Contains(err.Error(), "gate timed out after 300ms") {
+		t.Fatalf("done on a hung gate: %v", err)
+	}
+	gone(t, pidf)
+}
+
+// countingGate is a gate that logs each run to a file and passes.
+func countingGate(t *testing.T) (cmd string, runs func() int) {
+	log := filepath.Join(t.TempDir(), "runs")
+	return "echo run >> " + shellQuote(log), func() int {
+		b, _ := os.ReadFile(log)
+		return strings.Count(string(b), "run")
+	}
+}
+
+func hookState(t *testing.T, dir string) string {
+	t.Helper()
+	common, err := gitx.Run(dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	must(t, err)
+	state := filepath.Join(common, "saddle-hooks")
+	must(t, os.MkdirAll(state, 0o755))
+	return state
+}
+
+// #271: done doesn't check again a tree its gate already passed.
+func TestLintDoneSkipsATreeItPassed(t *testing.T) {
+	a := trainSetup(t)
+	cmd, runs := countingGate(t)
+	a.Cfg.Train.Lint = config.Lint{Cmd: cmd, Set: true}
+	tk, err := a.Spawn(SpawnReq{Title: "lint"})
+	must(t, err)
+	write(t, tk.Worktree, "x.go", "x\n")
+	commitAll(t, tk.Worktree, "x")
+	must(t, a.lintDone(tk))
+	must(t, a.lintDone(tk))
+	if n := runs(); n != 1 {
+		t.Fatalf("gate ran %d times on one tree", n)
+	}
+	write(t, tk.Worktree, "x.go", "y\n") // uncommitted: not the tree that passed
+	must(t, a.lintDone(tk))
+	if n := runs(); n != 2 {
+		t.Fatalf("gate ran %d times; a dirty tree must be checked", n)
+	}
+}
+
+// #271: done doesn't re-run the repo's gate on the tree the repo's
+// pre-commit hook (saddle's wrapper) passed moments before.
+func TestLintDoneHonoursTheHookStamp(t *testing.T) {
+	a := trainSetup(t)
+	cmd, runs := countingGate(t)
+	write(t, a.Root, "Makefile", "lint:\n\t"+cmd+"\n")
+	commitAll(t, a.Root, "makefile")
+	tk, err := a.Spawn(SpawnReq{Title: "lint"})
+	must(t, err)
+	write(t, tk.Worktree, "x.go", "x\n")
+	commitAll(t, tk.Worktree, "x")
+	if g := a.LintGate(); g.Cmd != "make lint" {
+		t.Fatalf("gate = %+v", g)
+	}
+	tree, err := gitx.Run(tk.Worktree, "write-tree")
+	must(t, err)
+	must(t, os.WriteFile(filepath.Join(hookState(t, tk.Worktree), "pre-commit.ok"), []byte("0000\n"+tree+"\n"), 0o644))
+	must(t, a.lintDone(tk))
+	if n := runs(); n != 0 {
+		t.Fatalf("gate ran %d times on a tree the hook passed", n)
+	}
+	// A configured gate isn't the hook: its stamp proves nothing.
+	a.Cfg.Train.Lint = config.Lint{Cmd: cmd + " # configured", Set: true}
+	must(t, a.lintDone(tk))
+	if n := runs(); n != 1 {
+		t.Fatalf("configured gate ran %d times", n)
+	}
+}
+
+// #271: done's gate waits its turn on the repo hooks' lock, so it never
+// runs alongside another worktree's make check.
+func TestLintDoneWaitsOnTheHookLock(t *testing.T) {
+	a := trainSetup(t)
+	cmd, runs := countingGate(t)
+	a.Cfg.Train.Lint = config.Lint{Cmd: cmd, Set: true}
+	tk, err := a.Spawn(SpawnReq{Title: "lint"})
+	must(t, err)
+	f, err := os.OpenFile(filepath.Join(hookState(t, tk.Worktree), "lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	must(t, err)
+	defer f.Close()
+	must(t, syscall.Flock(int(f.Fd()), syscall.LOCK_EX))
+	done := make(chan error, 1)
+	go func() { done <- a.lintDone(tk) }()
+	select {
+	case err := <-done:
+		t.Fatalf("done's gate ran while a hook held the lock (%v)", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	if n := runs(); n != 0 {
+		t.Fatalf("gate ran %d times under another's lock", n)
+	}
+	must(t, syscall.Flock(int(f.Fd()), syscall.LOCK_UN))
+	select {
+	case err := <-done:
+		must(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("done's gate never ran after the lock was free")
+	}
+}
+
+// #271: golangci-lint refusing to run beside another is the environment,
+// not the tree: done retries instead of telling the agent to fix it.
+func TestLintDoneRetriesParallelLint(t *testing.T) {
+	a := trainSetup(t)
+	once := filepath.Join(t.TempDir(), "once")
+	a.Cfg.Train.Lint = config.Lint{Cmd: "if [ ! -e " + shellQuote(once) + " ]; then touch " + shellQuote(once) + "; echo 'Error: parallel golangci-lint is running'; exit 3; fi", Set: true}
+	tk, err := a.Spawn(SpawnReq{Title: "lint"})
+	must(t, err)
+	must(t, a.lintDone(tk))
 }
