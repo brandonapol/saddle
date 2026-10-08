@@ -20,6 +20,9 @@
 // above it, is handed to Collapse: it retargets that PR to base, merges it
 // carrying the stack below it, and restacks. Collapse decides whether the
 // stack really qualifies; a failure stops the watcher like a failed merge.
+// A stack AtRisk covers never collapses: a layer the ci-red watcher holds
+// red, or anything above it, merges by neither path; its repair folds into
+// it instead.
 //
 // A held stack (`saddle automerge hold <stack|pr>`) is never merged, but it is
 // still tracked and restacked; when it falls behind base the orchestrator
