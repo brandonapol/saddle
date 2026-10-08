@@ -265,6 +265,7 @@ func TestStackRebaseConflictReturnsToOwner(t *testing.T) {
 // #196: the watcher NewAutomerge builds collapses a red-bottom stack through
 // its green top PR when nothing else is ready, with no human step.
 func TestAutomergeCollapsesRedBottom(t *testing.T) {
+	t.Parallel()
 	a, h, _ := stackOfTwo(t)
 	t2, _ := a.Store.Task("t2")
 	w := a.NewAutomerge(h)
@@ -295,6 +296,7 @@ func redOn(t *testing.T, a *App, task string, held ...string) {
 // The ci-red hook: a layer the ci-red watcher holds red, and every layer
 // above it, never merges bottom-up, even while GitHub reports them green.
 func TestAutomergeRefusesCIRedLayers(t *testing.T) {
+	t.Parallel()
 	a, h, _ := stackOfTwo(t)
 	t1, _ := a.Store.Task("t1")
 	h.checks[t1.PR] = []string{automerge.ChecksPass}
@@ -323,6 +325,7 @@ func TestAutomergeRefusesCIRedLayers(t *testing.T) {
 // into it (#213), and a green PR above it doesn't merge it. Nor does
 // collapse pass the stack-at-risk flag.
 func TestAutomergeNoCollapsePastRisk(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		set  func(a *App)

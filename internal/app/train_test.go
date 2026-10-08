@@ -35,7 +35,7 @@ func originWithGh(t *testing.T, a *App) (string, func() []string) {
 	git(t, a.Root, "push", "-q", "origin", a.Cfg.Base)
 	git(t, a.Root, "fetch", "-q", "origin")
 
-	bin := filepath.Join(a.Root, ".git", fakeGHSubdir)
+	bin := filepath.Join(a.Root, ".git", FakeGHSubdir)
 	must(t, os.MkdirAll(bin, 0o755))
 	log := filepath.Join(bin, "gh.log")
 	// pr view answers from a per-PR file (see setPR), else as an open PR;
@@ -69,8 +69,9 @@ esac
 	}
 }
 
-// fakeGHSubdir is where a repo's fake gh lives, under its git common dir.
-const fakeGHSubdir = "saddle-test-gh"
+// FakeGHSubdir is where a repo's fake gh lives, under its git common dir.
+// Exported for the app_test package's replays.
+const FakeGHSubdir = "saddle-test-gh"
 
 // installGHDispatch puts a gh on PATH that runs the fake gh of the repo it is
 // called in, and the real gh (if any) elsewhere. Tests that fake gh then need
@@ -81,7 +82,7 @@ func installGHDispatch(bin string) error {
 		fallback = `exec ` + shellQuote(real) + ` "$@"`
 	}
 	script := `#!/bin/sh
-d=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/` + fakeGHSubdir + `
+d=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/` + FakeGHSubdir + `
 if [ -x "$d/gh" ]; then exec "$d/gh" "$@"; fi
 ` + fallback + "\n"
 	if err := os.MkdirAll(bin, 0o755); err != nil {

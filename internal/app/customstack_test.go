@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/store"
@@ -330,25 +331,42 @@ type fakeStackGH struct {
 	answers map[string]error
 }
 
-func useFakeStackGH(t *testing.T, answers map[string]error) *fakeStackGH {
+// fakeStackGHs maps a repo root to its fake (see installStackGHDispatch).
+var fakeStackGHs sync.Map
+
+// installStackGHDispatch points ghStackRun, once for the whole test binary,
+// at the fake useFakeStackGH registered for the repo, or at gh. Tests that
+// fake gh-stack then share no global, so they can run in parallel.
+func installStackGHDispatch() {
+	real := ghStackRun
+	ghStackRun = func(dir string, args ...string) (string, error) {
+		if f, ok := fakeStackGHs.Load(dir); ok {
+			return f.(*fakeStackGH).run(args...)
+		}
+		return real(dir, args...)
+	}
+}
+
+func useFakeStackGH(t *testing.T, a *App, answers map[string]error) *fakeStackGH {
 	t.Helper()
 	f := &fakeStackGH{answers: answers}
-	old := ghStackRun
-	ghStackRun = func(_ string, args ...string) (string, error) {
-		f.calls = append(f.calls, args)
-		line := strings.Join(args, " ")
-		for k, err := range f.answers {
-			if strings.HasPrefix(line, k) && err != nil {
-				return "", err
-			}
-		}
-		if line == "stack --version" {
-			return "gh stack version 0.1.1", nil
-		}
-		return "", nil
-	}
-	t.Cleanup(func() { ghStackRun = old })
+	fakeStackGHs.Store(a.Root, f)
+	t.Cleanup(func() { fakeStackGHs.Delete(a.Root) })
 	return f
+}
+
+func (f *fakeStackGH) run(args ...string) (string, error) {
+	f.calls = append(f.calls, args)
+	line := strings.Join(args, " ")
+	for k, err := range f.answers {
+		if strings.HasPrefix(line, k) && err != nil {
+			return "", err
+		}
+	}
+	if line == "stack --version" {
+		return "gh stack version 0.1.1", nil
+	}
+	return "", nil
 }
 
 // links are the gh stack link calls, without the leading "stack link".
@@ -379,10 +397,11 @@ func eventsOf(t *testing.T, a *App, kind string) []string {
 // bottom to top, on base: custom stacks and clustered ones alike. A PR alone
 // isn't linked.
 func TestGhStackBackendLinksStacksAfterPRs(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.StackBackend = "gh-stack"
 	originWithGh(t, a)
-	f := useFakeStackGH(t, nil)
+	f := useFakeStackGH(t, a, nil)
 	landUnrelated(t, a, 3)
 	landTask(t, a, "t4", "t1 again", map[string]string{"t1.txt": "t1\nmore\n"}) // clusters with t1
 	rep, err := a.CreateStack("ui", []string{"t3", "t2"})
@@ -415,9 +434,10 @@ func TestGhStackBackendLinksStacksAfterPRs(t *testing.T) {
 }
 
 func TestSaddleBackendNeverCallsGhStack(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	originWithGh(t, a)
-	f := useFakeStackGH(t, nil)
+	f := useFakeStackGH(t, a, nil)
 	landUnrelated(t, a, 2)
 	rep, err := a.CreateStack("ui", []string{"t2", "t1"})
 	must(t, err)
@@ -430,6 +450,7 @@ func TestSaddleBackendNeverCallsGhStack(t *testing.T) {
 // still recorded and published the saddle way; the owner hears it once, and
 // the train never fails over it.
 func TestGhStackFallback(t *testing.T) {
+	t.Parallel()
 	for name, answers := range map[string]map[string]error{
 		"not installed": {"stack --version": errors.New(`gh stack: exit status 1: unknown command "stack" for "gh"`)},
 		"not enabled":   {"stack link": errors.New("gh stack link: exit status 1: Stacked PRs are not enabled for this repository")},
@@ -438,7 +459,7 @@ func TestGhStackFallback(t *testing.T) {
 			a := trainSetup(t)
 			a.Cfg.Train.StackBackend = "gh-stack"
 			_, ghLog := originWithGh(t, a)
-			useFakeStackGH(t, answers)
+			useFakeStackGH(t, a, answers)
 			ts := landUnrelated(t, a, 2)
 			rep, err := a.CreateStack("ui", []string{"t2", "t1"})
 			must(t, err)
@@ -465,10 +486,11 @@ func TestGhStackFallback(t *testing.T) {
 
 // A link that fails for another reason is logged; prs still succeeds.
 func TestGhStackLinkFailureDoesNotFailPRs(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.StackBackend = "gh-stack"
 	originWithGh(t, a)
-	useFakeStackGH(t, map[string]error{"stack link": errors.New("gh stack link: exit status 1: HTTP 502")})
+	useFakeStackGH(t, a, map[string]error{"stack link": errors.New("gh stack link: exit status 1: HTTP 502")})
 	landUnrelated(t, a, 2)
 	rep, err := a.CreateStack("ui", []string{"t2", "t1"})
 	must(t, err)
@@ -483,10 +505,11 @@ func TestGhStackLinkFailureDoesNotFailPRs(t *testing.T) {
 // stack merge links the stack, merges it atomically with gh stack merge up
 // to its top PR, then restacks so the merged tasks leave the stack.
 func TestMergeStackUsesGhStackMerge(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.StackBackend = "gh-stack"
 	originWithGh(t, a)
-	f := useFakeStackGH(t, nil)
+	f := useFakeStackGH(t, a, nil)
 	landUnrelated(t, a, 3)
 	_, err := a.CreateStack("ui", []string{"t3", "t1"})
 	must(t, err)
@@ -513,6 +536,7 @@ func TestMergeStackUsesGhStackMerge(t *testing.T) {
 }
 
 func TestMergeStackNeedsGhStack(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	originWithGh(t, a)
 	landUnrelated(t, a, 2)
@@ -522,7 +546,7 @@ func TestMergeStackNeedsGhStack(t *testing.T) {
 		t.Fatalf("err = %v, want a pointer to stack_backend", err)
 	}
 	a.Cfg.Train.StackBackend = "gh-stack"
-	useFakeStackGH(t, map[string]error{"api repos/{owner}/{repo}/stacks": errors.New("gh api: exit status 1: Stacked PRs are not enabled for this repository (HTTP 404)")})
+	useFakeStackGH(t, a, map[string]error{"api repos/{owner}/{repo}/stacks": errors.New("gh api: exit status 1: Stacked PRs are not enabled for this repository (HTTP 404)")})
 	if _, err := a.MergeStack("ui", ""); err == nil || !strings.Contains(err.Error(), "automerge") {
 		t.Fatalf("err = %v, want the bottom-up fallback named", err)
 	}

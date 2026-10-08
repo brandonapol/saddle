@@ -62,6 +62,9 @@ func runTests(m *testing.M) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	installStackGHDispatch()
+	// Only collapse's CI poll sleeps, and no test waits on real time there.
+	sleep = func(time.Duration) {}
 	return m.Run()
 }
 
