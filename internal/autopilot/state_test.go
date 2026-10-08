@@ -32,8 +32,8 @@ func TestParseUntil(t *testing.T) {
 	loc := time.FixedZone("x", 2*3600)
 	now := time.Date(2026, 10, 8, 22, 30, 0, 0, loc)
 	cases := map[string]time.Time{
-		"07:00": time.Date(2026, 10, 9, 7, 0, 0, 0, loc),   // tomorrow
-		"23:15": time.Date(2026, 10, 8, 23, 15, 0, 0, loc), // later today
+		"07:00":                     time.Date(2026, 10, 9, 7, 0, 0, 0, loc),   // tomorrow
+		"23:15":                     time.Date(2026, 10, 8, 23, 15, 0, 0, loc), // later today
 		"2026-10-10T05:00:00+02:00": time.Date(2026, 10, 10, 5, 0, 0, 0, loc),
 	}
 	for in, want := range cases {

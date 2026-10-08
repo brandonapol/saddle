@@ -42,12 +42,14 @@ func (f *fakeEnv) Capacity() (int, int, error) {
 	}
 	return n, f.limit, nil
 }
-func (f *fakeEnv) Usage(time.Time) (Usage, error)  { return f.usage, nil }
-func (f *fakeEnv) Reconcile() ([]string, error)    { f.reconciled++; return nil, nil }
-func (f *fakeEnv) Land() (int, error)              { f.landed++; return 0, nil }
-func (f *fakeEnv) Backlog() (time.Time, bool)      { return f.backlog, !f.backlog.IsZero() }
-func (f *fakeEnv) Notify(interrupt bool, s string) { f.notices = append(f.notices, fmt.Sprint(interrupt, " ", s)) }
-func (f *fakeEnv) Event(kind, data string)         { f.events = append(f.events, kind+": "+data) }
+func (f *fakeEnv) Usage(time.Time) (Usage, error) { return f.usage, nil }
+func (f *fakeEnv) Reconcile() ([]string, error)   { f.reconciled++; return nil, nil }
+func (f *fakeEnv) Land() (int, error)             { f.landed++; return 0, nil }
+func (f *fakeEnv) Backlog() (time.Time, bool)     { return f.backlog, !f.backlog.IsZero() }
+func (f *fakeEnv) Notify(interrupt bool, s string) {
+	f.notices = append(f.notices, fmt.Sprint(interrupt, " ", s))
+}
+func (f *fakeEnv) Event(kind, data string) { f.events = append(f.events, kind+": "+data) }
 func (f *fakeEnv) Nudge(s string) (bool, error) {
 	if f.busy {
 		return false, nil

@@ -29,7 +29,7 @@ const DefaultReadyLabel = "saddle:ready"
 // Stop is when a run ends. Zero fields don't stop it; an empty ready queue
 // always does.
 type Stop struct {
-	Until      time.Time `json:"until,omitzero"`       // no new spawns from then on
+	Until      time.Time `json:"until,omitzero"`        // no new spawns from then on
 	UntilUsage float64   `json:"until_usage,omitempty"` // plan-limit fraction (0, 1] at which spawning stops
 	MaxTasks   int       `json:"max_tasks,omitempty"`   // tasks to spawn in this run
 }
