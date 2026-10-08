@@ -50,7 +50,7 @@ func TestRunHeavyLogsEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer q.Close()
+	defer func() { _ = q.Close() }()
 	h, err := q.Acquire(context.Background(), runq.Request{Class: "go-test", Label: "t83", Cmd: "make check"})
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestRunHeavyObservesByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer q.Close()
+	defer func() { _ = q.Close() }()
 	if q.Mode() != runq.ModeObserve {
 		t.Fatalf("mode %q", q.Mode())
 	}
@@ -152,7 +152,7 @@ func TestCleanStaleLeases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer q.Close()
+	defer func() { _ = q.Close() }()
 	l, err := q.Acquire(context.Background(), runq.Request{Class: "go-test", Label: "ghost"})
 	if err != nil {
 		t.Fatal(err)

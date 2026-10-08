@@ -202,7 +202,7 @@ func withQueue(fn func(c *cobra.Command, q *runq.Queue, args []string) error) fu
 		if err != nil {
 			return err
 		}
-		defer q.Close()
+		defer func() { _ = q.Close() }()
 		return fn(c, q, args)
 	}
 }

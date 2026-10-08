@@ -115,7 +115,7 @@ func (h Heavy) Run(ctx context.Context, o HeavyOpts, cmd *exec.Cmd) (runq.Result
 		h.warn("%v; running unqueued", err)
 		return runq.Result{Mode: runq.ModeOff}, runq.Exec(cmd, o.Signals)
 	}
-	defer q.Close()
+	defer func() { _ = q.Close() }()
 	wait := o.WaitMax
 	switch {
 	case wait < 0:
@@ -173,7 +173,7 @@ func (a *App) CleanStaleLeases(out io.Writer) {
 		h.warn("%v", err)
 		return
 	}
-	defer q.Close()
+	defer func() { _ = q.Close() }()
 	n, err := q.Reap()
 	if err != nil {
 		h.warn("reaping stale leases: %v", err)
