@@ -269,3 +269,30 @@ func TestVersionAnswersWithoutStartingASession(t *testing.T) {
 		t.Fatalf("--version wrote %v", ents)
 	}
 }
+
+// Like Claude Code, the headless fake lists skills on disk, answers the
+// initialize control request with them and runs a typed /skill.
+func TestHeadlessListsAndRunsSkills(t *testing.T) {
+	d, home := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	skill := filepath.Join(home, ".claude", "skills", "greet")
+	if err := os.MkdirAll(skill, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skill, "SKILL.md"), []byte("---\nname: greet\ndescription: Say hello\n---\nGreet $ARGUMENTS\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := strings.NewReader(`{"type":"control_request","request_id":"r1","request":{"subtype":"initialize"}}` + "\n" +
+		`{"type":"user","message":{"role":"user","content":"/greet Ada"}}` + "\n")
+	var out bytes.Buffer
+	if code := Main([]string{"--script-dir", d, "-p", "--input-format", "stream-json"}, in, &out); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	s := out.String()
+	for _, want := range []string{`"slash_commands":["greet"]`, `"type":"control_response"`, `"description":"Say hello"`, "fake skill greet ran with: Ada"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("stream is missing %s:\n%s", want, s)
+		}
+	}
+}
