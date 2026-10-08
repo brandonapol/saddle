@@ -18,7 +18,9 @@ func doctorCmd() *cobra.Command {
 		Short: "Check the repo, gh, tools and hooks saddle needs, with a fix for each problem",
 		Long: `Runs saddle's preflight checks: git remote and default branch, gh login and
 scopes, repo merge settings, branch protection, test.cmd, tmux and claude, the
-ref guard hooks, .saddle/ being ignored, state.db, and stale worktrees.
+ref guard hooks, .saddle/ being ignored, state.db, stale worktrees, and the
+skills and slash commands the orchestrator sees (from a short claude session
+that makes no model call).
 
 Each check is ok, warn or fail. Exits non-zero when any check fails;
 warnings alone exit zero.`,
@@ -35,7 +37,7 @@ warnings alone exit zero.`,
 					return fmt.Errorf("not in a git repo: %w", err)
 				}
 			}
-			return reportDoctor(cmd.OutOrStdout(), doctor.Run(doctor.System(root)), asJSON)
+			return reportDoctor(cmd.OutOrStdout(), doctor.Run(doctor.WithSkillsProbe(root)), asJSON)
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")

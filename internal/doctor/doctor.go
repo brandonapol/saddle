@@ -123,6 +123,9 @@ func Run(env Env) []Result {
 	if te, ok := env.(TrustEnv); ok {
 		rs = append(rs, trustCheck(te))
 	}
+	if se, ok := env.(SkillsEnv); ok && r.cfg.Harness != config.HarnessGrok {
+		rs = append(rs, r.skills(se))
+	}
 	return rs
 }
 
