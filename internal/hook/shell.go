@@ -227,7 +227,8 @@ func isAssignment(w string) bool {
 		return false
 	}
 	for i, c := range name {
-		if !(c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && c >= '0' && c <= '9') {
+		letter := c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+		if !letter && (i == 0 || c < '0' || c > '9') {
 			return false
 		}
 	}

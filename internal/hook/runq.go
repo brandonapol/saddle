@@ -138,10 +138,10 @@ func HeavyRewrite(cmd string, m runq.Matcher, bin string) (string, string) {
 // /dev/null.
 func harmless(r redir) bool {
 	op := strings.TrimLeft(r.op, "0123456789")
-	switch {
-	case op == ">&" || op == "<&":
+	switch op {
+	case ">&", "<&":
 		return r.target == "" || isDigits(r.target) || r.target == "-"
-	case op == ">" || op == ">>" || op == "&>" || op == "&>>" || op == ">|":
+	case ">", ">>", "&>", "&>>", ">|":
 		return r.target == "/dev/null"
 	}
 	return false
@@ -153,9 +153,14 @@ func shellQuote(s string) string {
 
 func quoteIfNeeded(s string) string {
 	for _, c := range s {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("/._-+@%:,=", c)) {
+		if !plainRune(c) {
 			return shellQuote(s)
 		}
 	}
 	return s
+}
+
+// plainRune needs no shell quoting.
+func plainRune(c rune) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("/._-+@%:,=", c)
 }
