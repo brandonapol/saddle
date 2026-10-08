@@ -36,30 +36,34 @@ func TestParseSlash(t *testing.T) {
 	}
 }
 
-func TestCompleteSlash(t *testing.T) {
-	names := []string{"code-review", "compact", "security-review", "simplify", "understand-anything:understand", "understand-anything:understand-chat"}
+func TestSlashMatches(t *testing.T) {
+	var es []slashEntry
+	for _, n := range []string{"code-review", "compact", "security-review", "simplify", "understand-anything:understand", "understand-anything:understand-chat"} {
+		es = append(es, slashEntry{name: n})
+	}
 	cases := []struct {
-		in, want string
-		n        int
+		prefix string
+		want   []string
 	}{
-		{"/sim", "/simplify ", 1},
-		{"/co", "/co", 2},
-		{"/com", "/compact ", 1},
-		{"/understand-anything:", "/understand-anything:understand", 2},
-		{"/understand-c", "/understand-anything:understand-chat ", 1}, // after the plugin prefix
-		{"/nope", "/nope", 0},
-		{"/sim args", "/sim args", 0},
-		{"hello", "hello", 0},
+		{"sim", []string{"simplify"}},
+		{"co", []string{"code-review", "compact"}},
+		{"understand-anything:", []string{"understand-anything:understand", "understand-anything:understand-chat"}},
+		{"understand-c", []string{"understand-anything:understand-chat"}}, // after the plugin prefix
+		{"nope", nil},
 	}
 	for _, c := range cases {
-		got, m := completeSlash(c.in, names)
-		if got != c.want || len(m) != c.n {
-			t.Errorf("completeSlash(%q) = %q, %v; want %q with %d matches", c.in, got, m, c.want, c.n)
+		var got []string
+		for _, e := range slashMatches(c.prefix, es) {
+			got = append(got, e.name)
+		}
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("slashMatches(%q) = %v, want %v", c.prefix, got, c.want)
 		}
 	}
 }
 
 func TestFindSkills(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	home, root := t.TempDir(), t.TempDir()
 	plugin := filepath.Join(home, "plugin-install")
 	write := func(path, body string) {
@@ -90,5 +94,25 @@ func TestFindSkills(t *testing.T) {
 	}
 	if !reflect.DeepEqual(findSkills("", ""), builtinSkills) {
 		t.Errorf("with no dirs, want only built-ins, got %v", findSkills("", ""))
+	}
+}
+
+// CLAUDE_CONFIG_DIR moves Claude Code's user skills and plugins.
+func TestFindSkillsHonorsClaudeConfigDir(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	if err := os.MkdirAll(filepath.Join(cfg, "skills", "moved"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg, "skills", "moved", "SKILL.md"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := findSkills(t.TempDir(), "")
+	found := false
+	for _, g := range got {
+		found = found || g == "moved"
+	}
+	if !found {
+		t.Errorf("findSkills ignored CLAUDE_CONFIG_DIR: %v", got)
 	}
 }

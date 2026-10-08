@@ -117,7 +117,10 @@ type model struct {
 	input     textarea.Model
 	drafting  atomic.Bool // input holds text; read by the compact watcher off the UI goroutine
 	target    string      // task whose pane gets the next /command, if not the orchestrator
-	skills    []string    // skill names for completion, loaded on first use
+	commands   []slashEntry // the orchestrator's slash commands, as its session reports them
+	diskSkills []string     // skills found on disk, until the session reports; read on first use
+	slashSel   int          // the / menu's pick
+	turnText   bool         // the current turn showed text, so its result needn't
 	keys      keyMap
 	prefix    string // the user's tmux prefix, for help text
 
@@ -577,6 +580,7 @@ func (m *model) press(keys []tea.KeyMsg, c tea.Cmd) tea.Cmd {
 		}
 	}
 	if typed {
+		m.slashSel = 0
 		m.renderChat()
 		m.drafting.Store(strings.TrimSpace(m.input.Value()) != "")
 	}
@@ -659,6 +663,9 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		return m.waitEvent(), true
 	}
 	if m.focus == focusChat {
+		if m.slashKey(k) {
+			return nil, true
+		}
 		if key.Matches(k, keys.Untarget) && m.target != "" {
 			m.input.Reset()
 			m.unaim()
@@ -673,6 +680,10 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 				return m.submitTargeted(text), true
 			}
 			m.input.Reset()
+			if c, ok := parseSlash(text); ok {
+				m.sendSlash(c)
+				return nil, true
+			}
 			m.sendUser(text)
 			return nil, true
 		}
@@ -791,13 +802,24 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 	switch e.Kind {
 	case orch.Init:
 		m.gotInit = true
+		m.setCommands(e.Commands)
 		if e.SessionID != "" {
 			_ = m.app.Store.SetField(app.OrchestratorID, "session_id", e.SessionID)
 		}
 	case orch.Delta:
 		m.streaming.WriteString(e.Text)
+	case orch.Commands:
+		m.setCommands(e.Commands)
+	case orch.Local:
+		m.streaming.Reset()
+		m.turnText = true
+		m.addChat(store.ChatAssistant, e.Text)
+	case orch.Denied:
+		m.addChat(store.ChatEvent, "Not allowed for the orchestrator: "+e.Text+
+			". Press / on an agent row to run it in a worker, which has every tool.")
 	case orch.Text:
 		m.streaming.Reset()
+		m.turnText = true
 		m.addChat(store.ChatAssistant, strings.TrimSpace(e.Text))
 		if _, ok := urgentMark(e.Text); ok {
 			// The orchestrator flagged it itself; no need to ask Jev.
@@ -820,6 +842,11 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 		m.addChat(store.ChatTool, e.Text)
 	case orch.Result:
 		m.streaming.Reset()
+		if !m.turnText && strings.TrimSpace(e.Text) != "" {
+			// A command's reply that no assistant message carried.
+			m.addChat(store.ChatAssistant, strings.TrimSpace(e.Text))
+		}
+		m.turnText = false
 		m.cost = e.CostUSD
 		if e.SessionID != "" {
 			_ = m.app.Store.SetField(app.OrchestratorID, "session_id", e.SessionID)
@@ -827,6 +854,7 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 		m.deliver()
 	case orch.Error:
 		m.streaming.Reset()
+		m.turnText = false
 		m.addChat(store.ChatEvent, "Orchestrator error: "+e.Text)
 	case orch.Exit:
 		m.streaming.Reset()
@@ -1227,7 +1255,11 @@ func modelColor(model string) lipgloss.Color {
 // setChatHeight fits the chat viewport into a body of height h: the box
 // border, the input and its top rule take the rest.
 func (m *model) setChatHeight(h int) {
-	m.vp.Height = max(h-2-m.input.Height()-1, 3)
+	menu := 0
+	if s := m.viewSlashMenu(40); s != "" {
+		menu = lipgloss.Height(s)
+	}
+	m.vp.Height = max(h-2-m.input.Height()-1-menu, 3)
 	if m.follow {
 		m.vp.GotoBottom()
 	}
@@ -1237,7 +1269,11 @@ func (m *model) viewChat(w, h int) string {
 	m.input.SetWidth(w - 4)
 	m.setChatHeight(h)
 	in := lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(cBorder).Width(w - 2).Render(m.input.View())
-	body := lipgloss.JoinVertical(lipgloss.Left, m.vp.View(), in)
+	parts := []string{m.vp.View()}
+	if menu := m.viewSlashMenu(w - 2); menu != "" {
+		parts = append(parts, menu)
+	}
+	body := lipgloss.JoinVertical(lipgloss.Left, append(parts, in)...)
 	return box(m.chatTitle(), w, h, m.focus == focusChat, body)
 }
 
