@@ -32,7 +32,11 @@
 // event with its reason. All GitHub access goes through GitHub.
 //
 // The runtime toggle, the holds and the last check live in one small JSON
-// file under .saddle/, not in the store.
+// file under .saddle/, not in the store. Every writer saves it through
+// update, under an flock on a sidecar lock file, and writes only the fields
+// it owns: a check reads GitHub outside the lock and then merges its result
+// into the file as it is now, so a hold or toggle saved meanwhile survives
+// (#209).
 package automerge
 
 import (
@@ -43,6 +47,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -208,6 +213,29 @@ func (s State) Save(path string) error {
 	return os.Rename(tmp, path)
 }
 
+// update loads the state file, applies f and saves it, all under an flock on
+// path.lock so concurrent writers (other processes included) don't lose each
+// other's fields. f must not call GitHub; read it before update.
+func update(path string, f func(*State) error) (State, error) {
+	l, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return State{}, err
+	}
+	defer func() { _ = l.Close() }()
+	if err := syscall.Flock(int(l.Fd()), syscall.LOCK_EX); err != nil {
+		return State{}, err
+	}
+	defer func() { _ = syscall.Flock(int(l.Fd()), syscall.LOCK_UN) }()
+	s, err := Load(path)
+	if err != nil {
+		return s, err
+	}
+	if err := f(&s); err != nil {
+		return s, err
+	}
+	return s, s.Save(path)
+}
+
 // Watcher merges one repo's ready stacks.
 type Watcher struct {
 	Path    string // the state file
@@ -290,21 +318,19 @@ func (w *Watcher) enabled(s State) (bool, string) {
 // SetEnabled turns auto-merge on or off at runtime, overriding config. On
 // also clears a stop after a failure.
 func (w *Watcher) SetEnabled(on bool) error {
-	s, err := Load(w.Path)
-	if err != nil {
-		return err
-	}
-	s.Enabled = &on
 	why := "off"
-	if on {
-		why = "on"
-		if s.Stopped != "" {
-			why += "; cleared the stop after: " + s.Stopped
+	if _, err := update(w.Path, func(s *State) error {
+		s.Enabled = &on
+		if on {
+			why = "on"
+			if s.Stopped != "" {
+				why += "; cleared the stop after: " + s.Stopped
+			}
+			s.Stopped = ""
 		}
-		s.Stopped = ""
-	}
-	s.Last.Enabled, s.Last.Source, s.Last.Stopped = on, SourceRuntime, s.Stopped
-	if err := s.Save(w.Path); err != nil {
+		s.Last.Enabled, s.Last.Source, s.Last.Stopped = on, SourceRuntime, s.Stopped
+		return nil
+	}); err != nil {
 		return err
 	}
 	w.event("", EventToggle, why)
@@ -313,15 +339,14 @@ func (w *Watcher) SetEnabled(on bool) error {
 
 // Hold keeps the stack holding ref (a task or PR) from merging, until Release.
 func (w *Watcher) Hold(ref string) error {
-	s, err := Load(w.Path)
-	if err != nil {
-		return err
-	}
-	if !slices.Contains(s.Holds, ref) {
-		s.Holds = append(s.Holds, ref)
-	}
-	s.Last.Holds = s.Holds
-	if err := s.Save(w.Path); err != nil {
+	if _, err := update(w.Path, func(s *State) error {
+		if !slices.Contains(s.Holds, ref) {
+			s.Holds = append(s.Holds, ref)
+		}
+		s.Last.Holds = s.Holds
+		holdStacks(&s.Last, s.Holds)
+		return nil
+	}); err != nil {
 		return err
 	}
 	w.event(ref, EventHold, "held")
@@ -347,13 +372,15 @@ func (w *Watcher) Release(ref string) error {
 			}
 		}
 	}
-	n := len(s.Holds)
-	s.Holds = slices.DeleteFunc(s.Holds, func(h string) bool { return slices.Contains(drop, h) })
-	if len(s.Holds) == n {
-		return fmt.Errorf("%s isn't held", ref)
-	}
-	s.Last.Holds = s.Holds
-	if err := s.Save(w.Path); err != nil {
+	if _, err := update(w.Path, func(s *State) error {
+		n := len(s.Holds)
+		s.Holds = slices.DeleteFunc(s.Holds, func(h string) bool { return slices.Contains(drop, h) })
+		if len(s.Holds) == n {
+			return fmt.Errorf("%s isn't held", ref)
+		}
+		s.Last.Holds = s.Holds
+		return nil
+	}); err != nil {
 		return err
 	}
 	w.event(ref, EventHold, "released")
@@ -430,20 +457,31 @@ func (w *Watcher) explain(st *Status, last time.Time, merged string) {
 }
 
 func (w *Watcher) plan(s State) (Status, error) {
-	st := Status{Stopped: s.Stopped, Holds: s.Holds, Checked: w.now()}
-	st.Enabled, st.Source = w.enabled(s)
-	es, err := w.Entries()
+	nodes, err := w.read()
 	if err != nil {
-		return st, err
+		return w.status(s, nil), err
 	}
-	st.Stacks = w.graph(es, s.Holds)
-	return st, nil
+	return w.status(s, nodes), nil
 }
 
-// graph reads every entry's PR and groups the open ones into stacks: a PR
-// whose base is another open PR's branch sits on that PR.
-func (w *Watcher) graph(es []Entry, holds []string) []Stack {
-	var nodes []Node
+// status is s with the stacks nodes make, under s's holds.
+func (w *Watcher) status(s State, nodes []Node) Status {
+	st := Status{Stopped: s.Stopped, Holds: s.Holds, Checked: w.now()}
+	st.Enabled, st.Source = w.enabled(s)
+	if nodes != nil {
+		st.Stacks = w.graph(nodes, s.Holds)
+	}
+	return st
+}
+
+// read reads every entry's PR from GitHub; merged and closed ones are left
+// out.
+func (w *Watcher) read() ([]Node, error) {
+	es, err := w.Entries()
+	if err != nil {
+		return nil, err
+	}
+	nodes := []Node{}
 	for _, e := range es {
 		if e.PR == "" {
 			continue
@@ -463,6 +501,12 @@ func (w *Watcher) graph(es []Entry, holds []string) []Stack {
 		}
 		nodes = append(nodes, n)
 	}
+	return nodes, nil
+}
+
+// graph groups nodes into stacks: a PR whose base is another open PR's
+// branch sits on that PR.
+func (w *Watcher) graph(nodes []Node, holds []string) []Stack {
 	byBranch := map[string]int{}
 	for i, n := range nodes {
 		byBranch[n.Branch] = i
@@ -490,15 +534,9 @@ func (w *Watcher) graph(es []Entry, holds []string) []Stack {
 	for _, r := range order {
 		st := Stack{ID: nodes[r].Task}
 		for _, i := range members[r] {
-			n := nodes[i]
-			st.Nodes = append(st.Nodes, n)
-			if slices.Contains(holds, n.Task) || slices.Contains(holds, n.PR) {
-				st.Held = true
-			}
+			st.Nodes = append(st.Nodes, nodes[i])
 		}
-		if slices.Contains(holds, st.ID) {
-			st.Held = true
-		}
+		st.Held = held(st, holds)
 		top := st.Nodes[len(st.Nodes)-1]
 		if w.Behind != nil && top.head != "" {
 			st.Behind = w.Behind(top.head)
@@ -507,7 +545,7 @@ func (w *Watcher) graph(es []Entry, holds []string) []Stack {
 		st.Next = bottom.PR
 		st.Why, st.wait = w.refusal(bottom)
 		if st.Why == "" && st.Held {
-			st.Why = "the stack is held; `saddle automerge release " + st.ID + "` lets it merge"
+			st.Why = whyHeld(st.ID)
 		}
 		st.Ready = st.Why == ""
 		if st.Collapse = w.collapsible(st); st.Collapse != "" {
@@ -519,6 +557,32 @@ func (w *Watcher) graph(es []Entry, holds []string) []Stack {
 }
 
 const whyRed = "its CI is red"
+
+func whyHeld(id string) string {
+	return "the stack is held; `saddle automerge release " + id + "` lets it merge"
+}
+
+// held says whether any of holds names st or one of its PRs or tasks.
+func held(st Stack, holds []string) bool {
+	return slices.Contains(holds, st.ID) || slices.ContainsFunc(st.Nodes, func(n Node) bool {
+		return slices.Contains(holds, n.Task) || slices.Contains(holds, n.PR)
+	})
+}
+
+// holdStacks marks the stacks in st that holds now hold, for a status built
+// before those holds were placed.
+func holdStacks(st *Status, holds []string) {
+	for i := range st.Stacks {
+		x := &st.Stacks[i]
+		if x.Held || !held(*x, holds) {
+			continue
+		}
+		x.Held, x.Collapse = true, ""
+		if x.Ready {
+			x.Ready, x.Why, x.Blocked, x.wait = false, whyHeld(x.ID), "", false
+		}
+	}
+}
 
 // collapsible is the PR Check would collapse st into: the lowest green PR
 // above a bottom that is refused only for red CI, with nothing up to it
@@ -570,6 +634,10 @@ func (w *Watcher) refusal(n Node) (why string, wait bool) {
 // Check runs one tick: it rebuilds the graph, flags held stacks that fell
 // behind, and, when on and not stopped, merges the bottom PR of the first
 // ready stack that isn't held and restacks.
+//
+// It reads GitHub first and then reloads the state file, so a hold or toggle
+// saved during the read counts, and checks the file again just before
+// merging. It saves only the fields it owns.
 func (w *Watcher) Check() (Status, error) {
 	s, err := Load(w.Path)
 	if err != nil {
@@ -595,10 +663,15 @@ func (w *Watcher) Check() (Status, error) {
 	}
 	defer release()
 
-	st, err := w.plan(s)
+	nodes, err := w.read()
 	if err != nil {
-		return st, err
+		return w.status(s, nil), err
 	}
+	if s, err = Load(w.Path); err != nil { // what changed while GitHub was read
+		return Status{}, err
+	}
+	st := w.status(s, nodes)
+	stopped := s.Stopped
 	w.flagBehind(&s, st.Stacks)
 
 	if st.Enabled && s.Stopped == "" {
@@ -611,12 +684,46 @@ func (w *Watcher) Check() (Status, error) {
 			w.collapse(&s, &st, st.Stacks[i])
 		}
 	}
-	st.Stopped = s.Stopped
 	st.Next = w.now().Add(w.wait(false))
-	w.explain(&st, st.Checked, st.Merged)
-	w.logIdle(&s, st)
-	s.Last = st
-	return st, s.Save(w.Path)
+	return w.record(s, &st, s.Stopped != stopped)
+}
+
+// record saves a check: the fields a check owns (Behind, Logged, Idle and
+// IdleAt, Stopped when it stopped, and Last) merged into the file as it is
+// now, with Last's toggle and holds taken from it.
+func (w *Watcher) record(s State, st *Status, stopped bool) (Status, error) {
+	_, err := update(w.Path, func(cur *State) error {
+		cur.Behind, cur.Logged = s.Behind, s.Logged
+		if stopped {
+			cur.Stopped = s.Stopped
+		}
+		st.Enabled, st.Source = w.enabled(*cur)
+		st.Stopped, st.Holds = cur.Stopped, cur.Holds
+		holdStacks(st, cur.Holds)
+		w.explain(st, st.Checked, st.Merged)
+		cur.Idle, cur.IdleAt = s.Idle, s.IdleAt
+		w.logIdle(cur, *st)
+		cur.Last = *st
+		return nil
+	})
+	return *st, err
+}
+
+// vetoed says why stack mustn't merge after all: the file, read again just
+// before merging, has auto-merge off or stopped, or holds the stack.
+func (w *Watcher) vetoed(stack Stack) string {
+	s, err := Load(w.Path)
+	switch on, _ := w.enabled(s); {
+	case err != nil:
+		return "couldn't read " + w.Path + ": " + err.Error()
+	case !on:
+		return "auto-merge was turned off during the check"
+	case s.Stopped != "":
+		return "auto-merge stopped during the check"
+	case held(stack, s.Holds):
+		return "the stack was held during the check"
+	}
+	return ""
 }
 
 // busy records a tick that found the train lock held, marked busy since the
@@ -626,24 +733,24 @@ func (w *Watcher) Check() (Status, error) {
 func (w *Watcher) busy(s State) (Status, error) {
 	st := s.Last
 	if !st.Busy || w.now().Sub(st.Checked) >= w.interval() {
-		fresh, err := w.plan(s)
+		nodes, err := w.read()
 		if err != nil {
-			return fresh, err
+			return w.status(s, nil), err
 		}
+		if s, err = Load(w.Path); err != nil { // what changed while GitHub was read
+			return Status{}, err
+		}
+		fresh := w.status(s, nodes)
 		fresh.Busy, fresh.BusySince = st.Busy, st.BusySince
 		st = fresh
 	}
-	st.Enabled, st.Source = w.enabled(s)
-	st.Stopped, st.Holds, st.Merged = s.Stopped, s.Holds, ""
+	st.Merged = ""
 	if !st.Busy || st.BusySince.IsZero() {
 		st.BusySince = w.now()
 	}
 	st.Busy = true
 	st.Next = w.now().Add(w.wait(true))
-	w.explain(&st, st.Checked, "")
-	w.logIdle(&s, st)
-	s.Last = st
-	return st, s.Save(w.Path)
+	return w.record(s, &st, false)
 }
 
 // logIdle logs an EventIdle when a check merged nothing while auto-merge is
@@ -689,6 +796,10 @@ func (w *Watcher) merge(s *State, st *Status, stack Stack) {
 		stop(fmt.Sprintf("couldn't read the repo's merge method for %s: %v", n.PR, err))
 		return
 	}
+	if why := w.vetoed(stack); why != "" {
+		w.event(n.Task, EventRefused, n.PR+": "+why)
+		return
+	}
 	if err := w.GH.Merge(n.PR, method, n.head); err != nil {
 		stop(fmt.Sprintf("merging %s (%s) failed: %v", n.PR, n.Task, err))
 		return
@@ -706,6 +817,10 @@ func (w *Watcher) merge(s *State, st *Status, stack Stack) {
 // collapse hands a red-bottom stack to Collapse; a failure stops the watcher.
 func (w *Watcher) collapse(s *State, st *Status, stack Stack) {
 	n := stack.Nodes[0]
+	if why := w.vetoed(stack); why != "" {
+		w.event(n.Task, EventRefused, n.PR+": "+why)
+		return
+	}
 	pr, err := w.Collapse(stack.ID)
 	if err != nil {
 		why := fmt.Sprintf("collapsing stack %s (red %s) into %s failed: %v", stack.ID, n.PR, stack.Collapse, err)

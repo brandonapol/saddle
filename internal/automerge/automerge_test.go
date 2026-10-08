@@ -16,9 +16,13 @@ type fakeGH struct {
 	merged   []string
 	mergeErr error
 	method   string
+	onPR     func(url string) // runs at each PR read, as if gh were slow
 }
 
 func (f *fakeGH) PR(url string) (PR, error) {
+	if f.onPR != nil {
+		f.onPR(url)
+	}
 	p, ok := f.prs[url]
 	if !ok {
 		return PR{}, errors.New("no such PR " + url)
@@ -671,5 +675,97 @@ func TestRefusalLoggedOnceAcrossWatchers(t *testing.T) {
 	check(t, r2.w)
 	if n := len(r.events) + len(r2.events); slices.Index(r.kinds(), EventRefused) < 0 || slices.Contains(r2.kinds(), EventRefused) {
 		t.Fatalf("refusals: first %v, second %v (%d events)", r.kinds(), r2.kinds(), n)
+	}
+}
+
+// A hold or a toggle saved while a check reads GitHub survives the check's
+// save (#209): a check writes only the fields it owns.
+func TestHoldAndToggleDuringCheckSurvive(t *testing.T) {
+	r := newRig(t, "", "t1")
+	r.gh.prs["pr/t1"].Checks = ChecksPending // nothing merges
+	r.gh.onPR = func(string) {
+		r.gh.onPR = nil
+		if err := r.w.Hold("t1"); err != nil {
+			t.Error(err)
+		}
+		if err := r.w.SetEnabled(true); err != nil {
+			t.Error(err)
+		}
+	}
+	st := check(t, r.w)
+	saved, err := r.w.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range []Status{st, saved} {
+		if !x.Enabled || x.Source != SourceRuntime || !slices.Equal(x.Holds, []string{"t1"}) {
+			t.Fatalf("lost the hold or toggle: enabled %v (%s), holds %v", x.Enabled, x.Source, x.Holds)
+		}
+	}
+	if !saved.Stacks[0].Held {
+		t.Fatalf("saved stack not held: %+v", saved.Stacks[0])
+	}
+}
+
+// The same for a busy tick, which reads GitHub without the train lock.
+func TestHoldDuringBusyTickSurvives(t *testing.T) {
+	r := newRig(t, "", "t1")
+	r.on(t)
+	r.w.Lock = func() (func(), bool, error) { return nil, false, nil }
+	r.gh.onPR = func(string) {
+		r.gh.onPR = nil
+		if err := r.w.Hold("t1"); err != nil {
+			t.Error(err)
+		}
+	}
+	check(t, r.w)
+	if saved, _ := r.w.Status(); !slices.Equal(saved.Holds, []string{"t1"}) || !saved.Busy {
+		t.Fatalf("busy tick lost the hold: holds %v busy %v", saved.Holds, saved.Busy)
+	}
+}
+
+// A stack held, or auto-merge turned off, while a check reads GitHub is not
+// merged by that check.
+func TestHoldOrOffDuringCheckPreventsMerge(t *testing.T) {
+	for name, act := range map[string]func(w *Watcher) error{
+		"hold": func(w *Watcher) error { return w.Hold("t1") },
+		"off":  func(w *Watcher) error { return w.SetEnabled(false) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, "", "t1")
+			r.on(t)
+			r.gh.onPR = func(string) {
+				r.gh.onPR = nil
+				if err := act(r.w); err != nil {
+					t.Error(err)
+				}
+			}
+			st := check(t, r.w)
+			if len(r.gh.merged) != 0 || st.Merged != "" {
+				t.Fatalf("merged %v after %s during the check", r.gh.merged, name)
+			}
+		})
+	}
+}
+
+// A stop cleared by `on` while a check runs stays cleared.
+func TestOnDuringCheckClearsStop(t *testing.T) {
+	r := newRig(t, "", "t1")
+	r.gh.prs["pr/t1"].Checks = ChecksPending
+	r.on(t)
+	s, _ := Load(r.w.Path)
+	s.Stopped = "merging pr/x failed"
+	if err := s.Save(r.w.Path); err != nil {
+		t.Fatal(err)
+	}
+	r.gh.onPR = func(string) {
+		r.gh.onPR = nil
+		if err := r.w.SetEnabled(true); err != nil {
+			t.Error(err)
+		}
+	}
+	check(t, r.w)
+	if saved, _ := r.w.Status(); saved.Stopped != "" {
+		t.Fatalf("stop came back: %q", saved.Stopped)
 	}
 }
