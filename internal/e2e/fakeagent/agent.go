@@ -379,19 +379,35 @@ func (a *Agent) wait(match string) error {
 }
 
 // headless speaks Claude Code's stream-json on stdin and stdout, standing in
-// for the TUI's orchestrator: it acknowledges every message.
+// for the TUI's orchestrator: it acknowledges every message. Like Claude
+// Code it lists the user's and the project's skills (in init and in reply to
+// an initialize control request) and "runs" a typed /skill, answering
+// "fake skill <name> ran with: <args>".
 func (a *Agent) headless() int {
 	f, err := os.OpenFile(OrchestratorLog(a.Dir), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return 1
 	}
 	defer f.Close()
+	skills := a.skills()
+	names := make([]string, 0, len(skills))
+	cmds := make([]any, 0, len(skills))
+	for _, s := range skills {
+		names = append(names, s.name)
+		cmds = append(cmds, map[string]any{"name": s.name, "description": s.desc, "argumentHint": ""})
+	}
 	enc := json.NewEncoder(a.Out)
-	_ = enc.Encode(map[string]any{"type": "system", "subtype": "init", "session_id": "fake-orchestrator"})
+	_ = enc.Encode(map[string]any{"type": "system", "subtype": "init", "session_id": "fake-orchestrator",
+		"slash_commands": names, "skills": names})
 	sc := bufio.NewScanner(a.In)
 	sc.Buffer(make([]byte, 1<<20), 16<<20)
 	for sc.Scan() {
 		var m struct {
+			Type      string `json:"type"`
+			RequestID string `json:"request_id"`
+			Request   struct {
+				Subtype string `json:"subtype"`
+			} `json:"request"`
 			Message struct {
 				Content any `json:"content"`
 			} `json:"message"`
@@ -399,17 +415,60 @@ func (a *Agent) headless() int {
 		if json.Unmarshal(sc.Bytes(), &m) != nil {
 			continue
 		}
+		if m.Type == "control_request" {
+			fmt.Fprintln(f, "control: "+m.Request.Subtype)
+			resp := map[string]any{"subtype": "success", "request_id": m.RequestID, "response": map[string]any{}}
+			if m.Request.Subtype == "initialize" {
+				resp["response"] = map[string]any{"commands": cmds}
+			}
+			_ = enc.Encode(map[string]any{"type": "control_response", "response": resp})
+			continue
+		}
 		text := fmt.Sprint(m.Message.Content)
 		fmt.Fprintln(f, "user: "+strings.ReplaceAll(text, "\n", " | "))
-		first, _, _ := strings.Cut(text, "\n")
-		if len(first) > 60 {
-			first = first[:60]
+		reply := ""
+		if name, args, ok := strings.Cut(strings.TrimPrefix(text, "/")+" ", " "); ok && strings.HasPrefix(text, "/") && slices.Contains(names, name) {
+			reply = "fake skill " + name + " ran with: " + strings.TrimSpace(args)
+		} else {
+			first, _, _ := strings.Cut(text, "\n")
+			if len(first) > 60 {
+				first = first[:60]
+			}
+			reply = "fake orchestrator ack: " + first
 		}
 		_ = enc.Encode(map[string]any{"type": "assistant", "message": map[string]any{
-			"content": []any{map[string]any{"type": "text", "text": "fake orchestrator ack: " + first}}}})
-		_ = enc.Encode(map[string]any{"type": "result", "subtype": "success", "result": "ok", "session_id": "fake-orchestrator"})
+			"content": []any{map[string]any{"type": "text", "text": reply}}}})
+		_ = enc.Encode(map[string]any{"type": "result", "subtype": "success", "result": reply, "session_id": "fake-orchestrator"})
 	}
 	return 0
+}
+
+type fakeSkill struct{ name, desc string }
+
+// skills lists SKILL.md skills in the user's Claude config and the working
+// directory's .claude, with the description from the frontmatter.
+func (a *Agent) skills() []fakeSkill {
+	cfg := os.Getenv("CLAUDE_CONFIG_DIR")
+	if cfg == "" {
+		home, _ := os.UserHomeDir()
+		cfg = filepath.Join(home, ".claude")
+	}
+	var out []fakeSkill
+	for _, dir := range []string{filepath.Join(cfg, "skills"), filepath.Join(a.Work, ".claude", "skills")} {
+		ms, _ := filepath.Glob(filepath.Join(dir, "*", "SKILL.md"))
+		for _, m := range ms {
+			s := fakeSkill{name: filepath.Base(filepath.Dir(m))}
+			b, _ := os.ReadFile(m)
+			for _, l := range strings.Split(string(b), "\n") {
+				if d, ok := strings.CutPrefix(l, "description:"); ok {
+					s.desc = strings.TrimSpace(d)
+					break
+				}
+			}
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

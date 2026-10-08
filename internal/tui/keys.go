@@ -68,7 +68,7 @@ func newKeyMap() keyMap {
 
 		Send:     b("enter", "send", "enter"),
 		Newline:  b("alt+enter", "newline", "alt+enter", "ctrl+j"),
-		Complete: b("/skill tab", "complete", "tab"),
+		Complete: b("/ tab", "skills & commands (↑↓ pick, tab completes)", "tab"),
 		Untarget: b("esc", "back to orchestrator", "esc"),
 
 		Ask:       b("alt+a", "ask narrator", "alt+a"),
@@ -176,7 +176,7 @@ func (m *model) help() []key.Binding {
 		case m.target != "":
 			hs = append(hs, k.Untarget)
 		default:
-			hs = append(hs, k.Complete, k.Ask)
+			hs = append(hs, withHelp(k.Complete, "/", "skills"), k.Ask)
 		}
 		return append(hs, k.NextAgent, withHelp(k.Focus, "tab", "agents"), k.ViewControl, k.Terminal, k.CopyMode, withHelp(k.Help, "f1", "keys"), k.PageUp, k.Restart, k.Quit)
 	}
