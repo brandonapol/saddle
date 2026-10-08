@@ -37,6 +37,7 @@ func runIsolated(m *testing.M) int {
 		}
 	}
 	_ = os.Setenv("TMPDIR", base)
+	_ = os.Setenv("GOTMPDIR", base) // t.TempDir prefers it to TMPDIR
 	_ = os.Setenv("GIT_CEILING_DIRECTORIES", base)
 	_ = os.Setenv(trust.EnvFile, filepath.Join(base, "trust.json"))
 	return m.Run()
@@ -64,4 +65,12 @@ func isolatedTemp() (string, error) {
 		_ = os.RemoveAll(d)
 	}
 	return "", fmt.Errorf("no temp dir outside a saddle repo under %v", parents)
+}
+
+// t.TempDir must have no saddle repo above it, wherever the train's gate
+// points TMPDIR and GOTMPDIR (t.TempDir prefers GOTMPDIR).
+func TestTempDirsAreOutsideSaddleRepos(t *testing.T) {
+	if root := saddleRoot(t.TempDir()); root != "" {
+		t.Fatalf("t.TempDir is inside the saddle repo %s", root)
+	}
 }

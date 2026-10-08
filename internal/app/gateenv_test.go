@@ -203,6 +203,7 @@ func TestRunGateEnvHostileEnvInWorktree(t *testing.T) {
 	t.Setenv("SADDLE_ROOT", a.Root)
 	t.Setenv("CLAUDE_PROJECT_DIR", a.Root)
 	t.Setenv("TMPDIR", filepath.Join(a.Root, ".saddle", "tmp"))
+	t.Setenv("GOTMPDIR", filepath.Join(a.Root, ".saddle", "tmp"))
 	a.Cfg.Train.Tmpdir = ".saddle/tmp"
 
 	gate := `set -e
@@ -211,11 +212,13 @@ for v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE SADDLE_TASK SADDLE_ROOT CLAUDE_PRO
 done
 top=$(git rev-parse --show-toplevel)
 [ "$top" = "$PWD" ] || { echo "git toplevel $top, want $PWD"; exit 1; }
-d=$TMPDIR
-while :; do
-  [ ! -e "$d/.saddle/config.toml" ] || { echo "TMPDIR $TMPDIR is inside saddle repo $d"; exit 1; }
-  [ "$d" != / ] || break
-  d=$(dirname "$d")
+for t in "$TMPDIR" "$GOTMPDIR"; do
+  d=$t
+  while :; do
+    [ ! -e "$d/.saddle/config.toml" ] || { echo "temp dir $t is inside saddle repo $d"; exit 1; }
+    [ "$d" != / ] || break
+    d=$(dirname "$d")
+  done
 done
 echo gate ok`
 	res := a.RunGateEnv(context.Background(), "t1", ShellGate(wt, gate))
