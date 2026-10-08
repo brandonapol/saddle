@@ -23,8 +23,7 @@ func (u *TUI) row(s string) string {
 }
 
 // waitHeader waits until the header row contains s. The header shows the
-// state the TUI last read, unlike a flash, which shows an action began; a
-// toggle pressed before the state is read toggles the stale state (#207).
+// state the TUI last read, unlike a flash, which shows an action began.
 func (u *TUI) waitHeader(s string) {
 	u.w.T.Helper()
 	Eventually(u.w.T, "the header to show "+s, func() error {
@@ -264,9 +263,8 @@ func TestJourneyTUIMergeViewKeys(t *testing.T) {
 // (saddle stack rebase) on a stack already on main must move nothing and
 // say so. Today every call rebuilds every branch with new SHAs, so each
 // press force-moves the PR heads (restarting their CI) and "already on main"
-// never shows.
+// never shows. Fixed by #219.
 func TestJourneyRebaseStackIsIdempotent(t *testing.T) {
-	t.Skip("#205: saddle stack rebase rewrites every branch on every call")
 	w := world(t, Options{})
 	landThree(t, w)
 	must(t, w.GH.MergeByHand(prNumber(t, w.GHState(), w.Task("t1").PR).Number, "squash"))
@@ -293,7 +291,6 @@ func TestJourneyRebaseStackIsIdempotent(t *testing.T) {
 // merges its train entry is "merged". The merge view must list it as done,
 // not under returned, and the header must not count it as a conflict.
 func TestJourneyTUIMergedTaskNotShownAsConflict(t *testing.T) {
-	t.Skip("#206: merged train entries show as returned and count as conflicts")
 	w := world(t, Options{})
 	urls := landThree(t, w)
 	must(t, w.GH.MergeByHand(prNumber(t, w.GHState(), urls["t1"]).Number, "squash"))
