@@ -1,6 +1,6 @@
 # Heavy-run scheduler (runq)
 
-Status: design accepted for implementation; spike in `internal/runq` (#236).
+Status: core shipped as `saddle run` and `saddle runq` (#238) in observe mode; design in #236.
 
 ## Problem
 

@@ -195,11 +195,24 @@ change into a single thread. Usage comes from Claude Code transcript JSONL
 `usage` fields, bucketed per minute by task and model. Plan-limit bars are
 estimates against caps you configure.
 
+## Heavy-run queue
+
+`saddle run --class C -- cmd` (`internal/runq`, glue in `internal/app/runq.go`)
+makes CPU-heavy commands take turns across every agent, session and repo on
+the machine. The queue is a SQLite file in `$XDG_STATE_HOME/saddle/runq.db`.
+Each lease holds an flock, so a dead holder's slot is reaped on the next poll.
+`SADDLE_RUNQ_LEASE` lets nested runs ride the outer lease. Config comes from
+`.saddle/runq.toml` with `~/.config/saddle/runq.toml` on top. The default mode
+is `observe`: runs are recorded with wait, duration, CPU and peak RSS, but none
+waits. `App.RunHeavy` is the entry point for saddle's own gates. Design:
+[runq.md](runq.md).
+
 ## Layout on disk
 
 ```
 <repo>/.saddle/
   config.toml        per-repo config (merged over ~/.config/saddle/config.toml)
+  runq.toml          heavy-run classes and mode (under ~/.config/saddle/runq.toml)
   state.db           sqlite: epics, tasks, deps, claims, events, usage, train, renames
   worktrees/<task>/  one per agent, branch saddle/<task>
 ```
@@ -223,6 +236,7 @@ internal/hook/       hook entrypoint
 internal/narrator/   haiku narrator, usage
 internal/tui/        bubble tea views
 internal/engine/     headless watcher for the plugin orchestrator
+internal/runq/       heavy-run lease queue behind saddle run
 plugin/              Claude Code plugin (MCP, hooks, /saddle:* commands)
 ```
 

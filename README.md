@@ -110,3 +110,22 @@ How agents are kept apart:
   first write.
 - Notices reach agents through hooks. Inside a worktree, `saddle sync` rebases
   onto everything that has landed.
+
+### Heavy runs: `saddle run`
+
+Parallel agents that all start `flutter test` or `make check` at once
+saturate the machine. `saddle run` queues them on one per-user, per-machine
+queue that every session and repo shares:
+
+```
+saddle run --class go-test [--prio train|worker|background] [--wait-max 30m] -- make check
+saddle runq status [--json] | drain [class] | kill <lease> | slots <class> <n>
+```
+
+While it waits it prints one line, such as `queued: position 1 of 2 for go-test,
+holder t83 (make check, 40s), ~2m`, and then the command runs as if called
+directly. It forwards stdin, stdout, signals and the exit code. It starts in
+`observe` mode, which records how long runs take but never makes one wait.
+To enforce the slots, set `mode = "enforce"` in `~/.config/saddle/runq.toml`
+or `.saddle/runq.toml`. `SADDLE_RUNQ=off|observe|enforce` overrides the mode
+for one shell. See [docs/runq.md](docs/runq.md).
