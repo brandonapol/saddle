@@ -356,3 +356,30 @@ slots = 1
 		t.Fatalf("bad mode: %v", err)
 	}
 }
+
+// TestTransientOpenErrorIsRetried: a process opening the queue while others
+// are SIGKILLed or closing can get a passing SQLite I/O error (seen as
+// "disk I/O error" in TestCrashSafety under load). That is not corruption:
+// Open retries, and the live queue is never moved aside for it.
+func TestTransientOpenErrorIsRetried(t *testing.T) {
+	o := testOpts(t)
+	_ = acquire(t, open(t, o), Request{Class: "go-test"}).Release()
+	real := openDBFn
+	fails := 2
+	openDBFn = func(path string) (*sql.DB, error) {
+		if fails > 0 {
+			fails--
+			return nil, errors.New("disk I/O error (5898)")
+		}
+		return real(path)
+	}
+	t.Cleanup(func() { openDBFn = real })
+	q := open(t, o)
+	if aside, _ := filepath.Glob(o.Path + ".corrupt-*"); len(aside) > 0 {
+		t.Fatalf("a healthy queue was moved aside: %v", aside)
+	}
+	var n int
+	if err := q.db.QueryRow(`SELECT COUNT(*) FROM history`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("history lost: %d %v", n, err)
+	}
+}

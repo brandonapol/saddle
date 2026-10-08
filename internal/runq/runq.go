@@ -209,7 +209,7 @@ func Open(opts Options) (*Queue, error) {
 	if err := touch(q.wake); err != nil {
 		return nil, err
 	}
-	db, err := openDB(opts.Path)
+	db, err := openRetrying(opts.Path)
 	if err != nil {
 		aside := fmt.Sprintf("%s.corrupt-%d", opts.Path, time.Now().UnixNano())
 		if rerr := os.Rename(opts.Path, aside); rerr != nil {
@@ -218,13 +218,31 @@ func Open(opts Options) (*Queue, error) {
 		for _, sfx := range []string{"-wal", "-shm"} {
 			_ = os.Rename(opts.Path+sfx, aside+sfx)
 		}
-		if db, err = openDB(opts.Path); err != nil {
+		if db, err = openDBFn(opts.Path); err != nil {
 			return nil, err
 		}
 	}
 	q.db = db
 	return q, nil
 }
+
+// openRetrying opens path, retrying briefly: a process opening the queue
+// while another is killed or closing can get a passing I/O error from
+// SQLite's WAL recovery. Only an error that persists means the file is bad.
+func openRetrying(path string) (*sql.DB, error) {
+	var err error
+	for i := range 5 {
+		var db *sql.DB
+		if db, err = openDBFn(path); err == nil {
+			return db, nil
+		}
+		time.Sleep(time.Duration(20<<i) * time.Millisecond)
+	}
+	return nil, err
+}
+
+// openDBFn is openDB; tests inject failures.
+var openDBFn = openDB
 
 func openDB(path string) (*sql.DB, error) {
 	dsn := "file:" + path + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_txlock=immediate"
