@@ -44,6 +44,8 @@ func (m *model) routeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 	case key.Matches(k, keys.ViewMerge):
 		m.setView(viewMerge)
 		return m.loadTrain(), true
+	case key.Matches(k, keys.Infinite):
+		return m.toggleInfinite(), true
 	}
 	// The replan note takes typing, help key included.
 	if m.view == viewPlan && m.pl.noting {

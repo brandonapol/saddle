@@ -23,6 +23,7 @@ import (
 	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/automerge"
+	"github.com/brandonapol/saddle/internal/autopilot"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/orch"
 	"github.com/brandonapol/saddle/internal/store"
@@ -144,6 +145,10 @@ type model struct {
 	amer      automerger                                   // the merge view's actions; nil means the app's
 	amBusy    string                                       // the auto-merge action running, if any
 	amGen     int                                          // bumped by each auto-merge change the TUI made
+	ap        *autopilot.State                             // autopilot as last saved; nil until read
+	aper      infiniter                                    // the infinite-mode key's action; nil means the app's
+	apBusy    bool                                         // an infinite-mode toggle is running
+	apGen     int                                          // bumped by each autopilot change the TUI made
 	conc      *app.Concurrency                             // the bots limit as last read; nil until read
 	concSet   func(n int) (app.Concurrency, error)         // sets the bots limit; nil means the app's
 	stackSel  string                                       // the merge view's selected stack
@@ -202,6 +207,8 @@ type (
 		graph   *usageGraph
 		am      *automerge.Status
 		amGen   int // m.amGen when the refresh started
+		ap      *autopilot.State
+		apGen   int // m.apGen when the refresh started
 		conc    *app.Concurrency
 	}
 	flashMsg   string
@@ -349,7 +356,7 @@ func (m *model) refresh() tea.Cmd {
 	if m.sel < len(m.tasks) {
 		sel = m.tasks[m.sel].ID
 	}
-	a, amGen := m.app, m.amGen
+	a, amGen, apGen := m.app, m.amGen, m.apGen
 	peekShown := m.view == viewControl && !m.briefOn && !m.helpOpen && !m.cp.on
 	sweep := m.refreshN%sweepEvery == 0
 	m.refreshN++
@@ -373,6 +380,9 @@ func (m *model) refresh() tea.Cmd {
 		msg.limits, msg.graph = readUsage(a, time.Now())
 		if st, err := a.AutomergeState(); err == nil {
 			msg.am, msg.amGen = &st, amGen
+		}
+		if st, err := a.AutopilotState(); err == nil {
+			msg.ap, msg.apGen = &st, apGen
 		}
 		if c, err := a.Concurrency(); err == nil {
 			msg.conc = &c
@@ -590,6 +600,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.am != nil && msg.amGen == m.amGen {
 			m.am = msg.am
 		}
+		if msg.ap != nil && msg.apGen == m.apGen {
+			m.ap = msg.ap
+		}
 		m.sel = 0
 		for i, t := range m.tasks {
 			if t.ID == selID {
@@ -639,6 +652,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spawnedMsg:
 		cmds = append(cmds, m.spawned(msg))
+
+	case apDoneMsg:
+		cmds = append(cmds, m.infiniteDone(msg))
 
 	case amDoneMsg:
 		m.amBusy = ""

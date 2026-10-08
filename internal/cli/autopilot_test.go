@@ -61,3 +61,39 @@ func TestAutopilotCommands(t *testing.T) {
 		t.Fatalf("status after off:\n%s", out)
 	}
 }
+
+// #285: saddle autopilot infinite on|off toggles infinite mode in
+// .saddle/autopilot.json, and status shows it.
+func TestAutopilotInfiniteCommand(t *testing.T) {
+	a := automergeRepo(t)
+	must := func(args ...string) string {
+		t.Helper()
+		out, err := runCmd(t, autopilotCmd(), args...)
+		if err != nil {
+			t.Fatalf("saddle autopilot %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return out
+	}
+	if _, err := runCmd(t, autopilotCmd(), "infinite", "sideways"); err == nil {
+		t.Fatal("infinite accepted sideways")
+	}
+	if out := must("infinite", "on"); !strings.Contains(out, "infinite mode is on") {
+		t.Fatalf("infinite on:\n%s", out)
+	}
+	st, err := a.AutopilotState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.On || !st.Infinite {
+		t.Fatalf("state after infinite on = %+v", st)
+	}
+	if out := must("status"); !strings.Contains(out, "∞") || !strings.Contains(out, "plan limit") {
+		t.Fatalf("status in infinite mode:\n%s", out)
+	}
+	if out := must("infinite", "off"); !strings.Contains(out, "autopilot stopped: turned off") {
+		t.Fatalf("infinite off:\n%s", out)
+	}
+	if st, _ := a.AutopilotState(); st.On || st.Infinite {
+		t.Fatalf("state after infinite off = %+v", st)
+	}
+}

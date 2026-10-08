@@ -180,3 +180,57 @@ func TestAutopilotStopSummaryInterrupts(t *testing.T) {
 		t.Fatalf("notices = %+v", ns)
 	}
 }
+
+// #285: infinite mode parks running workers when a plan-limit window is
+// full (even without limits.pause_launches) and resumes them in new
+// windows after the reset.
+func TestAutopilotInfiniteParksAndResumes(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	a, _ := setup(t)
+	now := time.Now().Truncate(time.Minute)
+	d := a.NewAutopilot(readyQueue(apIssue(1, "claims: alpha/**")))
+	d.Now = func() time.Time { return now }
+	_, err := d.SetInfinite(true)
+	must(t, err)
+	rep, err := d.Tick()
+	must(t, err)
+	if len(rep.Spawned) != 1 {
+		t.Fatalf("spawned %+v", rep.Spawned)
+	}
+	id := rep.Spawned[0].Task
+
+	a.Cfg.Limits = usage.Limits{FiveHour: usage.Cap{Tokens: 100}}
+	must(t, a.Store.AddUsage("s1", false, []usage.Bucket{{
+		Key:    usage.Key{Minute: now.Add(-time.Hour), Task: "t9", Model: "claude-opus-4"},
+		Tokens: usage.Tokens{Input: 500}, Messages: 1}}))
+	rep, err = d.Tick()
+	must(t, err)
+	if !rep.Sleeping {
+		t.Fatalf("at the limit: %+v", rep)
+	}
+	if tk := mustTask(t, a, id); tk.Status != StatusPaused {
+		t.Fatalf("%s is %s, want paused", id, tk.Status)
+	}
+	st, err := d.Status()
+	must(t, err)
+	if !slices.Equal(st.Parked, []string{id}) || !st.On {
+		t.Fatalf("state = %+v", st)
+	}
+	// tmux took the window down with the session.
+	must(t, a.Tmux.KillWindow(mustTask(t, a, id).Window))
+
+	now = now.Add(-time.Hour).Add(usage.FiveHours)
+	a.Cfg.Limits = usage.Limits{}
+	_, err = d.Tick()
+	must(t, err)
+	tk := mustTask(t, a, id)
+	if tk.Status == StatusPaused || !a.ownWindow(tk) {
+		t.Fatalf("after the reset %s is %s (own window %v), want resumed", id, tk.Status, a.ownWindow(tk))
+	}
+	if n := countEvents(t, a, "resumed", ""); n != 1 {
+		t.Errorf("%d resumed events, want the task resumed once", n)
+	}
+	if n := countEvents(t, a, autopilot.EventUnpark, id); n != 1 {
+		t.Errorf("%d unpark events", n)
+	}
+}
