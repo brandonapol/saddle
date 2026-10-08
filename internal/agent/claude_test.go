@@ -135,3 +135,48 @@ func TestWriteResumesSession(t *testing.T) {
 		t.Errorf("a fresh launch resumes:\n%s", script)
 	}
 }
+
+// Skills and slash commands reach both the headless orchestrator and the
+// interactive workers (#255): no launch turns them off or narrows the
+// settings sources that hold user and project skills, and the orchestrator
+// may call the Skill tool without a prompt (a prompt in -p is a denial).
+func TestLaunchesKeepSkills(t *testing.T) {
+	for _, l := range []Launch{
+		{Bin: "/bin/saddle", Task: "t0", Cmd: "claude", RunDir: t.TempDir(), Allow: OrchestratorAllow(), Deny: OrchestratorDeny()},
+		{Bin: "/bin/saddle", Task: "t1", Cmd: "claude", RunDir: t.TempDir()},
+	} {
+		cmd, err := l.Headless("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sh, err := l.Write()
+		if err != nil {
+			t.Fatal(err)
+		}
+		script, err := os.ReadFile(strings.Trim(strings.TrimPrefix(sh, "bash "), "'"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, flag := range []string{"--bare", "--disable-slash-commands", "--setting-sources", "--strict-mcp-config"} {
+			if slices.Contains(cmd.Args, flag) {
+				t.Errorf("%s headless launch passes %s", l.Task, flag)
+			}
+			if strings.Contains(string(script), flag) {
+				t.Errorf("%s tmux launch passes %s", l.Task, flag)
+			}
+		}
+		for _, env := range cmd.Env {
+			if strings.HasPrefix(env, "CLAUDE_CONFIG_DIR=") && env != "CLAUDE_CONFIG_DIR="+os.Getenv("CLAUDE_CONFIG_DIR") {
+				t.Errorf("%s headless launch overrides %s", l.Task, env)
+			}
+		}
+		for _, deny := range l.Deny {
+			if deny == "Skill" || strings.HasPrefix(deny, "Skill(") {
+				t.Errorf("%s denies the Skill tool", l.Task)
+			}
+		}
+	}
+	if !slices.Contains(OrchestratorAllow(), "Skill") {
+		t.Error("the orchestrator's Skill tool calls need a permission prompt it can't answer")
+	}
+}

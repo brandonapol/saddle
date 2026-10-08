@@ -57,14 +57,15 @@ func OrchestratorDeny() []string {
 		"Bash(git branch -f:*)", "Bash(git update-ref:*)", "Bash(git checkout:*)"}
 }
 
-// OrchestratorAllow lets the chat agent read the repo and GitHub, never edit.
+// OrchestratorAllow lets the chat agent read the repo and GitHub and run
+// skills (#255), never edit.
 // The rules pre-approve what the orchestrator is meant to run, so neither a
 // permission prompt nor the auto-mode classifier blocks it (#220): saddle
 // itself (writeFiles adds the absolute binary too), gh pr and gh issue, git
 // fetch and read-only git. git push is not here and OrchestratorDeny removes
 // it: when prs is blocked, saddle publish pushes, as the saddle process.
 func OrchestratorAllow() []string {
-	return []string{"mcp__saddle", "Read", "Glob", "Grep", saddleAllow,
+	return []string{"mcp__saddle", "Read", "Glob", "Grep", "Skill", saddleAllow,
 		"Bash(gh issue:*)", "Bash(gh pr:*)", "Bash(gh pr create:*)", "Bash(gh pr edit:*)", "Bash(gh pr view:*)",
 		"Bash(gh pr list:*)", "Bash(gh pr merge:*)", "Bash(gh pr checks:*)", "Bash(gh pr diff:*)",
 		"Bash(git fetch:*)", "Bash(git log:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git show:*)",
