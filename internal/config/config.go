@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/BurntSushi/toml"
 
@@ -214,8 +215,8 @@ type Train struct {
 	// fixing it before the orchestrator is interrupted once (#223).
 	StuckAfter time.Duration `toml:"stuck_after"`
 	// Tmpdir is the disk-backed scratch dir the test gate's TMPDIR and
-	// GOTMPDIR point into, relative to the repo root; empty means .saddle/tmp
-	// (#184).
+	// GOTMPDIR point into; empty means <user cache dir>/saddle/tmp/<repo hash>.
+	// A value inside the repo is ignored (#184, #250).
 	Tmpdir string `toml:"tmpdir"`
 }
 
@@ -323,6 +324,27 @@ func Default() Config {
 	}
 }
 
+// DefaultSession names the tmux session for a repo root: "saddle-<dir>" with
+// every run of '.', ':' or whitespace (tmux target separators) collapsed to
+// '-' and leading/trailing '-' trimmed.
+func DefaultSession(root string) string {
+	var b strings.Builder
+	for _, r := range filepath.Base(root) {
+		if r == '.' || r == ':' || r == filepath.Separator || unicode.IsSpace(r) || r == '-' {
+			r = '-'
+		}
+		if r == '-' && strings.HasSuffix(b.String(), "-") {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	name := strings.Trim(b.String(), "-")
+	if name == "" {
+		return "saddle"
+	}
+	return "saddle-" + name
+}
+
 // Load merges config files over the defaults. Missing files are skipped.
 func Load(root string) (Config, error) {
 	cfg := Default()
@@ -347,7 +369,7 @@ func Load(root string) (Config, error) {
 		}
 	}
 	if cfg.Session == "" {
-		cfg.Session = "saddle-" + filepath.Base(root)
+		cfg.Session = DefaultSession(root)
 	}
 	if cfg.Harness == "" {
 		cfg.Harness = HarnessClaude
@@ -510,10 +532,11 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # long with no task fixing it.
 # stuck_after = "30m"
 # The test gate runs with TMPDIR and GOTMPDIR in a disk-backed scratch dir
-# here (relative to the repo), swept of day-old Test*/go-build* dirs before
-# each run. A gate that fails on the environment (disk quota, no space, OOM)
-# is retried and never blamed on the branch.
-# tmpdir = ".saddle/tmp"
+# here, swept of day-old Test*/go-build* dirs before each run. The default is
+# outside the repo (<user cache dir>/saddle/tmp/<repo hash>); a value inside
+# the repo is ignored. A gate that fails on the environment (disk quota, no
+# space, OOM) is retried and never blamed on the branch.
+# tmpdir = "/var/tmp/saddle-gate"
 
 [spawn]
 # How deep spawn chains go below the orchestrator, and how many working
