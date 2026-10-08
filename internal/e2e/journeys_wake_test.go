@@ -82,7 +82,8 @@ func TestJourneyWakeIdleAgentWithPromptSuggestion(t *testing.T) {
 // can stop being its agent's: the user reuses it for a shell, or a tmux
 // restart hands its id to another window, even the TUI's own. A notice for
 // the task must not type the wake line into whatever is there now; it waits
-// as a notice instead.
+// as a notice instead, until saddle up gives the task a window of its own
+// again (#254).
 func TestJourneyWakeLineNeverTypedIntoForeignWindow(t *testing.T) {
 	w := world(t, Options{})
 	w.Spawn("t1", "Alpha work", []string{"alpha/**"}, fa.Wait("never-comes"))
@@ -100,9 +101,17 @@ func TestJourneyWakeLineNeverTypedIntoForeignWindow(t *testing.T) {
 	if s := w.waitScreen(v.Window, "probe-one"); strings.Contains(s, wakeText) {
 		t.Fatalf("the wake line was typed into a window that isn't t1's agent:\n%s", s)
 	}
+	if n, err := w.App().Store.PendingNotices("t1"); err != nil || n < 1 {
+		t.Fatalf("t1's notices = %d (%v), want the note still pending", n, err)
+	}
+
+	// saddle up (under the TUI) resumes t1 in a window of its own, and the
+	// waiting note reaches it there.
+	u := w.StartTUI(120, 36)
+	w.WaitTask("t1", "a window of its own", func(v2 mcpserver.TaskView) bool { return v2.Window != "" && v2.Window != v.Window })
+	w.WaitAgentLog("t1", "first note")
 
 	// The record now points at the TUI's window.
-	u := w.StartTUI(120, 36)
 	tuiWin, err := w.Tmux.Run("display-message", "-p", "-t", u.Target, "#{window_id}")
 	must(t, err)
 	must(t, w.App().Store.SetField("t1", "window", tuiWin))
@@ -111,9 +120,6 @@ func TestJourneyWakeLineNeverTypedIntoForeignWindow(t *testing.T) {
 	u.WaitScreen("probe-two")
 	if s := u.Screen(); strings.Contains(s, wakeText) {
 		t.Fatalf("the wake line was typed into the TUI:\n%s", s)
-	}
-	if n, err := w.App().Store.PendingNotices("t1"); err != nil || n < 2 {
-		t.Fatalf("t1's notices = %d (%v), want both still pending", n, err)
 	}
 	u.clearInput("probe-two")
 	u.Quit()
