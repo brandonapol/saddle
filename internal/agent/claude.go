@@ -40,6 +40,8 @@ type Launch struct {
 	Args     []string // extra CLI arguments (Codex and Grok adapters)
 	Resume   string   // Claude session to resume in the window; empty starts a new one
 	ExtraEnv map[string]string
+	// ShimDir holds the heavy-run shims (#240); it goes first on PATH.
+	ShimDir string
 
 	// The hierarchical advisor (#257). Empty fields add nothing to the launch.
 	Effort        string // claude --effort
@@ -104,6 +106,24 @@ func (l Launch) env() map[string]string {
 		env[k] = v
 	}
 	return env
+}
+
+// pathDirs are prepended to the agent's PATH: the heavy-run shims first, so
+// they shadow real tools even in saddle's own bin dir, then saddle's.
+func (l Launch) pathDirs() []string {
+	dirs := []string{filepath.Dir(l.Bin)}
+	if l.ShimDir != "" {
+		dirs = append([]string{l.ShimDir}, dirs...)
+	}
+	return dirs
+}
+
+// shellPath is pathDirs for a launch script's export PATH line.
+func (l Launch) shellPath() string { return strings.Join(quoteAll(l.pathDirs()), ":") }
+
+// envPath is a child process's PATH: pathDirs, then this process's PATH.
+func (l Launch) envPath() string {
+	return strings.Join(append(l.pathDirs(), os.Getenv("PATH")), string(os.PathListSeparator))
 }
 
 // writeFiles writes settings (hooks, permissions), the MCP config, the brief and the prompt.
@@ -188,7 +208,7 @@ func (l Launch) writeClaude() (string, error) {
 	if l.SubagentModel != "" {
 		fmt.Fprintf(&sh, "export %s=%s\n", SubagentModelEnv, shellQuote(l.SubagentModel))
 	}
-	fmt.Fprintf(&sh, "export PATH=%s:\"$PATH\"\n", shellQuote(filepath.Dir(l.Bin)))
+	fmt.Fprintf(&sh, "export PATH=%s:\"$PATH\"\n", l.shellPath())
 	fmt.Fprintf(&sh, "cd %s || exit 1\n", shellQuote(l.Dir))
 	fmt.Fprintf(&sh, "run=%s\n", shellQuote(l.RunDir))
 	args := []string{shellQuote(l.Cmd)}
@@ -296,6 +316,6 @@ func (l Launch) headlessClaude(resume string) (*exec.Cmd, error) {
 	if l.SubagentModel != "" {
 		cmd.Env = append(cmd.Env, SubagentModelEnv+"="+l.SubagentModel)
 	}
-	cmd.Env = append(cmd.Env, "PATH="+filepath.Dir(l.Bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Env = append(cmd.Env, "PATH="+l.envPath())
 	return cmd, nil
 }

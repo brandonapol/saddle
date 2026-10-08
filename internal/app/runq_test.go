@@ -173,3 +173,29 @@ func TestCleanStaleLeases(t *testing.T) {
 		t.Fatalf("second pass said %q", out.String())
 	}
 }
+
+// TestWriteShims (#240): spawning refreshes .saddle/shims from the repo's
+// runq.toml, for tools that are installed; mode off writes none.
+func TestWriteShims(t *testing.T) {
+	a, _ := setup(t)
+	heavyTest(t, a, "[classes.e2e]\nmatch = [\"fake-e2e-tool run*\"]\n")
+	tools := t.TempDir()
+	write(t, tools, "fake-e2e-tool", "#!/bin/sh\n")
+	if err := os.Chmod(filepath.Join(tools, "fake-e2e-tool"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
+	a.Bin = "/opt/bin/saddle"
+	dir := a.WriteShims()
+	if dir != filepath.Join(a.Root, ".saddle", "shims") {
+		t.Fatalf("dir = %q", dir)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "fake-e2e-tool"))
+	if err != nil || !strings.Contains(string(b), "'/opt/bin/saddle' run --class") || !strings.Contains(string(b), "_saddle_class='e2e'") {
+		t.Fatalf("shim: %v\n%s", err, b)
+	}
+	write(t, a.Root, ".saddle/runq.toml", "mode = \"off\"\n")
+	if dir := a.WriteShims(); dir != "" {
+		t.Fatalf("mode off still gives agents shims at %s", dir)
+	}
+}

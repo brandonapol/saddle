@@ -258,3 +258,35 @@ func TestAdvisorLaunchArgs(t *testing.T) {
 		t.Errorf("empty advisor fields changed the launch: %s", args)
 	}
 }
+
+// The heavy-run shims (#240) go first on an agent's PATH, before saddle's
+// own bin dir, which may hold a real golangci-lint.
+func TestLaunchPutsShimsFirstOnPath(t *testing.T) {
+	l := Launch{Bin: "/opt/bin/saddle", Task: "t1", Cmd: "claude", RunDir: t.TempDir(), ShimDir: "/repo/.saddle/shims"}
+	sh, err := l.Write()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := os.ReadFile(strings.Trim(strings.TrimPrefix(sh, "bash "), "'"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `export PATH='/repo/.saddle/shims':'/opt/bin':"$PATH"`; !strings.Contains(string(script), want) {
+		t.Errorf("launch.sh lacks %q:\n%s", want, script)
+	}
+	cmd, err := l.Headless("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := cmd.Env[len(cmd.Env)-1]; !strings.HasPrefix(p, "PATH=/repo/.saddle/shims:/opt/bin:") {
+		t.Errorf("headless %s", p)
+	}
+	l.ShimDir = ""
+	if sh, err = l.Write(); err != nil {
+		t.Fatal(err)
+	}
+	script, _ = os.ReadFile(strings.Trim(strings.TrimPrefix(sh, "bash "), "'"))
+	if want := `export PATH='/opt/bin':"$PATH"`; !strings.Contains(string(script), want) {
+		t.Errorf("without shims, launch.sh lacks %q:\n%s", want, script)
+	}
+}

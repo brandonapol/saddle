@@ -184,3 +184,29 @@ func (a *App) CleanStaleLeases(out io.Writer) {
 		a.Store.Event("", EventRunqReaped, fmt.Sprintf("cleared %d stale lease(s)", n))
 	}
 }
+
+// ShimDir holds this repo's heavy-run shims (#240). It sits in .saddle, not
+// the machine's state dir, because the patterns baked into the shims are the
+// repo's.
+func (a *App) ShimDir() string { return a.stateDir("shims") }
+
+// WriteShims refreshes the shims for the repo's current runq config and
+// returns their dir for an agent's PATH. It returns "" when the queue is
+// off or the shims can't be written; agents then run without them (the
+// PreToolUse rewrite still queues their own heavy commands).
+func (a *App) WriteShims() string {
+	if a.Bin == "" {
+		return ""
+	}
+	cfg, err := a.Heavy().Config()
+	if err != nil || cfg.Mode == runq.ModeOff || os.Getenv(runq.EnvBypass) == string(runq.ModeOff) {
+		return ""
+	}
+	dir := a.ShimDir()
+	path := filepath.Dir(a.Bin) + string(os.PathListSeparator) + os.Getenv("PATH")
+	if _, err := runq.WriteShims(dir, a.Bin, runq.NewMatcher(cfg), path); err != nil {
+		a.Store.Event("", "runq_shims_failed", err.Error())
+		return ""
+	}
+	return dir
+}

@@ -3,10 +3,13 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/doctor"
+	"github.com/brandonapol/saddle/internal/runq"
 )
 
 func TestDoctorExitCodes(t *testing.T) {
@@ -55,5 +58,32 @@ func TestDoctorRegistered(t *testing.T) {
 	cmd, _, err := Root().Find([]string{"doctor"})
 	if err != nil || cmd.Name() != "doctor" || cmd.Flags().Lookup("json") == nil {
 		t.Fatalf("doctor not registered with --json: %v", err)
+	}
+}
+
+// TestShimCheck (#240): doctor passes healthy shims and warns when a pane's
+// PATH puts the real tool before its shim.
+func TestShimCheck(t *testing.T) {
+	d := t.TempDir()
+	shims, tools := filepath.Join(d, "shims"), filepath.Join(d, "tools")
+	if err := os.MkdirAll(tools, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tools, "go"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := func(kv map[string]string) func(string) string { return func(k string) string { return kv[k] } }
+	if r := shimCheck(shims, env(nil)); r.Status != doctor.OK {
+		t.Fatalf("no shims yet: %+v", r)
+	}
+	if _, err := runq.WriteShims(shims, "/opt/saddle", runq.NewMatcher(runq.Config{}), tools); err != nil {
+		t.Fatal(err)
+	}
+	if r := shimCheck(shims, env(map[string]string{"PATH": tools})); r.Status != doctor.OK {
+		t.Fatalf("outside a pane: %+v", r)
+	}
+	r := shimCheck(shims, env(map[string]string{"PATH": tools + ":" + shims, "SADDLE_TASK": "t1"}))
+	if r.Status != doctor.Warn || !strings.Contains(r.Detail, "before the go shim") {
+		t.Fatalf("shadowed shim in a pane: %+v", r)
 	}
 }

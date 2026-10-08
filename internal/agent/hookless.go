@@ -46,7 +46,7 @@ func (l Launch) writeHookless(name string, argv []string) (string, error) {
 	for _, k := range []string{"SADDLE_ROOT", "SADDLE_TASK"} {
 		fmt.Fprintf(&sh, "export %s=%s\n", k, shellQuote(env[k]))
 	}
-	fmt.Fprintf(&sh, "export PATH=%s:\"$PATH\"\n", shellQuote(filepath.Dir(l.Bin)))
+	fmt.Fprintf(&sh, "export PATH=%s:\"$PATH\"\n", l.shellPath())
 	fmt.Fprintf(&sh, "cd %s || exit 1\n", shellQuote(l.Dir))
 	fmt.Fprintf(&sh, "run=%s\n", shellQuote(l.RunDir))
 	sh.WriteString(strings.Join(argv, " ") + "\n")

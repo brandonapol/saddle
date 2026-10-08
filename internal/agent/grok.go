@@ -41,7 +41,7 @@ func (l Launch) writeGrok() (string, error) {
 	for _, k := range []string{"SADDLE_ROOT", "SADDLE_TASK"} {
 		fmt.Fprintf(&sh, "export %s=%s\n", k, shellQuote(env[k]))
 	}
-	fmt.Fprintf(&sh, "export PATH=%s:\"$PATH\"\n", shellQuote(filepath.Dir(l.Bin)))
+	fmt.Fprintf(&sh, "export PATH=%s:\"$PATH\"\n", l.shellPath())
 	fmt.Fprintf(&sh, "cd %s || exit 1\n", shellQuote(l.Dir))
 	fmt.Fprintf(&sh, "run=%s\n", shellQuote(l.RunDir))
 	args := append([]string{l.cmd()}, l.grokArgs(false)...)
@@ -82,7 +82,7 @@ func (l Launch) headlessGrok(resume string) (*exec.Cmd, error) {
 	cmd := exec.Command(l.Bin, "grok-bridge", l.RunDir)
 	cmd.Dir = l.Dir
 	cmd.Env = append(os.Environ(), spec.Env...)
-	cmd.Env = append(cmd.Env, "PATH="+filepath.Dir(l.Bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Env = append(cmd.Env, "PATH="+l.envPath())
 	return cmd, nil
 }
 
