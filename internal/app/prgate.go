@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/lintgate"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -121,7 +122,7 @@ func (a *App) GateChecks(cheap bool) []GateCheck {
 	var out []GateCheck
 	add := func(name, cmd string) {
 		cmd = strings.TrimSpace(cmd)
-		if cmd == "" || cmd == NoTestCmd || slices.ContainsFunc(out, func(c GateCheck) bool { return c.Cmd == cmd }) {
+		if cmd == "" || cmd == NoTestCmd || slices.ContainsFunc(out, func(c GateCheck) bool { return lintgate.SameCmd(c.Cmd, cmd) }) {
 			return
 		}
 		out = append(out, GateCheck{Name: name, Cmd: cmd})

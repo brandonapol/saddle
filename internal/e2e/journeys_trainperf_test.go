@@ -75,3 +75,42 @@ func TestJourneyLandRebasesEachQueuedTaskOnce(t *testing.T) {
 		t.Fatalf("land ran %d rebases for %d queued tasks, want %d", got, n, n)
 	}
 }
+
+// quarkMakeHook runs the repo's check through $MAKE, as quark's
+// git/hooks/pre-commit does (#270).
+const quarkMakeHook = "#!/bin/sh\nset -eu\nif command -v gmake >/dev/null 2>&1; then\n  MAKE=gmake\nelse\n  MAKE=make\nfi\n" +
+	"echo \"Running ${MAKE} check...\"\nif ! \"${MAKE}\" check; then\n  echo \"${MAKE} check failed\"\n  exit 1\nfi\n"
+
+// TestJourneyMakeVariableHookRunsOncePerLand (#270): the repo's hook runs
+// "${MAKE}" check and [test] cmd is make check. saddle used to take the hook
+// script itself as the lint gate, a different command, so every landing ran
+// make check twice on the same tree. Now doctor reports make check and a
+// land runs it once.
+func TestJourneyMakeVariableHookRunsOncePerLand(t *testing.T) {
+	w := world(t, Options{TestCmd: "make check"})
+	calls := filepath.Join(w.Root, "make-check.log")
+	w.WriteFile("Makefile", ".PHONY: check\ncheck:\n\t@echo call >> "+calls+"\n")
+	w.WriteFile("git/hooks/pre-commit", quarkMakeHook)
+	must(t, os.Chmod(filepath.Join(w.Repo, "git/hooks/pre-commit"), 0o755))
+	w.Git(w.Repo, "add", "Makefile", "git/hooks/pre-commit")
+	w.Git(w.Repo, "commit", "-q", "-m", "repo gate")
+	w.Git(w.Repo, "push", "-q", "origin", "main")
+
+	doc := w.Saddle("doctor")
+	if out := doc.Stdout + doc.Stderr; !strings.Contains(out, "runs `make check`") {
+		t.Fatalf("doctor's lint gate:\n%s", out)
+	}
+	w.Spawn("t1", "Alpha work", []string{"alpha/**"}, finished("alpha", "alpha\n")...)
+	w.WaitTask("t1", "queued in the train", func(v mcpserver.TaskView) bool { return v.Status == "done" && v.Train == "queued" })
+	count := func() int {
+		b, _ := os.ReadFile(calls)
+		return strings.Count(string(b), "call")
+	}
+	before := count()
+	if r := w.MustSaddle("land"); w.Task("t1").Status != "landed" {
+		t.Fatalf("t1 didn't land: %s", r)
+	}
+	if n := count() - before; n != 1 {
+		t.Fatalf("land ran make check %d times, want 1", n)
+	}
+}

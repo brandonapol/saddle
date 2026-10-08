@@ -176,19 +176,25 @@ var (
 	// makeElsewhere point make at another makefile or directory, so the
 	// target can't be checked against, or run from, the top of the repo.
 	makeElsewhere = []string{"-C", "-f", "--directory", "--file", "--makefile"}
+	// makeVarRe is make run through a variable, quoted or not: $MAKE,
+	// "${MAKE}", ${MAKE:-make} (#270). Not $MAKEFLAGS.
+	makeVarRe = regexp.MustCompile(`"?\$(?:\{MAKE(?::?[-=][^}]*)?\}|MAKE\b)"?`)
+	// makeNames are the words that run make.
+	makeNames = []string{"make", "gmake"}
 )
 
 // makeTargetsIn returns the target of each `make` invocation in one line of
-// shell, in order. An invocation without a target, or one run against
+// shell, in order: make, gmake or $MAKE in any of its spellings. An invocation without a target, or one run against
 // another directory or makefile, contributes nothing.
 func makeTargetsIn(line string) []string {
+	line = makeVarRe.ReplaceAllString(line, " make ")
 	for _, sep := range []string{"&&", "||", ";", "|", "&", "(", ")", "{", "}", "`"} {
 		line = strings.ReplaceAll(line, sep, " ; ")
 	}
 	words := strings.Fields(line)
 	var out []string
 	for i := 0; i < len(words); i++ {
-		if words[i] != "make" || (i > 0 && !commandStart(words[:i])) {
+		if !slices.Contains(makeNames, words[i]) || (i > 0 && !commandStart(words[:i])) {
 			continue
 		}
 		if t, ok := makeTarget(words[i+1:]); ok {
@@ -251,4 +257,21 @@ func hasFlagPrefix(a string, flags []string) bool {
 
 func isNumber(s string) bool {
 	return s != "" && strings.Trim(s, "0123456789") == ""
+}
+
+// SameCmd reports whether two gate commands run the same check: equal once
+// whitespace is collapsed and make is spelled one way (gmake, "${MAKE}"), so
+// a gate that is the test command isn't run twice on one tree (#270).
+func SameCmd(a, b string) bool {
+	return a != "" && normCmd(a) == normCmd(b)
+}
+
+func normCmd(s string) string {
+	ws := strings.Fields(makeVarRe.ReplaceAllString(s, " make "))
+	for i, w := range ws {
+		if slices.Contains(makeNames, w) {
+			ws[i] = "make"
+		}
+	}
+	return strings.Join(ws, " ")
 }

@@ -209,18 +209,28 @@ func lockHooks(state string, max time.Duration) (unlock func()) {
 }
 
 // trainLint runs the gate on the rebased tree in dir after the tests. It
-// returns the failure message, "" when green, off, or the same command the
-// tests just ran, and ErrGateInterrupted when saddle was told to stop.
+// returns the failure message, "" when green, off, the same command the
+// tests just ran (#270) or a tree that already passed it, and
+// ErrGateInterrupted when saddle was told to stop.
 func (a *App) trainLint(id, dir string) (string, error) {
 	g := a.LintGate()
-	if g.Cmd == "" || g.Cmd == strings.TrimSpace(a.Cfg.Test.Cmd) {
+	if g.Cmd == "" || lintgate.SameCmd(g.Cmd, a.Cfg.Test.Cmd) {
+		return "", nil
+	}
+	state, tree := hooksState(dir), cleanTree(dir)
+	if passedLint(state, tree, g) {
+		a.Store.Event(id, "lint_skipped", "tree "+tree+" already passed")
 		return "", nil
 	}
 	out, err := runGroup(context.Background(), dir, g.Cmd, nil, a.GateTimeout())
 	if errors.Is(err, ErrGateInterrupted) {
 		return "", err
 	}
-	if err == nil || a.brokenGate(id, g, out) {
+	if err == nil {
+		stampLint(state, tree, g)
+		return "", nil
+	}
+	if a.brokenGate(id, g, out) {
 		return "", nil
 	}
 	return lintFailure(g, out, "Your branch rebased cleanly onto "+a.Cfg.Integration+" and passed its tests, but on the result"), nil

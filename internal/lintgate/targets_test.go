@@ -23,6 +23,14 @@ func TestDetectHookMakeFollowedByFi(t *testing.T) {
 		{"make -C elsewhere", "#!/bin/sh\nmake -C tools check-tools\n", "hook"},
 		{"make -j4 check", "#!/bin/sh\nmake -j4 check\n", "make check"},
 		{"make check/format", "#!/bin/sh\nexec make check/format\n", "make check/format"},
+		// #270: make run through a variable, or as gmake.
+		{"quoted braced MAKE", "#!/bin/sh\nMAKE=make\n\"${MAKE}\" check\n", "make check"},
+		{"bare MAKE", "#!/bin/sh\n$MAKE check\n", "make check"},
+		{"quoted MAKE", "#!/bin/sh\n\"$MAKE\" -s lint\n", "make lint"},
+		{"MAKE with default", "#!/bin/sh\n${MAKE:-make} check\n", "make check"},
+		{"gmake", "#!/bin/sh\nexec gmake check\n", "make check"},
+		{"MAKEFLAGS is not make", "#!/bin/sh\n$MAKEFLAGS check\n", "hook"},
+		{"echo of MAKE", "#!/bin/sh\necho \"Running ${MAKE} check...\"\n", "hook"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -109,7 +117,10 @@ func TestMakeLine(t *testing.T) {
 		"make":                   nil,
 		"make >/dev/null":        nil,
 		"cmake --build .":        nil,
-		"gmake check":            nil,
+		"gmake check":            {"check"},
+		`"${MAKE}" check`:        {"check"},
+		"${MAKE:-gmake} -s lint": {"lint"},
+		"$MAKEFLAGS check":       nil,
 		"$(MAKE) check":          nil,
 		"make lint && make test": {"lint", "test"},
 		"make -C sub check":      nil,
@@ -119,6 +130,65 @@ func TestMakeLine(t *testing.T) {
 	for line, want := range cases {
 		if got := makeTargetsIn(line); !slices.Equal(got, want) {
 			t.Errorf("%q: %q, want %q", line, got, want)
+		}
+	}
+}
+
+// quarkHookText is quark's git/hooks/pre-commit as shipped (#270).
+const quarkHookText = `#!/usr/bin/env bash
+# Pre-commit hook — runs make check before every commit.
+# Install: make setup/hooks
+set -euo pipefail
+
+# Augment PATH with common tool locations so the hook works correctly
+# whether invoked from a GUI, IDE, or shell with a minimal environment.
+export PATH="/usr/local/go/bin:${HOME}/go/bin:${HOME}/flutter/bin:${PATH}"
+
+# Prefer gmake (GNU make) when available — required on macOS where the
+# system make is BSD make and incompatible with this Makefile.
+if command -v gmake &>/dev/null; then
+  MAKE=gmake
+else
+  MAKE=make
+fi
+
+echo "Running ${MAKE} check..."
+if ! "${MAKE}" check; then
+  echo ""
+  echo "❌ ${MAKE} check failed. Fix the issues above before committing."
+  exit 1
+fi
+`
+
+// #270: quark's hook runs "${MAKE}" check, so its gate is make check, the
+// same command as [test] cmd, not the hook script run as a second check.
+func TestDetectQuarkMakeVariableHook(t *testing.T) {
+	for _, where := range []string{".git/hooks/pre-commit", "git/hooks/pre-commit"} {
+		t.Run(where, func(t *testing.T) {
+			r := newRepo(t)
+			r.write("Makefile", "check:\n\ttrue\nsetup/hooks:\n\ttrue\n")
+			r.write(where, quarkHookText)
+			if g := r.detect(); g.Cmd != "make check" {
+				t.Fatalf("Cmd = %q, want make check (%+v)", g.Cmd, g)
+			}
+		})
+	}
+}
+
+func TestSameCmd(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"make check", "make check", true},
+		{"make  check ", "make check", true},
+		{`"${MAKE}" check`, "make check", true},
+		{"gmake check", "make check", true},
+		{"make check", "make lint", false},
+		{"", "", false},
+	} {
+		if got := SameCmd(c.a, c.b); got != c.want {
+			t.Errorf("SameCmd(%q, %q) = %v", c.a, c.b, got)
 		}
 	}
 }
