@@ -51,7 +51,9 @@ func TestJourneyTrustPrompt(t *testing.T) {
 	ask := func(name, answer string) *TUI {
 		t.Helper()
 		cmd := shq(w.Bins.Saddle) + ` init; echo "[saddle init exited $?]"; exec cat`
-		must(t, w.Tmux.NewSession(name, 120, 50, w.Repo, cmd))
+		// Wide enough that "initialized <repo>/.saddle" never wraps, however
+		// long TMPDIR is (the train's gate runs under the user cache dir).
+		must(t, w.Tmux.NewSession(name, max(120, len(w.Repo)+80), 50, w.Repo, cmd))
 		u := &TUI{w: w, Target: name + ":0"}
 		u.WaitScreen("Howdy", "1. Yes, trust this folder and continue", "2. No, exit (nothing written)", "Choose 1 or 2")
 		u.Type(answer)

@@ -1,7 +1,7 @@
 // Package trust asks the user, once per repo, whether saddle may work in it,
 // the way Claude Code asks before it opens a new folder (#215). Decisions live
 // in a user-level file (~/.config/saddle/trust.json, honoring
-// XDG_CONFIG_HOME), never inside the repo, keyed by the repo's canonical path
+// XDG_CONFIG_HOME and SADDLE_TRUST_FILE), never inside the repo, keyed by the repo's canonical path
 // and its origin URL: moving the repo or changing its origin asks again.
 package trust
 
@@ -80,9 +80,16 @@ type file struct {
 // Store is the decision file.
 type Store struct{ path string }
 
-// Default is the store at $XDG_CONFIG_HOME/saddle/trust.json, falling back
-// to ~/.config.
+// EnvFile names the decision file in place of the default: tests point it
+// at a temp file so they never read the user's real decisions.
+const EnvFile = "SADDLE_TRUST_FILE"
+
+// Default is the store at $SADDLE_TRUST_FILE, else
+// $XDG_CONFIG_HOME/saddle/trust.json, falling back to ~/.config.
 func Default() (*Store, error) {
+	if p := os.Getenv(EnvFile); p != "" {
+		return Open(p), nil
+	}
 	dir := os.Getenv("XDG_CONFIG_HOME")
 	if dir == "" {
 		home, err := os.UserHomeDir()

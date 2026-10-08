@@ -26,6 +26,7 @@ func repo(t *testing.T) (string, *Store) {
 	}
 	cfg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv(EnvFile, "")
 	t.Setenv(EnvTrust, "")
 	t.Setenv("SADDLE_TASK", "")
 	t.Setenv("GIT_AUTHOR_NAME", "t")
@@ -47,6 +48,24 @@ func repo(t *testing.T) (string, *Store) {
 		t.Fatalf("store path %s, want %s (XDG_CONFIG_HOME)", s.Path(), want)
 	}
 	return root, s
+}
+
+// SADDLE_TRUST_FILE wins over XDG_CONFIG_HOME, so a test run never reads
+// the user's real decisions.
+func TestDefaultHonorsTrustFile(t *testing.T) {
+	root, _ := repo(t)
+	f := filepath.Join(t.TempDir(), "trust.json")
+	t.Setenv(EnvFile, f)
+	s, err := Default()
+	if err != nil || s.Path() != f {
+		t.Fatalf("store %v, err %v; want %s", s, err, f)
+	}
+	if err := Decide(root, Options{Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(f); err != nil {
+		t.Fatalf("decision not written to %s: %v", f, err)
+	}
 }
 
 func TestPromptListsWhatSaddleDoes(t *testing.T) {

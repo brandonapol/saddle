@@ -2,10 +2,13 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,8 +19,8 @@ import (
 // (#184). A full /tmp, a disk quota or the OOM killer fails every branch
 // alike, and bouncing the task to its producer only burns its attempts. So
 // the gate runs with TMPDIR and GOTMPDIR in a per-run dir under a
-// disk-backed scratch dir ([train] tmpdir, .saddle/tmp by default) that is
-// removed after the run, day-old Test*/go-build* leftovers there are swept
+// disk-backed scratch dir ([train] tmpdir, the user cache dir by default)
+// that is removed after the run, day-old Test*/go-build* leftovers there are swept
 // first, and output that matches an environment signature is retried
 // instead of failing the branch. When the environment stays broken, the
 // orchestrator is interrupted with what to free; the branch stays queued.
@@ -62,12 +65,12 @@ func ClassifyGateOutput(out string) (GateEnvProblem, bool) {
 // GateRun runs the gate once with env added to its environment.
 type GateRun func(ctx context.Context, env []string) (string, error)
 
-// ShellGate is the GateRun of a shell command in dir.
+// ShellGate is the GateRun of a shell command in dir, in GateEnviron.
 func ShellGate(dir, cmd string) GateRun {
 	return func(ctx context.Context, env []string) (string, error) {
 		c := exec.CommandContext(ctx, "sh", "-c", cmd)
 		c.Dir = dir
-		c.Env = append(os.Environ(), env...)
+		c.Env = append(GateEnviron(os.Environ()), env...)
 		out, err := c.CombinedOutput()
 		return string(out), err
 	}
@@ -84,16 +87,58 @@ type GateEnvResult struct {
 	Retries int
 }
 
-// GateTmpdir is the scratch dir the gate's temp dirs go in.
+// gateUnsetEnv are inherited variables that would make the gate's tests see
+// the train's checkout or process instead of their own: git's per-invocation
+// repo pointers (set when saddle runs from a hook or a rebase) and the vars
+// Claude Code sets for the orchestrator saddle runs the train in. Every
+// SADDLE_* var goes too: SADDLE_TASK=t0 and SADDLE_ROOT are the train's.
+var gateUnsetEnv = []string{
+	"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR",
+	"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE",
+	"CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_ROOT", "CLAUDE_PLUGIN_DATA",
+}
+
+// GateEnviron is environ with what the gate must not inherit removed: a
+// branch passes or fails the same under the train as by hand.
+func GateEnviron(environ []string) []string {
+	out := make([]string, 0, len(environ))
+	for _, kv := range environ {
+		k, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(k, "SADDLE_") || slices.Contains(gateUnsetEnv, k) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// GateTmpdir is the scratch dir the gate's temp dirs go in: [train] tmpdir,
+// else <user cache dir>/saddle/tmp/<repo hash>. It is never inside the repo:
+// a test's temp dir there sits under the repo's .saddle/config.toml, so code
+// that walks up looking for a saddle repo (the plugin's saddleRoot) finds the
+// real one, and the trust prompt for it fails the gate. A [train] tmpdir
+// inside the repo is ignored for the default.
 func (a *App) GateTmpdir() string {
-	d := a.Cfg.Train.Tmpdir
-	if d == "" {
-		return a.stateDir("tmp")
+	if d := a.Cfg.Train.Tmpdir; d != "" {
+		if !filepath.IsAbs(d) {
+			d = filepath.Join(a.Root, d)
+		}
+		if !within(a.Root, d) {
+			return filepath.Clean(d)
+		}
 	}
-	if !filepath.IsAbs(d) {
-		d = filepath.Join(a.Root, d)
+	sum := sha256.Sum256([]byte(a.Root))
+	key := hex.EncodeToString(sum[:])[:12]
+	if c, err := os.UserCacheDir(); err == nil && !within(a.Root, c) {
+		return filepath.Join(c, "saddle", "tmp", key)
 	}
-	return d
+	return filepath.Join(os.TempDir(), "saddle-gate-"+key)
+}
+
+// within reports whether p is root or under it.
+func within(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // RunGateEnv runs task's gate through run with its temp dirs under
@@ -132,7 +177,8 @@ func (a *App) RunGateEnv(ctx context.Context, task string, run GateRun) GateEnvR
 	}
 }
 
-// gateOnce runs the gate once in a fresh per-run temp dir, removed after.
+// gateOnce runs the gate once in a fresh per-run temp dir, removed after
+// along with base when nothing else is left in it.
 func (a *App) gateOnce(ctx context.Context, base string, run GateRun) (string, error) {
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		return "", fmt.Errorf("gate tmpdir: %w", err)
@@ -142,7 +188,10 @@ func (a *App) gateOnce(ctx context.Context, base string, run GateRun) (string, e
 		// Can't even make the dir: that is the environment too.
 		return "cannot create temp dir: " + err.Error(), err
 	}
-	defer func() { _ = os.RemoveAll(dir) }()
+	defer func() {
+		_ = os.RemoveAll(dir)
+		_ = os.Remove(base) // only if empty: the default lives in the user's cache dir
+	}()
 	return run(ctx, []string{"TMPDIR=" + dir, "GOTMPDIR=" + dir})
 }
 
