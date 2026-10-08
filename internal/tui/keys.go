@@ -45,6 +45,9 @@ func newKeyMap() keyMap {
 	b := func(help, desc string, keys ...string) key.Binding {
 		return key.NewBinding(key.WithKeys(keys...), key.WithHelp(help, desc))
 	}
+	// pair is the second of two bindings whose first's help names both,
+	// like alt+n/p; the help overlay lists the pair once.
+	pair := func(keys ...string) key.Binding { return key.NewBinding(key.WithKeys(keys...)) }
 	return keyMap{
 		Quit:      b("ctrl+c", "quit (agents keep running)", "ctrl+c"),
 		Focus:     b("tab", "switch pane", "tab", "shift+tab"),
@@ -52,11 +55,11 @@ func newKeyMap() keyMap {
 		PageDown:  b("pgdn", "scroll down", "pgdown"),
 		Restart:   b("ctrl+r", "restart orchestrator", "ctrl+r"),
 		NextAgent: b("alt+n/p", "next/prev agent", "alt+n"),
-		PrevAgent: b("alt+p", "prev agent", "alt+p"),
+		PrevAgent: pair("alt+p"),
 
 		ViewControl: b("alt+1/2/3", "views", "alt+1"),
-		ViewPlan:    b("alt+2", "plan view", "alt+2"),
-		ViewMerge:   b("alt+3", "merge view", "alt+3"),
+		ViewPlan:    pair("alt+2"),
+		ViewMerge:   pair("alt+3"),
 		Help:        b("?", "keys", "?", "f1"),
 
 		// Terminals send alt+` as ESC ` and ctrl+` as NUL, which bubbletea
@@ -64,11 +67,11 @@ func newKeyMap() keyMap {
 		Terminal:       b("alt+`", "terminal", "alt+`", "ctrl+@"),
 		TermBack:       b("esc", "chat", "esc"),
 		TermScrollUp:   b("ctrl+pgup/dn", "history", "ctrl+pgup"),
-		TermScrollDown: b("ctrl+pgdn", "history", "ctrl+pgdown"),
+		TermScrollDown: pair("ctrl+pgdown"),
 
 		Send:     b("enter", "send", "enter"),
 		Newline:  b("alt+enter", "newline", "alt+enter", "ctrl+j"),
-		Complete: b("/ tab", "skills & commands (↑↓ pick, tab completes)", "tab"),
+		Complete: b("/ tab", "orchestrator's skills & commands", "tab"),
 		Untarget: b("esc", "back to orchestrator", "esc"),
 		// Esc in the chat, or the first ctrl+c anywhere, while the orchestrator works.
 		Interrupt: b("esc", "interrupt the orchestrator's turn", "esc"),
@@ -80,19 +83,19 @@ func newKeyMap() keyMap {
 		Hold:      b("h", "hold/release", "h"),
 		Rebase:    b("r", "rebase stack", "r"),
 		QueueDown: b("J/K", "move in queue", "J"),
-		QueueUp:   b("K", "move up in queue", "K"),
+		QueueUp:   pair("K"),
 		TakeOver:  b("t", "take over (open agent)", "t"),
 
 		Approve:   b("a", "approve/reopen", "a"),
 		EditPlan:  b("e", "edit in $EDITOR", "e"),
 		Replan:    b("r", "replan with a note", "r"),
 		ModelUp:   b("+/-", "task model", "+", "="),
-		ModelDown: b("-", "task model down", "-"),
+		ModelDown: pair("-"),
 		Go:        b("g", "go: run the plan", "g"),
 		PlanNext:  b("]/[", "next/prev plan", "]"),
-		PlanPrev:  b("[", "prev plan", "["),
+		PlanPrev:  pair("["),
 		BotsUp:    b(">/<", "bots limit", ">", "."),
-		BotsDown:  b("<", "bots limit down", "<", ","),
+		BotsDown:  pair("<", ","),
 
 		CopyMode:     b("ctrl+y", "copy mode", "ctrl+y"),
 		CopySelect:   b("V", "select lines", "V", "v"),
@@ -102,14 +105,14 @@ func newKeyMap() keyMap {
 		CopyTop:      b("g", "top", "g", "home"),
 		CopyBottom:   b("G", "bottom", "G", "end"),
 		CopyHalfDown: b("ctrl+d/u", "half page", "ctrl+d"),
-		CopyHalfUp:   b("ctrl+u", "half page up", "ctrl+u"),
+		CopyHalfUp:   pair("ctrl+u"),
 		CopyExit:     b("esc/q", "leave copy mode", "esc", "q"),
 
-		Up:    b("k", "up", "k", "up"),
+		Up:    pair("k", "up"),
 		Down:  b("j/k", "select", "j", "down"),
 		Open:  b("enter", "open window", "enter", "a"),
-		Skill: b("/", "skill in agent", "/"),
-		Spawn: b("s", "spawn", "s"),
+		Skill: b("/", "run a skill in that agent", "/"),
+		Spawn: b("s", "spawn an agent", "s"),
 		Pause: b("p", "pause (esc)", "p"),
 		Brief: b("b", "brief/peek", "b"),
 		Kill:  b("x", "kill", "x"),

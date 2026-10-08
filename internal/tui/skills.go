@@ -214,6 +214,9 @@ func (m *model) unaim() {
 // submitTargeted handles enter while the input is aimed at an agent. Only
 // slash commands go to agents; anything else stays in the input.
 func (m *model) submitTargeted(text string) tea.Cmd {
+	if m.target == spawnTarget {
+		return m.submitSpawn(text)
+	}
 	if m.asking() {
 		return m.submitAsk(text)
 	}
@@ -364,6 +367,7 @@ func (m *model) completeInput() (tea.Cmd, bool) {
 	m.input.SetValue("/" + ms[m.slashSel].name + " ")
 	m.input.CursorEnd()
 	m.slashSel = 0
+	m.flash = "" // a "no match" from an earlier try is stale now
 	return nil, true
 }
 

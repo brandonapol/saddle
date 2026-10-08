@@ -10,8 +10,9 @@ import (
 )
 
 // viewHeader is one line at any width: the logo and current view always,
-// then the view tabs, branches, task counts, train and orchestrator state as
-// room allows, most important first.
+// the orchestrator's state at the right, then what needs the user, task
+// counts, the train, auto-merge and the session and branches as room
+// allows, most important first.
 func (m *model) viewHeader() string {
 	counts := map[string]int{}
 	queued, stuck := 0, 0
@@ -47,9 +48,9 @@ func (m *model) viewHeader() string {
 			parts = append(parts, color(c, s, n))
 		}
 	}
-	parts = append(parts, sBright.Render(m.app.Cfg.Session), sDim.Render(m.app.Cfg.Base+" → "+m.app.Cfg.Integration))
+	opt(counts[store.NeedsYou]+counts[store.Conflict], cAlert, "▲ %d need you")
 	opt(counts[store.Running], cRun, "● %d running")
-	opt(counts[store.NeedsYou]+counts[store.Conflict]+counts[store.Idle], cAlert, "▲ %d need attention")
+	opt(counts[store.Idle], cAccent, "◐ %d idle")
 	if queued+stuck > 0 {
 		train := color(cAccent, "◆ train %d queued", queued)
 		if stuck > 0 {
@@ -58,9 +59,13 @@ func (m *model) viewHeader() string {
 		parts = append(parts, train)
 	}
 	opt(counts[store.Landed], cDone, "✓ %d landed")
+	tail := []string{sBright.Render(m.app.Cfg.Session), sDim.Render(m.app.Cfg.Base + " → " + m.app.Cfg.Integration)}
 
 	state := "idle"
-	if m.proc != nil && m.proc.Busy() {
+	switch {
+	case m.proc != nil && m.proc.Interrupting():
+		state = "interrupting"
+	case m.proc != nil && m.proc.Busy():
 		state = "working"
 	}
 	extra := ""
@@ -71,16 +76,18 @@ func (m *model) viewHeader() string {
 		extra += " · narrator"
 	}
 	right := sDim.Render(fmt.Sprintf("orchestrator %s · %s%s · $%.2f ", m.launch.Model, state, extra, m.cost))
+	short := sDim.Render("orch " + state + " ")
 
 	line := sLogo.Render("SADDLE")
-	if full := line + "  " + strings.Join(tabs, "  "); lipgloss.Width(full) < m.width {
+	if full := line + "  " + strings.Join(tabs, "  "); lipgloss.Width(full)+lipgloss.Width(short) < m.width {
 		line = full
 	} else {
 		line += " " + current
 	}
-	fits := func(s string) bool { return lipgloss.Width(line+"  "+s) < m.width }
+	// The short state is always kept room for.
+	fits := func(s string) bool { return lipgloss.Width(line+"  "+s)+lipgloss.Width(short) < m.width }
 	addAM := func() {
-		room := m.width - lipgloss.Width(line) - 3
+		room := m.width - lipgloss.Width(line) - lipgloss.Width(short) - 3
 		switch {
 		case fits(amLong):
 			line += "  " + color(amColor, "%s", amLong)
@@ -91,7 +98,13 @@ func (m *model) viewHeader() string {
 		}
 	}
 	if amFirst {
+		// Auto-merge that acts on its own outranks even the orchestrator's state.
+		reserve := short
+		short = ""
 		addAM()
+		if lipgloss.Width(line+"  "+reserve) < m.width {
+			short = reserve
+		}
 	}
 	for _, p := range parts {
 		if !fits(p) {
@@ -101,6 +114,15 @@ func (m *model) viewHeader() string {
 	}
 	if amLong != "" && !amFirst {
 		addAM()
+	}
+	for _, p := range tail {
+		if !fits(p) {
+			break
+		}
+		line += "  " + p
+	}
+	if lipgloss.Width(line)+lipgloss.Width(right) >= m.width {
+		right = sDim.Render("orch " + state + " ")
 	}
 	if gap := m.width - lipgloss.Width(line) - lipgloss.Width(right); gap >= 1 {
 		line += strings.Repeat(" ", gap) + right

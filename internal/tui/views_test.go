@@ -120,7 +120,7 @@ func TestHeaderShowsViewsBranchesCountsTrain(t *testing.T) {
 	}
 	m := newViewModel(160, 30)
 	h := m.viewHeader()
-	for _, want := range []string{"1 control", "2 plan", "3 merge", "main → saddle/integration", "1 running", "1 need attention", "train 1 queued", "1 conflict"} {
+	for _, want := range []string{"1 control", "2 plan", "3 merge", "main → saddle/integration", "1 running", "1 need you", "train 1 queued", "1 conflict"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("header lacks %q: %q", want, h)
 		}

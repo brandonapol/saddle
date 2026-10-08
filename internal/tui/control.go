@@ -71,7 +71,7 @@ func activity(e store.Event) (string, bool) {
 	case "tool":
 		return e.Data, true
 	case "notification":
-		return "waiting: " + e.Data, true
+		return notification(e.Data), true
 	case "stop":
 		return "at its prompt", true
 	case "session_start":
@@ -80,6 +80,18 @@ func activity(e store.Event) (string, bool) {
 		return "done", true
 	}
 	return "", false
+}
+
+// notification shortens Claude Code's notification texts for the status
+// column.
+func notification(s string) string {
+	switch {
+	case s == "Claude is waiting for your input":
+		return "waiting for input"
+	case strings.HasPrefix(s, "Claude needs your permission to use "):
+		return "needs permission: " + strings.TrimPrefix(s, "Claude needs your permission to use ")
+	}
+	return "waiting: " + s
 }
 
 // ctxLimit is a model's context window in tokens.
@@ -234,6 +246,10 @@ func (m *model) viewLeft(w, h int) string {
 	claimsH := 0
 	if cr := m.claimRows(w - 2); len(cr) > 0 {
 		claimsH = min(len(cr)+2, 6)
+		if n := claimsH - 2; len(cr) > n {
+			// The last row says how many didn't fit.
+			cr = append(cr[:n-1], sDim.Render(fmt.Sprintf("+%d more", len(cr)-n+1)))
+		}
 		if h-listH-claimsH < 6 {
 			claimsH = 0
 		} else {
@@ -284,13 +300,52 @@ func (m *model) viewLeft(w, h int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-// startSpawn moves to the chat with a spawn request to finish: the
-// orchestrator picks claims and writes the brief.
+// spawnTarget aims the chat input at a new agent. It can't be a task id.
+const spawnTarget = "@spawn"
+
+// spawnedMsg reports an agent the spawn prompt started.
+type spawnedMsg struct{ id, title string }
+
+// startSpawn aims the chat input at a new agent: enter spawns it with the
+// text as its brief and the first line as its title.
 func (m *model) startSpawn() {
+	m.target = spawnTarget
 	m.focus = focusChat
+	m.input.Reset()
+	m.input.Prompt = "spawn › "
+	m.input.Placeholder = "What should the new agent do? The first line is its title. (esc cancels)"
 	m.input.Focus()
-	m.input.SetValue("Spawn an agent to ")
-	m.input.CursorEnd()
+}
+
+// submitSpawn spawns an agent from the spawn prompt.
+func (m *model) submitSpawn(text string) tea.Cmd {
+	title, _, _ := strings.Cut(text, "\n")
+	title = truncate(strings.TrimSpace(title), 72)
+	m.input.Reset()
+	m.unaim()
+	spawn := m.spawner
+	if spawn == nil {
+		a := m.app
+		spawn = func(title, prompt string) (string, error) {
+			t, err := a.Spawn(app.SpawnReq{Title: title, Prompt: prompt})
+			return t.ID, err
+		}
+	}
+	return func() tea.Msg {
+		id, err := spawn(title, text)
+		if err != nil {
+			return flashMsg("spawn: " + err.Error())
+		}
+		return spawnedMsg{id: id, title: title}
+	}
+}
+
+// spawned notes an agent the spawn prompt started, for the user now and
+// for the orchestrator with its next message.
+func (m *model) spawned(msg spawnedMsg) tea.Cmd {
+	m.addChat(store.ChatEvent, "Spawned "+msg.id+": "+msg.title)
+	m.held = append(m.held, fmt.Sprintf("The user spawned %s (%s) from the agent list, with no claims.", msg.id, msg.title))
+	return m.refresh()
 }
 
 // pause interrupts the selected agent's current turn with Esc. It stops at

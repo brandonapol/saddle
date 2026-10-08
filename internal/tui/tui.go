@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -93,7 +94,7 @@ type attention struct {
 type model struct {
 	app     *app.App
 	launch  agent.Launch
-	proc    *orch.Proc
+	proc    orchProc
 	resumed bool // the current process was started with --resume
 	gotInit bool
 
@@ -152,6 +153,8 @@ type model struct {
 	asker     asker                                        // answers questions; nil when the narrator is off
 	askScreen bool                                         // the next question carries the selected agent's screen
 	capture   func(task string, lines int) (string, error) // a task's screen; nil means app.Peek
+	spawner   func(title, prompt string) (string, error)   // the spawn prompt's spawn; nil means the app's
+	outbox    []string                                     // user messages waiting for the orchestrator's turn to end
 	flash     string
 	flashAt   time.Time
 
@@ -295,6 +298,16 @@ type orchInput interface {
 	Send(text string) error
 }
 
+// orchProc is the orchestrator process as the TUI uses it: an *orch.Proc,
+// or a fake in tests.
+type orchProc interface {
+	orchInput
+	Events() <-chan orch.Event
+	Interrupt() error
+	Interrupting() bool
+	Close()
+}
+
 // registerCompact lets the compact watcher type /compact into p when it is
 // idle and the owner isn't typing; nil unregisters it. The watcher runs on
 // another goroutine, so it reads drafting, not the input box.
@@ -351,7 +364,7 @@ func (m *model) refresh() tea.Cmd {
 				ts = append(ts, t)
 			}
 		}
-		sort.SliceStable(ts, func(i, j int) bool { return rank(ts[i].Status) < rank(ts[j].Status) })
+		sortTasks(ts)
 		if sel == "" && len(ts) > 0 {
 			sel = ts[0].ID
 		}
@@ -460,6 +473,24 @@ func tailLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// sortTasks orders the task list by rank, then by task number: t8, t9, t10.
+func sortTasks(ts []mcpserver.TaskView) {
+	sort.SliceStable(ts, func(i, j int) bool {
+		if ri, rj := rank(ts[i].Status), rank(ts[j].Status); ri != rj {
+			return ri < rj
+		}
+		ni, oki := idNum(ts[i].ID)
+		nj, okj := idNum(ts[j].ID)
+		return oki && okj && ni < nj
+	})
+}
+
+// idNum is the number in a task id like t12.
+func idNum(id string) (int, bool) {
+	n, err := strconv.Atoi(strings.TrimPrefix(id, "t"))
+	return n, err == nil
 }
 
 // rank orders the task list: what needs attention first, finished work last.
@@ -605,6 +636,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case flashMsg:
 		m.flash, m.flashAt = string(msg), time.Now()
+
+	case spawnedMsg:
+		cmds = append(cmds, m.spawned(msg))
 
 	case amDoneMsg:
 		m.amBusy = ""
@@ -869,10 +903,21 @@ func (m *model) attachTask(t mcpserver.TaskView) tea.Cmd {
 	})
 }
 
+// sendUser sends the user's message, or, while a turn runs, holds it
+// until the turn ends so that each reply follows its message.
 func (m *model) sendUser(text string) {
+	m.follow = true
+	m.flash = ""
+	if m.proc != nil && m.proc.Busy() {
+		m.outbox = append(m.outbox, text)
+		return
+	}
+	m.sendNow(text)
+}
+
+func (m *model) sendNow(text string) {
 	m.eventTurn = false
 	m.addChat(store.ChatUser, text)
-	m.follow = true
 	if err := m.proc.Send(text); err != nil {
 		m.addChat(store.ChatEvent, "Could not reach the orchestrator ("+err.Error()+"). Press ctrl+r to restart it.")
 	}
@@ -961,7 +1006,14 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 	case orch.Error:
 		m.streaming.Reset()
 		m.turnText = false
-		m.addChat(store.ChatEvent, "Orchestrator error: "+e.Text)
+		text := strings.TrimSpace(e.Text)
+		if n := len(m.chat); n > 0 && m.chat[n-1].role == store.ChatAssistant && strings.TrimSpace(m.chat[n-1].text) == text {
+			// The turn said the error as text first; show it once, as an error.
+			m.chat[n-1] = chatLine{role: store.ChatEvent, text: "Orchestrator error: " + text}
+		} else {
+			m.addChat(store.ChatEvent, "Orchestrator error: "+text)
+		}
+		m.deliver()
 	case orch.Exit:
 		m.streaming.Reset()
 		m.registerCompact(nil) // a restart registers the new process
@@ -1126,6 +1178,13 @@ func (m *model) deliver() {
 	if m.proc == nil || m.proc.Busy() {
 		return
 	}
+	if len(m.outbox) > 0 {
+		// The user's messages go first; events wait for the next idle.
+		text := m.outbox[0]
+		m.outbox = m.outbox[1:]
+		m.sendNow(text)
+		return
+	}
 	ns, _ := m.app.Store.TakeNotices(app.OrchestratorID, false)
 	var actions []string
 	for _, n := range ns {
@@ -1228,6 +1287,9 @@ func (m *model) renderChat() {
 	} else if m.proc != nil && m.proc.Busy() {
 		b.WriteString(sDim.Render("  thinking… (esc to interrupt)") + "\n")
 	}
+	for _, q := range m.outbox {
+		b.WriteString(sFaint.Render("you · queued") + "\n" + sDim.Render(wrap.Render(q)) + "\n\n")
+	}
 	m.vp.SetContent(b.String())
 	if m.follow {
 		m.vp.GotoBottom()
@@ -1322,6 +1384,10 @@ func box(title string, w, h int, focused bool, body string) string {
 	// Put the title into the top border.
 	lines := strings.SplitN(b, "\n", 2)
 	if len(lines) == 2 && title != "" {
+		if focused {
+			// A cue that survives NO_COLOR, where the border color doesn't.
+			title = "▶ " + title
+		}
 		t := " " + truncate(title, w-6) + " "
 		top := lipgloss.NewStyle().Foreground(bc).Render("╭─") + sSection.Render(t)
 		rest := w - lipgloss.Width(top) - 1

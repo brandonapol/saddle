@@ -130,7 +130,7 @@ func TestReadStats(t *testing.T) {
 	}
 }
 
-// s starts a spawn request in the chat; p interrupts the selected agent.
+// s opens the spawn prompt; p interrupts the selected agent.
 func TestSpawnAndPauseKeys(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
@@ -142,10 +142,11 @@ func TestSpawnAndPauseKeys(t *testing.T) {
 	m.focus = focusTasks
 	m.input.Blur()
 	m.Update(runeKey('s'))
-	if m.focus != focusChat || !strings.HasPrefix(m.input.Value(), "Spawn an agent") {
-		t.Fatalf("s: focus=%d input=%q", m.focus, m.input.Value())
+	if m.focus != focusChat || m.target != spawnTarget {
+		t.Fatalf("s: focus=%d target=%q", m.focus, m.target)
 	}
 	m.input.Reset()
+	m.unaim()
 	m.focus = focusTasks
 	_, c := m.Update(runeKey('p'))
 	if c == nil {

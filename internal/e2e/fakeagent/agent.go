@@ -384,7 +384,7 @@ func (a *Agent) wait(match string) error {
 // an initialize control request) and "runs" a typed /skill, answering
 // "fake skill <name> ran with: <args>". A message starting "slow:" starts
 // a turn that sits in a tool call until an interrupt control request ends
-// it, as Claude Code's does.
+// it, as Claude Code's does; "fail: <msg>" fails the turn with an API error.
 func (a *Agent) headless() int {
 	f, err := os.OpenFile(OrchestratorLog(a.Dir), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -433,6 +433,14 @@ func (a *Agent) headless() int {
 		}
 		text := fmt.Sprint(m.Message.Content)
 		fmt.Fprintln(f, "user: "+strings.ReplaceAll(text, "\n", " | "))
+		if msg, ok := strings.CutPrefix(text, "fail:"); ok {
+			// An API error: Claude Code says it as text, then fails the turn.
+			msg = "API Error: " + strings.TrimSpace(msg)
+			_ = enc.Encode(map[string]any{"type": "assistant", "message": map[string]any{
+				"content": []any{map[string]any{"type": "text", "text": msg}}}})
+			_ = enc.Encode(map[string]any{"type": "result", "subtype": "success", "is_error": true, "result": msg, "session_id": "fake-orchestrator"})
+			continue
+		}
 		if strings.HasPrefix(text, "slow:") {
 			inTurn = true
 			_ = enc.Encode(map[string]any{"type": "assistant", "message": map[string]any{
