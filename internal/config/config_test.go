@@ -547,10 +547,14 @@ func TestDefaultSessionName(t *testing.T) {
 		"a..b::c":        "saddle-a-b-c",
 		".hidden.":       "saddle-hidden",
 		"autobutler.org": "saddle-autobutler-org",
-		"":               "saddle",
+		"/":              "saddle",
 		"...":            "saddle",
 	} {
-		if got := DefaultSession(filepath.Join("/x", in)); got != want {
+		root := filepath.Join("/x", in)
+		if in == "/" {
+			root = "/"
+		}
+		if got := DefaultSession(root); got != want {
 			t.Errorf("DefaultSession(%q) = %q, want %q", in, got, want)
 		}
 	}

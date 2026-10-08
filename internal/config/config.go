@@ -330,7 +330,7 @@ func Default() Config {
 func DefaultSession(root string) string {
 	var b strings.Builder
 	for _, r := range filepath.Base(root) {
-		if r == '.' || r == ':' || unicode.IsSpace(r) || r == '-' {
+		if r == '.' || r == ':' || r == filepath.Separator || unicode.IsSpace(r) || r == '-' {
 			r = '-'
 		}
 		if r == '-' && strings.HasSuffix(b.String(), "-") {
