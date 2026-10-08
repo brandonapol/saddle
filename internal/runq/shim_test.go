@@ -120,13 +120,16 @@ func (w shimWorld) path(extra ...string) string {
 func (w shimWorld) run(t *testing.T, path string, env []string, argv ...string) string {
 	t.Helper()
 	_ = os.Remove(w.log)
-	cmd := exec.Command(argv[0], argv[1:]...)
+	// Resolve argv[0] against the shims, not the test machine's PATH: a
+	// tool missing there (flutter on CI) would leave exec.Command with a
+	// lookup error that overwriting cmd.Path does not clear.
+	bin := argv[0]
+	if !strings.Contains(bin, "/") {
+		bin = filepath.Join(w.shims, bin)
+	}
+	cmd := exec.Command(bin, argv[1:]...)
 	cmd.Env = append([]string{"PATH=" + path}, env...)
 	cmd.Dir = w.dir
-	// Resolve argv[0] against the pane's PATH, not the test's.
-	if !strings.Contains(argv[0], "/") {
-		cmd.Path = filepath.Join(w.shims, argv[0])
-	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v: %v\n%s", argv, err, out)
