@@ -505,3 +505,46 @@ func TestLockTrainWaitsOnALiveHolder(t *testing.T) {
 		t.Fatal("stole a live holder's lock")
 	}
 }
+
+// #268: landing N disjoint queued tasks doesn't auto-rebase the ones still
+// waiting after each landing (N(N-1)/2 extra rebases); the train rebases each
+// once, on its turn. An idle worker still gets rebased, and a queued task the
+// run doesn't land hears about the landings once, not once per landing.
+func TestLandDoesNotAutoRebaseQueuedTasks(t *testing.T) {
+	a, _ := setup(t)
+	idle, err := a.Spawn(SpawnReq{Title: "idle"})
+	must(t, err)
+	write(t, idle.Worktree, "idle.txt", "idle\n")
+	commitAll(t, idle.Worktree, "idle")
+	const n = 5
+	ts := queued(t, a, n)
+	last := ts[n-1]
+	must(t, a.Hold(last.ID, "later"))
+
+	rs, err := a.Land()
+	must(t, err)
+	if len(rs) != n-1 {
+		t.Fatalf("land = %+v", rs)
+	}
+	es, err := a.Store.Events(-1)
+	must(t, err)
+	rebases := map[string]int{}
+	for _, e := range es {
+		if e.Kind == "auto_rebase" {
+			rebases[e.Task]++
+		}
+	}
+	for _, tk := range ts[:n-1] {
+		if rebases[tk.ID] != 0 {
+			t.Errorf("queued %s auto-rebased %d times while it waited", tk.ID, rebases[tk.ID])
+		}
+	}
+	if rebases[idle.ID] == 0 {
+		t.Error("idle worker was not auto-rebased")
+	}
+	ns, err := a.Store.TakeNotices(last.ID, false)
+	must(t, err)
+	if len(ns) != 1 || !strings.Contains(ns[0].Text, ts[0].ID) || !strings.Contains(ns[0].Text, ts[n-2].ID) {
+		t.Fatalf("held task notices = %+v", ns)
+	}
+}
