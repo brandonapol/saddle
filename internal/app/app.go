@@ -136,6 +136,9 @@ type SpawnReq struct {
 	Parent string
 	Base   string // defaults to the integration branch
 	Issue  int    // GitHub issue the task implements; its PR will close it
+	// After lists tasks whose unmerged work this one builds on. Its PR
+	// stacks on theirs even when their files don't overlap (#193).
+	After []string
 	// Adapter is the agent to launch: claude (the default), codex or grok.
 	Adapter string
 	Force   bool // ignore claim conflicts, the concurrency cap and paused launches
@@ -238,6 +241,10 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if _, err := a.Store.Task(id); err == nil {
 		return t, fmt.Errorf("task %s already exists", id)
 	}
+	after, err := a.cleanAfter(id, r.After)
+	if err != nil {
+		return t, err
+	}
 	name := id + "-" + slug(r.Title)
 	base := r.Base
 	if base == "" {
@@ -271,6 +278,9 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 		if err != nil {
 			return t, a.spawnFailed(t, false, hadBranch, err)
 		}
+	}
+	if err := a.setAfter(id, after); err != nil {
+		return t, a.spawnFailed(t, false, hadBranch, err)
 	}
 	if err := gitx.WorktreeAdd(a.Root, t.Worktree, t.Branch, base); err != nil {
 		return t, a.spawnFailed(t, false, hadBranch, fmt.Errorf("worktree add: %w", err))
@@ -606,6 +616,9 @@ func (a *App) CheckWrite(task, abs string) Decision {
 // typing into its window; info notices arrive with its next tool call. The
 // orchestrator is never typed at: the TUI delivers its notices.
 func (a *App) Notify(task, kind, text string) error {
+	if !a.admitNotice(task, kind, text) {
+		return nil
+	}
 	if err := a.Store.Notify(task, kind, text); err != nil {
 		return err
 	}
@@ -660,6 +673,9 @@ func (a *App) Done(task, summary string) error {
 	}
 	if n == 0 {
 		return errors.New("branch has no commits beyond the integration branch; nothing to land")
+	}
+	if err := a.lintDone(t); err != nil {
+		return err
 	}
 	if summary != "" {
 		if err := a.Store.SetField(task, "summary", summary); err != nil {

@@ -258,3 +258,33 @@ func TestPRsReplayConflictStacksOnLayerItNeeds(t *testing.T) {
 		}
 	}
 }
+
+// #193: a task spawned after another stacks on it even though their files
+// don't overlap and they share no issue.
+func TestPRsStacksExplicitDependency(t *testing.T) {
+	a := trainSetup(t)
+	_, ghLog := originWithGh(t, a)
+	land := func(id, file string, after ...string) store.Task {
+		tk, err := a.Spawn(SpawnReq{ID: id, Title: id, After: after})
+		must(t, err)
+		write(t, tk.Worktree, file, id+"\n")
+		commitAll(t, tk.Worktree, id)
+		must(t, a.Done(tk.ID, id))
+		_, err = a.Land()
+		must(t, err)
+		return tk
+	}
+	t1 := land("t1", "Makefile")
+	t2 := land("t2", "ci.yml", "t1")
+	t3 := land("t3", "other.txt")
+	if _, err := a.PRs(); err != nil {
+		t.Fatal(err)
+	}
+	bases := prBases(ghLog())
+	if bases[t2.Branch] != t1.Branch {
+		t.Fatalf("t2 base = %q, want %s (bases %v)", bases[t2.Branch], t1.Branch, bases)
+	}
+	if bases[t3.Branch] != "main" {
+		t.Fatalf("t3 base = %q, want main", bases[t3.Branch])
+	}
+}

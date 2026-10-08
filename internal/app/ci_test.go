@@ -168,7 +168,13 @@ func TestCIRecoveryIsInfo(t *testing.T) {
 	c.Poll(context.Background())
 
 	onlyNotice(t, a, "t2", store.NoticeInfo, "passing again")
-	onlyNotice(t, a, OrchestratorID, store.NoticeInfo, "passing again")
+	// The orchestrator gets it in the digest, not as a notice (#222).
+	if ns := notices(t, a, OrchestratorID); len(ns) != 0 {
+		t.Fatalf("orchestrator notices = %+v, want none", ns)
+	}
+	if !hasEvent(t, a, EventNoticeDigest, "passing again") {
+		t.Fatal("no notice_digest event for the recovery")
+	}
 }
 
 func TestCIStateSurvivesRestart(t *testing.T) {
@@ -188,5 +194,69 @@ func TestCIStateSurvivesRestart(t *testing.T) {
 	}
 	if ns := notices(t, a, OrchestratorID); len(ns) != 0 {
 		t.Fatalf("restart re-reported a known failure to the orchestrator: %+v", ns)
+	}
+}
+
+// ciMakeFail makes pr's check fail with make's missing-target error.
+func (f *ciGH) ciMakeFail(pr, link, target string) {
+	f.checks(pr, "fail", link)
+	f.out["run view --job 200 --log-failed"] = "e2e\tRun make test/e2e\t2026-10-03T17:03:02.0529854Z make: *** No rule to make target '" + target + "'.  Stop.\n"
+}
+
+// #193: a landed task's PR failed with "No rule to make target test/e2e"
+// because t1, which adds it, hasn't merged. No fix task spawns; an event and
+// a digest line say why.
+func TestCIFailureExplainedBySiblingSpawnsNoFix(t *testing.T) {
+	a := trainSetup(t)
+	landTask(t, a, "t1", "e2e harness", map[string]string{"Makefile": "test/e2e:\n\tgo test ./e2e\n"})
+	ciTask(t, a, "t2", store.Landed, "https://github.com/o/r/pull/2")
+	gh := newCIGH()
+	gh.ciMakeFail("https://github.com/o/r/pull/2", ciJob1, "test/e2e")
+
+	newCI(t, a, gh).Poll(context.Background())
+
+	if _, err := a.Store.Task("t3"); err == nil {
+		t.Fatal("spawned a fix task for a failure t1 explains")
+	}
+	if !hasEvent(t, a, EventCIExplained, "t1 adds make target test/e2e") {
+		t.Fatal("no ci_explained event naming t1")
+	}
+	if !hasEvent(t, a, EventNoticeDigest, "no fix task was spawned") {
+		t.Fatal("the orchestrator wasn't told why no fix spawned")
+	}
+}
+
+// A sibling that doesn't add the missing target explains nothing.
+func TestCIFailureNotExplainedBySiblingSpawnsFix(t *testing.T) {
+	a := trainSetup(t)
+	landTask(t, a, "t1", "e2e harness", map[string]string{"Makefile": "test/e2e:\n\tgo test ./e2e\n"})
+	ciTask(t, a, "t2", store.Landed, "https://github.com/o/r/pull/2")
+	gh := newCIGH()
+	gh.ciMakeFail("https://github.com/o/r/pull/2", ciJob1, "lint")
+
+	newCI(t, a, gh).Poll(context.Background())
+
+	if _, err := a.Store.Task("t3"); err != nil {
+		t.Fatalf("no fix task for a failure no sibling explains: %v", err)
+	}
+}
+
+// A stacked task's red CI belongs to the ci-red watcher: ciwatch neither
+// spawns a fix nor reports it.
+func TestCIFailureOnStackedTaskDefersToCIRed(t *testing.T) {
+	a := trainSetup(t)
+	landTask(t, a, "t1", "billing", map[string]string{"meter.go": "package m\n"})
+	must(t, a.Store.SetField("t1", "pr", "https://github.com/o/r/pull/1"))
+	notices(t, a, OrchestratorID)
+	gh := newCIGH()
+	gh.checks("https://github.com/o/r/pull/1", "fail", ciJob1)
+
+	newCI(t, a, gh).Poll(context.Background())
+
+	if _, err := a.Store.Task("t2"); err == nil {
+		t.Fatal("ciwatch spawned a fix for a ci-red layer")
+	}
+	if hasEvent(t, a, "ci_failed", "") {
+		t.Fatal("ciwatch handled a ci-red layer's failure")
 	}
 }

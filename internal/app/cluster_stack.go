@@ -169,8 +169,9 @@ const hubTasks = 3
 
 // clusterLayers joins the layers planner.Cluster puts in one stack: tasks
 // that changed the same files (serial files aside), a task and the stacked
-// task that spawned it, and tasks for the same issue. files holds what each
-// layer changed; hub files don't count as overlap.
+// task that spawned it, a task and those it was spawned to run after (#193),
+// and tasks for the same issue. files holds what each layer changed; hub
+// files don't count as overlap.
 func (a *App) clusterLayers(stack []landedTask, files [][]string, union func(i, j int)) error {
 	idx := make(map[string]int, len(stack))
 	for i, l := range stack {
@@ -188,6 +189,11 @@ func (a *App) clusterLayers(stack []landedTask, files [][]string, union func(i, 
 		pt := planner.Task{ID: l.ID, Title: l.Title, Claims: own}
 		if j, ok := idx[l.Parent]; ok && j < i {
 			pt.After = []string{l.Parent}
+		}
+		for _, d := range a.TaskAfter(l.ID) {
+			if j, ok := idx[d]; ok && j < i && !slices.Contains(pt.After, d) {
+				pt.After = append(pt.After, d)
+			}
 		}
 		if l.Issue > 0 {
 			pt.Issues = []string{strconv.Itoa(l.Issue)}
