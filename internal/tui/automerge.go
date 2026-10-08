@@ -128,11 +128,11 @@ func (m *model) amHeader() (long, short string, c lipgloss.Color) {
 	}
 	switch {
 	case st.Stopped != "":
-		return "auto-merge stopped: " + st.Stopped, "am stopped", cAlert
+		return "auto-merge stopped: " + st.Stopped, "merge stopped", cAlert
 	case !st.Enabled:
-		return "auto-merge off", "am off", cDim
+		return "auto-merge off", "merge off", cDim
 	}
-	long, short, c = "auto-merge on", "am on", cDone
+	long, short, c = "auto-merge on", "merge on", cDone
 	if n := heldCount(st); n > 0 {
 		long += fmt.Sprintf(" · %d held", n)
 		short += fmt.Sprintf(" · %d held", n)

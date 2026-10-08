@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -93,7 +94,7 @@ type attention struct {
 type model struct {
 	app     *app.App
 	launch  agent.Launch
-	proc    *orch.Proc
+	proc    orchProc
 	resumed bool // the current process was started with --resume
 	gotInit bool
 
@@ -130,6 +131,7 @@ type model struct {
 	// behind it and land out of order; a request made meanwhile sets stale,
 	// which runs one more refresh when the current one lands.
 	refreshing, stale bool
+	refreshN          int // refreshes started; every sweepEvery-th captures every agent
 
 	pending   []string // events waiting for the orchestrator to be idle
 	held      []string // info notices that ride along with the next message
@@ -151,6 +153,8 @@ type model struct {
 	asker     asker                                        // answers questions; nil when the narrator is off
 	askScreen bool                                         // the next question carries the selected agent's screen
 	capture   func(task string, lines int) (string, error) // a task's screen; nil means app.Peek
+	spawner   func(title, prompt string) (string, error)   // the spawn prompt's spawn; nil means the app's
+	outbox    []string                                     // user messages waiting for the orchestrator's turn to end
 	flash     string
 	flashAt   time.Time
 
@@ -191,6 +195,7 @@ type (
 		err     error
 		tasks   []mcpserver.TaskView
 		peek    string
+		peekOK  bool // peek was read; otherwise the last one stands
 		screens map[string]string
 		limits  *usage.LimitEstimate
 		stats   map[string]agentStats
@@ -293,6 +298,16 @@ type orchInput interface {
 	Send(text string) error
 }
 
+// orchProc is the orchestrator process as the TUI uses it: an *orch.Proc,
+// or a fake in tests.
+type orchProc interface {
+	orchInput
+	Events() <-chan orch.Event
+	Interrupt() error
+	Interrupting() bool
+	Close()
+}
+
 // registerCompact lets the compact watcher type /compact into p when it is
 // idle and the owner isn't typing; nil unregisters it. The watcher runs on
 // another goroutine, so it reads drafting, not the input box.
@@ -335,6 +350,9 @@ func (m *model) refresh() tea.Cmd {
 		sel = m.tasks[m.sel].ID
 	}
 	a, amGen := m.app, m.amGen
+	peekShown := m.view == viewControl && !m.briefOn && !m.helpOpen && !m.cp.on
+	sweep := m.refreshN%sweepEvery == 0
+	m.refreshN++
 	return func() tea.Msg {
 		all, err := mcpserver.Tasks(a)
 		if err != nil {
@@ -346,25 +364,12 @@ func (m *model) refresh() tea.Cmd {
 				ts = append(ts, t)
 			}
 		}
-		sort.SliceStable(ts, func(i, j int) bool { return rank(ts[i].Status) < rank(ts[j].Status) })
+		sortTasks(ts)
 		if sel == "" && len(ts) > 0 {
 			sel = ts[0].ID
 		}
-		peek := ""
-		if sel != "" {
-			peek, _ = a.Peek(sel, 200)
-		}
-		screens := map[string]string{}
-		for _, t := range ts {
-			if t.Window != "" && (t.Status == store.Running || t.Status == store.Idle) {
-				if t.ID == sel && peek != "" {
-					screens[t.ID] = tailLines(peek, 25)
-				} else if s, err := a.Peek(t.ID, 25); err == nil {
-					screens[t.ID] = s
-				}
-			}
-		}
-		msg := refreshMsg{tasks: ts, peek: peek, screens: screens, stats: readStats(a, time.Now())}
+		sc := captureScreens(a, ts, sel, peekShown, sweep)
+		msg := refreshMsg{tasks: ts, peek: sc.peek, peekOK: sc.peekOK, screens: sc.screens, stats: readStats(a, time.Now())}
 		msg.limits, msg.graph = readUsage(a, time.Now())
 		if st, err := a.AutomergeState(); err == nil {
 			msg.am, msg.amGen = &st, amGen
@@ -376,6 +381,91 @@ func (m *model) refresh() tea.Cmd {
 	}
 }
 
+// sweepEvery is how many refreshes apart every agent's screen is captured
+// for watchScreens. Between sweeps only the selected agent's peek is, and
+// only while it is on screen (#272).
+const sweepEvery = 3
+
+// paneReader captures panes in batches: one tmux process for the window
+// list and one for every capture, however many agents there are.
+type paneReader interface {
+	Windows() (map[string]bool, error)
+	CaptureMany(lines map[string]int) (map[string]string, error)
+}
+
+// screensRead is what one refresh read from the agents' panes.
+type screensRead struct {
+	peek    string
+	peekOK  bool
+	screens map[string]string // the last lines of running and idle agents
+}
+
+// captureScreens reads the selected agent's peek, when it is shown or on a
+// sweep, and on a sweep every running or idle agent's screen.
+func captureScreens(a *app.App, ts []mcpserver.TaskView, sel string, peekShown, sweep bool) screensRead {
+	out := screensRead{screens: map[string]string{}}
+	watch := func(t mcpserver.TaskView) bool {
+		return t.Window != "" && (t.Status == store.Running || t.Status == store.Idle)
+	}
+	wantPeek := sel != "" && (peekShown || sweep)
+	pr, ok := a.Tmux.(paneReader)
+	if !ok {
+		// A driver without batching: one Peek per pane.
+		if wantPeek {
+			out.peek, _ = a.Peek(sel, 200)
+			out.peekOK = true
+		}
+		for _, t := range ts {
+			if !watch(t) {
+				continue
+			}
+			if t.ID == sel && out.peek != "" {
+				out.screens[t.ID] = tailLines(out.peek, 25)
+			} else if sweep {
+				if s, err := a.Peek(t.ID, 25); err == nil {
+					out.screens[t.ID] = s
+				}
+			}
+		}
+		return out
+	}
+	if !wantPeek && !sweep {
+		return out
+	}
+	alive, err := pr.Windows()
+	if err != nil {
+		return out
+	}
+	lines := map[string]int{}
+	for _, t := range ts {
+		switch {
+		case t.Window == "" || !alive[t.Window]:
+		case t.ID == sel && wantPeek:
+			lines[t.Window] = 200
+		case sweep && watch(t):
+			lines[t.Window] = 25
+		}
+	}
+	caps, err := pr.CaptureMany(lines)
+	if err != nil {
+		return out // a window closed between the two calls; the next tick reads again
+	}
+	out.peekOK = wantPeek
+	for _, t := range ts {
+		s, ok := caps[t.Window]
+		if !ok || t.Window == "" {
+			continue
+		}
+		if t.ID == sel && wantPeek {
+			out.peek = s
+		}
+		if watch(t) {
+			out.screens[t.ID] = tailLines(s, 25)
+		}
+	}
+	return out
+}
+
 // tailLines returns the last n lines of s, newlines kept.
 func tailLines(s string, n int) string {
 	lines := strings.Split(s, "\n")
@@ -383,6 +473,24 @@ func tailLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// sortTasks orders the task list by rank, then by task number: t8, t9, t10.
+func sortTasks(ts []mcpserver.TaskView) {
+	sort.SliceStable(ts, func(i, j int) bool {
+		if ri, rj := rank(ts[i].Status), rank(ts[j].Status); ri != rj {
+			return ri < rj
+		}
+		ni, oki := idNum(ts[i].ID)
+		nj, okj := idNum(ts[j].ID)
+		return oki && okj && ni < nj
+	})
+}
+
+// idNum is the number in a task id like t12.
+func idNum(id string) (int, bool) {
+	n, err := strconv.Atoi(strings.TrimPrefix(id, "t"))
+	return n, err == nil
 }
 
 // rank orders the task list: what needs attention first, finished work last.
@@ -468,7 +576,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sel < len(m.tasks) {
 			selID = m.tasks[m.sel].ID
 		}
-		m.tasks, m.peek, m.stats = msg.tasks, msg.peek, msg.stats
+		m.tasks, m.stats = msg.tasks, msg.stats
+		if msg.peekOK {
+			m.peek = msg.peek
+		}
 		if msg.graph != nil {
 			m.graph = msg.graph
 		}
@@ -525,6 +636,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case flashMsg:
 		m.flash, m.flashAt = string(msg), time.Now()
+
+	case spawnedMsg:
+		cmds = append(cmds, m.spawned(msg))
 
 	case amDoneMsg:
 		m.amBusy = ""
@@ -610,6 +724,8 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		if m.quitArmed() {
 			return tea.Quit, true
 		}
+		// While a turn runs, the first ctrl+c also stops it.
+		m.interrupt()
 		m.quitArmedAt = time.Now()
 		at := m.quitArmedAt
 		return tea.Tick(quitWindow, func(time.Time) tea.Msg { return quitExpiry(at) }), true
@@ -669,6 +785,9 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		if key.Matches(k, keys.Untarget) && m.target != "" {
 			m.input.Reset()
 			m.unaim()
+			return nil, true
+		}
+		if key.Matches(k, keys.Interrupt) && m.interrupt() {
 			return nil, true
 		}
 		if key.Matches(k, keys.Send) {
@@ -784,13 +903,37 @@ func (m *model) attachTask(t mcpserver.TaskView) tea.Cmd {
 	})
 }
 
+// sendUser sends the user's message, or, while a turn runs, holds it
+// until the turn ends so that each reply follows its message.
 func (m *model) sendUser(text string) {
+	m.follow = true
+	m.flash = ""
+	if m.proc != nil && m.proc.Busy() {
+		m.outbox = append(m.outbox, text)
+		return
+	}
+	m.sendNow(text)
+}
+
+func (m *model) sendNow(text string) {
 	m.eventTurn = false
 	m.addChat(store.ChatUser, text)
-	m.follow = true
 	if err := m.proc.Send(text); err != nil {
 		m.addChat(store.ChatEvent, "Could not reach the orchestrator ("+err.Error()+"). Press ctrl+r to restart it.")
 	}
+}
+
+// interrupt stops the orchestrator's running turn. It reports whether one
+// was running.
+func (m *model) interrupt() bool {
+	if m.proc == nil || !m.proc.Busy() || m.proc.Interrupting() {
+		return false
+	}
+	if err := m.proc.Interrupt(); err != nil {
+		m.flash, m.flashAt = "interrupt: "+err.Error(), time.Now()
+		return false
+	}
+	return true
 }
 
 func (m *model) addChat(role, text string) {
@@ -852,10 +995,25 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 			_ = m.app.Store.SetField(app.OrchestratorID, "session_id", e.SessionID)
 		}
 		m.deliver()
+	case orch.Interrupted:
+		if part := strings.TrimSpace(m.streaming.String()); part != "" {
+			m.addChat(store.ChatAssistant, part)
+		}
+		m.streaming.Reset()
+		m.turnText = false
+		m.addChat(store.ChatEvent, "Interrupted. The orchestrator is idle; the conversation is kept.")
+		m.deliver()
 	case orch.Error:
 		m.streaming.Reset()
 		m.turnText = false
-		m.addChat(store.ChatEvent, "Orchestrator error: "+e.Text)
+		text := strings.TrimSpace(e.Text)
+		if n := len(m.chat); n > 0 && m.chat[n-1].role == store.ChatAssistant && strings.TrimSpace(m.chat[n-1].text) == text {
+			// The turn said the error as text first; show it once, as an error.
+			m.chat[n-1] = chatLine{role: store.ChatEvent, text: "Orchestrator error: " + text}
+		} else {
+			m.addChat(store.ChatEvent, "Orchestrator error: "+text)
+		}
+		m.deliver()
 	case orch.Exit:
 		m.streaming.Reset()
 		m.registerCompact(nil) // a restart registers the new process
@@ -1020,6 +1178,13 @@ func (m *model) deliver() {
 	if m.proc == nil || m.proc.Busy() {
 		return
 	}
+	if len(m.outbox) > 0 {
+		// The user's messages go first; events wait for the next idle.
+		text := m.outbox[0]
+		m.outbox = m.outbox[1:]
+		m.sendNow(text)
+		return
+	}
 	ns, _ := m.app.Store.TakeNotices(app.OrchestratorID, false)
 	var actions []string
 	for _, n := range ns {
@@ -1117,8 +1282,13 @@ func (m *model) renderChat() {
 	if m.streaming.Len() > 0 {
 		b.WriteString(renderLine(chatLine{role: store.ChatAssistant, text: m.streaming.String()}, w, wrap))
 		b.WriteString("\n")
+	} else if m.proc != nil && m.proc.Interrupting() {
+		b.WriteString(sDim.Render("  interrupting…") + "\n")
 	} else if m.proc != nil && m.proc.Busy() {
-		b.WriteString(sDim.Render("  thinking…") + "\n")
+		b.WriteString(sDim.Render("  thinking… (esc to interrupt)") + "\n")
+	}
+	for _, q := range m.outbox {
+		b.WriteString(sFaint.Render("you · queued") + "\n" + sDim.Render(wrap.Render(q)) + "\n\n")
 	}
 	m.vp.SetContent(b.String())
 	if m.follow {
@@ -1192,7 +1362,11 @@ func (m *model) viewFooter() string {
 		line = " " + lipgloss.NewStyle().Foreground(cAccent).Render(m.flash)
 	}
 	if m.quitArmed() {
-		line = " " + lipgloss.NewStyle().Foreground(cAccent).Render("Press Ctrl+C again to quit")
+		hint := "Press Ctrl+C again to quit"
+		if m.proc != nil && m.proc.Interrupting() {
+			hint = "Interrupting the orchestrator. " + hint
+		}
+		line = " " + lipgloss.NewStyle().Foreground(cAccent).Render(hint)
 	}
 	if m.limits != nil && hasUsage(*m.limits) {
 		line = usageStrip(*m.limits, m.width) + "\n" + line
@@ -1210,6 +1384,10 @@ func box(title string, w, h int, focused bool, body string) string {
 	// Put the title into the top border.
 	lines := strings.SplitN(b, "\n", 2)
 	if len(lines) == 2 && title != "" {
+		if focused {
+			// A cue that survives NO_COLOR, where the border color doesn't.
+			title = "▶ " + title
+		}
 		t := " " + truncate(title, w-6) + " "
 		top := lipgloss.NewStyle().Foreground(bc).Render("╭─") + sSection.Render(t)
 		rest := w - lipgloss.Width(top) - 1

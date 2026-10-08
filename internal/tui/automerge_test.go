@@ -80,12 +80,12 @@ func TestHeaderShowsAutomergeState(t *testing.T) {
 		narrowAny []string
 	}{
 		{"off", automerge.Status{}, []string{" off"}, nil}, // off trails, so it may be short
-		{"on", automerge.Status{Enabled: true}, []string{"auto-merge on"}, []string{"auto-merge on", "am on"}},
+		{"on", automerge.Status{Enabled: true}, []string{"auto-merge on"}, []string{"auto-merge on", "merge on"}},
 		{"stopped", automerge.Status{Enabled: true, Stopped: "merge of #12 failed"}, []string{"auto-merge stopped: merge of #12 failed"}, []string{"stopped"}},
 		{"held", *twoStacks(), []string{"auto-merge on · 1 held"}, []string{"1 held"}},
 	}
 	for _, c := range cases {
-		for _, w := range []int{36, 120} {
+		for _, w := range []int{36, 160} {
 			m := newViewModel(w, 30)
 			st := c.st
 			m.am = &st

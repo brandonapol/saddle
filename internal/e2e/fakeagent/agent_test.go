@@ -296,3 +296,21 @@ func TestHeadlessListsAndRunsSkills(t *testing.T) {
 		}
 	}
 }
+
+// A "slow:" message starts a turn that only an interrupt ends, with an
+// error_during_execution result as Claude Code sends.
+func TestHeadlessSlowTurnEndsOnInterrupt(t *testing.T) {
+	d := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	in := strings.NewReader(`{"type":"user","message":{"role":"user","content":"slow: build it"}}` + "\n" +
+		`{"type":"control_request","request_id":"i1","request":{"subtype":"interrupt"}}` + "\n")
+	var out bytes.Buffer
+	if code := Main([]string{"--script-dir", d, "-p", "--input-format", "stream-json"}, in, &out); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	s := out.String()
+	tool, res := strings.Index(s, `"tool_use"`), strings.Index(s, `"error_during_execution"`)
+	if tool < 0 || res < tool || strings.Contains(s, "fake orchestrator ack") {
+		t.Fatalf("stream:\n%s", s)
+	}
+}

@@ -114,6 +114,9 @@ func (m *model) viewHelp(w, h int) string {
 		rows := []string{sBright.Render(g.title)}
 		for _, b := range g.keys {
 			hp := b.Help()
+			if hp.Key == "" {
+				continue // the second of a pair
+			}
 			rows = append(rows, sKey.Render(fmt.Sprintf("%-*s", keyW, hp.Key))+" "+sDim.Render(hp.Desc))
 		}
 		sections = append(sections, strings.Join(rows, "\n"))

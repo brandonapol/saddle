@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -105,8 +106,19 @@ func (m *model) answered(msg askedMsg) {
 
 // chatTitle names who the chat input talks to.
 func (m *model) chatTitle() string {
+	if m.target == spawnTarget {
+		return "SPAWN AN AGENT"
+	}
 	if !m.asking() {
-		return "ORCHESTRATOR · " + m.launch.Model
+		title := "ORCHESTRATOR · " + m.launch.Model
+		if m.narrow() && len(m.tasks) > 0 {
+			// The agent list is hidden; say how to get to it.
+			title += fmt.Sprintf(" · tab: %d agent", len(m.tasks))
+			if len(m.tasks) > 1 {
+				title += "s"
+			}
+		}
+		return title
 	}
 	title := "ASK NARRATOR"
 	if t, ok := m.selected(); ok && m.askScreen {
