@@ -269,7 +269,8 @@ func Status(a *app.App) (StatusOut, error) {
 }
 
 // Tasks lists every task with its claims, train state and pending notices.
-// It reads only the store, so the TUI can poll it every second.
+// It reads the store, and tmux only for live tasks gone quiet for
+// app.OrphanAfter, so the TUI can poll it every second.
 func Tasks(a *app.App) ([]TaskView, error) {
 	ts, err := a.Store.Tasks()
 	if err != nil {
@@ -295,11 +296,18 @@ func Tasks(a *app.App) ([]TaskView, error) {
 		}
 		tr[e.Task] = s
 	}
+	orphans, err := a.Orphans()
+	if err != nil {
+		return nil, err
+	}
 	out := make([]TaskView, 0, len(ts))
 	for _, t := range ts {
 		reason := ""
 		if t.Status == app.StatusFailed {
 			reason = t.Summary
+		}
+		if orphans[t.ID] {
+			t.Status, reason = app.StatusOrphaned, app.OrphanHint(t.ID)
 		}
 		out = append(out, TaskView{Reason: reason,
 			ID: t.ID, Title: t.Title, Status: t.Status, Model: t.Model, Parent: t.Parent, Branch: t.Branch,

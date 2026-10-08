@@ -391,6 +391,26 @@ func (s *Store) LastEventID() (int64, error) {
 	return id, err
 }
 
+// LastEventTimes maps each task to the time of its newest event: its
+// heartbeat, since hooks log every tool call.
+func (s *Store) LastEventTimes() (map[string]time.Time, error) {
+	rows, err := s.db.Query(`SELECT task, MAX(ts) FROM events WHERE task != '' GROUP BY task`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var task string
+		var ts int64
+		if err := rows.Scan(&task, &ts); err != nil {
+			return nil, err
+		}
+		out[task] = time.Unix(ts, 0)
+	}
+	return out, rows.Err()
+}
+
 // NarratorSpend is the narrator's recorded API spend in USD for day
 // (YYYY-MM-DD), or 0 if none.
 func (s *Store) NarratorSpend(day string) (float64, error) {

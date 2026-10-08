@@ -165,14 +165,20 @@ func slug(s string) string {
 	return s
 }
 
+// activeWorkers counts live workers. Orphaned tasks (no window, no
+// heartbeat) don't count: they must not block new spawns (#254).
 func (a *App) activeWorkers() (int, error) {
 	ts, err := a.Store.Tasks()
 	if err != nil {
 		return 0, err
 	}
+	orphans, err := a.Orphans()
+	if err != nil {
+		return 0, err
+	}
 	n := 0
 	for _, t := range ts {
-		if t.Role == store.RoleWorker && (t.Status == store.Running || t.Status == store.Idle || t.Status == store.NeedsYou) {
+		if t.Role == store.RoleWorker && (t.Status == store.Running || t.Status == store.Idle || t.Status == store.NeedsYou) && !orphans[t.ID] {
 			n++
 		}
 	}
@@ -361,11 +367,18 @@ func conflictErr(c map[string]string) error {
 }
 
 func (a *App) launch(t store.Task, cl []string, ad agent.Adapter) (string, error) {
+	return a.start(t, cl, ad, "", t.Prompt)
+}
+
+// start opens t's agent in a new window of the tmux session, creating the
+// session (and the server) when it is gone. resume, if set, is the Claude
+// session to continue; prompt is the first message.
+func (a *App) start(t store.Task, cl []string, ad agent.Adapter, resume, prompt string) (string, error) {
 	cmdName, args := a.adapterCmd(ad.Name())
 	l := agent.Launch{
 		Root: a.Root, Bin: a.Bin, Task: t.ID, Title: t.Title, Dir: t.Worktree, Model: t.Model,
 		Mode: a.Cfg.Claude.PermissionMode, Cmd: cmdName, Args: args, RunDir: a.stateDir("run", t.ID),
-		Brief: a.workerBrief(t, cl), Prompt: t.Prompt,
+		Brief: a.workerBrief(t, cl), Prompt: prompt, Resume: resume,
 	}
 	// harness = "grok" runs the full Grok CLI (hooks, MCP, tmux), not the
 	// one-shot image adapter. [adapters.grok] cmd and args still apply.
@@ -463,29 +476,10 @@ func (a *App) orchModel() string {
 	return a.Cfg.Claude.OrchestratorModel
 }
 
-// Down stops every agent (the tmux session) and releases their claims.
-// Worktrees and branches stay, so no committed work is lost.
-func (a *App) Down() (int, error) {
-	ts, err := a.Store.Tasks()
-	if err != nil {
-		return 0, err
-	}
-	n := 0
-	for _, t := range ts {
-		if t.Role == store.RoleWorker && t.Active() && t.Status != store.Done && t.Status != StatusFailed {
-			if err := errors.Join(a.Store.Release(t.ID), a.Store.SetStatus(t.ID, store.Killed)); err != nil {
-				return n, err
-			}
-			n++
-		}
-	}
-	if a.Tmux.HasSession() {
-		if err := a.Tmux.KillSession(); err != nil {
-			return n, err
-		}
-	}
-	return n, nil
-}
+// Down stops every agent (the tmux session). Live tasks are paused, not
+// killed: claims, worktrees and branches stay, uncommitted work is
+// snapshotted, and saddle up resumes them. It returns the paused tasks.
+func (a *App) Down() ([]string, error) { return a.Pause() }
 
 // Peek returns the last lines of a task's terminal.
 func (a *App) Peek(task string, lines int) (string, error) {
@@ -706,14 +700,18 @@ func (a *App) Kill(task string, keep bool) error {
 	if err != nil {
 		return err
 	}
+	if t.Role == store.RoleWorker {
+		a.snapshotWIP(t.ID, t.Worktree)
+	}
+	// Dead before its window goes, so the resume watcher won't bring it back.
+	// The ref guard won't delete a live task's branch either.
+	if err := errors.Join(a.Store.Release(task), a.Store.SetStatus(task, store.Killed)); err != nil {
+		return err
+	}
 	if t.Window != "" && a.Tmux.Alive(t.Window) {
 		if err := a.Tmux.KillWindow(t.Window); err != nil {
 			return err
 		}
-	}
-	// The ref guard won't delete a live task's branch, so it dies first.
-	if err := errors.Join(a.Store.Release(task), a.Store.SetStatus(task, store.Killed)); err != nil {
-		return err
 	}
 	note := ""
 	if !keep && t.Role == store.RoleWorker {
