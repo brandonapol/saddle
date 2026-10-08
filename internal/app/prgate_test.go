@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -141,15 +142,83 @@ func TestGateChecksDedupesAndSkipsNone(t *testing.T) {
 }
 
 // A check that runs past the timeout is killed, with everything it started,
-// and counts as red.
-func TestRunGateCmdTimesOut(t *testing.T) {
+// and counts as red, not as the environment.
+func TestGateLayerTimesOut(t *testing.T) {
+	a, _, ts := gateStack(t)
+	a.Cfg.Train.Prepublish.Timeout = 200 * time.Millisecond
+	dir, err := a.gateWorktree(0)
+	must(t, err)
+	head := git(t, a.Root, "rev-parse", a.Cfg.Integration)
 	start := time.Now()
-	out, timedOut, err := runGateCmd(t.TempDir(), "sleep 30 & sleep 30; wait", 200*time.Millisecond)
-	if err == nil || !timedOut || !strings.Contains(out, "prepublish.timeout") {
-		t.Fatalf("timeout: out %q, timedOut %v, err %v", out, timedOut, err)
+	var mu sync.Mutex
+	r, _, err := a.gateLayer(dir, gateJob{task: ts[0].ID, head: head}, []GateCheck{{Name: "prepublish", Cmd: "sleep 30 & sleep 30; wait"}}, map[string]time.Time{}, &mu)
+	must(t, err)
+	if r == nil || !r.timedOut || r.env != nil || !strings.Contains(r.out, "timed out") {
+		t.Fatalf("timeout: %+v", r)
 	}
 	if d := time.Since(start); d > 10*time.Second {
 		t.Fatalf("the timed-out check took %v to stop", d)
+	}
+}
+
+// #274: a check that fails once on the environment (disk quota exceeded)
+// is retried, as the train's gate is, and the layer publishes.
+func TestPRsGateRetriesEnvironmentFailure(t *testing.T) {
+	a, origin, ts := gateStack(t)
+	once := filepath.Join(t.TempDir(), "once")
+	a.Cfg.Train.Prepublish.Cmd = "if [ ! -e " + once + " ]; then touch " + once + "; echo 'compile: writing output: disk quota exceeded'; exit 1; fi"
+	if _, err := a.PRs(); err != nil {
+		t.Fatalf("prs: %v", err)
+	}
+	for _, tk := range ts {
+		if remoteRev(t, origin, tk.Branch) == "" {
+			t.Errorf("%s not pushed", tk.ID)
+		}
+	}
+	if s, _ := a.Gate(); len(s.Red) != 0 {
+		t.Fatalf("red records: %+v", s.Red)
+	}
+}
+
+// #274: a check that keeps failing on the environment holds the layer and
+// the ones above it, but reports the environment, not the layer: no red
+// record, so no ci-red hold or repair for it.
+func TestPRsGateEnvironmentFailureDoesNotBlameTheLayer(t *testing.T) {
+	a, origin, ts := gateStack(t)
+	a.Cfg.Train.Prepublish.Cmd = "test ! -f uses-word.txt || { echo 'sqlite: disk I/O error'; echo 'disk quota exceeded'; exit 1; }"
+	_, err := a.PRs()
+	if err == nil {
+		t.Fatal("prs published layers whose check could not run")
+	}
+	for _, want := range []string{"pre-publish gate hit the environment", "disk quota exceeded", "not the layer", "t3"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q:\n%v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "fails its") {
+		t.Errorf("error blames the layer:\n%v", err)
+	}
+	for i, tk := range ts {
+		if pushed, want := remoteRev(t, origin, tk.Branch) != "", i < 2; pushed != want {
+			t.Errorf("%s: pushed %v, want %v", tk.ID, pushed, want)
+		}
+	}
+	if s, _ := a.Gate(); len(s.Red) != 0 {
+		t.Fatalf("the environment marked a layer red: %+v", s.Red)
+	}
+	es, err := a.Store.Events(-1)
+	must(t, err)
+	retries := 0
+	for _, e := range es {
+		if e.Kind == "prepublish_red" {
+			t.Fatalf("layer flagged red: %+v", e)
+		}
+		if e.Kind == EventGateEnv && e.Task == "t3" {
+			retries++
+		}
+	}
+	if retries == 0 {
+		t.Fatal("no gate_env events for t3")
 	}
 }
 

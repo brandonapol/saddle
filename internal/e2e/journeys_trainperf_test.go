@@ -114,3 +114,48 @@ func TestJourneyMakeVariableHookRunsOncePerLand(t *testing.T) {
 		t.Fatalf("land ran make check %d times, want 1", n)
 	}
 }
+
+// TestJourneyPrepublishGateEnvironmentFailure (#274): the pre-publish check
+// fails on the environment (disk quota exceeded) on layer t2's tip. Once it
+// is retried and publishes; while it persists, prs reports the environment,
+// not the layer, holds t2 without marking it red, and publishes it once
+// there is room.
+func TestJourneyPrepublishGateEnvironmentFailure(t *testing.T) {
+	full := filepath.Join(t.TempDir(), "disk-full")
+	check := "test ! -f beta/work.txt || test ! -e " + full + " || { echo 'compile: writing output: disk quota exceeded'; exit 1; }"
+	w := world(t, Options{Tables: "[train]\noutput = \"single\"\nprepublish.cmd = \"" + check + "\"\n"})
+	for _, l := range []struct{ id, dir string }{{"t1", "alpha"}, {"t2", "beta"}} {
+		w.Spawn(l.id, "Work "+l.dir, []string{l.dir + "/**"}, finished(l.dir, l.id+"\n")...)
+		w.WaitTask(l.id, "queued", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
+		w.MustSaddle("land")
+		if v := w.Task(l.id); v.Status != "landed" {
+			t.Fatalf("%s didn't land: %+v", l.id, v)
+		}
+	}
+
+	must(t, os.WriteFile(full, nil, 0o644))
+	r := w.Saddle("prs")
+	if r.Code == 0 {
+		t.Fatalf("prs published a layer whose check could not run: %s", r)
+	}
+	for _, want := range []string{"pre-publish gate hit the environment", "disk quota exceeded", "not the layer"} {
+		if !strings.Contains(r.Stderr, want) {
+			t.Errorf("prs error lacks %q:\n%s", want, r.Stderr)
+		}
+	}
+	if strings.Contains(r.Stderr, "fails its") {
+		t.Errorf("prs blamed the layer:\n%s", r.Stderr)
+	}
+	if w.Task("t1").PR == "" || w.Task("t2").PR != "" {
+		t.Fatalf("PRs: t1 %q, t2 %q; want only t1", w.Task("t1").PR, w.Task("t2").PR)
+	}
+	if st := w.MustSaddle("status"); strings.Contains(st.Stdout, "ci-red") {
+		t.Fatalf("status flags the layer:\n%s", st)
+	}
+
+	must(t, os.Remove(full))
+	w.MustSaddle("prs")
+	if w.Task("t2").PR == "" {
+		t.Fatal("t2 not published once the environment recovered")
+	}
+}

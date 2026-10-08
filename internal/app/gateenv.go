@@ -352,6 +352,13 @@ func within(root, p string) bool {
 // retries it interrupts the orchestrator and returns the failure with Env
 // set.
 func (a *App) RunGateEnv(ctx context.Context, task string, run GateRun) GateEnvResult {
+	return a.runGateEnv(ctx, task, run, true)
+}
+
+// runGateEnv is RunGateEnv; notify false leaves telling anyone about an
+// environment failure to the caller, as the pre-publish gate reports it in
+// its own error (#274).
+func (a *App) runGateEnv(ctx context.Context, task string, run GateRun, notify bool) GateEnvResult {
 	var res GateEnvResult
 	base := a.GateTmpdir()
 	sweepStaleTemp(base, time.Now().Add(-gateStaleAge))
@@ -367,6 +374,10 @@ func (a *App) RunGateEnv(ctx context.Context, task string, run GateRun) GateEnvR
 		}
 		if attempt == gateEnvRetries {
 			res.Env = &p
+			if !notify {
+				a.Store.Event(task, EventGateEnv, fmt.Sprintf("%s; still failing after %d retries", p.Signature, attempt))
+				return res
+			}
 			a.Store.Event(task, EventGateEnv, fmt.Sprintf("%s; still failing after %d retries, orchestrator told", p.Signature, attempt))
 			if err := a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
 				"The test gate for %s failed %d times on the environment, not the branch: %q. Free %s. "+
