@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -54,6 +56,8 @@ type World struct {
 func New(t testing.TB, bins Bins, opts Options) *World {
 	t.Helper()
 	root := t.TempDir()
+	// Runs before t.TempDir's RemoveAll, which a read-only tree would fail.
+	t.Cleanup(func() { makeWritable(root) })
 	w := &World{T: t, Bins: bins, Root: root, Home: filepath.Join(root, "home"), Origin: filepath.Join(root, "origin.git"),
 		Repo: filepath.Join(root, "demo"), Scripts: filepath.Join(root, "scripts"), Bin: filepath.Join(root, "bin")}
 	for _, d := range []string{w.Home, w.Scripts, w.Bin, filepath.Join(w.Home, ".config")} {
@@ -78,6 +82,7 @@ func New(t testing.TB, bins Bins, opts Options) *World {
 		"SHELL=/bin/sh",
 		"USER=e2e",
 	}
+	w.env = append(w.env, goEnv(t)...)
 	w.Tmux.Env = w.env
 	// In-process saddle calls (App from Open) see the same HOME and tmux.
 	for _, kv := range w.env {
@@ -121,6 +126,43 @@ func (w *World) WriteConfig(opts Options) {
 	cfg := fmt.Sprintf("%s\n[test]\ncmd = %q\n\n[claude]\ncmd = %q\n\n[triage]\ndisabled = true\n\n%s\n",
 		opts.Top, test, filepath.Join(w.Bin, "claude"), opts.Tables)
 	must(w.T, os.WriteFile(filepath.Join(w.Repo, ".saddle", "config.toml"), []byte(cfg), 0o644))
+}
+
+// realGoCaches are the module and build caches of the user running the
+// tests, read before any World moves HOME.
+var realGoCaches = sync.OnceValues(func() (string, string) {
+	out, err := exec.Command("go", "env", "GOMODCACHE", "GOCACHE").Output()
+	if err != nil {
+		return "", ""
+	}
+	mod, build, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	return mod, build
+})
+
+// goEnv keeps `go` run inside a World (by saddle's gates, make fix or a
+// lint) from filling the World's HOME with a module cache: it uses the
+// real caches, and -modcacherw keeps anything it downloads removable.
+func goEnv(t testing.TB) []string {
+	t.Helper()
+	env := []string{"GOFLAGS=" + strings.TrimSpace(os.Getenv("GOFLAGS")+" -modcacherw")}
+	mod, build := realGoCaches()
+	if mod == "" || build == "" {
+		t.Fatal("go env GOMODCACHE GOCACHE: no caches")
+	}
+	return append(env, "GOMODCACHE="+mod, "GOCACHE="+build)
+}
+
+// makeWritable gives the owner write access to every dir under root, so it
+// can be removed: Go's module cache is read-only.
+func makeWritable(root string) {
+	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			if fi, err := d.Info(); err == nil && fi.Mode().Perm()&0o200 == 0 {
+				_ = os.Chmod(p, fi.Mode().Perm()|0o700)
+			}
+		}
+		return nil
+	})
 }
 
 func must(t testing.TB, err error) {
