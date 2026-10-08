@@ -100,3 +100,22 @@ func TestUsageBucketsSince(t *testing.T) {
 		t.Fatalf("buckets = %+v", bs)
 	}
 }
+
+// LastEventTimes is each task's heartbeat: the time of its newest event (#254).
+func TestLastEventTimes(t *testing.T) {
+	s := openTest(t)
+	before := time.Now().Add(-time.Second)
+	s.Event("t1", "spawn", "")
+	s.Event("t1", "tool", "Edit")
+	s.Event("", "gc", "x")
+	got, err := s.LastEventTimes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts, ok := got["t1"]; !ok || ts.Before(before) {
+		t.Fatalf("t1 heartbeat = %v, %v", ts, ok)
+	}
+	if _, ok := got["t2"]; ok {
+		t.Fatal("t2 has a heartbeat without events")
+	}
+}
