@@ -10,8 +10,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/brandonapol/saddle/internal/autopilot"
 	"github.com/brandonapol/saddle/internal/automerge"
+	"github.com/brandonapol/saddle/internal/autopilot"
 	"github.com/brandonapol/saddle/internal/usage"
 )
 
