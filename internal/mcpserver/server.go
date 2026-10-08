@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/automerge"
+	"github.com/brandonapol/saddle/internal/autopilot"
 	"github.com/brandonapol/saddle/internal/sentinel"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -136,6 +138,15 @@ type PublishIn struct {
 type AutomergeIn struct {
 	Action string `json:"action" jsonschema:"on, off, status, hold or release"`
 	Stack  string `json:"stack,omitempty" jsonschema:"for hold and release: the stack's name (its bottom task), a task id, PR URL or PR number"`
+}
+
+// AutopilotIn steers the autopilot driver.
+type AutopilotIn struct {
+	Action     string `json:"action" jsonschema:"on, off, status, pause or resume"`
+	Until      string `json:"until,omitempty" jsonschema:"for on: stop spawning at this time (HH:MM, or RFC 3339)"`
+	UntilUsage string `json:"until_usage,omitempty" jsonschema:"for on: stop spawning at this share of a plan-limit window (e.g. 90%)"`
+	MaxTasks   int    `json:"max_tasks,omitempty" jsonschema:"for on: stop after spawning this many tasks; 0 means no limit"`
+	ReadyLabel string `json:"ready_label,omitempty" jsonschema:"for on: label of the issues autopilot may pick up; defaults to saddle:ready"`
 }
 
 type ConcurrencyIn struct {
@@ -527,6 +538,43 @@ func New(a *app.App, task string) *mcp.Server {
 				return nil, automerge.Status{}, err
 			}
 			st, err := w.Status()
+			return nil, st, err
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "autopilot", Description: "Autopilot (off by default): while on, saddle itself lands, tops up from open issues labelled ready up to the concurrency cap and nudges you when the pipeline stalls. on starts a run (optional until, until_usage, max_tasks, ready_label); off ends it; pause and resume hold and continue it; status reads it. Only turn it on when the owner asked."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in AutopilotIn) (*mcp.CallToolResult, autopilot.State, error) {
+			d := a.NewAutopilot(nil)
+			var st autopilot.State
+			var err error
+			switch in.Action {
+			case "on":
+				var o autopilot.Options
+				if in.Until != "" {
+					if o.Stop.Until, err = autopilot.ParseUntil(in.Until, time.Now()); err != nil {
+						return nil, st, err
+					}
+				}
+				if in.UntilUsage != "" {
+					if o.Stop.UntilUsage, err = autopilot.ParseUsage(in.UntilUsage); err != nil {
+						return nil, st, err
+					}
+				}
+				if in.MaxTasks < 0 {
+					return nil, st, fmt.Errorf("max_tasks %d: want 0 (no limit) or more", in.MaxTasks)
+				}
+				o.Stop.MaxTasks, o.ReadyLabel = in.MaxTasks, in.ReadyLabel
+				st, err = d.Enable(o)
+			case "off":
+				st, err = d.Disable()
+			case "pause":
+				st, err = d.Pause()
+			case "resume":
+				st, err = d.Resume()
+			case "status", "":
+				st, err = d.Status()
+			default:
+				err = fmt.Errorf("unknown action %q: want on, off, status, pause or resume", in.Action)
+			}
 			return nil, st, err
 		})
 

@@ -118,6 +118,7 @@ The goal is getting work done, not needing manual intervention. When a tool is s
 - Prefer the escape hatches over editing state.db: ` + "`unstack`" + ` <task|pr> detaches a task or PR from a broken stack (CLI: saddle unstack); ` + "`sentinel_ack`" + ` clears a guard or freeze sentinel that blocks work (saddle sentinel ack); ` + "`requeue`" + ` puts a failed or stuck task back in the landing queue (saddle requeue).
 - Steer the train and merges with tools, not state.db: ` + "`queue_move`" + `, ` + "`queue_hold`" + ` and ` + "`queue_release`" + ` reorder, hold and release branches waiting to land (saddle queue); ` + "`automerge`" + ` on|off|status|hold|release controls merging ready stacks (off by default; only turn it on or release a held stack when the owner asks; a held stack stays tracked, and ` + "`saddle stack rebase <stack>`" + ` rebases it).
 - Never leave things where only a human can unblock them.
+- While autopilot is on (` + "`saddle autopilot status`" + `), saddle drives the loop: it lands, tops up from ready issues and nudges you on stalls. Never end your turn to wait: check status, land, review or sequence blocked work, or pick another ready ticket. Never ask the owner for permission to continue. On a permission denial or capacity wall, log it, move to other work, and escalate only when nothing else is possible.
 
 ## Talking
 ` + talking
