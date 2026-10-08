@@ -28,7 +28,7 @@ func (a *App) NewAutomerge(gh automerge.GitHub) *automerge.Watcher {
 		Base:     a.Cfg.Base,
 		GH:       gh,
 		Entries:  a.automergeEntries,
-		AtRisk:   a.flagCovers,
+		AtRisk:   a.atRisk,
 		Behind:   a.behindBase,
 		Restack:  func() error { _, err := a.Restack(); return err },
 		Lock:     a.TryLockTrain,
@@ -95,6 +95,15 @@ func (a *App) automergeEntries() ([]automerge.Entry, error) {
 		}
 	}
 	return out, nil
+}
+
+// atRisk says why auto-merge must leave task alone: red CI on it or below
+// it, or the stack-at-risk flag covering it.
+func (a *App) atRisk(task string) string {
+	if why := a.CIRedCovers(task); why != "" {
+		return why
+	}
+	return a.flagCovers(task)
 }
 
 // flagCovers says why the stack-at-risk flag covers task: it is the flagged

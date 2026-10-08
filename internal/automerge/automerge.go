@@ -123,7 +123,7 @@ type Node struct {
 	Mergeable  string   `json:"mergeable,omitempty"`
 	MergeState string   `json:"merge_state,omitempty"`
 	Labels     []string `json:"labels,omitempty"`
-	AtRisk     string   `json:"at_risk,omitempty"` // why a stack-at-risk flag covers it
+	AtRisk     string   `json:"at_risk,omitempty"` // why it must not merge: red CI on or below it, or the stack-at-risk flag
 	Error      string   `json:"error,omitempty"`   // GitHub couldn't be asked
 	head       string
 }
@@ -213,7 +213,9 @@ type Watcher struct {
 	GH      GitHub
 	// Entries lists the stacked tasks with PRs, in train order.
 	Entries func() ([]Entry, error)
-	// AtRisk says why the stack-at-risk flag covers task; "" if it doesn't.
+	// AtRisk says why task must not merge, by bottom-up merge or collapse:
+	// red CI that the ci-red watcher holds on it or below it, or the
+	// stack-at-risk flag covering it; "" if nothing does.
 	AtRisk func(task string) string
 	// Behind counts the commits base has that head lacks.
 	Behind func(head string) int
@@ -545,7 +547,7 @@ func (w *Watcher) refusal(n Node) (why string, wait bool) {
 	case slices.Contains(n.Labels, NeedsHuman):
 		return "it is labeled " + NeedsHuman, false
 	case n.AtRisk != "":
-		return "the stack is flagged at risk: " + n.AtRisk, false
+		return "it is at risk: " + n.AtRisk, false
 	case n.Base != w.Base:
 		return fmt.Sprintf("it targets %s, not %s; waiting for restack to retarget it", n.Base, w.Base), true
 	case n.Mergeable == "CONFLICTING" || n.MergeState == "DIRTY":

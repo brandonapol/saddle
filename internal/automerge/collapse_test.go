@@ -196,3 +196,19 @@ func TestPlanSaysCollapseIsNext(t *testing.T) {
 		t.Fatal("Plan collapsed")
 	}
 }
+
+// Red CI the ci-red watcher holds comes in through AtRisk on the red layer
+// and everything above it; collapse leaves that stack alone.
+func TestCollapseNotPastCIRed(t *testing.T) {
+	c := newCollapseRig(t)
+	c.risk["t1"] = "CI is red on its PR (CI / test)"
+	c.risk["t2"] = "CI is red on t1 below it (CI / test)"
+	c.on(t)
+	st := check(t, c.w)
+	if len(c.calls) != 0 || st.Merged != "" || st.Stacks[0].Collapse != "" {
+		t.Fatalf("collapsed past ci-red: calls %v status %+v", c.calls, st)
+	}
+	if !strings.Contains(st.Stacks[0].Why, "CI is red on its PR") {
+		t.Fatalf("why = %q, want the ci-red reason", st.Stacks[0].Why)
+	}
+}

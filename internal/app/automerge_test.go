@@ -278,3 +278,63 @@ func TestAutomergeCollapsesRedBottom(t *testing.T) {
 		}
 	}
 }
+
+// redOn records task red in the ci-red state, holding the tasks above it.
+func redOn(t *testing.T, a *App, task string, held ...string) {
+	t.Helper()
+	tk, err := a.Store.Task(task)
+	must(t, err)
+	must(t, a.SetCIRed(CIRedState{Red: []CIRedLayer{{Task: task, PR: tk.PR, Checks: []string{"CI / test"}, Held: held}}}))
+}
+
+// The ci-red hook: a layer the ci-red watcher holds red, and every layer
+// above it, never merges bottom-up, even while GitHub reports them green.
+func TestAutomergeRefusesCIRedLayers(t *testing.T) {
+	a, h, _ := stackOfTwo(t)
+	t1, _ := a.Store.Task("t1")
+	h.checks[t1.PR] = []string{automerge.ChecksPass}
+	redOn(t, a, "t1", "t2")
+	w := a.NewAutomerge(h)
+	must(t, w.SetEnabled(true))
+	st, err := w.Check()
+	must(t, err)
+	if st.Merged != "" || len(h.merged) != 0 {
+		t.Fatalf("merged %q (%v) past ci-red", st.Merged, h.merged)
+	}
+	if len(st.Stacks) != 1 || !strings.Contains(st.Stacks[0].Why, "CI is red on its PR") {
+		t.Fatalf("stacks = %+v, want the bottom refused for ci-red", st.Stacks)
+	}
+	if n := st.Stacks[0].Nodes; n[1].AtRisk == "" || !strings.Contains(n[1].AtRisk, "below it") {
+		t.Fatalf("t2 = %+v, want covered by the red layer below it", n[1])
+	}
+	for _, id := range []string{"t1", "t2"} {
+		if got := trainState(t, a, id); got == TrainMerged {
+			t.Fatalf("%s merged past ci-red", id)
+		}
+	}
+}
+
+// Collapse never passes a layer ci-red holds: the red layer's repair folds
+// into it (#213), and a green PR above it doesn't merge it. Nor does
+// collapse pass the stack-at-risk flag.
+func TestAutomergeNoCollapsePastRisk(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(a *App)
+	}{
+		{"ci-red", func(a *App) { redOn(t, a, "t1", "t2") }},
+		{"flag", func(a *App) { must(t, a.SetFlag(StackFlag{Task: "t1", Cause: "main moved"})) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, h, _ := stackOfTwo(t)
+			tc.set(a)
+			w := a.NewAutomerge(h)
+			must(t, w.SetEnabled(true))
+			st, err := w.Check()
+			must(t, err)
+			if st.Merged != "" || len(h.merged) != 0 || st.Stacks[0].Collapse != "" {
+				t.Fatalf("collapsed past %s: %+v (merged %v)", tc.name, st, h.merged)
+			}
+		})
+	}
+}
