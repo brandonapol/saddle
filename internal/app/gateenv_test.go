@@ -85,6 +85,9 @@ func TestRunGateEnvRetriesEnvironmentFailure(t *testing.T) {
 	if !strings.HasPrefix(base, filepath.Join(cache, "saddle", "tmp")+string(filepath.Separator)) {
 		t.Fatalf("default tmpdir %s is not under the user cache dir", base)
 	}
+	if _, err := os.Stat(base); !os.IsNotExist(err) {
+		t.Fatalf("empty gate tmpdir %s left in the user cache dir (%v)", base, err)
+	}
 	es, err := a.Store.Events(100)
 	must(t, err)
 	found := false

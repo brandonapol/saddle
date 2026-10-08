@@ -177,7 +177,8 @@ func (a *App) RunGateEnv(ctx context.Context, task string, run GateRun) GateEnvR
 	}
 }
 
-// gateOnce runs the gate once in a fresh per-run temp dir, removed after.
+// gateOnce runs the gate once in a fresh per-run temp dir, removed after
+// along with base when nothing else is left in it.
 func (a *App) gateOnce(ctx context.Context, base string, run GateRun) (string, error) {
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		return "", fmt.Errorf("gate tmpdir: %w", err)
@@ -187,7 +188,10 @@ func (a *App) gateOnce(ctx context.Context, base string, run GateRun) (string, e
 		// Can't even make the dir: that is the environment too.
 		return "cannot create temp dir: " + err.Error(), err
 	}
-	defer func() { _ = os.RemoveAll(dir) }()
+	defer func() {
+		_ = os.RemoveAll(dir)
+		_ = os.Remove(base) // only if empty: the default lives in the user's cache dir
+	}()
 	return run(ctx, []string{"TMPDIR=" + dir, "GOTMPDIR=" + dir})
 }
 
