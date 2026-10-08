@@ -1,6 +1,9 @@
 # Heavy-run scheduler (runq)
 
 Status: core shipped as `saddle run` and `saddle runq` (#238) in observe mode; design in #236.
+The train's test gate and the pre-publish checks take a lease at `PrioGate` (#239): the
+class is the first `[classes]` pattern (in class-name order) that `test.cmd` matches, else
+`default`, and the gate's children get `SADDLE_RUNQ_LEASE` and `SADDLE_RUNQ_DB`.
 
 ## Problem
 
