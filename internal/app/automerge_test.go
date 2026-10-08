@@ -74,7 +74,7 @@ func (g *squashGH) Merge(url, method, head string) error {
 
 func ghCalls(t *testing.T) []string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(os.Getenv(fakeGHEnv), "gh.log"))
+	b, err := os.ReadFile(filepath.Join(fakeGHDir(t), "gh.log"))
 	if err != nil {
 		return nil
 	}
@@ -91,6 +91,7 @@ func noticesFor(t *testing.T, a *App, task string) []store.Notice {
 // #152: wired to the real stack, the watcher merges the bottom PR, restack
 // retargets the next one to main, and the next tick merges that one.
 func TestAutomergeMergesStackBottomUp(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.Output = "single"
 	origin, _ := originWithGh(t, a)
@@ -136,6 +137,7 @@ func TestAutomergeMergesStackBottomUp(t *testing.T) {
 // Holding by PR number holds the task's stack; the state accessor (for the
 // TUI) shows it without asking GitHub; a held stack never merges.
 func TestAutomergeHoldByPR(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, _ := originWithGh(t, a)
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -169,6 +171,7 @@ func TestAutomergeHoldByPR(t *testing.T) {
 
 // The at-risk flag covers its layer and the ones above, not those below.
 func TestAutomergeFlagCovers(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
 	landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})
@@ -187,6 +190,7 @@ func TestAutomergeFlagCovers(t *testing.T) {
 // A held stack still restacks: stack rebase moves it onto the new main,
 // reports what moved, and leaves the hold in place.
 func TestStackRebaseMovesHeldStack(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.Output = "single"
 	origin, _ := originWithGh(t, a)
@@ -225,6 +229,7 @@ func TestStackRebaseMovesHeldStack(t *testing.T) {
 // A conflict stops stack rebase, moves nothing, and goes back to its owner
 // while its agent is alive (#172 repairs an orphaned one instead).
 func TestStackRebaseConflictReturnsToOwner(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.CloseOnLand = false
 	origin, _ := originWithGh(t, a)

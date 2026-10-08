@@ -15,6 +15,7 @@ import (
 // startup. Land re-reads the config, so lint.cmd edited between two lands
 // takes effect on the second.
 func TestLandReloadsLintCmdBetweenLands(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	tk := queueTask(t, a, "t1", "lint", map[string]string{"x.go": "LINTBAD\n"})
 	write(t, a.Root, ".saddle/config.toml", "[test]\ncmd = \"none\"\n[train]\nlint.cmd = '"+badLint+"'\n")
@@ -39,6 +40,7 @@ func TestLandReloadsLintCmdBetweenLands(t *testing.T) {
 // Only what the file changed is applied: a setting made in memory stands
 // while the file leaves it alone, and other sections are untouched.
 func TestReloadTrainConfigAppliesOnlyChanges(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	must(t, a.Init()) // writes the commented-out template
 	a.Cfg.Train.Lint = config.Lint{Cmd: "in-memory", Set: true}
@@ -61,6 +63,7 @@ func TestReloadTrainConfigAppliesOnlyChanges(t *testing.T) {
 
 // SIGHUP to saddle mcp reloads the config without waiting for a land.
 func TestReloadOnSignal(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	must(t, a.Init())
 	_, err := a.ReloadTrainConfig() // baseline
@@ -97,6 +100,7 @@ func TestReloadOnSignal(t *testing.T) {
 // The hand fix for a gate nested in the repo was [train] tmpdir, applied
 // with SIGHUP, but the reload skipped it and the train kept .saddle/tmp.
 func TestReloadTrainConfigAppliesTmpdir(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	must(t, a.Init())
 	_, err := a.ReloadTrainConfig() // baseline

@@ -16,6 +16,7 @@ import (
 
 // #184: environment failures are told apart from the branch's own.
 func TestClassifyGateOutput(t *testing.T) {
+	t.Parallel()
 	for out, want := range map[string]bool{
 		"open /tmp/TestX/001/db: disk quota exceeded":                 true,
 		"write /tmp/go-build123/b001/x.a: no space left on device":    true,
@@ -103,6 +104,7 @@ func TestRunGateEnvRetriesEnvironmentFailure(t *testing.T) {
 
 // #184: a real failure is the branch's: no retry.
 func TestRunGateEnvRealFailureIsNotRetried(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	g := &fakeGate{outs: []string{"--- FAIL: TestThing", "--- FAIL: TestThing"}}
 	res := a.RunGateEnv(context.Background(), "t1", g.run)
@@ -114,6 +116,7 @@ func TestRunGateEnvRealFailureIsNotRetried(t *testing.T) {
 // #184: an environment that stays broken after two retries is the
 // orchestrator's problem, raised as an action notice naming what to free.
 func TestRunGateEnvEscalatesAfterTwoRetries(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	quota := "write /tmp/x: disk quota exceeded"
 	g := &fakeGate{outs: []string{quota, quota, quota, quota}}
@@ -140,6 +143,7 @@ func TestRunGateEnvEscalatesAfterTwoRetries(t *testing.T) {
 // #184: day-old Test* and go-build* dirs in the gate's tmpdir are swept
 // before a run; fresh ones and anything else stay.
 func TestRunGateEnvSweepsStaleTempDirs(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	a.Cfg.Train.Tmpdir = filepath.Join(t.TempDir(), "scratch")
 	base := a.GateTmpdir()
@@ -228,6 +232,7 @@ echo gate ok`
 }
 
 func TestGateEnvironDropsTheTrainsVars(t *testing.T) {
+	t.Parallel()
 	got := GateEnviron([]string{"PATH=/bin", "GIT_DIR=/r/.git", "SADDLE_TASK=t0", "SADDLE_TRUST_FILE=/x",
 		"GIT_AUTHOR_NAME=t", "CLAUDE_PROJECT_DIR=/r", "HOME=/h"})
 	if want := []string{"PATH=/bin", "GIT_AUTHOR_NAME=t", "HOME=/h"}; strings.Join(got, " ") != strings.Join(want, " ") {
@@ -237,10 +242,10 @@ func TestGateEnvironDropsTheTrainsVars(t *testing.T) {
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// setGateTimeout sets [train] gate_timeout in the user config setup points
-// XDG_CONFIG_HOME at.
+// setGateTimeout sets [train] gate_timeout in a user config private to t.
 func setGateTimeout(t *testing.T, d string) {
 	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	dir := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "saddle")
 	must(t, os.MkdirAll(dir, 0o755))
 	must(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[train]\ngate_timeout = \""+d+"\"\n"), 0o644))
@@ -298,6 +303,7 @@ func TestRunGateEnvTimeoutKillsTheGroup(t *testing.T) {
 // #269: a gate that leaves a helper holding its stdout returns when its
 // shell exits, not when the helper does.
 func TestShellGateReturnsWhenTheShellExits(t *testing.T) {
+	t.Parallel()
 	start := time.Now()
 	out, err := ShellGate(t.TempDir(), "(sleep 20; echo helper-exit) & echo gate-ok", time.Minute)(context.Background(), nil)
 	if err != nil || !strings.Contains(out, "gate-ok") {
@@ -311,6 +317,7 @@ func TestShellGateReturnsWhenTheShellExits(t *testing.T) {
 // #269: when the gate's caller gives up (land is interrupted), the gate's
 // whole group goes with it.
 func TestShellGateCancelKillsTheGroup(t *testing.T) {
+	t.Parallel()
 	pidf := filepath.Join(t.TempDir(), "child")
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {

@@ -8,6 +8,7 @@ import (
 )
 
 func TestSpawnDepthCap(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	parent := OrchestratorID
 	for depth := 1; depth <= DefaultMaxDepth; depth++ {
@@ -27,6 +28,7 @@ func TestSpawnDepthCap(t *testing.T) {
 }
 
 func TestSpawnFanOutCap(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	a.Cfg.Concurrency = 100
 	p, err := a.Spawn(SpawnReq{Title: "parent"})
@@ -50,6 +52,7 @@ func TestSpawnFanOutCap(t *testing.T) {
 
 // #142: spawn.max_depth and spawn.max_children come from config.
 func TestSpawnCapsFromConfig(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	a.Cfg.Spawn.MaxDepth, a.Cfg.Spawn.MaxChildren = 1, 1
 	p, err := a.Spawn(SpawnReq{Title: "parent"})

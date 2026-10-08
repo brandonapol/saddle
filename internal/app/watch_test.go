@@ -3,6 +3,7 @@ package app
 import "testing"
 
 func TestDetectPrompt(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"Quick safety check: Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder": PromptTrust,
 		" Do you want to create hello.txt?\n ❯ 1. Yes\n   2. Yes, and switch to accept edits\n   3. No":                 PromptAsk,

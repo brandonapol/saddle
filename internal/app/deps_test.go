@@ -9,6 +9,7 @@ import (
 // #193: spawn records an explicit after edge so the task stacks on its
 // dependency even when their files don't overlap.
 func TestSpawnRecordsAfter(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	t1, err := a.Spawn(SpawnReq{ID: "t1", Title: "harness"})
 	must(t, err)
@@ -34,6 +35,7 @@ func TestSpawnRecordsAfter(t *testing.T) {
 }
 
 func TestSpawnRejectsBadAfter(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	for name, after := range map[string][]string{
 		"unknown": {"t9"},
@@ -77,6 +79,7 @@ index 0000000..3333333
 // #193: a CI failure counts as explained by a sibling only when the
 // sibling's diff clearly adds the missing make target, file or symbol.
 func TestMissingAddedBy(t *testing.T) {
+	t.Parallel()
 	diff := parseDiff(siblingDiff)
 	for name, tc := range map[string]struct {
 		log  string
@@ -116,6 +119,7 @@ const noE2ETarget = "make: *** No rule to make target 'test/e2e'.  Stop."
 // branch, that adds what the log says is missing explains the failure; a
 // layer already below the failing one in its PR stack does not.
 func TestDependencyExplainsPendingSibling(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	landTask(t, a, "t1", "e2e harness", map[string]string{"Makefile": "test/e2e:\n\tgo test ./e2e\n"})
 	landTask(t, a, "t2", "e2e ci job", map[string]string{"e2e.yml": "run: make test/e2e\n"})

@@ -43,6 +43,7 @@ func orchNotices(t *testing.T, a *App, s string) []string {
 // files, the base and t1's prompt and summary. A second restack spawns no
 // second repair.
 func TestRestackOrphanConflictSpawnsOneRepair(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, _ := originWithGh(t, a)
 	t1, err := a.Spawn(SpawnReq{ID: "t1", Title: "one", Prompt: "Make README say one.", Claims: []string{"docs/**"}})
@@ -119,6 +120,7 @@ func TestRestackOrphanConflictSpawnsOneRepair(t *testing.T) {
 // When the repair lands, the original leaves the stack as superseded and
 // its PR is closed with a comment naming the repair.
 func TestRepairLandSupersedesOriginal(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, ghLog := originWithGh(t, a)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"README.md": "one\n"})
@@ -161,6 +163,7 @@ func TestRepairLandSupersedesOriginal(t *testing.T) {
 // A task whose agent is still alive gets the restack conflict, as before:
 // no repair task.
 func TestRestackConflictLiveOwnerGetsNoRepair(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.CloseOnLand = false
 	origin, _ := originWithGh(t, a)
@@ -184,6 +187,7 @@ func TestRestackConflictLiveOwnerGetsNoRepair(t *testing.T) {
 // window closed) conflicts in land: the train spawns one repair instead of
 // returning the conflict to nobody, and doesn't escalate.
 func TestLandConflictOrphanSpawnsRepair(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	a.Cfg.Test.Cmd = "none"
 	t1, _ := a.Spawn(SpawnReq{Title: "one"})
@@ -235,6 +239,7 @@ func TestLandConflictOrphanSpawnsRepair(t *testing.T) {
 
 // `saddle repair <task>` triggers a repair by hand, at most once.
 func TestRepairByHand(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.CloseOnLand = false // a live but stuck owner
 	origin, _ := originWithGh(t, a)

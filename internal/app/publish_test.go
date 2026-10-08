@@ -32,6 +32,7 @@ func prCreate(log []string, head string) string {
 }
 
 func TestPublishLandedTasksAsIndependentPRs(t *testing.T) {
+	t.Parallel()
 	a, origin, ghLog := publishSetup(t)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
 	tk, err := a.Spawn(SpawnReq{ID: "t2", Title: "two"})
@@ -109,6 +110,7 @@ func TestPublishLandedTasksAsIndependentPRs(t *testing.T) {
 }
 
 func TestPublishRefusesWorkFromBelow(t *testing.T) {
+	t.Parallel()
 	a, origin, ghLog := publishSetup(t)
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
 	landTask(t, a, "t2", "two", map[string]string{"one.txt": "one\ntwo\n"})
@@ -126,6 +128,7 @@ func TestPublishRefusesWorkFromBelow(t *testing.T) {
 }
 
 func TestPublishBranchRefusesOtherTasksCommits(t *testing.T) {
+	t.Parallel()
 	a, origin, _ := publishSetup(t)
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
 	git(t, a.Root, "branch", "fix/mine", a.Cfg.Integration)
@@ -143,6 +146,7 @@ func TestPublishBranchRefusesOtherTasksCommits(t *testing.T) {
 }
 
 func TestPublishExistingPRPrintsURL(t *testing.T) {
+	t.Parallel()
 	a, origin, ghLog := publishSetup(t)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
 	must(t, a.Store.SetField(t1.ID, "pr", "https://github.com/o/r/pull/7"))
@@ -158,6 +162,7 @@ func TestPublishExistingPRPrintsURL(t *testing.T) {
 }
 
 func TestPublishRefusesAnotherTasksBranch(t *testing.T) {
+	t.Parallel()
 	a, _, _ := publishSetup(t)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
 	landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})
@@ -169,6 +174,7 @@ func TestPublishRefusesAnotherTasksBranch(t *testing.T) {
 }
 
 func TestPRsLeavesPublishedTaskAlone(t *testing.T) {
+	t.Parallel()
 	a, origin, ghLog := publishSetup(t)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
 	res, err := a.Publish(PublishReq{Target: "t1"})

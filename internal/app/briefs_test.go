@@ -8,6 +8,7 @@ import (
 )
 
 func TestWorkerBriefRequiresRegressionTests(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	brief := a.workerBrief(store.Task{ID: "t1", Title: "x"}, nil)
 	for _, want := range []string{"write a failing test", "New behavior ships with tests", "done summary"} {
@@ -18,6 +19,7 @@ func TestWorkerBriefRequiresRegressionTests(t *testing.T) {
 }
 
 func TestOrchestratorBriefUrgentAndGettingUnstuck(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	brief := a.orchestratorBrief()
 	for _, want := range []string{
@@ -35,6 +37,7 @@ func TestOrchestratorBriefUrgentAndGettingUnstuck(t *testing.T) {
 }
 
 func TestOrchestratorBriefAsksForTests(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	if !strings.Contains(a.orchestratorBrief(), "which tests must exist") {
 		t.Error("orchestrator brief should tell spawn prompts to name required tests")
@@ -43,6 +46,7 @@ func TestOrchestratorBriefAsksForTests(t *testing.T) {
 
 // #146, #152: the orchestrator brief names the queue and automerge tools.
 func TestOrchestratorBriefQueueAndAutomergeTools(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	brief := a.orchestratorBrief()
 	for _, want := range []string{"`queue_move`", "`queue_hold`", "`queue_release`", "`automerge`", "saddle stack rebase"} {
@@ -54,6 +58,7 @@ func TestOrchestratorBriefQueueAndAutomergeTools(t *testing.T) {
 
 // #179: the orchestrator brief says when and how to compact its context.
 func TestOrchestratorBriefCompaction(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	for name, brief := range map[string]string{"tui": a.orchestratorBrief(), "plugin": a.PluginBrief()} {
 		for _, want := range []string{
@@ -70,6 +75,7 @@ func TestOrchestratorBriefCompaction(t *testing.T) {
 
 // #176: the brief states the live cap and names the concurrency tool.
 func TestOrchestratorBriefConcurrency(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	_, err := a.SetConcurrency(3)
 	must(t, err)
@@ -83,6 +89,7 @@ func TestOrchestratorBriefConcurrency(t *testing.T) {
 
 // #212: the brief names the repo's gate and forbids --no-verify.
 func TestWorkerBriefNamesRepoCheck(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	brief := a.workerBrief(store.Task{ID: "t1", Title: "x"}, nil)
 	if !strings.Contains(brief, "--no-verify") {
@@ -100,6 +107,7 @@ func TestWorkerBriefNamesRepoCheck(t *testing.T) {
 // #220/#213: the orchestrator learns publish is the way out of a blocked
 // prs, never a hand push, and that ci-red holds the layers above.
 func TestOrchestratorBriefPublishAndCIRed(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	b := a.orchestratorBrief()
 	for _, want := range []string{"saddle publish <task>", "Never `git push` or `gh pr create` by hand", "auto-mode classifier", "holds the layers above it"} {
@@ -111,6 +119,7 @@ func TestOrchestratorBriefPublishAndCIRed(t *testing.T) {
 
 // #256: the orchestrator brief says what to do while autopilot is on.
 func TestOrchestratorBriefAutopilot(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	brief := a.orchestratorBrief()
 	for _, want := range []string{"`saddle autopilot status`", "Never end your turn to wait", "Never ask the owner for permission to continue", "escalate only when nothing else is possible"} {
@@ -124,6 +133,7 @@ func TestOrchestratorBriefAutopilot(t *testing.T) {
 // advisor, and turning it on only inserts the advisor section: removing that
 // section gives back the off brief byte for byte.
 func TestOrchestratorBriefAdvisorOffGolden(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	for name, brief := range map[string]func() string{"tui": a.orchestratorBrief, "plugin": a.PluginBrief} {
 		a.Cfg.Claude.Advisor.Enabled = false
@@ -147,6 +157,7 @@ func TestOrchestratorBriefAdvisorOffGolden(t *testing.T) {
 // Haiku swarm read-only with structured summaries, and keeps Opus silent on
 // routine bash and digest traffic.
 func TestOrchestratorBriefAdvisorOn(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	a.Cfg.Claude.Advisor.Enabled = true
 	for name, brief := range map[string]string{"tui": a.orchestratorBrief(), "plugin": a.PluginBrief()} {

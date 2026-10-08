@@ -20,6 +20,7 @@ func addRecentUsage(t *testing.T, a *App, tokens int64) {
 }
 
 func TestLimitsEstimateFromStore(t *testing.T) {
+	t.Parallel()
 	a, _ := meterApp(t)
 	a.Cfg.Limits = usage.Limits{FiveHour: usage.Cap{Tokens: 1000}}
 	addRecentUsage(t, a, 900)
@@ -33,6 +34,7 @@ func TestLimitsEstimateFromStore(t *testing.T) {
 // Over a cap with pause_launches on, spawn refuses with an error that tells
 // the orchestrator why and how to get past it; force still spawns.
 func TestSpawnRefusedWhenOverCap(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	a.Cfg.Limits = usage.Limits{FiveHour: usage.Cap{Tokens: 1000}, PauseLaunches: true}
 	addRecentUsage(t, a, 1500)
@@ -56,6 +58,7 @@ func TestSpawnRefusedWhenOverCap(t *testing.T) {
 
 // Without pause_launches, being over a cap only shows in the usage strip.
 func TestSpawnAllowedOverCapWithoutPause(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	a.Cfg.Limits = usage.Limits{FiveHour: usage.Cap{Tokens: 1000}}
 	addRecentUsage(t, a, 1500)

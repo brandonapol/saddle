@@ -32,6 +32,7 @@ func gateStack(t *testing.T) (*App, string, []store.Task) {
 // anything above it; the layers below go out, and the error names the layer,
 // the check, its command and its output.
 func TestPRsGateHoldsRedLayerAndAbove(t *testing.T) {
+	t.Parallel()
 	a, origin, ts := gateStack(t)
 	_, err := a.PRs()
 	if err == nil {
@@ -74,6 +75,7 @@ func TestPRsGateHoldsRedLayerAndAbove(t *testing.T) {
 // A green layer is checked once per tree: prs again over the same heads runs
 // nothing, and a red layer that is fixed clears its record.
 func TestPRsGateCachesGreenAndClearsFixed(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.Output = "single"
 	_, _ = originWithGh(t, a)
@@ -109,6 +111,7 @@ func TestPRsGateCachesGreenAndClearsFixed(t *testing.T) {
 
 // Parallel workers check every layer and still hold the red one.
 func TestPRsGateParallel(t *testing.T) {
+	t.Parallel()
 	a, origin, ts := gateStack(t)
 	a.Cfg.Train.Prepublish.Parallel = 3
 	if _, err := a.PRs(); err == nil || !strings.Contains(err.Error(), "layer t3") {
@@ -120,6 +123,7 @@ func TestPRsGateParallel(t *testing.T) {
 }
 
 func TestGateChecksDedupesAndSkipsNone(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.Lint.Set, a.Cfg.Train.Lint.Cmd = true, "make check"
 	a.Cfg.Test.Cmd = "make check"
@@ -144,6 +148,7 @@ func TestGateChecksDedupesAndSkipsNone(t *testing.T) {
 // A check that runs past the timeout is killed, with everything it started,
 // and counts as red, not as the environment.
 func TestGateLayerTimesOut(t *testing.T) {
+	t.Parallel()
 	a, _, ts := gateStack(t)
 	a.Cfg.Train.Prepublish.Timeout = 200 * time.Millisecond
 	dir, err := a.gateWorktree(0)
@@ -164,6 +169,7 @@ func TestGateLayerTimesOut(t *testing.T) {
 // #274: a check that fails once on the environment (disk quota exceeded)
 // is retried, as the train's gate is, and the layer publishes.
 func TestPRsGateRetriesEnvironmentFailure(t *testing.T) {
+	t.Parallel()
 	a, origin, ts := gateStack(t)
 	once := filepath.Join(t.TempDir(), "once")
 	a.Cfg.Train.Prepublish.Cmd = "if [ ! -e " + once + " ]; then touch " + once + "; echo 'compile: writing output: disk quota exceeded'; exit 1; fi"
@@ -184,6 +190,7 @@ func TestPRsGateRetriesEnvironmentFailure(t *testing.T) {
 // the ones above it, but reports the environment, not the layer: no red
 // record, so no ci-red hold or repair for it.
 func TestPRsGateEnvironmentFailureDoesNotBlameTheLayer(t *testing.T) {
+	t.Parallel()
 	a, origin, ts := gateStack(t)
 	a.Cfg.Train.Prepublish.Cmd = "test ! -f uses-word.txt || { echo 'sqlite: disk I/O error'; echo 'disk quota exceeded'; exit 1; }"
 	_, err := a.PRs()
@@ -224,6 +231,7 @@ func TestPRsGateEnvironmentFailureDoesNotBlameTheLayer(t *testing.T) {
 
 // saddle publish runs the gate on the head it is about to push.
 func TestPublishRefusesRedHead(t *testing.T) {
+	t.Parallel()
 	a, origin, _ := publishSetup(t)
 	landTask(t, a, "t1", "one", map[string]string{"bad.txt": "one\n"})
 	a.Cfg.Train.Prepublish.Cmd = "test ! -f bad.txt"
@@ -239,6 +247,7 @@ func TestPublishRefusesRedHead(t *testing.T) {
 // #223 item 2: restack re-runs the cheap checks on every layer it re-cut,
 // records a red one so prs holds it, and tells the orchestrator.
 func TestGateRestackFlagsRecutLayer(t *testing.T) {
+	t.Parallel()
 	a, _, ts := gateStack(t)
 	_, _ = a.Store.TakeNotices(OrchestratorID, false)
 	t3, t4 := ts[2], ts[3]
@@ -276,6 +285,7 @@ func TestGateRestackFlagsRecutLayer(t *testing.T) {
 // has two 0002 migrations: the cheap check flags t2, and prs then holds t2
 // and t3 above it while t1 goes out.
 func TestRestackFlagsDuplicateMigration(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.Output = "single"
 	origin, _ := originWithGh(t, a)
@@ -312,6 +322,7 @@ func TestRestackFlagsDuplicateMigration(t *testing.T) {
 // The train just ran [test] cmd on each tree it landed; prs over those same
 // heads doesn't run it again.
 func TestPRsGateTrustsTheTrainsTests(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.Output = "single"
 	_, _ = originWithGh(t, a)

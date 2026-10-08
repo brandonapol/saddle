@@ -44,6 +44,7 @@ func hasEvent(t *testing.T, a *App, kind, sub string) bool {
 // #84: integration is cut from origin/<base>, not a stale local base, and
 // falling behind origin is reported once.
 func TestIntegrationCutFromOrigin(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	other := withOrigin(t, a)
 	pushCommit(t, other, "upstream1.txt")
@@ -84,6 +85,7 @@ func TestIntegrationCutFromOrigin(t *testing.T) {
 // #91: a spawn that fails after its row exists is marked failed with the
 // reason, leaves no branch, and a claim conflict leaves no row at all.
 func TestFailedSpawnIsRecorded(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	id, err := a.Store.NextID()
 	must(t, err)
@@ -131,6 +133,7 @@ func exists(p string) bool {
 
 // #92: kill cleans up after itself unless the branch holds work.
 func TestKillCleansUp(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	empty, err := a.Spawn(SpawnReq{Title: "empty"})
 	must(t, err)
@@ -161,6 +164,7 @@ func TestKillCleansUp(t *testing.T) {
 
 // #92: gc removes orphaned worktrees, branches and refs/saddle leftovers.
 func TestGCRemovesLeftovers(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	live, err := a.Spawn(SpawnReq{Title: "live"})
 	must(t, err)
@@ -196,6 +200,7 @@ func TestGCRemovesLeftovers(t *testing.T) {
 
 // #93: the headless orchestrator never gets keys typed into a stale window.
 func TestOrchestratorGetsNoWakeKeys(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	ft.windows["@0"] = true // the TUI's own window, recorded by an old-style saddle up
 	must(t, a.Store.CreateTask(store.Task{ID: OrchestratorID, Title: "orchestrator", Role: store.RoleOrchestrator,
@@ -216,6 +221,7 @@ func TestOrchestratorGetsNoWakeKeys(t *testing.T) {
 
 // #93: a window id that now belongs to something else is never typed into.
 func TestNoKeysIntoForeignWindow(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	w, err := a.Spawn(SpawnReq{Title: "worker"})
 	must(t, err)
@@ -259,6 +265,7 @@ func leftover(ls []Leftover, kind, name string) (Leftover, bool) {
 // #158: a branch whose PR was squash-merged into main has different SHAs than
 // main, but its work is there; gc removes it.
 func TestGCRemovesSquashMergedBranch(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	other := withOrigin(t, a)
 	task := killedWithWork(t, a, "squashed", "a.txt", "b.txt")
@@ -284,6 +291,7 @@ func TestGCRemovesSquashMergedBranch(t *testing.T) {
 
 // #158: a stacked branch squash-merged after the branch below it is removed too.
 func TestGCRemovesStackedSquashMergedBranch(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	other := withOrigin(t, a)
 	task := killedWithWork(t, a, "stacked", "a.txt", "b.txt")
@@ -305,6 +313,7 @@ func TestGCRemovesStackedSquashMergedBranch(t *testing.T) {
 
 // #158: real unmerged work is kept, with the reason.
 func TestGCKeepsUnmergedWork(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	other := withOrigin(t, a)
 	task := killedWithWork(t, a, "partial", "a.txt", "b.txt")
@@ -327,6 +336,7 @@ func TestGCKeepsUnmergedWork(t *testing.T) {
 // #158: a worktree with uncommitted changes is never removed, and neither is
 // its branch.
 func TestGCKeepsDirtyWorktree(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	task, err := a.Spawn(SpawnReq{Title: "dirty"})
 	must(t, err)
@@ -346,6 +356,7 @@ func TestGCKeepsDirtyWorktree(t *testing.T) {
 // #158: a killed task's clean worktree is removed; its branch goes too once
 // its work is merged.
 func TestGCRemovesKilledWorktree(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	other := withOrigin(t, a)
 	task, err := a.Spawn(SpawnReq{Title: "kept"})
@@ -365,6 +376,7 @@ func TestGCRemovesKilledWorktree(t *testing.T) {
 
 // #158: gc never deletes the branch checked out in the main repo.
 func TestGCKeepsCheckedOutBranch(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	task := killedWithWork(t, a, "checked out", "c.txt")
 	git(t, a.Root, "checkout", "-q", task.Branch)
@@ -409,6 +421,7 @@ func TestGCRemovesBranchOfMergedPR(t *testing.T) {
 
 // #158: a merged branch's copy on origin is deleted too; an unmerged one stays.
 func TestGCRemovesMergedOriginBranch(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	other := withOrigin(t, a)
 	merged := killedWithWork(t, a, "merged", "a.txt")
@@ -438,6 +451,7 @@ func TestGCRemovesMergedOriginBranch(t *testing.T) {
 // #158: doctor's count is what gc removes, so it clears after gc; kept work
 // is counted apart.
 func TestGCCountsMatchGC(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	other := withOrigin(t, a)
 	killedWithWork(t, a, "merged", "a.txt")

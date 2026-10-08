@@ -19,6 +19,7 @@ import (
 const badLint = `bad=$(grep -rl --exclude-dir=.git --exclude-dir=.saddle LINTBAD . || true); if [ -n "$bad" ]; then echo "lint: needs fixing: $bad"; exit 1; fi`
 
 func TestLintCmdResolution(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	if g := a.LintGate(); g.Cmd != "" {
 		t.Fatalf("no gate in the repo: %+v", g)
@@ -40,6 +41,7 @@ func TestLintCmdResolution(t *testing.T) {
 // done refuses a branch the repo's gate rejects, with the output, and
 // accepts it once fixed (#212).
 func TestLintDoneRefusesRedAndPassesGreen(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.Lint = config.Lint{Cmd: badLint, Set: true}
 	tk, err := a.Spawn(SpawnReq{Title: "lint"})
@@ -68,6 +70,7 @@ func TestLintDoneRefusesRedAndPassesGreen(t *testing.T) {
 // The train runs lint.cmd after test.cmd on the rebased tree and returns a
 // red gate to the producer like red tests, with the output tail.
 func TestLandReturnsLintFailureToProducer(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	// Queued before the gate is set, so done's own check doesn't stop it.
 	tk := queueTask(t, a, "t1", "lint", map[string]string{"x.go": "LINTBAD\n"})
@@ -100,6 +103,7 @@ func TestLandReturnsLintFailureToProducer(t *testing.T) {
 // A regen commit the train makes is gated too: lint runs on the tree the
 // train is about to land, not just the producer's commits.
 func TestLandLintsAfterRegen(t *testing.T) {
+	t.Parallel()
 	a := regenSetup(t)
 	a.Cfg.Train.Lint = config.Lint{Cmd: badLint, Set: true}
 	a.Cfg.Regen[0].Cmd = "cat a.txt b.txt > gen.txt; echo LINTBAD >> gen.txt"
@@ -122,6 +126,7 @@ func TestLandLintsAfterRegen(t *testing.T) {
 
 // When lint.cmd is the test command, the train runs it once.
 func TestLandRunsLintOnceWhenSameAsTest(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	count := filepath.Join(t.TempDir(), "count")
 	a.Cfg.Test.Cmd = "echo x >> " + count
@@ -144,6 +149,7 @@ func TestLandRunsLintOnceWhenSameAsTest(t *testing.T) {
 // the branch's. done and the train skip it, so it never counts toward
 // max_attempts, and the orchestrator is told how to fix it.
 func TestBrokenGateDoesNotFailTheBranch(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("make"); err != nil {
 		t.Skip("make not installed")
 	}
@@ -312,6 +318,7 @@ func TestLintDoneRetriesParallelLint(t *testing.T) {
 // quark's does) and [test] cmd is make check. The gate is the same check, so
 // a landing runs it once, and the pre-publish gate lists it once.
 func TestLandRunsMakeVariableHookOnceWhenSameAsTest(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("make"); err != nil {
 		t.Skip("make not installed")
 	}

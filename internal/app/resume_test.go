@@ -112,6 +112,7 @@ func TestResumeLostWindowsAfterServerDies(t *testing.T) {
 // Killed tasks, tasks still spawning (no window yet) and done tasks are
 // never resumed; paused tasks only when asked (saddle up's startup pass).
 func TestResumeLostSkipsDeadAndPaused(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	k, err := a.Spawn(SpawnReq{Title: "killed"})
 	must(t, err)
@@ -144,6 +145,7 @@ func TestResumeLostSkipsDeadAndPaused(t *testing.T) {
 // saddle down pauses live tasks: claims and worktrees stay, uncommitted work
 // is snapshotted, and the session is stopped.
 func TestPauseKeepsClaimsAndSnapshots(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	tk, err := a.Spawn(SpawnReq{Title: "one", Claims: []string{"one/**"}})
 	must(t, err)
@@ -169,6 +171,7 @@ func TestPauseKeepsClaimsAndSnapshots(t *testing.T) {
 // Kill snapshots uncommitted work to refs/saddle/wip/<task> first, and gc
 // keeps the snapshot.
 func TestKillSnapshotsWIP(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	tk, err := a.Spawn(SpawnReq{Title: "one"})
 	must(t, err)
@@ -237,6 +240,7 @@ func TestOrphanedTasks(t *testing.T) {
 // saddle rescue snapshots uncommitted files to rescue/<task> and a diff
 // under .saddle/rescue/, then kills the task, releasing its claims.
 func TestRescueSnapshotsAndKills(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	tk, err := a.Spawn(SpawnReq{Title: "one", Claims: []string{"one/**"}})
 	must(t, err)

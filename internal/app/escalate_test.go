@@ -23,6 +23,7 @@ func trainEntry(t *testing.T, a *App, id string) store.TrainEntry {
 // After max_attempts failed lands, the train stops bouncing the branch back
 // to its producer and escalates it to the owner as needs-you (#30).
 func TestConflictEscalatesAfterMaxAttempts(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	a.Cfg.Train.MaxAttempts = 2
 	t1, _ := a.Spawn(SpawnReq{Title: "one"})
@@ -72,6 +73,7 @@ func TestConflictEscalatesAfterMaxAttempts(t *testing.T) {
 
 // Persistent red tests escalate the same way.
 func TestRedTestsEscalate(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	a.Cfg.Test.Cmd = "echo red; exit 1"
 	a.Cfg.Train.MaxAttempts = 2
@@ -93,6 +95,7 @@ func TestRedTestsEscalate(t *testing.T) {
 // The escalation tells the owner to "tell t2 what to do": that message must
 // wake t2, whose agent sits idle at its prompt while it is needs-you (#189).
 func TestMessageWakesEscalatedTask(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	a.Cfg.Train.MaxAttempts = 1
 	t1, _ := a.Spawn(SpawnReq{Title: "one"})
@@ -119,6 +122,7 @@ func TestMessageWakesEscalatedTask(t *testing.T) {
 // A needs-you task on a permission prompt is not typed at: the wake line
 // would answer the prompt. Its notice waits for its next tool call.
 func TestNotifyLeavesTaskOnPromptAlone(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	c, err := a.Spawn(SpawnReq{Title: "asks"})
 	must(t, err)

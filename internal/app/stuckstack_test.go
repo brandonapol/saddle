@@ -25,6 +25,7 @@ func stuckNotices(t *testing.T, a *App) []store.Notice {
 // the orchestrator once per stack and reason, naming the stack, the layer
 // and why; it may alert again once that clears and recurs.
 func TestCheckStuckAlarmsOncePerStackAndReason(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.Output = "single"
 	_, _ = originWithGh(t, a)
@@ -83,6 +84,7 @@ func TestCheckStuckAlarmsOncePerStackAndReason(t *testing.T) {
 // A live repair task fixing the layer keeps the alarm quiet; an at-risk
 // flag, with no time of its own, starts its clock when first seen.
 func TestCheckStuckQuietWhileFixingAndClocksFlag(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.StuckAfter = 5 * time.Minute
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})

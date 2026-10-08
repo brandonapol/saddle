@@ -25,6 +25,7 @@ func landUnrelated(t *testing.T, a *App, n int) []store.Task {
 }
 
 func TestCreateStackRecordsOrderInStacksJSON(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	originWithGh(t, a)
 	ts := landUnrelated(t, a, 3)
@@ -52,6 +53,7 @@ func TestCreateStackRecordsOrderInStacksJSON(t *testing.T) {
 }
 
 func TestCreateStackValidates(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	originWithGh(t, a)
 	landUnrelated(t, a, 3)
@@ -84,6 +86,7 @@ func TestCreateStackValidates(t *testing.T) {
 }
 
 func TestStackArgsTakeOptionalName(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	originWithGh(t, a)
 	landUnrelated(t, a, 2)
@@ -106,6 +109,7 @@ func TestStackArgsTakeOptionalName(t *testing.T) {
 // share no files and land in another order; tasks outside it keep their
 // automatic layout.
 func TestCustomStackOverridesClustering(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, ghLog := originWithGh(t, a)
 	ts := landUnrelated(t, a, 3)
@@ -163,6 +167,7 @@ func TestCustomStackOverridesClustering(t *testing.T) {
 // same issue would stack, but one is in a custom stack, so the other goes
 // to base.
 func TestCustomStackMembersLeaveAutomaticClusters(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	_, ghLog := originWithGh(t, a)
 	land := func(id string, issue int) store.Task {
@@ -187,6 +192,7 @@ func TestCustomStackMembersLeaveAutomaticClusters(t *testing.T) {
 // When the given order can't be replayed (a lower task needs work landed
 // after it), the stack keeps its members but falls back to train order.
 func TestCustomStackOrderFallsBackOnConflict(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	_, ghLog := originWithGh(t, a)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -200,6 +206,7 @@ func TestCustomStackOrderFallsBackOnConflict(t *testing.T) {
 }
 
 func TestRestackKeepsCustomStack(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, ghLog := originWithGh(t, a)
 	ts := landUnrelated(t, a, 3)
@@ -236,6 +243,7 @@ func TestRestackKeepsCustomStack(t *testing.T) {
 }
 
 func TestStackAddRemoveDelete(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	_, ghLog := originWithGh(t, a)
 	ts := landUnrelated(t, a, 3)
@@ -276,6 +284,7 @@ func TestStackAddRemoveDelete(t *testing.T) {
 }
 
 func TestShowStackReportsMembers(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	originWithGh(t, a)
 	landUnrelated(t, a, 2)
@@ -299,7 +308,7 @@ func mustTask(t *testing.T, a *App, id string) store.Task {
 // it reads the raw call log.
 func lastBody(t *testing.T, pr string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(os.Getenv(fakeGHEnv), "gh.log"))
+	b, err := os.ReadFile(filepath.Join(fakeGHDir(t), "gh.log"))
 	must(t, err)
 	log := string(b)
 	i := strings.LastIndex(log, "pr edit "+pr+" --body ")

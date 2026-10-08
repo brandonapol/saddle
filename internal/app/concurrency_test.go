@@ -10,6 +10,7 @@ import (
 // #176: a runtime override beats the config's concurrency, is logged, and
 // survives a restart; reset goes back to the config.
 func TestConcurrencyOverrideBeatsConfigAndPersists(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	a.Cfg.Concurrency = 5
 	c, err := a.Concurrency()
@@ -50,6 +51,7 @@ func TestConcurrencyOverrideBeatsConfigAndPersists(t *testing.T) {
 }
 
 func TestSetConcurrencyRange(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	for _, n := range []int{0, -1, MaxConcurrency + 1} {
 		if _, err := a.SetConcurrency(n); err == nil {
@@ -66,6 +68,7 @@ func TestSetConcurrencyRange(t *testing.T) {
 // #176: lowering the cap kills nothing; spawn refuses with a clear message
 // until enough tasks finish, then works again.
 func TestSpawnHonorsLoweredConcurrency(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	a.Cfg.Concurrency = 5
 	t1, err := a.Spawn(SpawnReq{Title: "one"})

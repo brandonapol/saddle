@@ -22,6 +22,7 @@ func fakeRepoGH(merge, squash, rebase bool) (RepoGH, *[]string) {
 }
 
 func TestCheckRepoMergeSettingsCombinations(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		merge, squash, rebase bool
 		refuse                bool
@@ -56,6 +57,7 @@ func TestCheckRepoMergeSettingsCombinations(t *testing.T) {
 }
 
 func TestCheckRepoMergeSettingsRefusalMessage(t *testing.T) {
+	t.Parallel()
 	gh, _ := fakeRepoGH(true, true, false)
 	err := CheckRepoMergeSettings(gh, &bytes.Buffer{})
 	if err == nil {
@@ -76,6 +78,7 @@ func TestCheckRepoMergeSettingsRefusalMessage(t *testing.T) {
 }
 
 func TestCheckRepoMergeSettingsUnreadableWarns(t *testing.T) {
+	t.Parallel()
 	for name, gh := range map[string]RepoGH{
 		"gh fails": func(...string) (string, error) {
 			return "", errors.New("gh api repos/{owner}/{repo}: exit status 1: gh auth login required")

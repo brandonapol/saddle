@@ -35,8 +35,11 @@ func (a *App) AcquireLock(owner string) (release func(), err error) {
 		f.Close()
 		return nil, err
 	}
+	// Unlock before closing: a process forked while the lock was held shares
+	// the open file, and closing ours alone would leave it locked.
 	return func() {
 		_ = f.Truncate(0)
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		f.Close()
 	}, nil
 }

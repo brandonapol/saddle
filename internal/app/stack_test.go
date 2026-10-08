@@ -12,6 +12,7 @@ import (
 // t1 lands in two commits and is squash-merged into origin/main; restack must
 // drop it, lay t2 and t3 linearly on the new main and retarget t2's PR.
 func TestRestackAfterSquashMerge(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.Output = "single" // pins the one linear stack this test was written for (#52)
 	origin, ghLog := originWithGh(t, a)
@@ -95,6 +96,7 @@ func TestRestackAfterSquashMerge(t *testing.T) {
 // ref moves, and the conflict goes back to its task while its agent is alive
 // (an orphaned one gets a repair task instead: TestRestackOrphanConflictSpawnsOneRepair).
 func TestRestackConflictReturnsToOwner(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.CloseOnLand = false
 	origin, _ := originWithGh(t, a)
@@ -138,6 +140,7 @@ func contains(ss []string, s string) bool {
 // lacks, so restack fast-forwards it rather than counting main's own squash
 // commits as work it would drop.
 func TestRestackFastForwardsIntegrationBehindBase(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, _ := originWithGh(t, a)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -192,6 +195,7 @@ func TestRestackFastForwardsIntegrationBehindBase(t *testing.T) {
 // A commit on integration that no landed task owns and base doesn't have
 // still stops restack: dropping it would lose work.
 func TestRestackRefusesUnownedIntegrationCommit(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, _ := originWithGh(t, a)
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -225,6 +229,7 @@ func TestRestackRefusesUnownedIntegrationCommit(t *testing.T) {
 // is on integration alone, so restack keeps it, and a later task that needs
 // it still finds it there.
 func TestRestackKeepsKilledUnpublishedTask(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, _ := originWithGh(t, a)
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -255,6 +260,7 @@ func TestRestackKeepsKilledUnpublishedTask(t *testing.T) {
 // empty commit, skip it, and mark the task merged; it must stop on it as a
 // conflict, which with t1's agent gone means a repair task.
 func TestRestackDoesNotSkipRerereResolvedPick(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, _ := originWithGh(t, a)
 	git(t, a.Root, "config", "rerere.enabled", "true")
@@ -288,6 +294,7 @@ func TestRestackDoesNotSkipRerereResolvedPick(t *testing.T) {
 // #219: the integrity check refuses a rebuilt stack that lost a task or one
 // of its commits, whatever replay did.
 func TestVerifyKeptRefusesLostWork(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	originWithGh(t, a)
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -316,6 +323,7 @@ func TestVerifyKeptRefusesLostWork(t *testing.T) {
 // #205: restack with nothing to do moves no ref, and a second restack after
 // a real one moves nothing either.
 func TestRestackMovesNothingWhenNothingMoved(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, _ := originWithGh(t, a)
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
