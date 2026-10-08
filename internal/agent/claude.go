@@ -35,6 +35,7 @@ type Launch struct {
 	Allow    []string // permission allow rules; nil means the worker defaults
 	Deny     []string // tools removed from the session entirely
 	Args     []string // extra CLI arguments (Codex and Grok adapters)
+	Resume   string   // Claude session to resume in the window; empty starts a new one
 	ExtraEnv map[string]string
 }
 
@@ -181,6 +182,9 @@ func (l Launch) writeClaude() (string, error) {
 	)
 	if len(l.Deny) > 0 {
 		args = append(args, "--disallowedTools", shellQuote(strings.Join(l.Deny, ",")))
+	}
+	if l.Resume != "" {
+		args = append(args, "--resume", shellQuote(l.Resume))
 	}
 	if l.Prompt != "" {
 		args = append(args, `"$(cat "$run/prompt.md")"`)

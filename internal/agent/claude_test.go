@@ -111,3 +111,27 @@ func settingsAllow(t *testing.T, dir string) []string {
 	}
 	return s.Permissions.Allow
 }
+
+// A resumed worker continues its Claude session in a new window (#254).
+func TestWriteResumesSession(t *testing.T) {
+	l := Launch{Bin: "/bin/saddle", Task: "t1", Cmd: "claude", RunDir: t.TempDir(), Prompt: "carry on", Resume: "abc-123"}
+	sh, err := l.Write()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := os.ReadFile(strings.Trim(strings.TrimPrefix(sh, "bash "), "'"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(script), "--resume 'abc-123'") {
+		t.Errorf("launch script doesn't resume the session:\n%s", script)
+	}
+	l.Resume = ""
+	if sh, err = l.Write(); err != nil {
+		t.Fatal(err)
+	}
+	script, _ = os.ReadFile(strings.Trim(strings.TrimPrefix(sh, "bash "), "'"))
+	if strings.Contains(string(script), "--resume") {
+		t.Errorf("a fresh launch resumes:\n%s", script)
+	}
+}
