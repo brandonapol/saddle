@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // startTUIWayland is StartTUI with WAYLAND_DISPLAY set, so saddle picks
@@ -76,6 +77,33 @@ func rowAlone(lines []string, s string) (x, y int) {
 	return -1, -1
 }
 
+// copyPos is copy mode's "cursor/lines" counter from its title, or "".
+func copyPos(lines []string) string {
+	for _, l := range lines {
+		if _, rest, ok := strings.Cut(l, "COPY · "); ok {
+			if f := strings.Fields(strings.ReplaceAll(rest, "·", " ")); len(f) >= 2 {
+				return f[1]
+			}
+		}
+	}
+	return ""
+}
+
+// stepCopyCursor presses key once in copy mode and gives the cursor a
+// moment to move off the position shown in before, so the next look sees
+// where it went. A key that cannot move it (k on the top line) just times
+// out here; the caller looks again either way.
+func stepCopyCursor(u *TUI, before []string, key string) {
+	was := copyPos(before)
+	u.Keys(key)
+	_ = Poll(time.Second, func() error {
+		if p := copyPos(u.Lines()); p == was {
+			return errorf("cursor still at %s", p)
+		}
+		return nil
+	})
+}
+
 // TestJourneyCopyToClipboard copies chat lines out of the TUI (#217): in
 // copy mode, the cursor moves to a message, V and k select it and its
 // header, y copies; then a mouse drag over the same rows copies them again.
@@ -91,22 +119,25 @@ func TestJourneyCopyToClipboard(t *testing.T) {
 	u.WaitScreen("you", msg)
 
 	u.Keys("C-y")
-	scr := u.WaitScreen("COPY · chat")
-	lines := strings.Split(scr, "\n")
-	_, cur := rowOf(lines, "›")
-	_, at := rowAlone(lines, msg)
-	if cur < 0 || at < 0 || at > cur {
-		t.Fatalf("cursor row %d, message row %d:\n%s", cur, at, scr)
-	}
-	for range cur - at {
-		u.Keys("k")
-	}
+	u.WaitScreen("COPY · chat")
+	// Step the cursor one row at a time, rereading the screen each time: a
+	// capture taken mid-redraw can still hold the chat view's input prompt,
+	// so a count of k presses worked out from one capture can overshoot.
 	Eventually(t, "the cursor to reach the message", func() error {
 		ls := u.Lines()
-		if _, c := rowOf(ls, "›"); c < 0 || !strings.Contains(ls[c], "› "+msg+" ") {
-			return errorf("cursor not on %q:\n%s", msg, strings.Join(ls, "\n"))
+		_, cur := rowOf(ls, "› ")
+		_, at := rowAlone(ls, msg)
+		switch {
+		case cur < 0 || at < 0:
+			return errorf("cursor row %d, message row %d:\n%s", cur, at, strings.Join(ls, "\n"))
+		case at < cur:
+			stepCopyCursor(u, ls, "k")
+		case at > cur:
+			stepCopyCursor(u, ls, "j")
+		case strings.Contains(ls[cur], "› "+msg+" "):
+			return nil
 		}
-		return nil
+		return errorf("cursor not on %q:\n%s", msg, strings.Join(ls, "\n"))
 	})
 	u.Keys("V", "k")
 	u.WaitScreen("2 selected")
