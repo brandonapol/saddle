@@ -65,7 +65,7 @@ func (a *App) lost(t store.Task, paused bool) bool {
 	if t.Role != store.RoleWorker || t.Window == "" {
 		return false // never launched (still spawning) or not ours to run
 	}
-	if !liveStatus(t.Status) && !(paused && t.Status == StatusPaused) {
+	if !liveStatus(t.Status) && (!paused || t.Status != StatusPaused) {
 		return false
 	}
 	return !a.ownWindow(t)
