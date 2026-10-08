@@ -21,7 +21,7 @@ func gateRunqWorld(t *testing.T, testCmd string) *World {
 	w := world(t, Options{TestCmd: testCmd})
 	must(t, os.MkdirAll(filepath.Join(w.Home, ".config", "saddle"), 0o755))
 	must(t, os.WriteFile(filepath.Join(w.Home, ".config", "saddle", "runq.toml"),
-		[]byte("mode = \"enforce\"\nheartbeat = \"1s\"\n"), 0o644))
+		[]byte("mode = \"enforce\"\nmax_load_per_cpu = 0\nmax_cpu_pressure = 0\nheartbeat = \"1s\"\n"), 0o644))
 	must(t, os.WriteFile(filepath.Join(w.Repo, ".saddle", "runq.toml"),
 		[]byte("[classes.go-test]\nslots = 1\nmatch = [\"sh *gate.sh\", \"go test*\"]\n"), 0o644))
 	return w

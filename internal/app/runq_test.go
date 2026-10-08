@@ -44,7 +44,7 @@ func eventKinds(t *testing.T, a *App, prefix string) map[string]string {
 // with its wait and run_finished with its duration and wait.
 func TestRunHeavyLogsEvents(t *testing.T) {
 	a, _ := setup(t)
-	db := heavyTest(t, a, "mode = \"enforce\"\n[classes.go-test]\nslots = 1\n")
+	db := heavyTest(t, a, "mode = \"enforce\"\nmax_load_per_cpu = 0\nmax_cpu_pressure = 0\n[classes.go-test]\nslots = 1\n")
 	t.Setenv("SADDLE_TASK", "t7")
 	q, err := runq.Open(runq.Options{Path: db, Mode: runq.ModeEnforce, Slots: map[string]int{}})
 	if err != nil {

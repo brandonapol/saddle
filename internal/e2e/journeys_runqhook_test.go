@@ -30,7 +30,7 @@ func TestJourneyHeavyRunsInterceptedInAgentPanes(t *testing.T) {
 	}
 	w := world(t, Options{})
 	must(t, os.MkdirAll(filepath.Join(w.Home, ".config", "saddle"), 0o755))
-	must(t, os.WriteFile(filepath.Join(w.Home, ".config", "saddle", "runq.toml"), []byte("mode = \"enforce\"\nheartbeat = \"1s\"\n"), 0o644))
+	must(t, os.WriteFile(filepath.Join(w.Home, ".config", "saddle", "runq.toml"), []byte("mode = \"enforce\"\nmax_load_per_cpu = 0\nmax_cpu_pressure = 0\nheartbeat = \"1s\"\n"), 0o644))
 	log := filepath.Join(w.Root, "flutter.log")
 	// A fake flutter on the panes' PATH logs its argv and lease.
 	must(t, os.WriteFile(filepath.Join(w.Bin, "flutter"),
