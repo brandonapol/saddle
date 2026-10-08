@@ -130,6 +130,7 @@ type model struct {
 	// behind it and land out of order; a request made meanwhile sets stale,
 	// which runs one more refresh when the current one lands.
 	refreshing, stale bool
+	refreshN          int // refreshes started; every sweepEvery-th captures every agent
 
 	pending   []string // events waiting for the orchestrator to be idle
 	held      []string // info notices that ride along with the next message
@@ -191,6 +192,7 @@ type (
 		err     error
 		tasks   []mcpserver.TaskView
 		peek    string
+		peekOK  bool // peek was read; otherwise the last one stands
 		screens map[string]string
 		limits  *usage.LimitEstimate
 		stats   map[string]agentStats
@@ -335,6 +337,9 @@ func (m *model) refresh() tea.Cmd {
 		sel = m.tasks[m.sel].ID
 	}
 	a, amGen := m.app, m.amGen
+	peekShown := m.view == viewControl && !m.briefOn && !m.helpOpen && !m.cp.on
+	sweep := m.refreshN%sweepEvery == 0
+	m.refreshN++
 	return func() tea.Msg {
 		all, err := mcpserver.Tasks(a)
 		if err != nil {
@@ -350,21 +355,8 @@ func (m *model) refresh() tea.Cmd {
 		if sel == "" && len(ts) > 0 {
 			sel = ts[0].ID
 		}
-		peek := ""
-		if sel != "" {
-			peek, _ = a.Peek(sel, 200)
-		}
-		screens := map[string]string{}
-		for _, t := range ts {
-			if t.Window != "" && (t.Status == store.Running || t.Status == store.Idle) {
-				if t.ID == sel && peek != "" {
-					screens[t.ID] = tailLines(peek, 25)
-				} else if s, err := a.Peek(t.ID, 25); err == nil {
-					screens[t.ID] = s
-				}
-			}
-		}
-		msg := refreshMsg{tasks: ts, peek: peek, screens: screens, stats: readStats(a, time.Now())}
+		sc := captureScreens(a, ts, sel, peekShown, sweep)
+		msg := refreshMsg{tasks: ts, peek: sc.peek, peekOK: sc.peekOK, screens: sc.screens, stats: readStats(a, time.Now())}
 		msg.limits, msg.graph = readUsage(a, time.Now())
 		if st, err := a.AutomergeState(); err == nil {
 			msg.am, msg.amGen = &st, amGen
@@ -374,6 +366,91 @@ func (m *model) refresh() tea.Cmd {
 		}
 		return msg
 	}
+}
+
+// sweepEvery is how many refreshes apart every agent's screen is captured
+// for watchScreens. Between sweeps only the selected agent's peek is, and
+// only while it is on screen (#272).
+const sweepEvery = 3
+
+// paneReader captures panes in batches: one tmux process for the window
+// list and one for every capture, however many agents there are.
+type paneReader interface {
+	Windows() (map[string]bool, error)
+	CaptureMany(lines map[string]int) (map[string]string, error)
+}
+
+// screensRead is what one refresh read from the agents' panes.
+type screensRead struct {
+	peek    string
+	peekOK  bool
+	screens map[string]string // the last lines of running and idle agents
+}
+
+// captureScreens reads the selected agent's peek, when it is shown or on a
+// sweep, and on a sweep every running or idle agent's screen.
+func captureScreens(a *app.App, ts []mcpserver.TaskView, sel string, peekShown, sweep bool) screensRead {
+	out := screensRead{screens: map[string]string{}}
+	watch := func(t mcpserver.TaskView) bool {
+		return t.Window != "" && (t.Status == store.Running || t.Status == store.Idle)
+	}
+	wantPeek := sel != "" && (peekShown || sweep)
+	pr, ok := a.Tmux.(paneReader)
+	if !ok {
+		// A driver without batching: one Peek per pane.
+		if wantPeek {
+			out.peek, _ = a.Peek(sel, 200)
+			out.peekOK = true
+		}
+		for _, t := range ts {
+			if !watch(t) {
+				continue
+			}
+			if t.ID == sel && out.peek != "" {
+				out.screens[t.ID] = tailLines(out.peek, 25)
+			} else if sweep {
+				if s, err := a.Peek(t.ID, 25); err == nil {
+					out.screens[t.ID] = s
+				}
+			}
+		}
+		return out
+	}
+	if !wantPeek && !sweep {
+		return out
+	}
+	alive, err := pr.Windows()
+	if err != nil {
+		return out
+	}
+	lines := map[string]int{}
+	for _, t := range ts {
+		switch {
+		case t.Window == "" || !alive[t.Window]:
+		case t.ID == sel && wantPeek:
+			lines[t.Window] = 200
+		case sweep && watch(t):
+			lines[t.Window] = 25
+		}
+	}
+	caps, err := pr.CaptureMany(lines)
+	if err != nil {
+		return out // a window closed between the two calls; the next tick reads again
+	}
+	out.peekOK = wantPeek
+	for _, t := range ts {
+		s, ok := caps[t.Window]
+		if !ok || t.Window == "" {
+			continue
+		}
+		if t.ID == sel && wantPeek {
+			out.peek = s
+		}
+		if watch(t) {
+			out.screens[t.ID] = tailLines(s, 25)
+		}
+	}
+	return out
 }
 
 // tailLines returns the last n lines of s, newlines kept.
@@ -468,7 +545,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sel < len(m.tasks) {
 			selID = m.tasks[m.sel].ID
 		}
-		m.tasks, m.peek, m.stats = msg.tasks, msg.peek, msg.stats
+		m.tasks, m.stats = msg.tasks, msg.stats
+		if msg.peekOK {
+			m.peek = msg.peek
+		}
 		if msg.graph != nil {
 			m.graph = msg.graph
 		}

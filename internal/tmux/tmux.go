@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Driver is what saddle needs from a terminal multiplexer. Tests use a fake.
@@ -95,16 +96,63 @@ func (t Tmux) KillWindow(id string) error {
 }
 
 func (t Tmux) Alive(id string) bool {
+	ws, err := t.Windows()
+	return err == nil && ws[id]
+}
+
+// Windows returns the id of every window on the server, from one tmux call.
+func (t Tmux) Windows() (map[string]bool, error) {
 	out, err := run("list-windows", "-a", "-F", "#{window_id}")
 	if err != nil {
-		return false
+		return nil, err
 	}
+	ws := map[string]bool{}
 	for _, w := range strings.Split(out, "\n") {
-		if w == id {
-			return true
+		if w != "" {
+			ws[w] = true
 		}
 	}
-	return false
+	return ws, nil
+}
+
+// CaptureMany captures the last lines[id] lines of each window's pane in
+// one tmux call, a marker line between them. It fails as a whole if any
+// window is gone; callers check Windows first.
+func (t Tmux) CaptureMany(lines map[string]int) (map[string]string, error) {
+	out := map[string]string{}
+	if len(lines) == 0 {
+		return out, nil
+	}
+	mark := fmt.Sprintf("saddle-pane-%d-", time.Now().UnixNano())
+	var args []string
+	for id, n := range lines {
+		if len(args) > 0 {
+			args = append(args, ";")
+		}
+		args = append(args, "display-message", "-p", mark+id, ";",
+			"capture-pane", "-p", "-t", id, "-S", fmt.Sprintf("-%d", n))
+	}
+	text, err := run(args...)
+	if err != nil {
+		return nil, err
+	}
+	id := ""
+	var cur []string
+	flush := func() {
+		if id != "" {
+			out[id] = strings.TrimRight(strings.Join(cur, "\n"), "\n ")
+		}
+	}
+	for _, l := range strings.Split(text, "\n") {
+		if next, ok := strings.CutPrefix(l, mark); ok {
+			flush()
+			id, cur = next, nil
+			continue
+		}
+		cur = append(cur, l)
+	}
+	flush()
+	return out, nil
 }
 
 // SendText types text into the window's active pane and presses Enter.

@@ -4,8 +4,11 @@ package e2e
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/e2e/fakeagent"
 )
@@ -56,5 +59,62 @@ func TestJourneyInterruptOrchestrator(t *testing.T) {
 		return nil
 	})
 	u.WaitGone("esc to interrupt")
+	u.Quit()
+}
+
+// tmuxShim puts a tmux on the world's PATH that logs each call saddle
+// makes, then runs the real one. It returns the log's path.
+func tmuxShim(t *testing.T, w *World) string {
+	t.Helper()
+	real, err := exec.LookPath("tmux")
+	must(t, err)
+	log := filepath.Join(w.Root, "tmux-calls.log")
+	shim := "#!/bin/sh\n" +
+		"[ \"$(cat /proc/$PPID/comm 2>/dev/null)\" = saddle ] && echo \"$1\" >> " + shq(log) + "\n" +
+		"exec " + shq(real) + " \"$@\"\n"
+	must(t, os.WriteFile(filepath.Join(w.Bin, "tmux"), []byte(shim), 0o755))
+	return log
+}
+
+// countCalls counts the tmux subcommands in the shim's log.
+func countCalls(log string) int {
+	b, _ := os.ReadFile(log)
+	n := 0
+	for _, l := range strings.Split(string(b), "\n") {
+		if l == "list-windows" || l == "capture-pane" || l == "display-message" {
+			n++
+		}
+	}
+	return n
+}
+
+// #272: with idle agents, saddle up's refresh starts a fixed number of tmux
+// processes per tick (one window list, one batched capture), not two per
+// agent.
+func TestJourneyRefreshTmuxExecs(t *testing.T) {
+	if _, err := os.Stat("/proc/self/comm"); err != nil {
+		t.Skip("needs /proc to tell saddle's tmux calls apart")
+	}
+	w := world(t, Options{})
+	for _, id := range []string{"t1", "t2", "t3", "t4", "t5"} { // the default cap
+		idleAgent(w, id, "Idle agent "+id, "dir"+id+"/**")
+	}
+	log := tmuxShim(t, w)
+	u := w.StartTUI(160, 44)
+	u.WaitScreen("Idle agent t5")
+	time.Sleep(2 * time.Second) // past start-up
+	before := countCalls(log)
+	const secs = 6
+	time.Sleep(secs * time.Second)
+	calls := countCalls(log) - before
+	// Two per one-second tick, plus slack for a refresh a key or the
+	// orchestrator triggered. The old refresh made 2 per agent: 60 here.
+	if calls > 2*secs+6 {
+		b, _ := os.ReadFile(log)
+		t.Fatalf("saddle up ran %d tmux processes in %ds with 5 idle agents; want about %d. Calls:\n%s", calls, secs, 2*secs, b)
+	}
+	if calls == 0 {
+		t.Fatal("the shim saw no tmux calls from saddle up; the count proves nothing")
+	}
 	u.Quit()
 }
