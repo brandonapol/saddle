@@ -108,3 +108,14 @@ func TestOrchestratorBriefPublishAndCIRed(t *testing.T) {
 		}
 	}
 }
+
+// #256: the orchestrator brief says what to do while autopilot is on.
+func TestOrchestratorBriefAutopilot(t *testing.T) {
+	a, _ := setup(t)
+	brief := a.orchestratorBrief()
+	for _, want := range []string{"`saddle autopilot status`", "Never end your turn to wait", "Never ask the owner for permission to continue", "escalate only when nothing else is possible"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("orchestrator brief lacks %q", want)
+		}
+	}
+}
