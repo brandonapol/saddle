@@ -32,7 +32,8 @@ func helperOpts() Options {
 		}
 		return time.Duration(n) * time.Millisecond
 	}
-	return Options{Path: os.Getenv("RUNQ_DB"), Heartbeat: ms("RUNQ_HEARTBEAT_MS", 200), StaleAfter: ms("RUNQ_STALE_MS", 5000)}
+	return Options{Path: os.Getenv("RUNQ_DB"), Heartbeat: ms("RUNQ_HEARTBEAT_MS", 200), StaleAfter: ms("RUNQ_STALE_MS", 5000),
+		Mode: ModeEnforce, Slots: map[string]int{}}
 }
 
 func logLine(format string, a ...any) {
@@ -220,6 +221,8 @@ func testOpts(t *testing.T) Options {
 	return Options{
 		Path:      filepath.Join(t.TempDir(), "runq.db"),
 		Heartbeat: 200 * time.Millisecond,
+		Mode:      ModeEnforce,
+		Slots:     map[string]int{}, // every class gets DefaultSlots (1)
 		Getenv:    func(string) string { return "" },
 	}
 }

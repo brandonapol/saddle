@@ -32,7 +32,8 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: runq [-db path] run|status")
 		return 2
 	}
-	q, err := runq.Open(runq.Options{Path: *db, Heartbeat: *hb})
+	// The spike's journeys expect the prototype's behavior: enforce, one slot per class.
+	q, err := runq.Open(runq.Options{Path: *db, Heartbeat: *hb, Mode: runq.ModeEnforce, Slots: map[string]int{}})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
