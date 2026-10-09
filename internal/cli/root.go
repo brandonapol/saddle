@@ -72,6 +72,18 @@ func withApp(fn func(cmd *cobra.Command, a *app.App, args []string) error) func(
 	}
 }
 
+// withScratch is withApp for the commands that start gates, the train or
+// agents: it points TMPDIR and GOTMPDIR at the scratch root first, so all
+// they start writes its temp files there, not /tmp (#322).
+func withScratch(fn func(cmd *cobra.Command, a *app.App, args []string) error) func(*cobra.Command, []string) error {
+	return withApp(func(cmd *cobra.Command, a *app.App, args []string) error {
+		if err := a.UseScratch(); err != nil {
+			fmt.Fprintln(cmd.ErrOrStderr(), "warning: scratch root: "+err.Error())
+		}
+		return fn(cmd, a, args)
+	})
+}
+
 // resolveTask picks the task from --task, then SADDLE_TASK, then the current worktree.
 func resolveTask(a *app.App, flag string) (string, error) {
 	if flag != "" {
@@ -146,7 +158,7 @@ keep the CLI they were spawned with.
 			}
 			return upTrustErr(gateTrust(cmd.OutOrStdout(), cmd.InOrStdin(), trusted))
 		},
-		RunE: withApp(func(cmd *cobra.Command, a *app.App, args []string) error {
+		RunE: withScratch(func(cmd *cobra.Command, a *app.App, args []string) error {
 			// Local setup first (#163), so the doctor only stops up for what
 			// needs the user. PreRunE already checked the repo is trusted.
 			steps, err := initcmd.Ensure(a.Root, a.Init)
@@ -204,7 +216,8 @@ keep the CLI they were spawned with.
 // startWatchers starts the background loops that live as long as saddle up:
 // the stack sentinel, the auto-merge watcher (which merges nothing unless
 // on), the orchestrator compact watcher, the notice digest, the resume
-// watcher, the checkpoint watcher and, unless ci.disabled, the CI and
+// watcher, the checkpoint watcher, the scratch sweeper and, unless
+// ci.disabled, the CI and
 // ci-red watchers. Short-lived commands never
 // start them. The returned func stops them and waits until they have.
 func startWatchers(ctx context.Context, a *app.App) (stop func()) {
@@ -219,6 +232,7 @@ func startWatchers(ctx context.Context, a *app.App) (stop func()) {
 	wg.Go(func() { a.RunResumeWatcher(ctx) })            // new windows for tasks that lost theirs (#254); failures are events
 	wg.Go(func() { _ = a.NewAutopilot(nil).Run(ctx) })   // drives the loop only while autopilot is on; failures are events
 	wg.Go(func() { a.NewCheckpointWatcher().Run(ctx) })  // checkpoints uncommitted work and nudges commits (#50); failures are events
+	wg.Go(func() { a.RunScratchSweeper(ctx) })           // sweeps saddle's scratch now and every 10m, holds spawns when low (#322)
 	if !a.Cfg.CI.Disabled {
 		wg.Go(func() { _ = sentinel.NewCIRed(a).Run(ctx) }) // holds layers above red CI; errors are events
 		if ci, err := a.NewCIWatcher(ciwatch.ExecRunner(a.Root)); err == nil {
@@ -297,7 +311,7 @@ func spawnCmd() *cobra.Command {
 		Use:   "spawn <title> [prompt]",
 		Short: "Start an agent on its own branch, worktree and tmux window",
 		Args:  cobra.RangeArgs(1, 2),
-		RunE: withApp(func(cmd *cobra.Command, a *app.App, args []string) error {
+		RunE: withScratch(func(cmd *cobra.Command, a *app.App, args []string) error {
 			r.Title = args[0]
 			if len(args) == 2 {
 				r.Prompt = args[1]
@@ -513,7 +527,7 @@ func landCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "land",
 		Short: "Run the merge train: land queued branches one at a time",
-		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
+		RunE: withScratch(func(cmd *cobra.Command, a *app.App, _ []string) error {
 			if err := a.CheckMergeSettings(cmd.ErrOrStderr()); err != nil {
 				return err
 			}
@@ -661,7 +675,7 @@ func mcpCmd() *cobra.Command {
 		Use:    "mcp",
 		Short:  "Stdio MCP server for agents",
 		Hidden: true,
-		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
+		RunE: withScratch(func(cmd *cobra.Command, a *app.App, _ []string) error {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			go a.ReloadOnSIGHUP(ctx) // the train's config sections; land reloads them too (#228)

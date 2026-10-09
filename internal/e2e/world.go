@@ -77,6 +77,8 @@ func New(t testing.TB, bins Bins, opts Options) *World {
 		"PATH=" + w.Bin + string(os.PathListSeparator) + bins.Dir + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"TMUX_TMPDIR=" + w.Tmux.Dir,
 		"TMPDIR=" + os.TempDir(),
+		// saddle up's scratch sweeper sweeps the world's dir, not the runner's /tmp.
+		"SADDLE_SCRATCH_OS_TEMP=" + root,
 		"TERM=xterm-256color",
 		"LANG=C.UTF-8",
 		"SHELL=/bin/sh",
