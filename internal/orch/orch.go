@@ -38,6 +38,10 @@ const (
 	Denied = "denied"
 	// Interrupted: the turn ended because Interrupt stopped it.
 	Interrupted = "interrupted"
+	// Retry: an API call failed and will be retried; Text says why and when.
+	Retry = "retry"
+	// Cleared: /clear started a new conversation.
+	Cleared = "cleared"
 
 	// ack and nack answer a control request; Text is its request id. The
 	// reader consumes them.
@@ -60,6 +64,7 @@ type Event struct {
 	SessionID string
 	CostUSD   float64
 	Commands  []Command
+	Model     string // Init: the model the session runs, when it says
 }
 
 // Command is a slash command the session offers. Skill marks one backed by
@@ -282,7 +287,14 @@ type line struct {
 	Subtype       string          `json:"subtype"`
 	SessionID     string          `json:"session_id"`
 	Result        string          `json:"result"`
+	Errors        []string        `json:"errors"` // grok's error result carries no "result"
 	IsError       bool            `json:"is_error"`
+	Model         string          `json:"model"`
+	Attempt       int             `json:"attempt"`
+	MaxRetries    int             `json:"max_retries"`
+	RetryDelayMS  int             `json:"retry_delay_ms"`
+	ErrorStatus   json.RawMessage `json:"error_status"`
+	ErrorText     json.RawMessage `json:"error"`
 	CostUSD       float64         `json:"total_cost_usd"`
 	Event         json.RawMessage `json:"event"`
 	SlashCommands []string        `json:"slash_commands"`
@@ -364,7 +376,7 @@ func parse(b []byte) []Event {
 	case "system":
 		switch l.Subtype {
 		case "init":
-			e := Event{Kind: Init, SessionID: l.SessionID}
+			e := Event{Kind: Init, SessionID: l.SessionID, Model: l.Model}
 			skill := map[string]bool{}
 			for _, s := range l.Skills {
 				skill[s] = true
@@ -377,7 +389,11 @@ func parse(b []byte) []Event {
 			return []Event{{Kind: Commands, Commands: commands(l.Commands)}}
 		case "compact_boundary":
 			return []Event{{Kind: Compacted, Text: l.Compact.Trigger, SessionID: l.SessionID}}
+		case "api_retry":
+			return []Event{{Kind: Retry, Text: l.retryText()}}
 		}
+	case "conversation_reset":
+		return []Event{{Kind: Cleared}}
 	case "stream_event":
 		var ev struct {
 			Type  string `json:"type"`
@@ -424,7 +440,11 @@ func parse(b []byte) []Event {
 	case "result":
 		e := Event{Kind: Result, Text: l.Result, SessionID: l.SessionID, CostUSD: l.CostUSD}
 		if l.IsError {
-			e = Event{Kind: Error, Text: l.Result}
+			text := l.Result
+			if strings.TrimSpace(text) == "" {
+				text = strings.Join(l.Errors, "\n")
+			}
+			e = Event{Kind: Error, Text: text}
 		}
 		var out []Event
 		if len(l.Denials) > 0 {
@@ -437,6 +457,42 @@ func parse(b []byte) []Event {
 		return append(out, e)
 	}
 	return nil
+}
+
+// retryText describes an api_retry line: "API error (529 overloaded_error);
+// retrying, attempt 3/10, next in 5s".
+func (l line) retryText() string {
+	why := strings.TrimSpace(rawText(l.ErrorStatus) + " " + rawText(l.ErrorText))
+	if why == "" {
+		why = "unknown"
+	}
+	s := fmt.Sprintf("API error (%s); retrying, attempt %d", why, l.Attempt)
+	if l.MaxRetries > 0 {
+		s += fmt.Sprintf("/%d", l.MaxRetries)
+	}
+	if l.RetryDelayMS > 0 {
+		s += ", next in " + (time.Duration(l.RetryDelayMS) * time.Millisecond).Round(time.Second).String()
+	}
+	return s
+}
+
+// rawText reads a JSON string, number or {"message": …} as text; null is "".
+func rawText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var n json.Number
+	if json.Unmarshal(raw, &n) == nil {
+		return n.String()
+	}
+	var o struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(raw, &o) == nil {
+		return o.Message
+	}
+	return ""
 }
 
 // describeTool renders a tool call as one short line for the chat.

@@ -40,6 +40,19 @@ func TestParse(t *testing.T) {
 		{`{"type":"result","subtype":"success","result":"","session_id":"s1","permission_denials":[{"tool_name":"Write","tool_use_id":"t1","tool_input":{}},{"tool_name":"Bash","tool_use_id":"t2","tool_input":{"command":"rm -rf x"}}]}`,
 			[]Event{{Kind: Denied, Text: "Write, Bash rm -rf x"}, {Kind: Result, SessionID: "s1"}}},
 		{`{"type":"result","subtype":"error","is_error":true,"result":"boom"}`, []Event{{Kind: Error, Text: "boom"}}},
+		// grok's error result has no "result"; its text is in "errors" (#263).
+		{`{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["Not signed in. Run grok login."],"session_id":""}`,
+			[]Event{{Kind: Error, Text: "Not signed in. Run grok login."}}},
+		{`{"type":"result","subtype":"error_during_execution","is_error":true,"result":"","errors":["a","b"]}`, []Event{{Kind: Error, Text: "a\nb"}}},
+		// The init line names the model, which grok's config may leave unset (#263).
+		{`{"type":"system","subtype":"init","session_id":"s1","model":"grok-4"}`, []Event{{Kind: Init, SessionID: "s1", Model: "grok-4"}}},
+		// Retries while the API is down or overloaded (#262, CC 2.1.293).
+		{`{"type":"system","subtype":"api_retry","attempt":3,"max_retries":10,"retry_delay_ms":2370,"error_status":null,"error":"unknown","session_id":"s1"}`,
+			[]Event{{Kind: Retry, Text: "API error (unknown); retrying, attempt 3/10, next in 2s"}}},
+		{`{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":500,"error_status":529,"error":"overloaded_error"}`,
+			[]Event{{Kind: Retry, Text: "API error (529 overloaded_error); retrying, attempt 1/10, next in 1s"}}},
+		// /clear starts a new conversation (#261, CC 2.1.293).
+		{`{"type":"conversation_reset","new_conversation_id":"c2","trigger":"clear","session_id":"s1"}`, []Event{{Kind: Cleared}}},
 		{`not json`, nil},
 	}
 	for _, c := range cases {
