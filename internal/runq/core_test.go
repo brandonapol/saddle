@@ -118,7 +118,7 @@ func TestPrototypeSchemaMigrates(t *testing.T) {
 	}
 	if _, err := db.Exec(`CREATE TABLE history(class TEXT NOT NULL, label TEXT NOT NULL, cmd TEXT NOT NULL,
 		waited_ms INTEGER NOT NULL, held_ms INTEGER NOT NULL, ended INTEGER NOT NULL, how TEXT NOT NULL);
-		INSERT INTO history VALUES('go-test','old','x',0,1000,0,'ok');`); err != nil {
+		INSERT INTO history VALUES('go-test','old','x',0,1000,CAST(strftime('%s','now') AS INTEGER)*1000,'ok');`); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()

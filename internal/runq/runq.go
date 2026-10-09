@@ -239,6 +239,8 @@ func Open(opts Options) (*Queue, error) {
 		}
 	}
 	q.db = db
+	// Pruning is housekeeping: a failure keeps the rows rather than blocking the run.
+	_ = pruneHistory(db, opts.Now())
 	if opts.TargetUtil > 0 {
 		// Adaptive slots are an optimization: a failure keeps the
 		// current slots rather than blocking the run.

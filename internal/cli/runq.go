@@ -259,6 +259,7 @@ func runqCmd() *cobra.Command {
 	status.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	cmd.AddCommand(
 		status,
+		runqStatsCmd(),
 		&cobra.Command{
 			Use:   "drain [class]",
 			Short: "Set a class's slots (every class's without one) to 0: running work finishes, nothing new starts",

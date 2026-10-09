@@ -331,6 +331,7 @@ func statusCmd() *cobra.Command {
 			if st.HeavyRuns != nil {
 				writeHeavyRuns(cmd.OutOrStdout(), *st.HeavyRuns)
 			}
+			writeHeavyStatsLine(cmd.OutOrStdout(), a)
 			return nil
 		}),
 	}
