@@ -155,3 +155,144 @@ func must(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
+
+// limitScreen is Claude Code parked on a session usage limit (#180).
+const limitScreen = `You've hit your session limit · resets 12:10pm (America/New_York)
+
+● Usage limit reached · continuing automatically at 12:10pm · esc to cancel
+╭────────────╮
+│ >          │
+╰────────────╯
+  ⚠ Usage limit reached · limit resets 12:10pm`
+
+func TestEngineParksWorkerOnUsageLimit(t *testing.T) {
+	a, ft := setup(t)
+	w, err := a.Spawn(app.SpawnReq{Title: "meter"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now()
+	e := New(a)
+	e.now = func() time.Time { return clock }
+	ft.screens[w.Window] = "working…"
+	must(t, e.Tick())
+	orchNotices(t, a)
+
+	ft.screens[w.Window] = limitScreen
+	must(t, e.Tick())
+	clock = clock.Add(5 * time.Second)
+	must(t, e.Tick())
+	if st, _ := a.Store.Task(w.ID); st.Status != app.StatusPaused {
+		t.Fatalf("status %q while the banner is up", st.Status)
+	}
+	got := orchNotices(t, a)
+	if !strings.Contains(got, w.ID+" (meter) is parked on a Claude usage limit") || !strings.Contains(got, "12:10pm (America/New_York)") {
+		t.Fatalf("notices %q", got)
+	}
+	for range 3 {
+		clock = clock.Add(5 * time.Second)
+		must(t, e.Tick())
+	}
+	if got := orchNotices(t, a); got != "" {
+		t.Fatalf("nagged again: %q", got)
+	}
+	if k := ft.keys[w.Window]; len(k) > 0 {
+		t.Fatalf("sent keys into a parked pane: %v", k)
+	}
+
+	ft.screens[w.Window] = "⏺ Picking up where I left off"
+	must(t, e.Tick())
+	if st, _ := a.Store.Task(w.ID); st.Status != store.Running {
+		t.Fatalf("status %q after the banner cleared", st.Status)
+	}
+	clock = clock.Add(5 * time.Second)
+	must(t, e.Tick())
+	if got := orchNotices(t, a); got != "" {
+		t.Fatalf("notified on resume: %q", got)
+	}
+}
+
+// Claude Code's Stop hook marks the worker idle as it hits the limit; that
+// is the park, not a worker that stopped without calling done.
+func TestEngineUsageLimitIsNotStoppedWithoutDone(t *testing.T) {
+	a, ft := setup(t)
+	w, err := a.Spawn(app.SpawnReq{Title: "meter"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now()
+	e := New(a)
+	e.now = func() time.Time { return clock }
+	ft.screens[w.Window] = "working…"
+	must(t, e.Tick())
+	orchNotices(t, a)
+
+	must(t, a.Store.SetStatus(w.ID, store.Idle))
+	ft.screens[w.Window] = limitScreen
+	must(t, e.Tick())
+	if got := orchNotices(t, a); got != "" {
+		t.Fatalf("reported the park as a stop: %q", got)
+	}
+	clock = clock.Add(5 * time.Second)
+	must(t, e.Tick())
+	got := orchNotices(t, a)
+	if strings.Contains(got, "stopped without calling done") || !strings.Contains(got, "parked on a Claude usage limit") {
+		t.Fatalf("notices %q", got)
+	}
+	// The hook fires again while the banner is up: back to paused, quietly.
+	must(t, a.Store.SetStatus(w.ID, store.Idle))
+	clock = clock.Add(5 * time.Second)
+	must(t, e.Tick())
+	if st, _ := a.Store.Task(w.ID); st.Status != app.StatusPaused {
+		t.Fatalf("status %q", st.Status)
+	}
+	if got := orchNotices(t, a); got != "" {
+		t.Fatalf("nagged again: %q", got)
+	}
+}
+
+// A restarted engine finds the worker it parked still paused on the banner,
+// keeps quiet about it and still puts it back to running after the reset.
+func TestRestartedEngineResumesUsageParkedWorker(t *testing.T) {
+	a, ft := setup(t)
+	w, err := a.Spawn(app.SpawnReq{Title: "meter"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, a.Store.SetStatus(w.ID, app.StatusPaused))
+	ft.screens[w.Window] = limitScreen
+	orchNotices(t, a)
+	clock := time.Now()
+	e := New(a)
+	e.now = func() time.Time { return clock }
+	must(t, e.Tick())
+	clock = clock.Add(5 * time.Second)
+	must(t, e.Tick())
+	if got := orchNotices(t, a); got != "" {
+		t.Fatalf("re-notified after a restart: %q", got)
+	}
+	ft.screens[w.Window] = "⏺ Back at it"
+	must(t, e.Tick())
+	if st, _ := a.Store.Task(w.ID); st.Status != store.Running {
+		t.Fatalf("status %q after the banner cleared", st.Status)
+	}
+}
+
+// A task saddle down paused, whose window is gone, is not the engine's to
+// resume.
+func TestEngineLeavesDownPausedTaskAlone(t *testing.T) {
+	a, ft := setup(t)
+	w, err := a.Spawn(app.SpawnReq{Title: "meter"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, a.Store.SetStatus(w.ID, app.StatusPaused))
+	ft.screens[w.Window] = "⏺ last words"
+	e := New(a)
+	for range 3 {
+		must(t, e.Tick())
+	}
+	if st, _ := a.Store.Task(w.ID); st.Status != app.StatusPaused {
+		t.Fatalf("status %q", st.Status)
+	}
+}
