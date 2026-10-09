@@ -22,6 +22,7 @@ import (
 	"github.com/brandonapol/saddle/internal/hook"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/refguard"
+	"github.com/brandonapol/saddle/internal/remote"
 	"github.com/brandonapol/saddle/internal/sentinel"
 	"github.com/brandonapol/saddle/internal/tui"
 	"github.com/spf13/cobra"
@@ -43,7 +44,7 @@ func Root() *cobra.Command {
 			Run:   func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), Version) },
 		},
 		initCmd(), upCmd(), downCmd(), spawnCmd(), withTmux(statusCmd()), briefCmd(), claimCmd(), releaseCmd(), doneCmd(),
-		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(), repairCmd(), concurrencyCmd(), pluginCmd(), grokBridgeCmd(), publishCmd(), noticesCmd(), trustCmd(), untrustCmd(), resumeCmd(), rescueCmd(), heavyRunCmd(), runqCmd(), autopilotCmd(),
+		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(), repairCmd(), concurrencyCmd(), pluginCmd(), grokBridgeCmd(), publishCmd(), noticesCmd(), trustCmd(), untrustCmd(), resumeCmd(), rescueCmd(), heavyRunCmd(), runqCmd(), autopilotCmd(), remote.Command(open),
 	)
 	return root
 }
