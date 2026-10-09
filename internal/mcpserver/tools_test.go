@@ -49,6 +49,7 @@ func errText(res *mcp.CallToolResult) string {
 
 func TestSpawnToolPicksAdapter(t *testing.T) {
 	a, _ := stackSetup(t)
+	a.AdapterStatus = func() []agent.Status { return []agent.Status{{Name: "grok", OK: true}} }
 	var out SpawnOut
 	res := callTool(t, a, "t1", "spawn", map[string]any{"title": "hero art", "prompt": "draw", "adapter": "grok"}, &out)
 	if res.IsError {
