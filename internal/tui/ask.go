@@ -110,7 +110,7 @@ func (m *model) chatTitle() string {
 		return "SPAWN AN AGENT"
 	}
 	if !m.asking() {
-		title := "ORCHESTRATOR · " + m.launch.Model
+		title := "ORCHESTRATOR · " + m.orchModel()
 		if m.narrow() && len(m.tasks) > 0 {
 			// The agent list is hidden; say how to get to it.
 			title += fmt.Sprintf(" · tab: %d agent", len(m.tasks))

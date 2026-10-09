@@ -40,6 +40,9 @@ func (m *model) routeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 	if m.hv.confirm != "" {
 		return m.heavyConfirmKey(k), true
 	}
+	if m.confirm != nil {
+		return m.confirmKey(k), true
+	}
 	switch {
 	case key.Matches(k, keys.ViewControl):
 		m.setView(viewControl)

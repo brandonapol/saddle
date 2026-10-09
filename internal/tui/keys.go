@@ -126,8 +126,8 @@ func newKeyMap() keyMap {
 		Spawn: b("s", "spawn an agent", "s"),
 		Pause: b("p", "pause (esc)", "p"),
 		Brief: b("b", "brief/peek", "b"),
-		Kill:  b("x", "kill", "x"),
-		Land:  b("L", "land", "L"),
+		Kill:  b("x", "kill (asks first)", "x"),
+		Land:  b("L", "land (asks first)", "L"),
 		Back:  b("esc/tab", "orchestrator", "esc"),
 	}
 }
@@ -175,6 +175,9 @@ func (m *model) help() []key.Binding {
 	}
 	if m.view == viewMerge {
 		return []key.Binding{withHelp(k.Down, "j/k", "stack"), withHelp(k.Focus, "tab", "train"), k.AutoMerge, k.Hold, k.Rebase, k.ViewControl, k.Help, k.Terminal, k.CopyMode, k.Quit}
+	}
+	if m.confirm != nil {
+		return []key.Binding{withHelp(k.Confirm, "y", "yes"), withHelp(k.Back, "any key", "no")}
 	}
 	if m.view == viewRuns {
 		if m.hv.confirm != "" {
