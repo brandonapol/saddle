@@ -44,12 +44,12 @@ func heavyQueue(t *testing.T, root string) {
 		}
 		_ = q.Close()
 	})
-	h, err := q.Acquire(ctx, runq.Request{Class: "go-test", Label: "t83", Repo: filepath.Base(root), Cmd: "make check"})
+	h, err := q.Acquire(ctx, runq.Request{Class: "go-test", Label: "t83", Repo: runq.RepoLabel(root), Cmd: "make check"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = h.Release() })
-	for i, w := range []struct{ label, repo string }{{"t84", "other"}, {"pid 4242", filepath.Base(root)}} {
+	for i, w := range []struct{ label, repo string }{{"t84", "other"}, {"pid 4242", runq.RepoLabel(root)}} {
 		g := make(chan struct{})
 		gone = append(gone, g)
 		go func() {

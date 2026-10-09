@@ -124,6 +124,9 @@ func Run(env Env) []Result {
 		r.tool(CheckClaude, r.cfg.Claude.Cmd, "--version", "install Claude Code (https://claude.com/claude-code) or set [claude] cmd in .saddle/config.toml"),
 		r.hooks(), r.push(), r.orchAllow(), r.gate(), r.ignored(), r.stateDB(), r.leftovers(),
 	}
+	if r.wantsGrok() {
+		rs = append(rs, r.grok())
+	}
 	if he, ok := env.(RepoHooksEnv); ok {
 		rs = append(rs, r.repoHooks(he))
 	}
