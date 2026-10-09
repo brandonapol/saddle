@@ -25,6 +25,10 @@ func TestDetectLimitBanner(t *testing.T) {
 		{"older wording", "Claude usage limit reached. Your limit will reset at 5pm (America/Chicago).", "5pm (America/Chicago)", true},
 		{"five hour", "5-hour limit reached ∙ resets 3am\n", "3am", true},
 		{"no reset given", "Usage limit reached\n", "", true},
+		// #321: the other adapters' wordings rotate them too.
+		{"codex", "■ You've hit your usage limit. Upgrade to Pro or try again at 4:05 PM.\n› ", "4:05 PM", true},
+		{"openai quota", "stream error: You exceeded your current quota, please check your plan and billing details.\n> ", "", true},
+		{"grok credits", "Error: out of credits for this billing period. Resets 6pm\n> ", "6pm", true},
 		{"working", "⏺ Editing engine.go\n  esc to interrupt", "", false},
 		{"prompt", "Do you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel", "", false},
 		// An agent quoting the banner further up its scrollback is not parked.

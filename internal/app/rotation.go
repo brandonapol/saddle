@@ -378,34 +378,46 @@ func modelFamily(model string) string {
 	return ""
 }
 
-var resetClockRe = regexp.MustCompile(`(?i)\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b(?:\s*\(([^)]+)\))?`)
+var resetClockRe = regexp.MustCompile(`(?i)(?:\b([a-z]{3})[a-z]*\s+(\d{1,2}),?\s+)?\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b(?:\s*\(([^)]+)\))?`)
 
 // parseReset reads a banner's reset wording ("3pm (America/New_York)",
-// "12:10pm") as the next such time after now.
+// "12:10pm", "Oct 12, 3pm") as the next such time after now.
 func parseReset(s string, now time.Time) (time.Time, bool) {
 	m := resetClockRe.FindStringSubmatch(s)
 	if m == nil {
 		return time.Time{}, false
 	}
-	h, _ := strconv.Atoi(m[1])
+	h, _ := strconv.Atoi(m[3])
 	mins := 0
-	if m[2] != "" {
-		mins, _ = strconv.Atoi(m[2])
+	if m[4] != "" {
+		mins, _ = strconv.Atoi(m[4])
 	}
 	if h < 1 || h > 12 || mins > 59 {
 		return time.Time{}, false
 	}
 	h %= 12
-	if strings.EqualFold(m[3], "pm") {
+	if strings.EqualFold(m[5], "pm") {
 		h += 12
 	}
 	loc := now.Location()
-	if m[4] != "" {
-		if l, err := time.LoadLocation(strings.TrimSpace(m[4])); err == nil {
+	if m[6] != "" {
+		if l, err := time.LoadLocation(strings.TrimSpace(m[6])); err == nil {
 			loc = l
 		}
 	}
 	n := now.In(loc)
+	if m[1] != "" {
+		// A dated reset ("Oct 12, 3pm"): this year's, or next year's once past.
+		mon, err := time.Parse("Jan", strings.ToUpper(m[1][:1])+strings.ToLower(m[1][1:]))
+		day, _ := strconv.Atoi(m[2])
+		if err == nil && day >= 1 && day <= 31 {
+			t := time.Date(n.Year(), mon.Month(), day, h, mins, 0, 0, loc)
+			if !t.After(n) {
+				t = t.AddDate(1, 0, 0)
+			}
+			return t, true
+		}
+	}
 	t := time.Date(n.Year(), n.Month(), n.Day(), h, mins, 0, 0, loc)
 	if !t.After(n) {
 		t = t.AddDate(0, 0, 1)

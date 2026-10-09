@@ -11,9 +11,49 @@ import (
 
 // Status says whether an adapter can run on this machine (#182).
 type Status struct {
-	Name   string `json:"name"`
-	OK     bool   `json:"ok"`
-	Reason string `json:"reason,omitempty"` // why not, when !OK
+	Name     string `json:"name"`
+	Provider string `json:"provider,omitempty"` // who serves its models (#321)
+	OK       bool   `json:"ok"`
+	Reason   string `json:"reason,omitempty"` // why not, when !OK
+	// Hooks is whether its workers run saddle's hooks, so claims are enforced.
+	Hooks bool `json:"hooks"`
+	// OutOfQuotaUntil is set while the adapter is out of quota: its reset.
+	OutOfQuotaUntil string `json:"out_of_quota_until,omitempty"`
+}
+
+// Provider describes who serves an adapter's models and what it is good
+// for, so the orchestrator can pick per task (#321).
+type Provider struct {
+	Adapter   string
+	Vendor    string
+	Models    string
+	Strengths string
+}
+
+// Providers lists the adapters the orchestrator picks between, in the
+// default rotation order.
+func Providers() []Provider {
+	return []Provider{
+		{Adapter: "claude", Vendor: "Anthropic", Models: "Claude Code: opus, sonnet, haiku",
+			Strengths: "hard design, refactors across packages, careful review; haiku or sonnet for small mechanical edits"},
+		{Adapter: "grok", Vendor: "SpaceXAI", Models: "Grok CLI: grok's default model, or [grok] model",
+			Strengths: "fast general coding and a second opinion; good for well-scoped features and fixes"},
+		{Adapter: "codex", Vendor: "OpenAI", Models: "Codex CLI: its default model",
+			Strengths: "well-specified implementation and cheap mechanical edits; no hooks, so give it tasks whose claims nobody else touches"},
+	}
+}
+
+// ProviderOf is the vendor serving adapter name, or "".
+func ProviderOf(name string) string {
+	for _, p := range Providers() {
+		if p.Adapter == name {
+			return p.Vendor
+		}
+	}
+	if name == GeminiName {
+		return "Google"
+	}
+	return ""
 }
 
 // auth is how an adapter's CLI finds its credentials: any of these
@@ -85,7 +125,10 @@ func Unavailable(name string, why error, ss []Status) error {
 func (m machine) availability(cmds map[string]string) []Status {
 	var out []Status
 	for _, n := range Names() {
-		s := Status{Name: n, OK: true}
+		s := Status{Name: n, Provider: ProviderOf(n), OK: true}
+		if ad, err := ByName(n); err == nil {
+			s.Hooks = ad.Hooks()
+		}
 		if err := m.check(n, cmds[n]); err != nil {
 			s.OK, s.Reason = false, err.Error()
 		}

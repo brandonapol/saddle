@@ -230,6 +230,8 @@ func TestParseReset(t *testing.T) {
 		{"3pm (America/New_York)", time.Date(2026, 10, 9, 15, 0, 0, 0, ny)},
 		{"12:10pm (America/New_York)", time.Date(2026, 10, 10, 12, 10, 0, 0, ny)},
 		{"9am (America/New_York)", time.Date(2026, 10, 10, 9, 0, 0, 0, ny)},
+		{"4:05 PM", time.Date(2026, 10, 9, 16, 5, 0, 0, ny)},
+		{"Oct 12, 3pm (America/New_York)", time.Date(2026, 10, 12, 15, 0, 0, 0, ny)},
 	} {
 		got, ok := parseReset(c.in, now)
 		if !ok || !got.Equal(c.want) {
@@ -238,5 +240,41 @@ func TestParseReset(t *testing.T) {
 	}
 	if _, ok := parseReset("soon", now); ok {
 		t.Error("parsed a reset from nothing")
+	}
+}
+
+// #321: the orchestrator brief lists the three providers with their models
+// and strengths, tells it to pick per task, and explains rotation.
+func TestOrchestratorBriefListsProviders(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	b := a.orchestratorBrief()
+	for _, want := range []string{"Anthropic", "SpaceXAI", "OpenAI", "claude", "grok", "codex", "pick per task", "out of quota", "[adapters] order"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("brief lacks %q", want)
+		}
+	}
+	if !strings.Contains(a.PluginBrief(), "SpaceXAI") {
+		t.Error("plugin brief lacks the providers")
+	}
+}
+
+// #321: status lists each adapter's provider, hooks and quota state.
+func TestAdaptersStatusShowsProviderAndQuota(t *testing.T) {
+	t.Parallel()
+	a, _, _ := rotationApp(t)
+	must(t, a.MarkExhausted(usage.Claude, time.Now().Add(time.Hour), "3pm"))
+	got := map[string]agent.Status{}
+	for _, s := range a.Adapters() {
+		got[s.Name] = s
+	}
+	if c := got[usage.Claude]; c.Provider != "Anthropic" || !c.Hooks || c.OutOfQuotaUntil != "3pm" {
+		t.Errorf("claude = %+v", c)
+	}
+	if g := got[usage.Grok]; g.Provider != "SpaceXAI" || !g.Hooks || g.OutOfQuotaUntil != "" {
+		t.Errorf("grok = %+v", g)
+	}
+	if c := got[usage.Codex]; c.Provider != "OpenAI" || c.Hooks {
+		t.Errorf("codex = %+v", c)
 	}
 }
