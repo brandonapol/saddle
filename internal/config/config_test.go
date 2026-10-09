@@ -668,3 +668,37 @@ func TestTemplateDocumentsAdvisor(t *testing.T) {
 		}
 	}
 }
+
+// #321: [adapters] order sets the rotation order next to the per-adapter
+// tables, and [notify] configures owner notifications.
+func TestAdapterOrderAndNotify(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.AdapterOrder, ","); got != "claude,grok,codex" {
+		t.Fatalf("default order = %s", got)
+	}
+	if cfg.Notify.Desktop || cfg.Notify.Webhook != "" {
+		t.Fatalf("notify defaults = %+v", cfg.Notify)
+	}
+	root := t.TempDir()
+	writeConfig(t, root, "[adapters]\norder = [\"grok\", \"codex\"]\n[adapters.codex]\ncmd = \"/opt/codex\"\n[notify]\ndesktop = true\nwebhook = \"https://example.test/hook\"\n")
+	if cfg, err = Load(root); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.AdapterOrder, ","); got != "grok,codex" {
+		t.Fatalf("order = %s", got)
+	}
+	if cfg.Adapters["codex"].Cmd != "/opt/codex" || len(cfg.Adapters) != 1 {
+		t.Fatalf("adapters = %+v", cfg.Adapters)
+	}
+	if !cfg.Notify.Desktop || cfg.Notify.Webhook != "https://example.test/hook" {
+		t.Fatalf("notify = %+v", cfg.Notify)
+	}
+	writeConfig(t, root, "[adapters]\norder = [\"claude\", \"gpt\"]\n")
+	if _, err = Load(root); err == nil || !strings.Contains(err.Error(), "gpt") {
+		t.Fatalf("unknown adapter in order: err = %v", err)
+	}
+}
