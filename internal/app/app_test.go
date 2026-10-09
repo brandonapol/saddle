@@ -15,6 +15,7 @@ import (
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/lintgate"
 	"github.com/brandonapol/saddle/internal/refguard"
+	"github.com/brandonapol/saddle/internal/runq"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -64,6 +65,13 @@ func runTests(m *testing.M) int {
 		return 1
 	}
 	installStackGHDispatch()
+	// Every gate takes a heavy-run lease (#239). Point this package's tests
+	// at a private queue so they never touch the machine's, and drop any
+	// lease the test binary inherited from a gate it runs under. Tests that
+	// look at the queue set their own with heavyTest. The queue lives in tmp
+	// so it goes when the run ends: an init here once leaked a dir per start.
+	_ = os.Setenv(runq.EnvPath, filepath.Join(tmp, "runq", "runq.db"))
+	_ = os.Unsetenv(runq.EnvLease)
 	// Only collapse's CI poll sleeps, and no test waits on real time there.
 	sleep = func(time.Duration) {}
 	return m.Run()
