@@ -17,6 +17,7 @@ type RunOptions struct {
 	Class  string
 	Prio   int
 	Label  string    // who is asking; SADDLE_TASK or "pid N" when empty
+	Repo   string    // the saddle repo asking, for status; may be empty
 	Status io.Writer // queue lines go here; nil discards them
 	// WaitMax gives up queueing after this long with a *WaitMaxError; 0
 	// waits until ctx ends.
@@ -121,6 +122,7 @@ func (q *Queue) RunWith(ctx context.Context, o RunOptions, cmd *exec.Cmd) (Resul
 		Class: o.Class,
 		Prio:  o.Prio,
 		Label: o.Label,
+		Repo:  o.Repo,
 		Cmd:   describe(cmd),
 		OnWait: func(w Wait) {
 			last = w
