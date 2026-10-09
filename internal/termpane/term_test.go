@@ -105,7 +105,11 @@ func TestCloseKillsShell(t *testing.T) {
 
 func TestInteractiveInputReachesProgram(t *testing.T) {
 	tm := startSh(t, 80, 10)
-	send(t, tm, "read x; echo got:$x\r")
+	// Wait until the command runs before typing: input that arrives while
+	// readline still owns the line can be dropped when it restores the
+	// terminal for the command. rea""dy only reads "ready" once it runs.
+	send(t, tm, "echo rea\"\"dy; read x; echo got:$x\r")
+	waitFor(t, tm, "ready")
 	send(t, tm, "abc\r")
 	waitFor(t, tm, "got:abc")
 }
