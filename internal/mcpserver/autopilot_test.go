@@ -43,3 +43,40 @@ func TestAutopilotTool(t *testing.T) {
 		t.Fatal("unknown action succeeded")
 	}
 }
+
+// #285: the autopilot tool's infinite action toggles and reads infinite
+// mode, the same state `saddle autopilot infinite on|off` writes.
+func TestAutopilotToolInfinite(t *testing.T) {
+	a, _ := stackSetup(t)
+	noGH(t)
+	call := func(mode string) (autopilot.State, bool) {
+		var out autopilot.State
+		args := map[string]any{"action": "infinite", "mode": mode}
+		res := callTool(t, a, app.OrchestratorID, "autopilot", args, &out)
+		if res.IsError {
+			t.Logf("%v: %s", args, errText(res))
+		}
+		return out, !res.IsError
+	}
+	if st, ok := call("status"); !ok || st.Infinite {
+		t.Fatalf("status before: %+v", st)
+	}
+	if st, ok := call("on"); !ok || !st.On || !st.Infinite {
+		t.Fatalf("on: %+v", st)
+	}
+	if st, ok := call("status"); !ok || !st.On || !st.Infinite {
+		t.Fatalf("status after on: %+v", st)
+	}
+	if st, err := a.NewAutopilot(nil).Status(); err != nil || !st.Infinite {
+		t.Fatalf("persisted state: %+v, %v", st, err)
+	}
+	if st, ok := call("off"); !ok || st.On || st.Infinite {
+		t.Fatalf("off: %+v", st)
+	}
+	if st, ok := call("status"); !ok || st.Infinite {
+		t.Fatalf("status after off: %+v", st)
+	}
+	if _, ok := call("sideways"); ok {
+		t.Fatal("bad mode succeeded")
+	}
+}
