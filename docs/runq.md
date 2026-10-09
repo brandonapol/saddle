@@ -136,6 +136,7 @@ All of these pass under `-race`; the e2e journeys pass three runs in a row.
 | e2e `TestJourneyRunqNestedRunDoesNotDeadlock` | `runq run -- runq run -- …` with one slot finishes without queueing. |
 | `TestStatusRepoAndETA`, `TestMaxRunConfig`, `TestHeavyRunsView`, `TestStatusShowsHeavyRuns` (cli, mcpserver), `TestRunsViewShowsQueuePositions`, `TestRunsViewKillAsksFirst`, `TestNarratorMentionsLongWaitAndOverdueOnce`, `TestNarratorBackpressureOnce` | #242: with one holder and two waiters, status, MCP status and the TUI show the same positions; kill asks first; the narrator mentions each long wait, overdue holder and backpressure spell once. |
 | e2e `TestJourneyHeavyRunsQueueVisible` | The same through the real binary: `saddle status`, `--json`, MCP `status` and `saddle up`'s runs view agree, and killing the overdue holder from the TUI hands its slot to the next waiter. |
+| e2e `TestJourneyRunqTwoSessionsTakeTurns`, `TestJourneyRunqCrashedHolderFreesSlot`, `TestJourneyRunqHookReentrancy`, `TestJourneyRunqLoadCeiling` | #245: #236's criteria through real agent panes. Two sessions on two repos share one `XDG_STATE_HOME`; the second agent's rewritten `flutter test` queues at position 1 and starts by itself. SIGKILLing a holder's whole pane hands its slot over within a heartbeat, and Pdeathsig kills its child. A train gate's pre-commit `make check` rides the gate's lease while an agent's queues behind it, with no deadlock. Six CPU burners under a fake `/proc` stay at two at a time and wait while the box reads saturated. |
 
 What the spike taught:
 
