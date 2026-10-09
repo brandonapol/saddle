@@ -117,7 +117,10 @@ func TestPlanViewEmptyAndBroken(t *testing.T) {
 		t.Fatal(err)
 	}
 	press(m, altKey('2'))
-	if out := m.View(); !strings.Contains(out, "unknown keys") || !strings.Contains(out, "e edit") {
+	// The error follows the plan's temp path, so where it wraps varies:
+	// match it with the box borders and whitespace taken out.
+	flat := strings.NewReplacer("│", "", " ", "", "\n", "").Replace(m.View())
+	if out := m.View(); !strings.Contains(flat, "unknownkeys:bogus") || !strings.Contains(out, "e edit") {
 		t.Errorf("broken plan should show the error and the edit key:\n%s", out)
 	}
 }
