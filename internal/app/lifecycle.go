@@ -93,6 +93,9 @@ func (a *App) Warnings() []string {
 	if err != nil {
 		drift = []string{"can't check landed branches for drift: " + err.Error()}
 	}
+	if w := a.ScratchWarning(); w != "" {
+		ws = append(ws, w)
+	}
 	return append(ws, drift...)
 }
 
@@ -158,6 +161,7 @@ type Leftover struct {
 // cleanup removes a dead task's worktree and, when it holds no commits
 // beyond integration, its branch. It says what it kept and why.
 func (a *App) cleanup(t store.Task) (string, error) {
+	a.sweepScratchAfter(t.ID)
 	if _, err := os.Stat(t.Worktree); err == nil {
 		if dirty, _ := gitx.Dirty(t.Worktree); len(dirty) > 0 {
 			return "kept worktree: uncommitted changes", nil

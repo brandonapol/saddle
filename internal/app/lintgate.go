@@ -69,8 +69,9 @@ func (a *App) lintDone(t store.Task) error {
 		a.Store.Event(t.ID, "lint_skipped", "tree "+tree+" already passed")
 		return nil
 	}
+	defer a.sweepScratchAfter(t.ID)
 	for attempt := 0; ; attempt++ {
-		out, err := runGroup(context.Background(), t.Worktree, g.Cmd, nil, a.GateTimeout())
+		out, err := a.runLintGate(t.Worktree, g.Cmd)
 		if errors.Is(err, ErrGateInterrupted) {
 			return err
 		}
@@ -87,8 +88,8 @@ func (a *App) lintDone(t store.Task) error {
 				continue
 			}
 			a.Store.Event(t.ID, EventGateEnv, "done's lint gate: "+p.Signature)
-			return fmt.Errorf("done could not check your tree: the repo's gate `%s` failed on the environment (%q), not on your branch. Free %s, then call the saddle done tool again; your branch needs no change for it.\n%s",
-				g.Cmd, p.Signature, p.Free, tail(out, 10))
+			return fmt.Errorf("done could not check your tree: the repo's gate `%s` failed on the environment (%q), not on your branch. Free %s, then call the saddle done tool again; your branch needs no change for it.%s\n%s",
+				g.Cmd, p.Signature, p.Free, a.tempHint(), tail(out, 10))
 		}
 		if a.brokenGate(t.ID, g, out) {
 			return nil
@@ -96,6 +97,18 @@ func (a *App) lintDone(t store.Task) error {
 		a.Store.Event(t.ID, "lint_failed", g.Cmd)
 		return errors.New(lintFailure(g, out, "done refused: in your worktree"))
 	}
+}
+
+// runLintGate runs the lint gate cmd in dir with TMPDIR and GOTMPDIR in a
+// per-run dir under GateTmpdir, as the train's test gate does (#320), so a
+// full /tmp doesn't block done when the train would have passed.
+func (a *App) runLintGate(dir, cmd string) (string, error) {
+	env, cleanup, out, err := gateTemp(a.GateTmpdir())
+	if err != nil {
+		return out, err
+	}
+	defer cleanup()
+	return runGroup(context.Background(), dir, cmd, append(os.Environ(), env...), a.GateTimeout())
 }
 
 // hooksState is where the repo-hook wrapper keeps its lock and pass stamps:
@@ -222,7 +235,7 @@ func (a *App) trainLint(id, dir string) (string, error) {
 		a.Store.Event(id, "lint_skipped", "tree "+tree+" already passed")
 		return "", nil
 	}
-	out, err := runGroup(context.Background(), dir, g.Cmd, nil, a.GateTimeout())
+	out, err := a.runLintGate(dir, g.Cmd)
 	if errors.Is(err, ErrGateInterrupted) {
 		return "", err
 	}

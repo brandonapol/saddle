@@ -347,3 +347,55 @@ func TestLandRunsMakeVariableHookOnceWhenSameAsTest(t *testing.T) {
 		t.Fatalf("the train ran make check %d times", n)
 	}
 }
+
+// done's gate runs with TMPDIR and GOTMPDIR in a per-run dir under
+// GateTmpdir, like the train's (#320): with the inherited TMPDIR full (here
+// read-only), done still passes and writes nothing there.
+func TestLintDoneHonoursGateTmpdirWithPoisonedTMPDIR(t *testing.T) {
+	a := trainSetup(t)
+	a.Cfg.Train.Tmpdir = filepath.Join(t.TempDir(), "gates")
+	poison := filepath.Join(t.TempDir(), "full")
+	must(t, os.Mkdir(poison, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(poison, 0o755) })
+	t.Setenv("TMPDIR", poison)
+	seen := filepath.Join(t.TempDir(), "seen")
+	a.Cfg.Train.Lint = config.Lint{Cmd: `mktemp >/dev/null && echo "$TMPDIR $GOTMPDIR" > ` + seen, Set: true}
+	tk, err := a.Spawn(SpawnReq{Title: "tmp"})
+	must(t, err)
+	write(t, tk.Worktree, "x.go", "ok\n")
+	commitAll(t, tk.Worktree, "x")
+	must(t, a.lintDone(tk))
+	b, err := os.ReadFile(seen)
+	must(t, err)
+	dirs := strings.Fields(string(b))
+	if len(dirs) != 2 || !strings.HasPrefix(dirs[0], a.GateTmpdir()+string(filepath.Separator)) || dirs[1] != dirs[0] {
+		t.Fatalf("gate saw TMPDIR GOTMPDIR %q, want a per-run dir under %s", b, a.GateTmpdir())
+	}
+	if es, _ := os.ReadDir(poison); len(es) != 0 {
+		t.Fatalf("done's gate wrote %d entries to the inherited TMPDIR", len(es))
+	}
+	if _, err := os.Stat(dirs[0]); !os.IsNotExist(err) {
+		t.Fatalf("the per-run dir %s must be removed after", dirs[0])
+	}
+}
+
+// A done gate that fails on temp space names the temp entries with the
+// most files (#320), so a leak of empty dirs shows at once.
+func TestLintDoneTempFailureNamesTheBiggestLeak(t *testing.T) {
+	t.Parallel()
+	a := trainSetup(t)
+	dir := withScratchDir(t, a)
+	leak := filepath.Join(dir, "saddle-app-runq-leak")
+	for i := range 30 {
+		must(t, os.MkdirAll(filepath.Join(leak, strings.Repeat("d", i+1)), 0o755))
+	}
+	a.Cfg.Train.Lint = config.Lint{Cmd: `echo "mkdir: disk quota exceeded"; exit 1`, Set: true}
+	tk, err := a.Spawn(SpawnReq{Title: "quota"})
+	must(t, err)
+	write(t, tk.Worktree, "x.go", "x\n")
+	commitAll(t, tk.Worktree, "x")
+	err = a.lintDone(tk)
+	if err == nil || !strings.Contains(err.Error(), "Most files: "+leak) {
+		t.Fatalf("env failure must name the leak: %v", err)
+	}
+}

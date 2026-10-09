@@ -37,11 +37,14 @@ func (a *App) depth(id string) int {
 	return d
 }
 
-// checkSpawnCaps refuses a spawn while the heavy-run queue is backed up, or
-// one that would nest deeper than the max depth or give parent more working
+// checkSpawnCaps refuses a spawn while the heavy-run queue is backed up or
+// scratch space stays low (#322), or one that would nest deeper than the max depth or give parent more working
 // children than allowed.
 func (a *App) checkSpawnCaps(parent string) error {
 	if err := a.checkBackpressure(); err != nil {
+		return err
+	}
+	if err := a.checkScratch(); err != nil {
 		return err
 	}
 	if parent == "" || parent == OrchestratorID {

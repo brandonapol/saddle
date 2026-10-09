@@ -3,8 +3,6 @@ package app
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -20,6 +18,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/brandonapol/saddle/internal/scratch"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -140,7 +139,7 @@ func runGroup(ctx context.Context, dir, cmd string, env []string, timeout time.D
 	// A file, not a pipe: a helper the gate leaves running mustn't hold Wait.
 	// With no temp space it is a pipe, and WaitDelay stops the wait.
 	var buf bytes.Buffer
-	if f, err := os.CreateTemp("", "saddle-gate-*.log"); err == nil {
+	if f, err := os.CreateTemp(envTmp(env), "saddle-gate-*.log"); err == nil {
 		defer func() {
 			f.Close()
 			_ = os.Remove(f.Name())
@@ -182,6 +181,17 @@ func runGroup(ctx context.Context, dir, cmd string, env []string, timeout time.D
 		err = ctx.Err()
 	}
 	return out, err
+}
+
+// envTmp is the last TMPDIR env sets, else "" (the process's temp dir), so
+// the gate's own log goes where its temp files do.
+func envTmp(env []string) string {
+	for i := len(env) - 1; i >= 0; i-- {
+		if v, ok := strings.CutPrefix(env[i], "TMPDIR="); ok {
+			return v
+		}
+	}
+	return ""
 }
 
 // killGroup stops process group pgid: SIGTERM, then SIGKILL for whatever is
@@ -319,7 +329,8 @@ func GateEnviron(environ []string) []string {
 }
 
 // GateTmpdir is the scratch dir the gate's temp dirs go in: [train] tmpdir,
-// else <user cache dir>/saddle/tmp/<repo hash>. It is never inside the repo:
+// else <scratch root>/<repo hash> (scratch.go; the root defaults to
+// <user cache dir>/saddle/tmp). It is never inside the repo:
 // a test's temp dir there sits under the repo's .saddle/config.toml, so code
 // that walks up looking for a saddle repo (the plugin's saddleRoot) finds the
 // real one, and the trust prompt for it fails the gate. A [train] tmpdir
@@ -333,12 +344,11 @@ func (a *App) GateTmpdir() string {
 			return filepath.Clean(d)
 		}
 	}
-	sum := sha256.Sum256([]byte(a.Root))
-	key := hex.EncodeToString(sum[:])[:12]
-	if c, err := os.UserCacheDir(); err == nil && !within(a.Root, c) {
-		return filepath.Join(c, "saddle", "tmp", key)
+	key := scratch.RepoKey(a.Root)
+	if r := a.ScratchRoot(); !within(a.Root, r) {
+		return filepath.Join(r, key)
 	}
-	return filepath.Join(os.TempDir(), "saddle-gate-"+key)
+	return filepath.Join(scratch.OSTemp(), "saddle-gate-"+key)
 }
 
 // within reports whether p is root or under it.
@@ -398,8 +408,8 @@ func (a *App) runGateEnv(ctx context.Context, task string, run GateRun, notify b
 			if err := a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
 				"The test gate for %s failed %d times on the environment, not the branch: %q. Free %s. "+
 					"The gate's temp dirs are under %s; leftover Test*/go-build* dirs in /tmp count too. "+
-					"%s stays queued and nothing was counted against it; land again once there is room.",
-				task, attempt+1, p.Signature, p.Free, base, task)); err != nil {
+					"%s stays queued and nothing was counted against it; land again once there is room.%s",
+				task, attempt+1, p.Signature, p.Free, base, task, a.tempHint())); err != nil {
 				res.Output += "\n(orchestrator not notified: " + err.Error() + ")"
 			}
 			return res
@@ -415,18 +425,11 @@ func (a *App) runGateEnv(ctx context.Context, task string, run GateRun, notify b
 // along with base when nothing else is left in it. The gate rides on lease
 // and is stopped if the queue takes it away.
 func (a *App) gateOnce(ctx context.Context, base string, run GateRun, lease *gateLease) (string, error) {
-	if err := os.MkdirAll(base, 0o755); err != nil {
-		return "", fmt.Errorf("gate tmpdir: %w", err)
-	}
-	dir, err := os.MkdirTemp(base, "gate-")
+	env, done, out, err := gateTemp(base)
 	if err != nil {
-		// Can't even make the dir: that is the environment too.
-		return "cannot create temp dir: " + err.Error(), err
+		return out, err
 	}
-	defer func() {
-		_ = os.RemoveAll(dir)
-		_ = os.Remove(base) // only if empty: the default lives in the user's cache dir
-	}()
+	defer done()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if lost := lease.lost(); lost != nil {
@@ -438,11 +441,29 @@ func (a *App) gateOnce(ctx context.Context, base string, run GateRun, lease *gat
 			}
 		}()
 	}
-	env := []string{"TMPDIR=" + dir, "GOTMPDIR=" + dir}
 	if lease != nil {
 		env = append(env, lease.env...)
 	}
 	return run(ctx, env)
+}
+
+// gateTemp makes a fresh per-run temp dir under base for one gate run, the
+// train's or done's (#320). env points TMPDIR and GOTMPDIR at it; done
+// removes it, and base too when nothing else is left in it. When the dir
+// can't be made, out is the gate output to classify: that is the
+// environment too.
+func gateTemp(base string) (env []string, done func(), out string, err error) {
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return nil, nil, "cannot create temp dir: " + err.Error(), fmt.Errorf("gate tmpdir: %w", err)
+	}
+	dir, err := os.MkdirTemp(base, "gate-")
+	if err != nil {
+		return nil, nil, "cannot create temp dir: " + err.Error(), err
+	}
+	return scratch.Env(dir), func() {
+		_ = os.RemoveAll(dir)
+		_ = os.Remove(base) // only if empty: the default lives in the user's cache dir
+	}, "", nil
 }
 
 // sweepStaleTemp removes Test*, go-build* and leftover gate-* dirs in base
