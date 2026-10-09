@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/checkpoint"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/gitx"
@@ -109,10 +110,22 @@ func (a *App) resume(t store.Task) (Resumed, error) {
 		return r, err
 	}
 	prompt := strings.TrimSpace(t.Prompt + "\n\n" + relaunchNote)
-	if a.canResume(t) {
+	ad := a.taskAdapter(t)
+	// An adapter out of quota would only park it again: relaunch it on the
+	// next one with quota (#321). Its session can't move across adapters.
+	if next, err := a.nextAdapter(ad.Name(), a.ExhaustedAdapters(time.Now())); err == nil && next != ad.Name() {
+		if nad, err := agent.ByName(next); err == nil {
+			a.Store.Event(t.ID, EventAdapterRotated, ad.Name()+" -> "+next)
+			ad = nad
+			t.Model = a.modelFor(next, t.Model)
+			if err := a.Store.SetField(t.ID, "model", t.Model); err != nil {
+				return r, err
+			}
+		}
+	} else if a.canResume(t) {
 		r.Session, prompt = t.SessionID, resumedNote
 	}
-	win, err := a.start(t, all[t.ID], a.taskAdapter(t), r.Session, prompt)
+	win, err := a.start(t, all[t.ID], ad, r.Session, prompt)
 	if err != nil {
 		a.Store.Event(t.ID, "resume_failed", err.Error())
 		return r, fmt.Errorf("%s: %w", t.ID, err)

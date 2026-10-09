@@ -55,10 +55,14 @@ func (a *App) checkAdapter(name string) error {
 	return nil
 }
 
-// taskAdapter is the adapter a task was launched with.
+// taskAdapter is the adapter a task was launched with; the session's
+// harness when its run dir recorded none (#321).
 func (a *App) taskAdapter(t store.Task) agent.Adapter {
-	run := a.stateDir("run", t.ID)
-	ad, err := agent.ByName(agent.Recorded(run))
+	name, ok := agent.RecordedName(a.stateDir("run", t.ID))
+	if !ok {
+		name = a.Cfg.Harness
+	}
+	ad, err := agent.ByName(name)
 	if err != nil {
 		return agent.Claude{}
 	}
