@@ -10,6 +10,7 @@ import (
 // #222: only questions and real decisions interrupt the orchestrator;
 // routine news goes to the digest and no-op chatter is silenced.
 func TestClassifyNotice(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, kind, text string
 		autoMerge        bool
@@ -77,6 +78,7 @@ func pendingOrch(t *testing.T, a *App) []store.Notice {
 // #222: an interrupt reaches the orchestrator's queue at once, a digest item
 // and a silent one don't, and every one is logged with its class.
 func TestAdmitNoticeRoutesByClass(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	conflict := `Restack stopped: t2's landed commit abc conflicts with origin/main in a.go. Nothing was moved; t2 has the conflict.`
 	if !a.admitNotice(OrchestratorID, store.NoticeAction, conflict) {
@@ -102,6 +104,7 @@ func TestAdmitNoticeRoutesByClass(t *testing.T) {
 // #222: worker agents keep getting their own action notices unchanged, even
 // ones that would be digested for the orchestrator.
 func TestAdmitNoticeLeavesWorkersAlone(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	for _, text := range []string{
 		"Your branch conflicts with saddle/integration in a.go.\nFix it on your branch, commit, and call the saddle done tool again.",
@@ -128,6 +131,7 @@ func TestAdmitNoticeLeavesWorkersAlone(t *testing.T) {
 // A repeated interrupt still waiting in the queue is silenced too, but once
 // delivered the next one interrupts again.
 func TestAdmitNoticeSilencesRepeats(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	clean := `The PR stack checks clean again; the needs-human flag on t2 is lifted and prs and land work again.`
 	for i := range 3 {

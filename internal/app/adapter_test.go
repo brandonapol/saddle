@@ -14,6 +14,7 @@ import (
 )
 
 func TestSpawnWithCodexAdapter(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	if _, err := a.Spawn(SpawnReq{Title: "bad", Adapter: "nope"}); err == nil || !strings.Contains(err.Error(), "unknown adapter") {
 		t.Fatalf("unknown adapter: err = %v", err)
@@ -45,6 +46,7 @@ func TestSpawnWithCodexAdapter(t *testing.T) {
 // A hookless agent never calls the hook that hands out notices, and its
 // status never turns idle, so notices are typed in whole.
 func TestNotifyTypesNoticesIntoHooklessAgent(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	c, err := a.Spawn(SpawnReq{Title: "codex work", Adapter: "codex"})
 	must(t, err)
@@ -65,6 +67,7 @@ func TestNotifyTypesNoticesIntoHooklessAgent(t *testing.T) {
 // #183: a notice typed into a hookless agent's pane is marked delivered only
 // once the pane changed, and is typed with Enter exactly once.
 func TestHooklessNoticeStaysPendingUntilPaneChanges(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	fastRetry(t)
 	ft.frozen = true
@@ -93,6 +96,7 @@ func waitUntil(cond func() bool) bool {
 // Claims are advisory for hookless agents: done goes through, and the
 // orchestrator hears about files that belong to another task.
 func TestDoneFlagsHooklessWritesToClaimedFiles(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	owner, err := a.Spawn(SpawnReq{Title: "meter", Claims: []string{"billing/meter.go"}})
 	must(t, err)
@@ -112,6 +116,7 @@ func TestDoneFlagsHooklessWritesToClaimedFiles(t *testing.T) {
 }
 
 func TestUsageMeterReadsCodexRollout(t *testing.T) {
+	t.Parallel()
 	a, m := meterApp(t)
 	wt := filepath.Join(a.Root, ".saddle", "worktrees", "t5-codex")
 	must(t, a.Store.CreateTask(store.Task{ID: "t5", Title: "codex", Role: store.RoleWorker, Worktree: wt, Status: store.Running}))
@@ -134,6 +139,7 @@ func TestUsageMeterReadsCodexRollout(t *testing.T) {
 
 // #142: [adapters.<name>] sets the command and arguments of non-Claude agents.
 func TestAdapterCmdFromConfig(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	if cmd, args := a.adapterCmd("codex"); cmd != "" || args != nil {
 		t.Fatalf("codex without config = %q %v, want the default binary", cmd, args)
@@ -157,6 +163,7 @@ func TestAdapterCmdFromConfig(t *testing.T) {
 // harness = "grok" makes grok the default worker with hooks enforced, and
 // still honors [adapters.grok] cmd and args from #142.
 func TestSpawnUnderGrokHarness(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	a.Cfg.Harness = config.HarnessGrok
 	a.Cfg.Grok = config.Grok{Cmd: "grok", Model: "grok-4.5", PermissionMode: "bypassPermissions"}

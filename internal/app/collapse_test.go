@@ -4,7 +4,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/brandonapol/saddle/internal/automerge"
 )
@@ -76,8 +75,6 @@ func stackOfTwo(t *testing.T) (*App, *fakeHub, func() []string) {
 	h.base[t1.PR], h.base[t2.PR] = "main", t1.Branch
 	h.checks[t1.PR] = []string{automerge.ChecksFail}
 	h.checks[t2.PR] = []string{automerge.ChecksPass}
-	sleep = func(time.Duration) {}
-	t.Cleanup(func() { sleep = time.Sleep })
 	return a, h, ghLog
 }
 
@@ -85,6 +82,7 @@ func stackOfTwo(t *testing.T) (*App, *fakeHub, func() []string) {
 // retargets the top PR to main, waits for its CI, squash-merges it, marks
 // both tasks merged, closes the bottom PR with a comment, and restacks.
 func TestCollapseRedBottomMergesTop(t *testing.T) {
+	t.Parallel()
 	a, h, ghLog := stackOfTwo(t)
 	t1, _ := a.Store.Task("t1")
 	t2, _ := a.Store.Task("t2")
@@ -127,6 +125,7 @@ func TestCollapseRedBottomMergesTop(t *testing.T) {
 // A covered PR in an unrelated needs-human or conflict state stops collapse
 // before anything changes.
 func TestCollapseRefusesNeedsHuman(t *testing.T) {
+	t.Parallel()
 	a, h, ghLog := stackOfTwo(t)
 	t1, _ := a.Store.Task("t1")
 	h.labels[t1.PR] = []string{automerge.NeedsHuman}
@@ -147,6 +146,7 @@ func TestCollapseRefusesNeedsHuman(t *testing.T) {
 // Red CI on the combined head puts the top PR back on its old base and
 // merges nothing.
 func TestCollapseRedCombinedHeadRestores(t *testing.T) {
+	t.Parallel()
 	a, h, ghLog := stackOfTwo(t)
 	t1, _ := a.Store.Task("t1")
 	t2, _ := a.Store.Task("t2")
@@ -165,6 +165,7 @@ func TestCollapseRedCombinedHeadRestores(t *testing.T) {
 // AutoCollapse acts only on a red bottom with a green PR above that holds
 // its commits.
 func TestAutoCollapse(t *testing.T) {
+	t.Parallel()
 	a, h, _ := stackOfTwo(t)
 	t1, _ := a.Store.Task("t1")
 	t2, _ := a.Store.Task("t2")

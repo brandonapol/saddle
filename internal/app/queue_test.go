@@ -35,6 +35,7 @@ func queueIDs(t *testing.T, a *App) []string {
 
 // #25: reorder moves a queued entry, and land follows the new order.
 func TestMoveInQueueReordersLanding(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	ts := queued(t, a, 3)
 	must(t, a.MoveInQueue(ts[2].ID, 1))
@@ -59,6 +60,7 @@ func TestMoveInQueueReordersLanding(t *testing.T) {
 // #25: a held entry is skipped by land, keeps its place, survives done, and
 // lands once released.
 func TestHoldSkipsLandUntilReleased(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	ts := queued(t, a, 2)
 	must(t, a.Hold(ts[0].ID, "waiting on design review"))

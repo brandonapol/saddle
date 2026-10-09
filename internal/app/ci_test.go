@@ -71,6 +71,7 @@ func onlyNotice(t *testing.T, a *App, task, kind string, want ...string) store.N
 }
 
 func TestCITargetsAreLiveTasksWithPRs(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	ciTask(t, a, "t1", store.Landed, "https://github.com/o/r/pull/1")
 	ciTask(t, a, "t2", store.Done, "https://github.com/o/r/pull/2")
@@ -89,6 +90,7 @@ func TestCITargetsAreLiveTasksWithPRs(t *testing.T) {
 }
 
 func TestCIFailureGoesToActiveOwnerAndOrchestrator(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	ciTask(t, a, "t2", store.Done, "https://github.com/o/r/pull/2")
 	gh := newCIGH()
@@ -106,6 +108,7 @@ func TestCIFailureGoesToActiveOwnerAndOrchestrator(t *testing.T) {
 }
 
 func TestCIFailureOnLandedTaskSpawnsOneFixTask(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	ciTask(t, a, "t1", store.Landed, "https://github.com/o/r/pull/1")
 	gh := newCIGH()
@@ -140,6 +143,7 @@ func TestCIFailureOnLandedTaskSpawnsOneFixTask(t *testing.T) {
 }
 
 func TestCIFailureOffersFixWhenSpawnFails(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	a.Cfg.Concurrency = 0
 	ciTask(t, a, "t1", store.Landed, "https://github.com/o/r/pull/1")
@@ -155,6 +159,7 @@ func TestCIFailureOffersFixWhenSpawnFails(t *testing.T) {
 }
 
 func TestCIRecoveryIsInfo(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	ciTask(t, a, "t2", store.Done, "https://github.com/o/r/pull/2")
 	gh := newCIGH()
@@ -178,6 +183,7 @@ func TestCIRecoveryIsInfo(t *testing.T) {
 }
 
 func TestCIStateSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	ciTask(t, a, "t2", store.Done, "https://github.com/o/r/pull/2")
 	gh := newCIGH()
@@ -207,6 +213,7 @@ func (f *ciGH) ciMakeFail(pr, link, target string) {
 // because t1, which adds it, hasn't merged. No fix task spawns; an event and
 // a digest line say why.
 func TestCIFailureExplainedBySiblingSpawnsNoFix(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	landTask(t, a, "t1", "e2e harness", map[string]string{"Makefile": "test/e2e:\n\tgo test ./e2e\n"})
 	ciTask(t, a, "t2", store.Landed, "https://github.com/o/r/pull/2")
@@ -228,6 +235,7 @@ func TestCIFailureExplainedBySiblingSpawnsNoFix(t *testing.T) {
 
 // A sibling that doesn't add the missing target explains nothing.
 func TestCIFailureNotExplainedBySiblingSpawnsFix(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	landTask(t, a, "t1", "e2e harness", map[string]string{"Makefile": "test/e2e:\n\tgo test ./e2e\n"})
 	ciTask(t, a, "t2", store.Landed, "https://github.com/o/r/pull/2")
@@ -244,6 +252,7 @@ func TestCIFailureNotExplainedBySiblingSpawnsFix(t *testing.T) {
 // A stacked task's red CI belongs to the ci-red watcher: ciwatch neither
 // spawns a fix nor reports it.
 func TestCIFailureOnStackedTaskDefersToCIRed(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	landTask(t, a, "t1", "billing", map[string]string{"meter.go": "package m\n"})
 	must(t, a.Store.SetField("t1", "pr", "https://github.com/o/r/pull/1"))

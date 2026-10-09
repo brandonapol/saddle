@@ -77,6 +77,7 @@ func prCalls(calls []string, url string) []string {
 // #123: two tasks landed in one batch each record their own from..to, a
 // restack keeps both on integration, and prs opens a PR for each.
 func TestBatchLandKeepsEveryTask(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, _ := originWithGh(t, a)
 	queueTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -145,6 +146,7 @@ func mustStack(t *testing.T, a *App) []landedTask {
 // both batch-landed tasks' note. Restack must not judge the second one merged
 // (empty range) and drop it; it recovers each task's range from its landing.
 func TestRestackRecoversBatchLandedLegacyNotes(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, _ := originWithGh(t, a)
 	queueTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -169,6 +171,7 @@ func TestRestackRecoversBatchLandedLegacyNotes(t *testing.T) {
 // are gone from integration. The stack reports it and restack puts t2's work
 // back, so nobody has to requeue the train row by hand.
 func TestRestackRestoresTaskDroppedAsMerged(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	originWithGh(t, a)
 	queueTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -197,6 +200,7 @@ func TestRestackRestoresTaskDroppedAsMerged(t *testing.T) {
 // superseded, its PR is never touched again, and restack drops its commits
 // instead of letting prs bundle them into the next task's PR.
 func TestKilledLandedTaskLeavesStack(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	_, ghLog := originWithGh(t, a)
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -233,6 +237,7 @@ func TestKilledLandedTaskLeavesStack(t *testing.T) {
 // The owner already marked rows 'superseded' in state.db by hand; that
 // literal keeps working.
 func TestHandSupersededRowLeavesStack(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	originWithGh(t, a)
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -247,6 +252,7 @@ func TestHandSupersededRowLeavesStack(t *testing.T) {
 // PR merged into main instead of failing on "Cannot change the base branch of
 // a closed pull request", and retargets the open PRs above them.
 func TestRestackSkipsClosedAndMergedPRs(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.Output = "single" // pins the one linear stack this test was written for (#52)
 	origin, ghLog := originWithGh(t, a)
@@ -325,6 +331,7 @@ func TestRestackToleratesRetargetOfClosedPR(t *testing.T) {
 // reported once with the fix and re-landed as a fresh PR; nobody clears
 // tasks.pr by hand.
 func TestPRMergedIntoStackedBaseGetsFreshPR(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, _ := originWithGh(t, a)
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -379,6 +386,7 @@ func TestPRMergedIntoStackedBaseGetsFreshPR(t *testing.T) {
 // A PR merged into its stacked base whose work reached main anyway (the base
 // PR merged later) simply leaves the stack.
 func TestPRMergedIntoStackedBaseThenMainIsMerged(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, _ := originWithGh(t, a)
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -415,6 +423,7 @@ func TestPRMergedIntoStackedBaseThenMainIsMerged(t *testing.T) {
 // #119.3: a landed branch deleted locally is recreated at its landed commit
 // instead of blocking prs and restack.
 func TestDeletedLandedBranchIsRestored(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, _ := originWithGh(t, a)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -441,6 +450,7 @@ func TestDeletedLandedBranchIsRestored(t *testing.T) {
 // #119.4: a flag freezes land only for queued work that touches the broken
 // layers; a task that doesn't lands.
 func TestFlagHoldsOnlyDependentLand(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	originWithGh(t, a)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -472,6 +482,7 @@ func TestFlagHoldsOnlyDependentLand(t *testing.T) {
 
 // #119.4: prs publishes the healthy layers below a broken one.
 func TestPRsPublishesLayersBelowFlag(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, _ := originWithGh(t, a)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -489,6 +500,7 @@ func TestPRsPublishesLayersBelowFlag(t *testing.T) {
 // #119.5: unstack drops a task from the stack by task id or PR, and ack
 // lifts the freeze of the current flag, both without touching state.db.
 func TestUnstackAndAck(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	originWithGh(t, a)
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -532,6 +544,7 @@ func TestUnstackAndAck(t *testing.T) {
 // integration is requeued with one call and lands again; requeueing work
 // integration already has is refused.
 func TestRequeueLandsAgain(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	originWithGh(t, a)
 	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})

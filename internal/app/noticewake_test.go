@@ -48,6 +48,7 @@ func countWakes(sent []string) int {
 // #183: a notice for an idle agent whose input box shows Claude Code's grey
 // suggestion is typed in at once.
 func TestNotifyReachesIdleAgentShowingSuggestion(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	c := idleWorker(t, a, ft, "done\n\x1b[39m❯ \x1b[2mrun saddle restack now\x1b[0m")
 	a.Tmux = styledFake{ft}
@@ -66,6 +67,7 @@ func (s styledFake) CaptureStyled(id string, n int) (string, error) { return s.C
 // typed in even though its input looks like a draft, once per wake_after,
 // with a notice_wake event.
 func TestWakeIdleAfterWakeAfter(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	fastRetry(t)
 	c := idleWorker(t, a, ft, "done\n❯ run saddle restack now")
@@ -102,6 +104,7 @@ func TestWakeIdleAfterWakeAfter(t *testing.T) {
 // The wake never answers a permission prompt, and never types at a busy
 // agent or one with nothing pending.
 func TestWakeIdleLeavesPromptsAndBusyAgentsAlone(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	fastRetry(t)
 	later := time.Now().Add(a.Cfg.Notices.WakeAfter + time.Minute)

@@ -35,6 +35,7 @@ func feedDigest(t *testing.T, a *App) {
 // #222: routine notices in one window become a single compact digest line,
 // sent once the window has passed.
 func TestDigestCoalescesWindow(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	a.Cfg.Notices.DigestEvery = 15 * time.Minute
 	feedDigest(t, a)
@@ -67,6 +68,7 @@ func TestDigestCoalescesWindow(t *testing.T) {
 // #222: the digest waits while the orchestrator is busy or the owner types,
 // and goes out once it is idle.
 func TestDigestOnlyWhenIdle(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	tgt := &digestTarget{}
 	a.SetCompactTarget(tgt)
@@ -94,6 +96,7 @@ func TestDigestOnlyWhenIdle(t *testing.T) {
 
 // #222: nothing worth telling, no digest: silenced notices alone send none.
 func TestDigestSkipsWhenNothingHappened(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	if a.admitNotice(OrchestratorID, store.NoticeInfo, `Restacked 2 landed tasks onto origin/main at abc: 0 refs moved, 0 commits already in base dropped.`) {
 		t.Fatal("no-op restack interrupted")
@@ -106,6 +109,7 @@ func TestDigestSkipsWhenNothingHappened(t *testing.T) {
 // #222: an interrupt is admitted at once, never held for the digest window,
 // and routine notices around it don't hold it back either.
 func TestInterruptNeverDelayed(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	feedDigest(t, a)
 	if !a.admitNotice(OrchestratorID, store.NoticeAction, `t7 asks: should the cache be per-user or global?`) {
@@ -118,6 +122,7 @@ func TestInterruptNeverDelayed(t *testing.T) {
 
 // #222: Digest previews the unsent digest for `saddle notices`.
 func TestDigestPreview(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	if line, err := a.PendingDigest(); err != nil || line != "" {
 		t.Fatalf("empty preview = %q, %v", line, err)

@@ -49,6 +49,7 @@ func TestNarratorOffWhenUnconfigured(t *testing.T) {
 // The source starts after the events already logged, then hands out each new
 // event once. The narrator's own error events are never fed back to it.
 func TestNarratorSourceResumesFromCursor(t *testing.T) {
+	t.Parallel()
 	a, _ := meterApp(t)
 	a.Store.Event("t1", "spawn", "old")
 	src, err := a.narratorSource()
@@ -73,6 +74,7 @@ func TestNarratorSourceResumesFromCursor(t *testing.T) {
 // Today's spend lives in the store: a narrator built after a restart is
 // already at the cap and narrates locally without calling the API.
 func TestNarratorSpendSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	a, _ := meterApp(t)
 	a.Cfg.Narrator.DailyCapUSD = 0.05
 	d := &doer{}
@@ -104,6 +106,7 @@ func TestNarratorSpendSurvivesRestart(t *testing.T) {
 
 // Run errors are recorded once per distinct message, not every poll.
 func TestNarratorErrorsAreNotRepeated(t *testing.T) {
+	t.Parallel()
 	a, _ := meterApp(t)
 	report := a.narratorErrors()
 	for range 3 {

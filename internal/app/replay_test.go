@@ -187,19 +187,18 @@ func newReplay(t *testing.T) (r *replay, other, m0 string, ft *replayTmux) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("SADDLE_ROOT", "")
-	t.Setenv("SADDLE_TASK", "")
-	t.Setenv("SADDLE_TRAIN", "")
-	t.Setenv("GIT_AUTHOR_NAME", "t")
-	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
-	t.Setenv("GIT_COMMITTER_NAME", "t")
-	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	// TestMain set the environment: user config, SADDLE_* and git identity.
 	r = &replay{t: t}
+	root := t.TempDir()
+	r.git(root, "", "init", "-q", "-b", "main")
 
 	// The fake gh logs its calls, numbers created PRs, and answers `pr view`
-	// from a per-PR file, else as an open, mergeable PR.
-	r.ghDir = t.TempDir()
+	// from a per-PR file, else as an open, mergeable PR. The gh TestMain put on
+	// PATH runs it for calls made in this repo.
+	r.ghDir = filepath.Join(root, ".git", app.FakeGHSubdir)
+	if err := os.MkdirAll(r.ghDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	log := filepath.Join(r.ghDir, "gh.log")
 	script := `#!/bin/sh
 echo "$*" >> "` + log + `"
@@ -221,11 +220,8 @@ esac
 	if err := os.WriteFile(filepath.Join(r.ghDir, "gh"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", r.ghDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	// 1. Local main is one commit behind origin/main.
-	root := t.TempDir()
-	r.git(root, "", "init", "-q", "-b", "main")
 	r.commit(root, "", "scaffold", map[string]string{"README.md": "scaffold\n"})
 	r.origin = t.TempDir()
 	r.git(r.origin, "", "init", "-q", "--bare", "-b", "main")
@@ -266,6 +262,7 @@ esac
 // refuse the out-of-train ref writes, flag the stack, restack it, and leave
 // one linear stack whose PRs each show exactly their own task's work.
 func TestReplayStackIncident(t *testing.T) {
+	t.Parallel()
 	r, other, m0, ft := newReplay(t)
 	a, root, integ := r.a, r.a.Root, r.a.Cfg.Integration
 	a.Cfg.Train.Output = "single" // pins the one linear stack this test was written for (#52)
@@ -543,6 +540,7 @@ func TestReplayStackIncident(t *testing.T) {
 // labels, no frozen land for independent work, no PR touched once it left the
 // stack, and every task that is still open gets exactly its own work in its PR.
 func TestReplayGitHubHumansIncident(t *testing.T) {
+	t.Parallel()
 	r, other, _, _ := newReplay(t)
 	a, root, integ := r.a, r.a.Root, r.a.Cfg.Integration
 	a.Cfg.Train.Output = "single" // pins the one linear stack this test was written for (#52)

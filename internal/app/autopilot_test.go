@@ -24,6 +24,7 @@ func apIssue(n int, body string) autopilot.Issue {
 // #256: a tick spawns ready issues as tasks with their claims, model scope,
 // issue number and a prompt carrying AGENTS.md, up to the concurrency cap.
 func TestAutopilotSpawnsReadyIssues(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	write(t, a.Root, "AGENTS.md", "# Agent notes\nNo AI co-authors.\n")
 	_, err := a.SetConcurrency(2)
@@ -98,6 +99,7 @@ func TestAutopilotReconcilesOrphans(t *testing.T) {
 // #256: a stall nudge goes through the orchestrator's safe-send target: never
 // while it is busy or the owner is typing, and never as a notice.
 func TestAutopilotNudgesThroughCompactTarget(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	var sent []string
 	busy := true
@@ -133,6 +135,7 @@ func TestAutopilotNudgesThroughCompactTarget(t *testing.T) {
 // #256: plan-limit pressure (limits.pause_launches with a window over its
 // cap) puts autopilot to sleep until the window resets.
 func TestAutopilotSleepsOnPlanLimit(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	now := time.Now().Truncate(time.Minute)
 	a.Cfg.Limits = usage.Limits{FiveHour: usage.Cap{Tokens: 100}, PauseLaunches: true}
@@ -165,6 +168,7 @@ func TestAutopilotSleepsOnPlanLimit(t *testing.T) {
 // #256: the state file lives under .saddle/ and its stop summary reaches the
 // orchestrator as an interrupt.
 func TestAutopilotStopSummaryInterrupts(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	d := a.NewAutopilot(readyQueue())
 	_, err := d.Enable(autopilot.Options{})

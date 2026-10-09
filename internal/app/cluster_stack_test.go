@@ -37,6 +37,7 @@ func prBases(log []string) map[string]string {
 // work; one that changes an earlier task's files, or shares its issue,
 // stacks on it. Local branches stay at the commits the train landed.
 func TestPRsSplitsUnrelatedTasksIntoStacks(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, ghLog := originWithGh(t, a)
 	main := git(t, a.Root, "rev-parse", "main")
@@ -99,6 +100,7 @@ func TestPRsSplitsUnrelatedTasksIntoStacks(t *testing.T) {
 
 // Tasks for the same issue stack even when their files don't overlap.
 func TestPRsStacksTasksSharingAnIssue(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	_, ghLog := originWithGh(t, a)
 	land := func(id, file string) store.Task {
@@ -123,6 +125,7 @@ func TestPRsStacksTasksSharingAnIssue(t *testing.T) {
 // Serial files don't link tasks, but when a task's commits don't replay onto
 // base without the work below it, it stacks there after all.
 func TestPRsStackWhenReplayConflicts(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Serial = []string{"go.sum"}
 	write(t, a.Root, "go.sum", "a\n")
@@ -140,6 +143,7 @@ func TestPRsStackWhenReplayConflicts(t *testing.T) {
 
 // output = "single" keeps the one linear stack.
 func TestPRsSingleOutputKeepsOneStack(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.Output = "single"
 	_, ghLog := originWithGh(t, a)
@@ -157,6 +161,7 @@ func TestPRsSingleOutputKeepsOneStack(t *testing.T) {
 // PRs still target main, each holding only its own work on the new main, and
 // a dependent one still targets its stack's branch.
 func TestRestackKeepsClusteredLayout(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, ghLog := originWithGh(t, a)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -209,6 +214,7 @@ func TestRestackKeepsClusteredLayout(t *testing.T) {
 // Overlap on it doesn't chain otherwise unrelated tasks into one stack when
 // their edits to it replay cleanly on their own.
 func TestPRsHubFileDoesNotChainUnrelatedTasks(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	lines := make([]string, 30)
 	for i := range lines {
@@ -239,6 +245,7 @@ func TestPRsHubFileDoesNotChainUnrelatedTasks(t *testing.T) {
 // #226: a layer that doesn't replay on its own stacks on the earlier layer
 // that changed the same files, not on whatever landed just before it.
 func TestPRsReplayConflictStacksOnLayerItNeeds(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Serial = []string{"go.sum"}
 	write(t, a.Root, "go.sum", "a\n")
@@ -262,6 +269,7 @@ func TestPRsReplayConflictStacksOnLayerItNeeds(t *testing.T) {
 // #193: a task spawned after another stacks on it even though their files
 // don't overlap and they share no issue.
 func TestPRsStacksExplicitDependency(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	_, ghLog := originWithGh(t, a)
 	land := func(id, file string, after ...string) store.Task {

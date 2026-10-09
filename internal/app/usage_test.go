@@ -54,6 +54,7 @@ func modelTotals(t *testing.T, a *App) map[string]usage.Tokens {
 }
 
 func TestUsageMeterPersistsSessions(t *testing.T) {
+	t.Parallel()
 	a, m := meterApp(t)
 	wt := filepath.Join(a.Root, ".saddle", "worktrees", "t1-meter")
 	must(t, a.Store.CreateTask(store.Task{ID: "t1", Title: "meter", Role: store.RoleWorker, Worktree: wt, Status: store.Running, SessionID: "s1"}))
@@ -105,6 +106,7 @@ func TestUsageMeterPersistsSessions(t *testing.T) {
 }
 
 func TestUsageWindowsAgainstCaps(t *testing.T) {
+	t.Parallel()
 	a, m := meterApp(t)
 	a.Cfg.Usage.Windows = []config.Window{
 		{Name: "5h", Span: 5 * time.Hour, Cap: 1000},

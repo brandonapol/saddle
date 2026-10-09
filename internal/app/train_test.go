@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -23,8 +24,9 @@ func trainSetup(t *testing.T) *App {
 	return a
 }
 
-// originWithGh gives the repo a bare origin holding base, and puts a fake gh on
-// PATH. It returns the origin's path and a func reading gh's call log.
+// originWithGh gives the repo a bare origin holding base, and a fake gh that
+// answers gh calls made in the repo or its worktrees (see installGHDispatch).
+// It returns the origin's path and a func reading gh's call log.
 func originWithGh(t *testing.T, a *App) (string, func() []string) {
 	t.Helper()
 	origin := t.TempDir()
@@ -33,7 +35,8 @@ func originWithGh(t *testing.T, a *App) (string, func() []string) {
 	git(t, a.Root, "push", "-q", "origin", a.Cfg.Base)
 	git(t, a.Root, "fetch", "-q", "origin")
 
-	bin := t.TempDir()
+	bin := filepath.Join(a.Root, ".git", FakeGHSubdir)
+	must(t, os.MkdirAll(bin, 0o755))
 	log := filepath.Join(bin, "gh.log")
 	// pr view answers from a per-PR file (see setPR), else as an open PR;
 	// pr edit --base fails on a closed or merged PR, as GitHub does.
@@ -54,8 +57,8 @@ case "$1 $2" in
 esac
 `
 	must(t, os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0o755))
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv(fakeGHEnv, bin)
+	fakeGHDirs.Store(t.Name(), bin)
+	t.Cleanup(func() { fakeGHDirs.Delete(t.Name()) })
 	return origin, func() []string {
 		b, err := os.ReadFile(log)
 		if os.IsNotExist(err) {
@@ -66,15 +69,59 @@ esac
 	}
 }
 
-// fakeGHEnv names the fake gh's directory, so setPR can reach it.
-const fakeGHEnv = "SADDLE_TEST_FAKE_GH"
+// FakeGHSubdir is where a repo's fake gh lives, under its git common dir.
+// Exported for the app_test package's replays.
+const FakeGHSubdir = "saddle-test-gh"
+
+// installGHDispatch puts a gh on PATH that runs the fake gh of the repo it is
+// called in, and the real gh (if any) elsewhere. Tests that fake gh then need
+// no PATH of their own, so they can run in parallel.
+func installGHDispatch(bin string) error {
+	fallback := `echo "gh: command not found" >&2; exit 127`
+	if real, err := exec.LookPath("gh"); err == nil {
+		fallback = `exec ` + shellQuote(real) + ` "$@"`
+	}
+	script := `#!/bin/sh
+d=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/` + FakeGHSubdir + `
+if [ -x "$d/gh" ]; then exec "$d/gh" "$@"; fi
+` + fallback + "\n"
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0o755); err != nil {
+		return err
+	}
+	return os.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// fakeGHDirs maps a test's name to its fake gh's directory, so setPR and the
+// call log readers can reach it from the test or its subtests.
+var fakeGHDirs sync.Map
+
+// fakeGHDir is the fake gh directory of t or its nearest parent, or "".
+func fakeGHDir(t *testing.T) string {
+	for n := t.Name(); ; {
+		if d, ok := fakeGHDirs.Load(n); ok {
+			return d.(string)
+		}
+		i := strings.LastIndex(n, "/")
+		if i < 0 {
+			return ""
+		}
+		n = n[:i]
+	}
+}
 
 // setPR makes the fake gh report the PR at url as state, merged into or
 // targeting baseRef.
 func setPR(t *testing.T, url, state, baseRef string) {
 	t.Helper()
 	b := fmt.Sprintf(`{"state":%q,"mergeable":"MERGEABLE","baseRefName":%q}`, state, baseRef)
-	must(t, os.WriteFile(filepath.Join(os.Getenv(fakeGHEnv), "view-"+filepath.Base(url)), []byte(b), 0o644))
+	dir := fakeGHDir(t)
+	if dir == "" {
+		t.Fatal("setPR: no fake gh; call originWithGh first")
+	}
+	must(t, os.WriteFile(filepath.Join(dir, "view-"+filepath.Base(url)), []byte(b), 0o644))
 }
 
 // remoteRev is the commit a branch points at in the bare origin, or "".
@@ -121,6 +168,7 @@ func queueTask(t *testing.T, a *App, id, title string, commits ...map[string]str
 }
 
 func TestLandRefusesWithoutTestCmd(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	tk, err := a.Spawn(SpawnReq{Title: "one"})
 	must(t, err)
@@ -152,6 +200,7 @@ func TestLandRefusesWithoutTestCmd(t *testing.T) {
 }
 
 func TestDetectTestCmd(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	write(t, a.Root, "go.mod", "module x\n")
 	write(t, a.Root, "Makefile", "GO := go\n\ncheck: vet test\n\tgo vet ./...\n")
@@ -182,6 +231,7 @@ func TestDetectTestCmd(t *testing.T) {
 }
 
 func TestPRsPushesLandedSHAs(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Train.Output = "single" // pins the one linear stack this test was written for (#52)
 	origin, ghLog := originWithGh(t, a)
@@ -302,6 +352,7 @@ func TestPRsRefusesForkedStack(t *testing.T) {
 // While the stack is flagged at risk from its bottom, prs pushes and opens
 // nothing, and land holds work that touches the broken layer.
 func TestFlaggedStackFreezesPRsAndLand(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	origin, ghLog := originWithGh(t, a)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -342,6 +393,7 @@ func TestFlaggedStackFreezesPRsAndLand(t *testing.T) {
 // fault: the task stays queued, is not returned to its producer, isn't
 // charged an attempt, and the orchestrator hears what to free.
 func TestLandEnvironmentFailureKeepsTaskQueued(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Test.Cmd = "echo 'write /tmp/x: disk quota exceeded'; exit 1"
 	tk := queueTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
@@ -437,6 +489,7 @@ func lockStolen(t *testing.T, a *App) bool {
 // #269 watchdog: a train.lock whose holder is dead (its lock kept by a
 // leaked descriptor) is stolen, with an event.
 func TestLockTrainStealsFromADeadHolder(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	c := exec.Command("true")
 	must(t, c.Run())
@@ -487,6 +540,7 @@ func TestLockTrainStealsFromAnOverdueHolder(t *testing.T) {
 
 // A holder within its time keeps the lock.
 func TestLockTrainWaitsOnALiveHolder(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	f := holdTrainLock(t, a, os.Getpid(), time.Now())
 	_, ok, err := a.TryLockTrain()
@@ -511,6 +565,7 @@ func TestLockTrainWaitsOnALiveHolder(t *testing.T) {
 // once, on its turn. An idle worker still gets rebased, and a queued task the
 // run doesn't land hears about the landings once, not once per landing.
 func TestLandDoesNotAutoRebaseQueuedTasks(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	idle, err := a.Spawn(SpawnReq{Title: "idle"})
 	must(t, err)

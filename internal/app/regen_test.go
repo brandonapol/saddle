@@ -25,6 +25,7 @@ func regenSetup(t *testing.T) *App {
 // conflicts. The train takes integration's copy, reruns the regen command and
 // commits, instead of returning the conflict.
 func TestLandRegeneratesDerivedFileOnConflict(t *testing.T) {
+	t.Parallel()
 	a := regenSetup(t)
 	t1, _ := a.Spawn(SpawnReq{Title: "one"})
 	t2, _ := a.Spawn(SpawnReq{Title: "two"})
@@ -54,6 +55,7 @@ func TestLandRegeneratesDerivedFileOnConflict(t *testing.T) {
 // A conflict outside the regen globs still goes back to the producer, even
 // when a regen file conflicts too.
 func TestRegenLeavesOtherConflictsToProducer(t *testing.T) {
+	t.Parallel()
 	a := regenSetup(t)
 	t1, _ := a.Spawn(SpawnReq{Title: "one"})
 	t2, _ := a.Spawn(SpawnReq{Title: "two"})
@@ -76,6 +78,7 @@ func TestRegenLeavesOtherConflictsToProducer(t *testing.T) {
 
 // A failing regen command returns the branch to its producer with the output.
 func TestRegenFailureReturnsToProducer(t *testing.T) {
+	t.Parallel()
 	a := regenSetup(t)
 	a.Cfg.Regen[0].Cmd = "echo boom >&2; exit 3"
 	t1, _ := a.Spawn(SpawnReq{Title: "one"})

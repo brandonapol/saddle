@@ -7,6 +7,7 @@ import (
 )
 
 func TestAboveFollowsTheStackChain(t *testing.T) {
+	t.Parallel()
 	// 0 ← 1 ← 2 is one stack; 3 targets base.
 	layout := []prLayer{{Below: -1}, {Below: 0}, {Below: 1}, {Below: -1}}
 	for _, c := range []struct {
@@ -20,6 +21,7 @@ func TestAboveFollowsTheStackChain(t *testing.T) {
 }
 
 func TestCIRedErrNamesRedLayerAndHeld(t *testing.T) {
+	t.Parallel()
 	if ciRedErr(nil, nil) != nil {
 		t.Fatal("nothing held, but prs failed")
 	}
@@ -34,6 +36,7 @@ func TestCIRedErrNamesRedLayerAndHeld(t *testing.T) {
 // The escape hatch: an acked red layer holds nothing back until it goes red
 // on a new head; auto-merge still never merges it.
 func TestAckCIRedStopsHoldingUntilNewHead(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	must(t, a.SetCIRed(CIRedState{Red: []CIRedLayer{{Task: "t1", Head: "aaa", Checks: []string{"CI / ci"}, Held: []string{"t2"}}}}))
 	acked, err := a.AckCIRed()
@@ -84,6 +87,7 @@ func TestSiblingExplainsMissingTarget(t *testing.T) {
 }
 
 func TestIsLintFailure(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		f    CIRedFailure
 		want bool
@@ -100,6 +104,7 @@ func TestIsLintFailure(t *testing.T) {
 }
 
 func TestCIRedOwnsOnlyStackedLandedTasks(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	if a.CIRedOwns("t1") || a.CIRedOwns("nope") {
 		t.Fatal("ci-red owns a task that isn't stacked")
@@ -109,6 +114,7 @@ func TestCIRedOwnsOnlyStackedLandedTasks(t *testing.T) {
 // #234: only real failures are red. Canceled and superseded runs are
 // ignored, infra failures and known flaky checks are rerun once.
 func TestClassifyCIFailure(t *testing.T) {
+	t.Parallel()
 	flaky := []string{"CI / e2e", "race"}
 	for _, c := range []struct {
 		f    CIRedFailure
@@ -148,6 +154,7 @@ func ciEvents(t *testing.T, a *App, kind string) []string {
 // #234: a canceled run is not red and spawns nothing; an infra failure is
 // rerun once (gh run rerun --failed) and only counts when it fails again.
 func TestScreenCIPollIgnoresCanceledAndRerunsInfraOnce(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	var reruns []string
 	rerun := func(run string) error { reruns = append(reruns, run); return nil }

@@ -31,7 +31,41 @@ func TestMain(m *testing.M) {
 	// every exit, and so on every ref update.
 	_ = os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	_ = os.Setenv(TestRefguardEnv, "1")
-	os.Exit(m.Run())
+	os.Exit(runTests(m))
+}
+
+// runTests sets the environment every test shares, once, so tests can run in
+// parallel: t.Setenv refuses a parallel test. A test that needs a different
+// value sets it itself and stays serial.
+func runTests(m *testing.M) int {
+	tmp, err := os.MkdirTemp("", "saddle-app-test-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	for k, v := range map[string]string{
+		"XDG_CONFIG_HOME": filepath.Join(tmp, "config"),
+		// Tests act as nobody in particular unless they say otherwise; the
+		// ref guard Init installs reads these.
+		"SADDLE_ROOT":         "",
+		"SADDLE_TASK":         "",
+		"SADDLE_TRAIN":        "",
+		"GIT_AUTHOR_NAME":     "t",
+		"GIT_AUTHOR_EMAIL":    "t@example.com",
+		"GIT_COMMITTER_NAME":  "t",
+		"GIT_COMMITTER_EMAIL": "t@example.com",
+	} {
+		_ = os.Setenv(k, v)
+	}
+	if err := installGHDispatch(filepath.Join(tmp, "bin")); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	installStackGHDispatch()
+	// Only collapse's CI poll sleeps, and no test waits on real time there.
+	sleep = func(time.Duration) {}
+	return m.Run()
 }
 
 type fakeTmux struct {
@@ -146,16 +180,7 @@ func setup(t *testing.T) (*App, *fakeTmux) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("SADDLE_ROOT", "")
-	// Tests act as nobody in particular unless they say otherwise; the ref
-	// guard Init installs reads these.
-	t.Setenv("SADDLE_TASK", "")
-	t.Setenv("SADDLE_TRAIN", "")
-	t.Setenv("GIT_AUTHOR_NAME", "t")
-	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
-	t.Setenv("GIT_COMMITTER_NAME", "t")
-	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	// runTests set the environment: user config, SADDLE_* and git identity.
 	root := t.TempDir()
 	git(t, root, "init", "-q", "-b", "main")
 	write(t, root, "billing/meter.go", "package billing\n\nfunc Meter() {}\n")
@@ -175,6 +200,7 @@ func setup(t *testing.T) (*App, *fakeTmux) {
 }
 
 func TestInitInstallsRefGuard(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	must(t, a.Init())
 	must(t, a.ensureIntegration())
@@ -215,6 +241,7 @@ func TestInitInstallsRefGuard(t *testing.T) {
 
 // Init chains a repo's own hook instead of refusing or clobbering it (#212).
 func TestInitChainsForeignRefHook(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	hooks := git(t, a.Root, "rev-parse", "--path-format=absolute", "--git-path", "hooks")
 	foreign := "#!/bin/sh\nexit 0\n"
@@ -227,6 +254,7 @@ func TestInitChainsForeignRefHook(t *testing.T) {
 }
 
 func TestWarningsReportDrift(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
 	landed := git(t, a.Root, "rev-parse", t1.Branch)
@@ -248,6 +276,7 @@ func TestWarningsReportDrift(t *testing.T) {
 }
 
 func TestSpawnClaimsAndWrites(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	t1, err := a.Spawn(SpawnReq{Title: "meter", Claims: []string{"billing/meter.go"}})
 	if err != nil {
@@ -286,6 +315,7 @@ func TestSpawnClaimsAndWrites(t *testing.T) {
 // A barrier task moves billing/ to pkg/billing/ while another task adds a new
 // file under billing/. After both land, the new file must follow the move.
 func TestLandFollowsDirectoryMove(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	mover, err := a.Spawn(SpawnReq{Title: "move billing", Claims: []string{"billing/**", "pkg/billing/**"}})
 	if err != nil {
@@ -340,6 +370,7 @@ func TestLandFollowsDirectoryMove(t *testing.T) {
 }
 
 func TestLandBroadcastsRenamesAndRemapsClaims(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	mover, _ := a.Spawn(SpawnReq{Title: "move", Claims: []string{"README.md", "docs/**"}})
 	other, _ := a.Spawn(SpawnReq{Title: "meter work", Claims: []string{"billing/meter.go"}})
@@ -357,6 +388,7 @@ func TestLandBroadcastsRenamesAndRemapsClaims(t *testing.T) {
 }
 
 func TestConflictReturnsToProducer(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	t1, _ := a.Spawn(SpawnReq{Title: "one"})
 	t2, _ := a.Spawn(SpawnReq{Title: "two"})
@@ -397,6 +429,7 @@ func TestConflictReturnsToProducer(t *testing.T) {
 // The orchestrator repairs stacks through tasks and restack, never by hand;
 // workers never move integration.
 func TestBriefsCarryStackRules(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	orch := a.orchestratorBrief()
 	for _, want := range []string{
@@ -417,6 +450,7 @@ func TestBriefsCarryStackRules(t *testing.T) {
 // A spawn whose every claim covers files landed or queued tasks changed owns
 // no new work: it is likely a stack repair, so it needs confirmation first.
 func TestSpawnNeedsConfirmWhenClaimsOnlyCoverTrainWork(t *testing.T) {
+	t.Parallel()
 	a := trainSetup(t)
 	landTask(t, a, "t1", "meter", map[string]string{"billing/meter.go": "package billing\n\nfunc Meter() int { return 2 }\n"})
 
@@ -464,6 +498,7 @@ func TestSpawnNeedsConfirmWhenClaimsOnlyCoverTrainWork(t *testing.T) {
 // otherwise. Every ref update runs it as the ref guard, so that second, paid
 // on each one, pushed the race run of this package past go test's timeout.
 func TestRefguardHookExitsPromptly(t *testing.T) {
+	t.Parallel()
 	cmd := exec.Command(os.Args[0], "refguard", "prepared")
 	cmd.Dir = t.TempDir()
 	start := time.Now()

@@ -37,6 +37,28 @@ ENTRYPOINT := ./cmd/saddle
 # several times slower, so the nightly raises it.
 E2E_GO_TIMEOUT := $(or $(E2E_GO_TIMEOUT),15m)
 
+# go test's -timeout for each package's test binary (Go's default is 10m).
+# internal/app, the slowest, takes about 75s idle but several times that at
+# load average 60+, when several agents run `make check` at once.
+TEST_TIMEOUT := $(or $(TEST_TIMEOUT),20m)
+
+# go_test runs go test with $(1), then repeats the failing packages and tests
+# at the end. Gates keep only the output's last lines, where other packages'
+# ok lines or a timeout's goroutine dump would otherwise hide what failed.
+define go_test
+	log="$$(mktemp)"
+	trap 'rm -f "$$log"' EXIT
+	if $(GO) test $(1) 2>&1 | tee "$$log"; then exit 0; fi
+	echo
+	echo "make $@ FAILED:"
+	{
+	    grep -E '^FAIL[[:space:]]' "$$log" || echo "(no FAIL line: see the errors above)"
+	    grep -E '^panic: test timed out' "$$log" || true
+	    grep -E -- '--- FAIL' "$$log" || true
+	} | head -n 30
+	exit 1
+endef
+
 # The version is the git description of HEAD: a tag when one points at it,
 # otherwise the commit, with -dirty for uncommitted changes. A dev build never
 # claims a released version. Override with VERSION=X.Y.Z.
@@ -106,8 +128,8 @@ clean: ## Remove build artifacts (never touches .saddle/ state)
 ##@ Testing
 
 .PHONY: test
-test: ## Run unit and integration tests
-	$(GO) test $(GO_TAGFLAG) ./...
+test: ## Run unit and integration tests (TEST_TIMEOUT per package, default 20m)
+	$(call go_test,$(GO_TAGFLAG) -timeout $(TEST_TIMEOUT) ./...)
 
 .PHONY: test/e2e
 test/e2e: ## Run the end-to-end journeys (RUN=Journey to pick some; needs tmux)
@@ -124,7 +146,7 @@ test/scripts: ## Test the shell scripts (scripts/upgrade.sh)
 test/race: ## Run tests with the race detector
 	# The hook, MCP server and CLI share one SQLite file from separate processes,
 	# so races here are real bugs.
-	$(GO) test $(GO_TAGFLAG) -race ./...
+	$(call go_test,$(GO_TAGFLAG) -race -timeout $(TEST_TIMEOUT) ./...)
 
 .PHONY: bench
 bench: ## Run benchmarks (BENCH=Status to pick some)

@@ -26,6 +26,7 @@ func init() {
 }
 
 func TestGateClass(t *testing.T) {
+	t.Parallel()
 	cfg := runq.Config{Classes: map[string]runq.ClassConfig{
 		"go-test":       {Match: []string{"go test*", "make check"}},
 		"flutter-test":  {Match: []string{"flutter test*"}},
@@ -52,6 +53,7 @@ func TestGateClass(t *testing.T) {
 }
 
 func TestMatchCmd(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		p, s string
 		ok   bool

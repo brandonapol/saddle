@@ -15,6 +15,7 @@ import (
 )
 
 func TestContextWindowTable(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		model string
 		want  int64
@@ -34,6 +35,7 @@ func TestContextWindowTable(t *testing.T) {
 }
 
 func TestContextFraction(t *testing.T) {
+	t.Parallel()
 	tok := usage.Tokens{Input: 10_000, CacheRead: 120_000, CacheCreation: 10_000, Output: 50_000}
 	u := NewContextUse("claude-opus-4-5", "", tok)
 	if u.Prompt != 140_000 || u.Window != 200_000 {
@@ -57,6 +59,7 @@ func TestContextFraction(t *testing.T) {
 }
 
 func TestContextReaderKeepsLatestPrompt(t *testing.T) {
+	t.Parallel()
 	p := filepath.Join(t.TempDir(), "s.jsonl")
 	line := func(id string, cache int64) string {
 		return `{"type":"assistant","timestamp":"2026-10-03T10:00:00Z","message":{"id":"` + id +
@@ -84,6 +87,7 @@ func TestContextReaderKeepsLatestPrompt(t *testing.T) {
 }
 
 func TestCompactAtDefaultAndConfig(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	if got := a.CompactAt(); got != DefaultCompactAt {
 		t.Fatalf("CompactAt = %v, want default %v", got, DefaultCompactAt)
@@ -106,6 +110,7 @@ func TestCompactAtDefaultAndConfig(t *testing.T) {
 }
 
 func TestCompactCommandPerHarness(t *testing.T) {
+	t.Parallel()
 	cmd, ok := CompactCommand(usage.Claude)
 	if !ok || !strings.HasPrefix(cmd, "/compact ") {
 		t.Fatalf("claude: %q %v, want /compact with an instruction", cmd, ok)
@@ -192,6 +197,7 @@ func (r *compactRig) events(t *testing.T, kind string) []store.Event {
 }
 
 func TestCompactNoticeOncePerCrossing(t *testing.T) {
+	t.Parallel()
 	r := newCompactRig(t, usage.Claude)
 	r.tgt.busy = true // keep it from compacting so only the notices are in play
 	r.step(t, 0.5)
@@ -223,6 +229,7 @@ func TestCompactNoticeOncePerCrossing(t *testing.T) {
 }
 
 func TestCompactWaitsWhileBusyOrDrafting(t *testing.T) {
+	t.Parallel()
 	r := newCompactRig(t, usage.Claude)
 	r.tgt.busy = true
 	if rep := r.step(t, 0.8); rep.Injected || rep.Waiting != "busy" {
@@ -249,6 +256,7 @@ func TestCompactWaitsWhileBusyOrDrafting(t *testing.T) {
 }
 
 func TestCompactWithoutTargetOnlyNotifies(t *testing.T) {
+	t.Parallel()
 	r := newCompactRig(t, usage.Claude)
 	r.w.SetTarget(nil) // the plugin: saddle can't type into the owner's session
 	rep := r.step(t, 0.9)
@@ -262,6 +270,7 @@ func TestCompactWithoutTargetOnlyNotifies(t *testing.T) {
 }
 
 func TestCompactInjectsHarnessCommand(t *testing.T) {
+	t.Parallel()
 	r := newCompactRig(t, usage.Codex)
 	r.step(t, 0.8)
 	if len(r.tgt.sent) != 1 || r.tgt.sent[0] != "/compact" {
@@ -283,6 +292,7 @@ func TestCompactInjectsHarnessCommand(t *testing.T) {
 }
 
 func TestCompactLogsEvent(t *testing.T) {
+	t.Parallel()
 	r := newCompactRig(t, usage.Claude)
 	r.step(t, 0.85)
 	es := r.events(t, EventCompact)
@@ -302,6 +312,7 @@ func TestCompactLogsEvent(t *testing.T) {
 }
 
 func TestCompactGivesUpAfterPendingFor(t *testing.T) {
+	t.Parallel()
 	r := newCompactRig(t, usage.Claude)
 	r.tgt.busy = true
 	r.step(t, 0.8)
@@ -324,6 +335,7 @@ func TestCompactGivesUpAfterPendingFor(t *testing.T) {
 }
 
 func TestCompactWatcherDefaults(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	w := a.NewCompactWatcher()
 	if w.Threshold != DefaultCompactAt || w.Interval <= 0 || w.PendingFor <= 0 || w.Harness != usage.Claude {
@@ -336,6 +348,7 @@ func TestCompactWatcherDefaults(t *testing.T) {
 }
 
 func TestPaneTargetUsesSafeSend(t *testing.T) {
+	t.Parallel()
 	a, ft := setup(t)
 	ft.windows["@9"] = true
 	p := PaneTarget{Tmux: a.Tmux, Window: "@9"}
@@ -353,6 +366,7 @@ func TestPaneTargetUsesSafeSend(t *testing.T) {
 }
 
 func TestCompactUsesAppTarget(t *testing.T) {
+	t.Parallel()
 	r := newCompactRig(t, usage.Claude)
 	r.w.SetTarget(nil)
 	tgt := &fakeTarget{}

@@ -134,6 +134,7 @@ func TestSyncNeverStacksOnARebaseInProgress(t *testing.T) {
 // left alone, and one whose rebase would conflict is put back as it was; both
 // are told to sync.
 func TestLandAutoRebasesLiveWorktrees(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	spawn := func(title string) store.Task {
 		tk, err := a.Spawn(SpawnReq{Title: title})
@@ -205,6 +206,7 @@ func TestLandAutoRebasesLiveWorktrees(t *testing.T) {
 
 // With [train] no_auto_rebase = true the train only tells agents to sync.
 func TestAutoRebaseCanBeTurnedOff(t *testing.T) {
+	t.Parallel()
 	a, _ := setup(t)
 	a.Cfg.Train.NoAutoRebase = true
 	lander, err := a.Spawn(SpawnReq{Title: "lander"})
@@ -230,6 +232,7 @@ func TestAutoRebaseCanBeTurnedOff(t *testing.T) {
 // set) and restack rewrites integration. The task must land with only its own
 // commit replayed, and is never sent a conflict for commits base already has.
 func TestLandSkipsCommitsSquashLandedAfterRestack(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name                      string
 		synced, between, noReflog bool
