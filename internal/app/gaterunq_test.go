@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -215,7 +216,12 @@ func TestRunGateEnvGatePriority(t *testing.T) {
 	hold, err := q.Acquire(context.Background(), runq.Request{Class: "go-test", Label: "holder"})
 	must(t, err)
 	order := make(chan string, 2)
+	// Both runs must be over, leases released, before TempDir's cleanup.
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	wg.Add(2)
 	go func() {
+		defer wg.Done()
 		l, err := q.Acquire(context.Background(), runq.Request{Class: "go-test", Prio: runq.PrioWorker, Label: "worker"})
 		if err == nil {
 			order <- "worker"
@@ -224,6 +230,7 @@ func TestRunGateEnvGatePriority(t *testing.T) {
 	}()
 	waitWaiters(t, q, 1)
 	go func() {
+		defer wg.Done()
 		a.RunGateEnv(context.Background(), "t1", func(context.Context, []string) (string, error) {
 			order <- "gate"
 			return "ok", nil
