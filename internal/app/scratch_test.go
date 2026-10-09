@@ -16,6 +16,8 @@ import (
 // fail because the developer's cache dir is full. Tests of the hold set
 // their own (and stay serial).
 func init() {
+	// Nor sweep the machine's temp dir: tests name their own when they want one.
+	_ = os.Setenv(scratch.EnvOSTemp, "/nonexistent/saddle-test-os-temp")
 	scratchSpace = func(p string) (scratch.Space, error) {
 		return scratch.Space{Path: p, Free: 90, Total: 100}, nil
 	}

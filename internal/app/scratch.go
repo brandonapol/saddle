@@ -156,10 +156,21 @@ func (a *App) noteScratch(p scratch.Pressure) {
 // events.
 func (a *App) RunScratchSweeper(ctx context.Context) {
 	for {
-		if p, err := a.ScratchPressure(scratchSpace); err == nil {
-			a.noteScratch(p)
+		// A sweep of a big temp dir takes a while; stopping must not wait
+		// for it. One left running finishes on its own.
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			if p, err := a.ScratchPressure(scratchSpace); err == nil {
+				a.noteScratch(p)
+			}
+			a.SweepScratch(false, 0)
+		}()
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
 		}
-		a.SweepScratch(false, 0)
 		select {
 		case <-ctx.Done():
 			return

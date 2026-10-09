@@ -138,8 +138,18 @@ var osTemp = func() string {
 	return "/tmp"
 }()
 
-// OSTemp is the OS temp dir saddle started with: $TMPDIR then, else /tmp.
-func OSTemp() string { return osTemp }
+// EnvOSTemp overrides OSTemp. Tests set it so a sweep never reaches the
+// machine's real temp dir.
+const EnvOSTemp = "SADDLE_SCRATCH_OS_TEMP"
+
+// OSTemp is the OS temp dir saddle started with: $TMPDIR then, else /tmp,
+// unless EnvOSTemp says otherwise.
+func OSTemp() string {
+	if d := os.Getenv(EnvOSTemp); d != "" {
+		return filepath.Clean(d)
+	}
+	return osTemp
+}
 
 // DefaultRoot is <user cache dir>/saddle/tmp. Without a cache dir it falls
 // back to a per-user dir in the OS temp dir, which the sweep never removes.
@@ -147,7 +157,7 @@ func DefaultRoot() string {
 	if c, err := os.UserCacheDir(); err == nil && c != "" {
 		return filepath.Join(c, "saddle", "tmp")
 	}
-	return filepath.Join(osTemp, fmt.Sprintf("saddle-tmp-%d", os.Getuid()))
+	return filepath.Join(OSTemp(), fmt.Sprintf("saddle-tmp-%d", os.Getuid()))
 }
 
 // RepoKey is the name of a repo's own dir under the root.

@@ -261,3 +261,12 @@ func TestTopByCount(t *testing.T) {
 		t.Fatalf("by bytes: %+v", top)
 	}
 }
+
+// Tests point OSTemp away from the machine's temp dir so no sweep reaches it.
+func TestOSTempHonoursOverride(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(EnvOSTemp, dir)
+	if OSTemp() != dir {
+		t.Fatalf("OSTemp() = %q, want %q", OSTemp(), dir)
+	}
+}
