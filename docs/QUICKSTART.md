@@ -91,16 +91,29 @@ Without a terminal it refuses and tells you to run `saddle trust`.
 
 Init also writes
 `.saddle/config.toml`, adds `/.saddle/` to `.git/info/exclude`, detects a
-test command (`make check`, `go test ./...`, `npm test`, `cargo test`) and
-installs the ref guard hooks, which stop anyone but the merge train from
-moving Saddle's branches.
+test command (`make check`, `npm run check`, `go test ./...`, `npm test`,
+`cargo test`) and installs the ref guard hooks, which stop anyone but the
+merge train from moving Saddle's branches.
+
+You can skip this step: the first `saddle up` in a trusted repo runs init
+itself, prints what it set up, and only then runs the doctor. Init is safe to
+rerun: it repairs missing hooks or the exclude entry and never overwrites an
+existing `config.toml`.
 
 ## 4. Run the doctor
 
 ```sh
-saddle doctor          # a table: ok / warn / FAIL, then a fix for each problem
-saddle doctor --json   # the same for scripts
+saddle doctor          # a table: ok / warn / FAIL, then what to do, grouped
+saddle doctor --fix    # apply every local fix (runs saddle init, keeps config.toml)
+saddle doctor --json   # the same for scripts, with each check's group
 ```
+
+After the table, problems are grouped: **Fixed automatically** (by `--fix`),
+**Saddle can fix these** (run `saddle doctor --fix`), **You need to do this**
+(gh login, tmux, GitHub settings) and **Optional**. Each says in plain words
+what the check is for. Branch protection names the repo's settings URL, the
+boxes to tick and the check names from `.github/workflows/`. Once nothing
+blocks, it shows the next steps. `--fix` asks for trust first, like init.
 
 It checks the git remote and the repo's default branch (detected, not assumed
 to be `main`), gh login and token scopes, repo merge settings (merge commits

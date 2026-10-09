@@ -26,7 +26,7 @@ make setup            # dev tools; asks for a Jev key / Claude login only if mis
 make install          # puts saddle on your PATH
 cd your-repo
 saddle init           # asks if you trust the folder, then config, git exclude, ref guard hooks
-saddle doctor         # preflight checks, each with a fix
+saddle doctor         # preflight checks, grouped by who fixes them; --fix applies the local ones
 saddle up             # opens the TUI (harness from config, default claude)
 saddle up grok        # or claude / codex, for this run only
 ```

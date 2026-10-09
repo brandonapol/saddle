@@ -22,6 +22,7 @@ import (
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/doctor"
 	"github.com/brandonapol/saddle/internal/hook"
+	"github.com/brandonapol/saddle/internal/initcmd"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/remote"
@@ -146,15 +147,19 @@ keep the CLI they were spawned with.
 			return upTrustErr(gateTrust(cmd.OutOrStdout(), cmd.InOrStdin(), trusted))
 		},
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, args []string) error {
+			// Local setup first (#163), so the doctor only stops up for what
+			// needs the user. PreRunE already checked the repo is trusted.
+			steps, err := initcmd.Ensure(a.Root, a.Init)
+			if err != nil {
+				return err
+			}
+			initcmd.Report(cmd.OutOrStdout(), steps)
 			if err := upDoctor(cmd.OutOrStdout(), skipDoctor, upDoctorTimeout, func() []doctor.Result {
 				return doctor.Run(doctor.System(a.Root))
 			}); err != nil {
 				return err
 			}
 			if err := a.CheckMergeSettings(cmd.ErrOrStderr()); err != nil {
-				return err
-			}
-			if err := a.Init(); err != nil {
 				return err
 			}
 			release, err := a.AcquireLock(app.LockUp)

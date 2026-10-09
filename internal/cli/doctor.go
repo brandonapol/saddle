@@ -15,7 +15,7 @@ import (
 )
 
 func doctorCmd() *cobra.Command {
-	var asJSON bool
+	var asJSON, fix, trusted bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check the repo, gh, tools and hooks saddle needs, with a fix for each problem",
@@ -25,8 +25,10 @@ ref guard hooks, .saddle/ being ignored, state.db, stale worktrees, and the
 skills and slash commands the orchestrator sees (from a short claude session
 that makes no model call).
 
-Each check is ok, warn or fail. Exits non-zero when any check fails;
-warnings alone exit zero.`,
+Each check is ok, warn or fail, and the output groups what isn't ok: what
+saddle fixed, what --fix can fix locally (it runs saddle init, keeping
+config.toml), what you need to do, and what is optional. Exits non-zero when
+any check fails; warnings alone exit zero.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Doctor must work before saddle init, so it doesn't open the app
 			// (which would create .saddle/).
@@ -40,11 +42,35 @@ warnings alone exit zero.`,
 					return fmt.Errorf("not in a git repo: %w", err)
 				}
 			}
-			rs := append(doctor.Run(doctor.WithSkillsProbe(root)), shimCheck(filepath.Join(root, ".saddle", "shims"), os.Getenv))
+			env := doctor.WithSkillsProbe(root)
+			var rs []doctor.Result
+			if fix {
+				// --fix writes hooks and config, so it asks for trust first (#215).
+				if err := gateTrust(cmd.OutOrStdout(), cmd.InOrStdin(), trusted); err != nil {
+					return err
+				}
+				var err error
+				rs, err = doctor.Fix(env, func() error {
+					a, err := open()
+					if err != nil {
+						return err
+					}
+					defer a.Close()
+					return a.Init()
+				})
+				if err != nil {
+					return err
+				}
+			} else {
+				rs = doctor.Run(env)
+			}
+			rs = append(rs, shimCheck(filepath.Join(root, ".saddle", "shims"), os.Getenv))
 			return reportDoctor(cmd.OutOrStdout(), rs, asJSON)
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	cmd.Flags().BoolVar(&fix, "fix", false, "apply every local fix saddle can make safely (runs saddle init; keeps config.toml)")
+	cmd.Flags().BoolVar(&trusted, "trust", false, "with --fix, trust this repo without asking (remembered; see saddle trust)")
 	return cmd
 }
 

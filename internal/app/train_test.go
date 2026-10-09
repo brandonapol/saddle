@@ -228,6 +228,13 @@ func TestDetectTestCmd(t *testing.T) {
 	if got := DetectTestCmd(t.TempDir()); got != "" {
 		t.Errorf("DetectTestCmd on an empty repo = %q", got)
 	}
+
+	// #163: a package.json check script is the fuller gate, so it wins over npm test.
+	dir := t.TempDir()
+	write(t, dir, "package.json", `{"scripts": {"test": "vitest", "check": "tsc && vitest"}}`)
+	if got := DetectTestCmd(dir); got != "npm run check" {
+		t.Errorf("DetectTestCmd with a check script = %q, want npm run check", got)
+	}
 }
 
 func TestPRsPushesLandedSHAs(t *testing.T) {
