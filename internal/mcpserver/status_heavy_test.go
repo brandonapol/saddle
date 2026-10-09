@@ -35,7 +35,7 @@ func TestStatusShowsHeavyRuns(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	gone := make(chan struct{}, 2)
 	t.Cleanup(func() { cancel(); <-gone; <-gone; _ = q.Close() })
-	repo := filepath.Base(a.Root)
+	repo := runq.RepoLabel(a.Root)
 	h, err := q.Acquire(ctx, runq.Request{Class: "go-test", Label: "t83", Repo: repo, Cmd: "make check"})
 	if err != nil {
 		t.Fatal(err)

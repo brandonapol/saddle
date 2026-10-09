@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -124,10 +123,7 @@ func taskOf(label string) string {
 
 // repoName is how leases name the repo at root.
 func repoName(root string) string {
-	if root == "" {
-		return ""
-	}
-	return filepath.Base(root)
+	return runq.RepoLabel(root)
 }
 
 // HeavyRuns reads the machine's heavy-run queue.

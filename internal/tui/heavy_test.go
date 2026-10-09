@@ -40,12 +40,12 @@ func realHeavy(t *testing.T) app.HeavyRuns {
 	ctx, cancel := context.WithCancel(context.Background())
 	gone := make(chan struct{}, 2)
 	t.Cleanup(func() { cancel(); <-gone; <-gone; _ = q.Close() })
-	h, err := q.Acquire(ctx, runq.Request{Class: "go-test", Label: "t83", Repo: filepath.Base(root), Cmd: "make check"})
+	h, err := q.Acquire(ctx, runq.Request{Class: "go-test", Label: "t83", Repo: runq.RepoLabel(root), Cmd: "make check"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = h.Release() })
-	for i, w := range []struct{ label, repo string }{{"t84", "other"}, {"pid 4242", filepath.Base(root)}} {
+	for i, w := range []struct{ label, repo string }{{"t84", "other"}, {"pid 4242", runq.RepoLabel(root)}} {
 		go func() {
 			defer func() { gone <- struct{}{} }()
 			_, _ = q.Acquire(ctx, runq.Request{Class: "go-test", Label: w.label, Repo: w.repo, Cmd: "go test ./..."})

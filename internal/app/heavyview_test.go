@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -68,7 +67,7 @@ func heavyClass(t *testing.T, v HeavyRuns, class string) HeavyClass {
 func TestHeavyRunsView(t *testing.T) {
 	a, _ := setup(t)
 	db := heavyTest(t, a, "mode = \"enforce\"\nmax_load_per_cpu = 0\nmax_cpu_pressure = 0\nheartbeat = \"200ms\"\n[classes.go-test]\nslots = 1\nmax_run = \"1ms\"\n")
-	repo := filepath.Base(a.Root)
+	repo := runq.RepoLabel(a.Root)
 	q := openQueue(t, db)
 	h, err := q.Acquire(context.Background(), runq.Request{Class: "go-test", Label: "t83", Repo: repo, Cmd: "make check"})
 	must(t, err)
@@ -126,7 +125,7 @@ func TestHeavyRunCarriesTaskAndRepo(t *testing.T) {
 		}
 		return len(ws) == 1
 	})
-	if w.Task != "t7" || w.Repo != filepath.Base(a.Root) {
+	if w.Task != "t7" || w.Repo != runq.RepoLabel(a.Root) {
 		t.Fatalf("waiter %+v", w)
 	}
 	must(t, h.Release())
@@ -162,7 +161,7 @@ func TestNarratorHeavyLeases(t *testing.T) {
 	a, _ := setup(t)
 	db := heavyTest(t, a, "mode = \"enforce\"\nmax_load_per_cpu = 0\nmax_cpu_pressure = 0\nheartbeat = \"200ms\"\n[classes.go-test]\nslots = 1\nmax_run = \"1ms\"\n")
 	q := openQueue(t, db)
-	h, err := q.Acquire(context.Background(), runq.Request{Class: "go-test", Label: "t83", Repo: filepath.Base(a.Root), Cmd: "make check"})
+	h, err := q.Acquire(context.Background(), runq.Request{Class: "go-test", Label: "t83", Repo: runq.RepoLabel(a.Root), Cmd: "make check"})
 	must(t, err)
 	t.Cleanup(func() { _ = h.Release() })
 	queueWaiter(t, a, q, "go-test", "t84", "other")
