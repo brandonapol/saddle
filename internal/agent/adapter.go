@@ -117,9 +117,18 @@ func (l Launch) record(name string) error {
 // Recorded returns the adapter name a run dir was launched with; Claude Code
 // for run dirs written before adapters were recorded.
 func Recorded(runDir string) string {
+	if n, ok := RecordedName(runDir); ok {
+		return n
+	}
+	return usage.Claude
+}
+
+// RecordedName returns the adapter name a run dir was launched with, and
+// false when none was recorded.
+func RecordedName(runDir string) (string, bool) {
 	b, err := os.ReadFile(filepath.Join(runDir, adapterFile))
 	if err != nil || strings.TrimSpace(string(b)) == "" {
-		return usage.Claude
+		return "", false
 	}
-	return strings.TrimSpace(string(b))
+	return strings.TrimSpace(string(b)), true
 }

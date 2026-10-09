@@ -6,7 +6,8 @@ import (
 )
 
 // LimitBanner is Claude Code's notice that its session is parked on a plan
-// usage limit and will continue on its own after the reset (#180).
+// usage limit and will continue on its own after the reset (#180), or
+// another agent CLI's out-of-quota error (#321).
 type LimitBanner struct {
 	Resets string // when it resets, as the banner words it; empty when it doesn't say
 }
@@ -18,12 +19,13 @@ type LimitBanner struct {
 const bannerTail = 12
 
 var (
-	limitRe = regexp.MustCompile(`(?i)usage limit reached|you(?:'|’)ve hit your [\w-]+ limit|\b(?:session|weekly|5-hour|opus) limit reached`)
-	resetRe = regexp.MustCompile(`(?i)\bresets?(?: at)?\s+([^·∙\n]+)`)
+	limitRe = regexp.MustCompile(`(?i)usage limit reached|you(?:'|’)ve hit your [\w-]+ limit|\b(?:session|weekly|5-hour|opus) limit reached|exceeded your current quota|\bout of credits\b|insufficient credits`)
+	resetRe = regexp.MustCompile(`(?i)\b(?:resets?(?: at)?|try again at)\s+([^·∙\n]+)`)
 )
 
 // DetectLimitBanner reports whether a terminal screen shows Claude Code
-// parked on a usage limit, and when the banner says the limit resets.
+// parked on a usage limit (or Codex or Grok out of quota), and when the
+// banner says the limit resets.
 func DetectLimitBanner(screen string) (LimitBanner, bool) {
 	var tail []string
 	ls := strings.Split(screen, "\n")

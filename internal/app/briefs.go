@@ -170,11 +170,19 @@ func (a *App) workersBrief() string {
 	if on == "" {
 		on = "none"
 	}
-	b := fmt.Sprintf("- Workers can run on any available adapter: pass adapter=<name> to spawn, picked for the task (code, review, a cheap mechanical edit, a model that still has quota). Spawns without one use %s. Available here: %s.", a.Cfg.Harness, on)
+	b := fmt.Sprintf("- Workers can run on any available adapter: pass adapter=<name> to spawn. Spawns without one use %s. Available here: %s.", a.Cfg.Harness, on)
 	if len(off) > 0 {
 		b += " Not available: " + strings.Join(off, "; ") + "."
 	}
-	return b + " Claude and grok workers run saddle hooks, so their claims are enforced; codex and gemini have no hooks, so nothing enforces their claims."
+	b += " Claude and grok workers run saddle hooks, so their claims are enforced; codex and gemini have no hooks, so nothing enforces their claims.\n"
+	b += "- Three providers, so pick per task rather than defaulting to one:\n"
+	for _, p := range agent.Providers() {
+		b += fmt.Sprintf("  - %s = %s (%s): %s.\n", p.Vendor, p.Adapter, p.Models, p.Strengths)
+	}
+	b += "  Weigh the task (hard design or refactor, review, a cheap mechanical edit), claims (hooked adapters for tasks next to other claimed work) and quota: status shows each adapter's provider, hooks and out_of_quota_until.\n"
+	b += fmt.Sprintf("- When an adapter runs out of quota, saddle marks it out until its reset and sends spawns that would use it to the next one in [adapters] order (%s) that can run here. You get a notice naming who ran out, who took over and when it resets; tell the owner. Tasks already on it park and continue on their own; don't kill them. With every adapter out, spawn refuses until the first reset.",
+		strings.Join(a.Cfg.AdapterOrder, ", "))
+	return b
 }
 
 func (a *App) workerDefaultName() string {

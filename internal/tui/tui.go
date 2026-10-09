@@ -172,6 +172,8 @@ type model struct {
 	outbox    []string                                     // user messages waiting for the orchestrator's turn to end
 	flash     string
 	flashAt   time.Time
+	// rotation is the footer banner while an adapter is out of quota (#321).
+	rotation string
 
 	quitArmedAt time.Time // first ctrl+c of a pending quit; zero when disarmed
 
@@ -225,6 +227,8 @@ type (
 		ap      *autopilot.State
 		apGen   int // m.apGen when the refresh started
 		conc    *app.Concurrency
+		// rotation is the adapter rotation banner, "" with nothing out.
+		rotation string
 	}
 	flashMsg   string
 	quitExpiry time.Time // the arming a timer was set for
@@ -451,6 +455,7 @@ func (m *model) refresh() tea.Cmd {
 		if c, err := a.Concurrency(); err == nil {
 			msg.conc = &c
 		}
+		msg.rotation = a.RotationBanner(time.Now())
 		return msg
 	}
 }
@@ -651,6 +656,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if hasUsage(*m.limits) != before && m.width > 0 {
 				m.layout() // the strip changes the footer's height
 			}
+		}
+		shown := m.rotation != ""
+		m.rotation = msg.rotation
+		if shown != (m.rotation != "") && m.width > 0 {
+			m.layout() // the banner changes the footer's height
 		}
 		m.watchScreens(msg.tasks, msg.screens)
 		cmds = append(cmds, m.noticeTransitions(msg.tasks)...)
@@ -1258,6 +1268,16 @@ func (m *model) watchScreens(ts []mcpserver.TaskView, screens map[string]string)
 		if st.acted || time.Since(st.since) < 4*time.Second {
 			continue
 		}
+		// A usage-limit banner parks the worker on its own; its adapter is
+		// out of quota, so new spawns rotate past it (#321). No keys:
+		// Escape there cancels the automatic restart.
+		if b, on := usage.DetectLimitBanner(s); on {
+			st.acted = true
+			if err := m.app.AdapterLimitHit(id, b); err != nil {
+				m.app.Store.Event(id, "tui_error", err.Error())
+			}
+			continue
+		}
 		kind := app.DetectPrompt(s)
 		if kind == app.PromptNone {
 			continue
@@ -1486,6 +1506,9 @@ func (m *model) viewFooter() string {
 	}
 	if m.limits != nil && hasUsage(*m.limits) {
 		line = usageStrip(*m.limits, m.width) + "\n" + line
+	}
+	if m.rotation != "" {
+		line = " " + lipgloss.NewStyle().Foreground(cAlert).Render("⚠ "+m.rotation) + "\n" + line
 	}
 	return lipgloss.NewStyle().Width(m.width).MaxWidth(m.width).Render(line)
 }

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/autopilot"
-	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/usage"
 )
@@ -164,11 +163,8 @@ func (e *autopilotEnv) Land() (int, error) {
 }
 
 func (e *autopilotEnv) Spawn(r autopilot.SpawnReq) (string, error) {
-	model := r.Model
-	if e.a.Cfg.Harness != config.HarnessClaude {
-		model = "" // model scope names Claude models
-	}
-	t, err := e.a.Spawn(SpawnReq{Title: r.Title, Prompt: r.Prompt, Claims: r.Claims, Model: model, Issue: r.Issue, After: r.After})
+	// Model scope names Claude models; Spawn drops them on other adapters.
+	t, err := e.a.Spawn(SpawnReq{Title: r.Title, Prompt: r.Prompt, Claims: r.Claims, Model: r.Model, Issue: r.Issue, After: r.After})
 	switch {
 	case errors.Is(err, ErrLaunchesPaused):
 		return "", fmt.Errorf("%w: %v", autopilot.ErrPaused, err)

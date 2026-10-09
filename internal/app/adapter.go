@@ -27,7 +27,25 @@ func (a *App) adapterCmd(name string) (string, []string) {
 }
 
 // Adapters lists which adapters can run on this machine (#182).
-func (a *App) Adapters() []agent.Status { return a.adapterStatus() }
+// Each carries its provider, whether it runs hooks, and when it is out of
+// quota, its reset (#321).
+func (a *App) Adapters() []agent.Status {
+	ss := a.adapterStatus()
+	ex := a.ExhaustedAdapters(time.Now())
+	for i := range ss {
+		s := &ss[i]
+		if s.Provider == "" {
+			s.Provider = agent.ProviderOf(s.Name)
+		}
+		if ad, err := agent.ByName(s.Name); err == nil {
+			s.Hooks = ad.Hooks()
+		}
+		if e, out := ex[s.Name]; out {
+			s.OutOfQuotaUntil = e.when()
+		}
+	}
+	return ss
+}
 
 // adapterStatus lists which adapters can run on this machine.
 func (a *App) adapterStatus() []agent.Status {
@@ -55,10 +73,14 @@ func (a *App) checkAdapter(name string) error {
 	return nil
 }
 
-// taskAdapter is the adapter a task was launched with.
+// taskAdapter is the adapter a task was launched with; the session's
+// harness when its run dir recorded none (#321).
 func (a *App) taskAdapter(t store.Task) agent.Adapter {
-	run := a.stateDir("run", t.ID)
-	ad, err := agent.ByName(agent.Recorded(run))
+	name, ok := agent.RecordedName(a.stateDir("run", t.ID))
+	if !ok {
+		name = a.Cfg.Harness
+	}
+	ad, err := agent.ByName(name)
 	if err != nil {
 		return agent.Claude{}
 	}

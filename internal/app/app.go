@@ -32,6 +32,9 @@ type App struct {
 	// AdapterStatus lists which adapters can run here (#182); nil means
 	// agent.Availability with the configured commands.
 	AdapterStatus func() []agent.Status
+	// OwnerNotify tells the owner about adapter rotation outside saddle
+	// (#321); nil means the [notify] desktop and webhook settings.
+	OwnerNotify func(text string)
 
 	wake wakeState // idle notice wake-ups (#183)
 }
@@ -197,9 +200,18 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	// Availability is checked for a chosen adapter, or a session default
 	// other than claude; the plain claude default spawns as it always has.
 	checkAvail := r.Adapter != "" || a.Cfg.Harness != config.HarnessClaude
-	if r.Adapter == "" {
-		r.Adapter = a.Cfg.Harness // the session default (#150); claude when unset
+	if r.Adapter != "" {
+		if _, err := agent.ByName(r.Adapter); err != nil {
+			return t, err
+		}
 	}
+	// No adapter means the session default (#150), rotated past adapters out
+	// of quota (#321).
+	picked, rotated, err := a.spawnAdapter(r.Adapter, r.Force)
+	if err != nil {
+		return t, err
+	}
+	r.Adapter = picked
 	ad, err := agent.ByName(r.Adapter)
 	if err != nil {
 		return t, err
@@ -267,14 +279,9 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if base == "" {
 		base = a.Cfg.Integration
 	}
-	model := r.Model
-	if model == "" {
-		if ad.Name() == usage.Grok {
-			model = a.Cfg.Grok.Model
-		} else if ad.Name() == usage.Claude {
-			model = a.Cfg.Claude.Model
-		}
-	}
+	// A model from another adapter's family (a ticket's "opus", a repair's
+	// "sonnet") falls back to this adapter's default.
+	model := a.modelFor(ad.Name(), r.Model)
 	hint := a.retryHint(r.Title)
 	t = store.Task{
 		ID: id, Title: r.Title, Prompt: r.Prompt, Parent: r.Parent, Role: store.RoleWorker, Model: model,
@@ -308,6 +315,11 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	}
 	t.Window = win
 	a.Store.Event(id, "spawn", fmt.Sprintf("parent=%s adapter=%s model=%s claims=%s%s", r.Parent, ad.Name(), model, strings.Join(r.Claims, ","), hint))
+	if rotated != "" {
+		if err := a.rotatedTask(t, rotated, ad, r.Claims); err != nil {
+			return t, err
+		}
+	}
 	if r.Parent != "" && r.Parent != OrchestratorID {
 		if err := a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf("%s spawned sub-task %s %q.", r.Parent, id, r.Title)); err != nil {
 			return t, err

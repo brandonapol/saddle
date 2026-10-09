@@ -56,7 +56,13 @@ type Config struct {
 	CI CI `toml:"ci"`
 	// Adapters sets the command and extra arguments of agent CLIs other than
 	// Claude, by adapter name (codex, grok).
-	Adapters map[string]Adapter `toml:"adapters"`
+	Adapters AdapterMap `toml:"adapters"`
+	// AdapterOrder is [adapters] order: the adapters new spawns rotate
+	// through when one runs out of quota (#321).
+	AdapterOrder []string `toml:"-"`
+	// Notify sends owner notifications (adapter rotation) beyond the TUI and
+	// the orchestrator.
+	Notify Notify `toml:"notify"`
 	// Spawn caps how deep and wide spawn chains below the orchestrator go.
 	Spawn Spawn `toml:"spawn"`
 	// Orchestrator tunes the orchestrator session itself.
@@ -88,6 +94,70 @@ type Orchestrator struct {
 type Adapter struct {
 	Cmd  string   `toml:"cmd"`
 	Args []string `toml:"args"`
+}
+
+// AdapterMap is the [adapters.<name>] tables. The [adapters] table also
+// holds order, which Load reads into Config.AdapterOrder.
+type AdapterMap map[string]Adapter
+
+// UnmarshalTOML decodes the per-adapter tables and skips order. Tables from
+// a later config file are merged over earlier ones.
+func (m *AdapterMap) UnmarshalTOML(v any) error {
+	tbl, ok := v.(map[string]any)
+	if !ok {
+		return fmt.Errorf("adapters: want a table")
+	}
+	if *m == nil {
+		*m = AdapterMap{}
+	}
+	for name, raw := range tbl {
+		if name == "order" {
+			continue
+		}
+		t, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("adapters.%s: want a table", name)
+		}
+		var ad Adapter
+		for k, v := range t {
+			switch k {
+			case "cmd":
+				s, ok := v.(string)
+				if !ok {
+					return fmt.Errorf("adapters.%s.cmd: want a string", name)
+				}
+				ad.Cmd = s
+			case "args":
+				l, ok := v.([]any)
+				if !ok {
+					return fmt.Errorf("adapters.%s.args: want an array of strings", name)
+				}
+				for _, a := range l {
+					s, ok := a.(string)
+					if !ok {
+						return fmt.Errorf("adapters.%s.args: want an array of strings", name)
+					}
+					ad.Args = append(ad.Args, s)
+				}
+			default:
+				return fmt.Errorf("adapters.%s: unknown key %q", name, k)
+			}
+		}
+		(*m)[name] = ad
+	}
+	return nil
+}
+
+// AdapterNames lists the adapters [adapters] order may name.
+func AdapterNames() []string { return []string{HarnessClaude, HarnessCodex, "gemini", HarnessGrok} }
+
+// Notify configures owner notifications beyond the TUI banner and the
+// orchestrator's notice, e.g. when an adapter runs out of quota (#321).
+type Notify struct {
+	// Desktop pops a desktop notification (notify-send, or osascript on macOS).
+	Desktop bool `toml:"desktop"`
+	// Webhook is a URL that gets a JSON POST {"text": ...}.
+	Webhook string `toml:"webhook"`
 }
 
 // Spawn caps sub-task spawning. 0 means no cap.
@@ -311,11 +381,12 @@ func Harnesses() []string { return []string{HarnessClaude, HarnessCodex, Harness
 
 func Default() Config {
 	return Config{
-		Base:        "main",
-		Integration: "saddle/integration",
-		Concurrency: 5,
-		CloseOnLand: true,
-		Harness:     HarnessClaude,
+		Base:         "main",
+		Integration:  "saddle/integration",
+		Concurrency:  5,
+		CloseOnLand:  true,
+		Harness:      HarnessClaude,
+		AdapterOrder: []string{HarnessClaude, HarnessGrok, HarnessCodex},
 		Claude: Claude{
 			Cmd:               "claude",
 			Model:             "opus",
@@ -390,6 +461,17 @@ func Load(root string) (Config, error) {
 		if md.IsDefined("train", "lint", "cmd") {
 			cfg.Train.Lint.Set = true
 		}
+		if md.IsDefined("adapters", "order") {
+			var o struct {
+				Adapters struct {
+					Order []string `toml:"order"`
+				} `toml:"adapters"`
+			}
+			if _, err := toml.DecodeFile(p, &o); err != nil {
+				return cfg, err
+			}
+			cfg.AdapterOrder = o.Adapters.Order
+		}
 	}
 	if cfg.Session == "" {
 		cfg.Session = DefaultSession(root)
@@ -403,6 +485,14 @@ func Load(root string) (Config, error) {
 	}
 	if !slices.Contains(Harnesses(), cfg.Harness) {
 		return cfg, fmt.Errorf("%s %q: want one of %s", src, cfg.Harness, strings.Join(Harnesses(), ", "))
+	}
+	for _, n := range cfg.AdapterOrder {
+		if !slices.Contains(AdapterNames(), n) {
+			return cfg, fmt.Errorf("adapters.order %q: want names from %s", n, strings.Join(AdapterNames(), ", "))
+		}
+	}
+	if len(cfg.AdapterOrder) == 0 {
+		cfg.AdapterOrder = Default().AdapterOrder
 	}
 	if cfg.Claude.Advisor.Lead == "" {
 		cfg.Claude.Advisor.Lead = cfg.Claude.OrchestratorModel
@@ -594,6 +684,10 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # "saddle notices --all" lists everything, digested and silenced included.
 # digest_every = "15m"
 
+# When an adapter hits its usage limit, new spawns rotate to the next one
+# in this order that has quota and can run here (#321).
+# [adapters]
+# order = ["claude", "grok", "codex"]
 # Agent CLIs other than claude: the command and extra arguments.
 # [adapters.codex]
 # cmd = "codex"
@@ -601,6 +695,12 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # [adapters.grok]
 # cmd = "grok"
 # args = []
+
+# Owner notifications on adapter rotation, beyond the TUI banner and the
+# orchestrator's notice.
+# [notify]
+# desktop = false   # notify-send, or osascript on macOS
+# webhook = ""      # gets a JSON POST {"text": "..."}
 
 [triage]
 # Uses TypeSafe Jev (set JEV_TOKEN; make setup asks for it) to decide which agent events reach

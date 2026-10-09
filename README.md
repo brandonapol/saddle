@@ -108,6 +108,23 @@ Any orchestrator can still spawn a worker on any adapter that can run here
 Grok workers run saddle's hooks, so their claims are enforced; Codex and
 Gemini claims are advisory.
 
+The orchestrator knows the three providers (Anthropic `claude`, SpaceXAI
+`grok`, OpenAI `codex`) and picks one per task. When one runs out of quota,
+saddle marks it out until its reset and sends new spawns to the next in
+`[adapters] order`, telling you in the TUI, in the chat and, if `[notify]`
+sets `desktop` or `webhook`, there too:
+
+```toml
+[adapters]
+order = ["claude", "grok", "codex"]
+
+[notify]
+desktop = true
+webhook = "https://hooks.example.com/saddle"
+```
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#providers-per-task-choice-and-rotation-321).
+
 ### Under the hood
 
 The TUI uses the same building blocks you can call yourself:

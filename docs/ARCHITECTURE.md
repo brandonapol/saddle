@@ -183,6 +183,45 @@ close PRs and delete branches, and it handles those without anyone editing
   hookless, so claims are advisory and notices are typed in. Usage and status
   come from their output on a best-effort basis.
 
+### Providers, per-task choice and rotation (#321)
+
+Three providers back the adapters: Anthropic (`claude`), SpaceXAI (`grok`)
+and OpenAI (`codex`). The orchestrator brief lists them with their models and
+strengths and tells the orchestrator to pick per task: claude for hard design,
+cross-package refactors and review; grok for fast, well-scoped work and a
+second opinion; codex for well-specified or mechanical edits whose claims no
+one else touches (it has no hooks). `status` shows each adapter's `provider`,
+`hooks` and, while it is out, `out_of_quota_until`.
+
+A spawn with no `adapter` uses the session's harness (`saddle up
+claude|grok|codex`, or `harness`). That holds for every path saddle spawns on
+its own: CI fix and CI-red repair tasks, stuck-task repairs, autopilot
+top-ups, and resumes of tasks whose run dir recorded no adapter. A model from
+another provider's family (a ticket's `opus`, a repair's `sonnet`) falls back
+to the chosen adapter's default.
+
+When a worker's screen shows a usage-limit banner (Claude Code's, Codex's
+"usage limit" or an OpenAI/Grok out-of-quota error; `usage.DetectLimitBanner`),
+the engine or the TUI parks it as in #180 and marks its adapter out of quota
+until the banner's reset (or `app.ExhaustFor`, one hour, when it names none).
+The state lives in `.saddle/adapters-exhausted.json`. Spawns that would use
+that adapter go to the next one in `[adapters] order` (default `["claude",
+"grok", "codex"]`) that has quota and can run here; an explicit `adapter=` on
+an exhausted one is refused unless forced. A lost or paused task whose adapter
+is out resumes on the next one with its brief. Tasks already running on it
+are never killed: they park and continue on their own after the reset. When
+the reset passes, or a parked worker's banner clears, the adapter is restored.
+With every adapter out, spawn returns a paused-launch error (autopilot and
+infinite mode sleep until the first reset).
+
+Each rotation notifies the owner once: a footer banner in the TUI, an action
+notice to the orchestrator naming who ran out, who takes over and when it
+resets (plus a warning when the successor has no hooks, so claims become
+advisory), and, when `[notify]` sets them, a desktop notification
+(`notify-send`, or `osascript` on macOS) and a JSON `{"text": ...}` POST to
+`webhook`. Every adapter running out sends a distinct notice naming the first
+reset. A restored adapter is routine news: a digest line, no desktop ping.
+
 Sub-agents spawned through MCP are ordinary tasks with a `parent_task`. Each
 gets its own worktree, window and claims, and the train lands it before its
 parent. Spawn depth and fan-out are capped.
