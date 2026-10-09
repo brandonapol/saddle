@@ -166,8 +166,14 @@ func (q *Queue) RunWith(ctx context.Context, o RunOptions, cmd *exec.Cmd) (Resul
 		cmd.Env = append(cmd.Env, EnvLease+"="+l.Token())
 	}
 	dieWithParent(cmd)
+	restore := func() {}
+	if !l.Nested() && !l.Bypassed() {
+		// A nested run inherits the outer run's niceness and scope.
+		restore = q.shape(cmd, out)
+	}
 	began := q.opts.Now()
 	runErr := cmd.Start()
+	restore()
 	if runErr == nil {
 		runErr = waitForwarding(cmd, o.Signals)
 	}

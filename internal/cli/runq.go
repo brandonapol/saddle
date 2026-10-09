@@ -82,6 +82,12 @@ Modes (SADDLE_RUNQ, else mode in .saddle/runq.toml or ~/.config/saddle/runq.toml
   enforce   wait for a slot
   off       bypass the queue entirely
 
+In enforce mode a free slot also waits while the box is saturated by other
+work ("waiting on load: ..."): load1 per core over max_load_per_cpu (1.0) or
+CPU pressure over max_cpu_pressure (60%), for at most gate_max_wait (10m).
+The command runs at nice 10 with idle I/O (nice, ionice), and in a user
+systemd scope with scope = "systemd".
+
 After --wait-max (default 30m, wait_max in runq.toml) it gives up with exit
 code 75 naming the holder. Report that rather than retrying in a loop.`,
 		Args: cobra.MinimumNArgs(1),

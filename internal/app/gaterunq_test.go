@@ -85,7 +85,7 @@ func openQueue(t *testing.T, db string) *runq.Queue {
 	return q
 }
 
-const gateRunqToml = "mode = \"enforce\"\nheartbeat = \"200ms\"\n[classes.go-test]\nslots = 1\nmatch = [\"true\", \"go test*\"]\n"
+const gateRunqToml = "mode = \"enforce\"\nmax_load_per_cpu = 0\nmax_cpu_pressure = 0\nheartbeat = \"200ms\"\n[classes.go-test]\nslots = 1\nmatch = [\"true\", \"go test*\"]\n"
 
 // TestRunGateEnvWaitsForSlotAndShowsQueued: the train's gate queues behind a
 // worker's run in its class (test.cmd "true" matches go-test). While it

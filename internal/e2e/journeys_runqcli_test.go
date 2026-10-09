@@ -32,7 +32,7 @@ func newRunqShells(t *testing.T) runqShells {
 	if err := os.MkdirAll(filepath.Join(s.config, "saddle"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(s.config, "saddle", "runq.toml"), []byte("mode = \"enforce\"\nheartbeat = \"1s\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(s.config, "saddle", "runq.toml"), []byte("mode = \"enforce\"\nmax_load_per_cpu = 0\nmax_cpu_pressure = 0\nheartbeat = \"1s\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return s

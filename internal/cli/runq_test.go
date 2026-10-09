@@ -19,7 +19,8 @@ func runqEnv(t *testing.T, mode string) (db string, code *int) {
 	t.Setenv(runq.EnvBypass, mode)
 	t.Setenv(runq.EnvLease, "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Chdir(t.TempDir()) // outside any repo
+	t.Setenv(runq.EnvProcRoot, t.TempDir()) // no probe: the load gate fails open
+	t.Chdir(t.TempDir())                    // outside any repo
 	code = new(int)
 	*code = -1
 	old := exitFn

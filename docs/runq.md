@@ -307,6 +307,30 @@ Notes:
 
 ### 3. Load awareness
 
+Shipped in #241. The keys, all in `[runq]` of `.saddle/runq.toml` or
+`~/.config/saddle/runq.toml` (the user file wins):
+
+```toml
+max_load_per_cpu = 1.0   # 0 turns the load check off
+max_cpu_pressure = 60    # CPU PSI "some avg10", %; 0 turns it off
+gate_max_wait = "10m"
+nice = 10                # heavy children's nice increment; 0 off
+ionice = true            # idle I/O class on Linux (ionice -t -c3)
+scope = "systemd"        # off by default; needs a reachable user systemd
+cpu_weight = 20
+cpu_quota = "400%"       # optional hard ceiling
+adaptive_slots = true    # off by default
+target_util = 0.75
+```
+
+The gate only matters in enforce mode (observe never waits). Its status
+line names the kind of hold once, not every probe's figures. Nested runs
+are not reniced again, since they inherit it. Adaptive slots use the last
+week of `ok` runs with at least five measurements per class, recompute at
+most once a day (a `meta` row in `runq.db`), cap at the core count and
+leave drained classes alone. `SADDLE_RUNQ_PROC` points the gate at a
+fixture `/proc` for tests.
+
 - **Gate.** `runq.Gate` is an interface, and `LoadGate` reads `/proc/loadavg`
   and `/proc/pressure/cpu`.
   - It holds the head of a class while `load1/ncpu > max_load_per_cpu`
