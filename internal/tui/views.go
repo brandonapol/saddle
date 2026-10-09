@@ -10,14 +10,16 @@ import (
 )
 
 // Views. The control view is agents, peek and the orchestrator chat; plan and
-// merge show the plan under review and the merge train.
+// merge show the plan under review and the merge train; runs shows the
+// machine's heavy-run queue.
 const (
 	viewControl = iota
 	viewPlan
 	viewMerge
+	viewRuns
 )
 
-var viewNames = []string{"control", "plan", "merge"}
+var viewNames = []string{"control", "plan", "merge", "runs"}
 
 // narrowWidth is the width below which the control view shows only the
 // focused pane: agents and peek, or the chat.
@@ -34,6 +36,10 @@ func (m *model) routeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 	if key.Matches(k, keys.Quit, keys.Terminal) {
 		return nil, false
 	}
+	// A kill waiting on y takes the next key, whatever it is.
+	if m.hv.confirm != "" {
+		return m.heavyConfirmKey(k), true
+	}
 	switch {
 	case key.Matches(k, keys.ViewControl):
 		m.setView(viewControl)
@@ -44,6 +50,9 @@ func (m *model) routeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 	case key.Matches(k, keys.ViewMerge):
 		m.setView(viewMerge)
 		return m.loadTrain(), true
+	case key.Matches(k, keys.ViewRuns):
+		m.setView(viewRuns)
+		return m.loadHeavy(), true
 	case key.Matches(k, keys.Infinite):
 		return m.toggleInfinite(), true
 	}
@@ -73,6 +82,11 @@ func (m *model) routeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 			return c, true
 		}
 	}
+	if m.view == viewRuns {
+		if c, ok := m.heavyKey(k); ok {
+			return c, true
+		}
+	}
 	return nil, m.view != viewControl
 }
 
@@ -91,6 +105,8 @@ func (m *model) viewBody(w, h int) string {
 		return m.markPane("plan", 0, m.bodyTop, m.viewPlan(w, h))
 	case m.view == viewMerge:
 		return m.markPane("merge", 0, m.bodyTop, m.viewMerge(w, h))
+	case m.view == viewRuns:
+		return m.markPane("runs", 0, m.bodyTop, m.viewRuns(w, h))
 	}
 	if m.narrow() {
 		if m.focus == focusTasks {

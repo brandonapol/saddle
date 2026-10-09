@@ -154,6 +154,7 @@ type model struct {
 	stackSel  string                                       // the merge view's selected stack
 	pl        planState                                    // the plan review view
 	tr        trainState                                   // the merge view's train panel
+	hv        heavyState                                   // the heavy-run queue: header segment and runs view
 	narr      narrSink                                     // narrator lines; nil when the narrator is off
 	asker     asker                                        // answers questions; nil when the narrator is off
 	askScreen bool                                         // the next question carries the selected agent's screen
@@ -533,7 +534,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout()
 
 	case tickMsg:
-		cmds = append(cmds, m.refresh(), tick())
+		cmds = append(cmds, m.refresh(), tick(), m.heavyTick())
 		switch m.view {
 		case viewPlan:
 			cmds = append(cmds, m.loadPlan())
@@ -543,6 +544,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case trainLoadedMsg:
 		m.trainLoaded(msg)
+
+	case heavyMsg:
+		m.heavyLoaded(msg)
+
+	case heavyDoneMsg:
+		m.hv.busy = false
+		m.flash, m.flashAt = string(msg), time.Now()
+		cmds = append(cmds, m.loadHeavy())
 
 	case trainDoneMsg:
 		m.tr.busy = ""
@@ -1376,6 +1385,9 @@ func (m *model) viewFooter() string {
 	line := m.viewKeys(m.width)
 	if m.flash != "" && time.Since(m.flashAt) < 6*time.Second {
 		line = " " + lipgloss.NewStyle().Foreground(cAccent).Render(m.flash)
+	}
+	if m.hv.confirm != "" {
+		line = " " + lipgloss.NewStyle().Foreground(cAlert).Render(m.heavyPrompt())
 	}
 	if m.quitArmed() {
 		hint := "Press Ctrl+C again to quit"
