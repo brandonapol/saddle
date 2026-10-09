@@ -154,7 +154,8 @@ func (a *App) MarkExhausted(adapter string, until time.Time, resets string) erro
 	return a.tellOwner(text)
 }
 
-// restored tells the owner an adapter has quota again.
+// restored tells the orchestrator an adapter has quota again: routine
+// news, so no desktop or webhook notification.
 func (a *App) restored(adapter string, still map[string]Exhaustion) {
 	a.Store.Event(OrchestratorID, EventAdapterRestored, adapter)
 	text := fmt.Sprintf("Adapter %s has quota again; spawns that would use it go back to it.", adapter)
@@ -166,7 +167,7 @@ func (a *App) restored(adapter string, still map[string]Exhaustion) {
 		sort.Strings(names)
 		text += " Still out: " + strings.Join(names, ", ") + "."
 	}
-	_ = a.tellOwner(text)
+	_ = a.Notify(OrchestratorID, store.NoticeInfo, text)
 }
 
 // ClearExhausted restores adapter early, e.g. when a parked agent's limit

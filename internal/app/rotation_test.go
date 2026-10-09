@@ -171,8 +171,8 @@ func TestAllAdaptersExhausted(t *testing.T) {
 	}
 }
 
-// #321: once its reset passes, an adapter takes default spawns again and
-// the owner hears it is back.
+// #321: once its reset passes, an adapter takes default spawns again; the
+// orchestrator's digest says it is back, without pinging the owner.
 func TestAdapterResetReenables(t *testing.T) {
 	t.Parallel()
 	a, _, sink := rotationApp(t)
@@ -187,10 +187,10 @@ func TestAdapterResetReenables(t *testing.T) {
 	if len(a.ExhaustedAdapters(time.Now())) != 0 {
 		t.Error("claude still listed as exhausted")
 	}
-	if ns := orchNotices(t, a, "has quota again"); len(ns) != 1 {
-		t.Errorf("back notices = %q", ns)
+	if got, ok := a.lastEvent(OrchestratorID, EventAdapterRestored); !ok || got != usage.Claude {
+		t.Errorf("restored event = %q %v", got, ok)
 	}
-	if got := sink.all(); len(got) != 2 {
+	if got := sink.all(); len(got) != 1 {
 		t.Errorf("owner notifications = %q", got)
 	}
 	if a.RotationBanner(time.Now()) != "" {

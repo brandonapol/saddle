@@ -9,9 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/usage"
 )
 
 // screenTmux shows each window the screen set for it.
@@ -294,5 +296,45 @@ func TestEngineLeavesDownPausedTaskAlone(t *testing.T) {
 	}
 	if st, _ := a.Store.Task(w.ID); st.Status != app.StatusPaused {
 		t.Fatalf("status %q", st.Status)
+	}
+}
+
+// #321: a worker parked on its adapter's usage limit marks that adapter out
+// of quota, so the next spawn rotates to grok; the banner clearing restores it.
+func TestEngineParkRotatesAdapter(t *testing.T) {
+	a, ft := setup(t)
+	a.AdapterStatus = func() []agent.Status {
+		var out []agent.Status
+		for _, n := range agent.Names() {
+			out = append(out, agent.Status{Name: n, OK: true})
+		}
+		return out
+	}
+	var told []string
+	a.OwnerNotify = func(s string) { told = append(told, s) }
+	w, err := a.Spawn(app.SpawnReq{Title: "meter"})
+	must(t, err)
+	clock := time.Now()
+	e := New(a)
+	e.now = func() time.Time { return clock }
+	ft.screens[w.Window] = limitScreen
+	must(t, e.Tick())
+	clock = clock.Add(5 * time.Second)
+	must(t, e.Tick())
+	if _, out := a.ExhaustedAdapters(time.Now())[usage.Claude]; !out {
+		t.Fatal("claude not marked out of quota")
+	}
+	if len(told) != 1 || !strings.Contains(told[0], "grok") {
+		t.Fatalf("owner told %q", told)
+	}
+	next, err := a.Spawn(app.SpawnReq{Title: "next"})
+	must(t, err)
+	if got := agent.Recorded(filepath.Join(a.Root, ".saddle", "run", next.ID)); got != usage.Grok {
+		t.Fatalf("next spawn ran %s, want grok", got)
+	}
+	ft.screens[w.Window] = "⏺ Picking up where I left off"
+	must(t, e.Tick())
+	if len(a.ExhaustedAdapters(time.Now())) != 0 {
+		t.Fatal("claude still out after its banner cleared")
 	}
 }

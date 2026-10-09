@@ -196,6 +196,10 @@ func (e *Engine) park(ts []mcpserver.TaskView, id, status string, b usage.LimitB
 		return
 	}
 	e.parked[id] = true
+	// Its adapter is out of quota: new spawns rotate past it (#321).
+	if err := e.a.AdapterLimitHit(id, b); err != nil {
+		e.a.Store.Event(id, "engine_error", err.Error())
+	}
 	resets := "after the limit resets"
 	if b.Resets != "" {
 		resets = "at " + b.Resets
@@ -212,7 +216,8 @@ func (e *Engine) park(ts []mcpserver.TaskView, id, status string, b usage.LimitB
 }
 
 // unpark puts a worker whose usage-limit banner cleared back to running,
-// without a notice. A hook may have done it already.
+// without a notice, and gives its adapter back its quota. A hook may have
+// done the first already.
 func (e *Engine) unpark(id, status string) {
 	delete(e.parked, id)
 	if status == app.StatusPaused {
@@ -222,6 +227,9 @@ func (e *Engine) unpark(id, status string) {
 		}
 	}
 	e.a.Store.Event(id, "usage_resumed", "")
+	if err := e.a.AdapterLimitCleared(id); err != nil {
+		e.a.Store.Event(id, "engine_error", err.Error())
+	}
 }
 
 func (e *Engine) escalate(task, text, screen string) {
