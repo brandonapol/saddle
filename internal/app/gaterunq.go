@@ -131,6 +131,7 @@ func (a *App) gateLease(ctx context.Context, task string, train bool) *gateLease
 		Class: class,
 		Prio:  runq.PrioGate,
 		Label: task,
+		Repo:  repoName(a.Root),
 		Cmd:   a.Cfg.Test.Cmd,
 		OnWait: func(w runq.Wait) {
 			line := gateWaitLine(w)

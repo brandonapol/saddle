@@ -141,7 +141,8 @@ type Deps struct {
 	HTTP   Doer
 	Model  Model
 	Sink   Sink
-	Ledger Ledger // optional; without it spend is kept in memory only
+	Ledger Ledger      // optional; without it spend is kept in memory only
+	Heavy  HeavySource // optional; the heavy-run queue, for long waits and overdue runs
 }
 
 type realClock struct{}
@@ -157,6 +158,7 @@ type Narrator struct {
 	pending    []store.Event
 	batchStart time.Time
 	retryAt    time.Time
+	hv         heavy
 
 	mu     sync.Mutex // guards the fields below, shared with Ask
 	day    string
@@ -224,11 +226,21 @@ func (n *Narrator) rollDay() {
 // Step polls the source once and flushes the batch if it is due: a salient
 // event is pending, or the oldest pending event is BatchInterval old. After
 // an API error nothing is flushed until BatchInterval has passed.
-func (n *Narrator) Step(ctx context.Context) error {
+func (n *Narrator) Step(ctx context.Context) (err error) {
 	now := n.deps.Clock.Now()
 	es, err := n.deps.Source.Poll(ctx)
 	if err != nil {
 		return fmt.Errorf("narrator: poll events: %w", err)
+	}
+	es = n.takeBackpressure(now, es)
+	// A queue that can't be read is reported, but this poll's events
+	// still go on.
+	if herr := n.checkHeavy(now); herr != nil {
+		defer func() {
+			if err == nil {
+				err = herr
+			}
+		}()
 	}
 	if len(es) > 0 {
 		if len(n.pending) == 0 {

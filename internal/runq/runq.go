@@ -166,7 +166,8 @@ CREATE TABLE IF NOT EXISTS leases(
   enqueued INTEGER NOT NULL,
   granted INTEGER NOT NULL DEFAULT 0,
   heartbeat INTEGER NOT NULL,
-  mode TEXT NOT NULL DEFAULT 'enforce'
+  mode TEXT NOT NULL DEFAULT 'enforce',
+  repo TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS leases_class ON leases(class, state);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL);
@@ -187,6 +188,7 @@ CREATE TABLE IF NOT EXISTS history(
 // migrations add columns a queue file written by an older saddle lacks.
 var migrations = []struct{ table, column, def string }{
 	{"leases", "mode", "TEXT NOT NULL DEFAULT 'enforce'"},
+	{"leases", "repo", "TEXT NOT NULL DEFAULT ''"},
 	{"history", "cpu_ms", "INTEGER NOT NULL DEFAULT 0"},
 	{"history", "max_rss_kb", "INTEGER NOT NULL DEFAULT 0"},
 	{"history", "mode", "TEXT NOT NULL DEFAULT 'enforce'"},
@@ -366,6 +368,7 @@ type Request struct {
 	Class string
 	Prio  int
 	Label string // who is asking (task id); SADDLE_TASK or "pid N" when empty
+	Repo  string // the saddle repo asking, for status across repos; may be empty
 	Cmd   string // what will run, for status
 	// OnWait is called while queued, whenever the position or holder changes.
 	OnWait func(Wait)
@@ -615,8 +618,8 @@ func (q *Queue) enqueue(req Request, mode Mode) (*Lease, error) {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO classes(name, slots) VALUES(?, ?)`, req.Class, q.slotsFor(req.Class)); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`INSERT INTO leases(token, class, prio, state, label, cmd, pid, host, enqueued, granted, heartbeat, mode)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, token, req.Class, req.Prio, state, req.Label, req.Cmd, os.Getpid(), q.host, now, granted, now, string(mode))
+		_, err := tx.Exec(`INSERT INTO leases(token, class, prio, state, label, repo, cmd, pid, host, enqueued, granted, heartbeat, mode)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, token, req.Class, req.Prio, state, req.Label, req.Repo, req.Cmd, os.Getpid(), q.host, now, granted, now, string(mode))
 		return err
 	})
 	if err != nil {
@@ -923,11 +926,13 @@ type Entry struct {
 	Token    string
 	Class    string
 	Label    string
+	Repo     string // the saddle repo that asked; "" when unknown
 	Cmd      string
 	PID      int
-	Prio     int // effective (aged) priority
-	Position int // 1-based among waiters; 0 for holders
-	Age      time.Duration
+	Prio     int           // effective (aged) priority
+	Position int           // 1-based among waiters; 0 for holders
+	Age      time.Duration // holders: running for; waiters: waiting for
+	ETA      time.Duration // waiters, in Status: median run time × turns ahead; 0 without history
 }
 
 // ClassStatus is one class's slots, holders and waiters (in grant order).
@@ -965,6 +970,15 @@ func (q *Queue) Status() ([]ClassStatus, error) {
 			if err != nil {
 				return err
 			}
+			if cs.Slots > 0 && len(cs.Waiters) > 0 {
+				med, err := medianHeld(tx, n)
+				if err != nil {
+					return err
+				}
+				for i := range cs.Waiters {
+					cs.Waiters[i].ETA = med * time.Duration((cs.Waiters[i].Position+cs.Slots-1)/cs.Slots)
+				}
+			}
 			out = append(out, cs)
 		}
 		return nil
@@ -977,7 +991,7 @@ func (q *Queue) classStatus(tx *sql.Tx, class string, now time.Time) (ClassStatu
 	if err := tx.QueryRow(`SELECT slots FROM classes WHERE name=?`, class).Scan(&cs.Slots); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return cs, err
 	}
-	rows, err := tx.Query(`SELECT seq, token, label, cmd, pid, prio, state, enqueued, granted FROM leases WHERE class=? ORDER BY seq`, class)
+	rows, err := tx.Query(`SELECT seq, token, label, repo, cmd, pid, prio, state, enqueued, granted FROM leases WHERE class=? ORDER BY seq`, class)
 	if err != nil {
 		return cs, err
 	}
@@ -991,7 +1005,7 @@ func (q *Queue) classStatus(tx *sql.Tx, class string, now time.Time) (ClassStatu
 		var e Entry
 		var seq, enq, granted int64
 		var state string
-		if err := rows.Scan(&seq, &e.Token, &e.Label, &e.Cmd, &e.PID, &e.Prio, &state, &enq, &granted); err != nil {
+		if err := rows.Scan(&seq, &e.Token, &e.Label, &e.Repo, &e.Cmd, &e.PID, &e.Prio, &state, &enq, &granted); err != nil {
 			return cs, err
 		}
 		e.Class = class

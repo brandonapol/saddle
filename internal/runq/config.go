@@ -21,6 +21,7 @@ import (
 //	aging_step = "30s"
 //	gate_max_wait = "10m"
 //	wait_max = "30m"         # saddle run --wait-max default
+//	max_run = "30m"          # a holder running longer shows as overdue
 //	default_slots = 1        # for classes named nowhere
 //	max_load_per_cpu = 1.0   # load gate: hold while load1/cores is over this (0 off)
 //	max_cpu_pressure = 60    # ... or CPU PSI "some avg10" is over this % (0 off)
@@ -34,6 +35,7 @@ import (
 //	[classes.go-test]
 //	slots = 2
 //	match = ["go test*", "make check"]
+//	max_run = "45m"          # this class's own max_run
 type Config struct {
 	Mode         Mode                   `toml:"mode"`
 	Heartbeat    Duration               `toml:"heartbeat"`
@@ -41,6 +43,7 @@ type Config struct {
 	AgingStep    Duration               `toml:"aging_step"`
 	GateMaxWait  Duration               `toml:"gate_max_wait"`
 	WaitMax      Duration               `toml:"wait_max"`
+	MaxRun       Duration               `toml:"max_run"`
 	DefaultSlots int                    `toml:"default_slots"`
 	Classes      map[string]ClassConfig `toml:"classes"`
 
@@ -75,8 +78,25 @@ const (
 // ClassConfig is one [classes.<name>] table. Match holds the argv patterns
 // the hook and shims (#240) route to the class; the core doesn't read them.
 type ClassConfig struct {
-	Slots int      `toml:"slots"`
-	Match []string `toml:"match"`
+	Slots  int      `toml:"slots"`
+	Match  []string `toml:"match"`
+	MaxRun Duration `toml:"max_run"`
+}
+
+// DefaultMaxRun is how long a holder runs before status, the TUI and the
+// narrator call it overdue. Saddle never kills it for that (docs/runq.md Q5).
+const DefaultMaxRun = 30 * time.Minute
+
+// MaxRunFor is class's max_run: its own, else the top-level one, else
+// DefaultMaxRun.
+func (c Config) MaxRunFor(class string) time.Duration {
+	if d := c.Classes[class].MaxRun.D; d > 0 {
+		return d
+	}
+	if c.MaxRun.D > 0 {
+		return c.MaxRun.D
+	}
+	return DefaultMaxRun
 }
 
 // Duration is a TOML string like "30s".
@@ -130,7 +150,7 @@ func LoadConfig(paths ...string) (Config, error) {
 		}
 		for _, d := range []struct{ dst, src *Duration }{
 			{&c.Heartbeat, &f.Heartbeat}, {&c.StaleAfter, &f.StaleAfter}, {&c.AgingStep, &f.AgingStep},
-			{&c.GateMaxWait, &f.GateMaxWait}, {&c.WaitMax, &f.WaitMax},
+			{&c.GateMaxWait, &f.GateMaxWait}, {&c.WaitMax, &f.WaitMax}, {&c.MaxRun, &f.MaxRun},
 		} {
 			if d.src.D > 0 {
 				*d.dst = *d.src
@@ -153,6 +173,9 @@ func LoadConfig(paths ...string) (Config, error) {
 			}
 			if fc.Match != nil {
 				cc.Match = fc.Match
+			}
+			if fc.MaxRun.D > 0 {
+				cc.MaxRun = fc.MaxRun
 			}
 			c.Classes[name] = cc
 		}

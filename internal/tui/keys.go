@@ -17,7 +17,7 @@ type keyMap struct {
 	NextAgent, PrevAgent                   key.Binding
 
 	// Views and the help overlay.
-	ViewControl, ViewPlan, ViewMerge, Help key.Binding
+	ViewControl, ViewPlan, ViewMerge, ViewRuns, Help key.Binding
 
 	// Infinite mode (#285), from any view.
 	Infinite key.Binding
@@ -33,6 +33,9 @@ type keyMap struct {
 
 	// Merge view.
 	AutoMerge, Hold, Rebase, QueueDown, QueueUp, TakeOver key.Binding
+
+	// Runs view.
+	KillLease, Confirm key.Binding
 
 	// Plan view.
 	Approve, EditPlan, Replan, ModelUp, ModelDown, Go, PlanNext, PlanPrev, BotsUp, BotsDown key.Binding
@@ -60,9 +63,10 @@ func newKeyMap() keyMap {
 		NextAgent: b("alt+n/p", "next/prev agent", "alt+n"),
 		PrevAgent: pair("alt+p"),
 
-		ViewControl: b("alt+1/2/3", "views", "alt+1"),
+		ViewControl: b("alt+1/2/3/4", "views", "alt+1"),
 		ViewPlan:    pair("alt+2"),
 		ViewMerge:   pair("alt+3"),
+		ViewRuns:    pair("alt+4"),
 		Help:        b("?", "keys", "?", "f1"),
 		Infinite:    infiniteBinding(),
 
@@ -89,6 +93,9 @@ func newKeyMap() keyMap {
 		QueueDown: b("J/K", "move in queue", "J"),
 		QueueUp:   pair("K"),
 		TakeOver:  b("t", "take over (open agent)", "t"),
+
+		KillLease: b("x", "kill lease (asks first)", "x"),
+		Confirm:   b("y", "yes, kill it", "y"),
 
 		Approve:   b("a", "approve/reopen", "a"),
 		EditPlan:  b("e", "edit in $EDITOR", "e"),
@@ -135,11 +142,12 @@ type keyGroup struct {
 // fails if a binding is added to keyMap but not here.
 func (k keyMap) groups() []keyGroup {
 	return []keyGroup{
-		{"Anywhere", []key.Binding{k.ViewControl, k.ViewPlan, k.ViewMerge, k.Infinite, k.Help, k.NextAgent, k.PrevAgent, k.Focus, k.PageUp, k.PageDown, k.Restart, k.Quit}},
+		{"Anywhere", []key.Binding{k.ViewControl, k.ViewPlan, k.ViewMerge, k.ViewRuns, k.Infinite, k.Help, k.NextAgent, k.PrevAgent, k.Focus, k.PageUp, k.PageDown, k.Restart, k.Quit}},
 		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget, k.Interrupt, k.Ask, k.AskScreen}},
 		{"Agents", []key.Binding{k.Down, k.Up, k.Open, k.Skill, k.Spawn, k.Pause, k.Brief, k.Kill, k.Land, k.Back}},
 		{"Plan view", []key.Binding{k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.ModelDown, k.Go, k.PlanNext, k.PlanPrev, k.BotsUp, k.BotsDown}},
 		{"Merge view", []key.Binding{k.AutoMerge, k.Hold, k.Rebase, k.QueueDown, k.QueueUp, k.TakeOver}},
+		{"Runs view", []key.Binding{k.KillLease, k.Confirm}},
 		{"Terminal", []key.Binding{k.Terminal, k.TermBack, k.TermScrollUp, k.TermScrollDown}},
 		{"Copy", []key.Binding{k.CopyMode, k.CopySelect, k.CopyYank, k.CopyAll, k.CopySource, k.CopyTop, k.CopyBottom, k.CopyHalfDown, k.CopyHalfUp, k.CopyExit,
 			// Display only: the mouse.
@@ -167,6 +175,12 @@ func (m *model) help() []key.Binding {
 	}
 	if m.view == viewMerge {
 		return []key.Binding{withHelp(k.Down, "j/k", "stack"), withHelp(k.Focus, "tab", "train"), k.AutoMerge, k.Hold, k.Rebase, k.ViewControl, k.Help, k.Terminal, k.CopyMode, k.Quit}
+	}
+	if m.view == viewRuns {
+		if m.hv.confirm != "" {
+			return []key.Binding{withHelp(k.Confirm, "y", "kill"), withHelp(k.Back, "any key", "keep")}
+		}
+		return []key.Binding{withHelp(k.Down, "j/k", "lease"), k.KillLease, k.ViewControl, k.Help, k.Terminal, k.CopyMode, k.Quit}
 	}
 	if m.view == viewPlan {
 		if m.pl.noting {

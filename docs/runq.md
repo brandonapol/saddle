@@ -6,6 +6,13 @@ design in #236.
 The train's test gate and the pre-publish checks take a lease at `PrioGate` (#239): the
 class is the first `[classes]` pattern (in class-name order) that `test.cmd` matches, else
 `default`, and the gate's children get `SADDLE_RUNQ_LEASE` and `SADDLE_RUNQ_DB`.
+The queue shows up without asking (#242): a "Heavy runs" section in `saddle status`
+(and `heavy_runs` in `--json` and the MCP `status` tool) while it is busy, a header
+segment (`go-test ▸t83 3m · 2 waiting`) and a runs view (alt+4) in the TUI where `x`
+kills the selected lease after a `y`, and narrator lines for waits over 5 minutes,
+holders past `max_run` (top-level or per class, default 30m) and spawn backpressure.
+Each lease records the repo that asked next to its label (the task), so another
+repo's entry reads `otherrepo/t84`.
 
 ## Problem
 
@@ -127,6 +134,8 @@ All of these pass under `-race`; the e2e journeys pass three runs in a row.
 | e2e `TestJourneyRunqTwoContendersTakeTurns` | Two real `runq run` processes share one slot. `runq status` shows `1/1 slots busy, 1 waiting`, the runs come out in order and B reports its wait. |
 | e2e `TestJourneyRunqCrashedHolder` | SIGKILL the holder's `runq` process: its `sleep` child dies too (Pdeathsig) and the waiter starts within ~1 heartbeat. |
 | e2e `TestJourneyRunqNestedRunDoesNotDeadlock` | `runq run -- runq run -- …` with one slot finishes without queueing. |
+| `TestStatusRepoAndETA`, `TestMaxRunConfig`, `TestHeavyRunsView`, `TestStatusShowsHeavyRuns` (cli, mcpserver), `TestRunsViewShowsQueuePositions`, `TestRunsViewKillAsksFirst`, `TestNarratorMentionsLongWaitAndOverdueOnce`, `TestNarratorBackpressureOnce` | #242: with one holder and two waiters, status, MCP status and the TUI show the same positions; kill asks first; the narrator mentions each long wait, overdue holder and backpressure spell once. |
+| e2e `TestJourneyHeavyRunsQueueVisible` | The same through the real binary: `saddle status`, `--json`, MCP `status` and `saddle up`'s runs view agree, and killing the overdue holder from the TUI hands its slot to the next waiter. |
 
 What the spike taught:
 

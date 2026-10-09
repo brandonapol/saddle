@@ -14,6 +14,7 @@ import (
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/refguard"
+	"github.com/brandonapol/saddle/internal/runq"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -32,7 +33,16 @@ func TestMain(m *testing.M) {
 	// every exit, and so on every ref update.
 	_ = os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	_ = os.Setenv(app.TestRefguardEnv, "1")
-	os.Exit(m.Run())
+	// Status reads the heavy-run queue: keep it off the user's real one.
+	dir, err := os.MkdirTemp("", "saddle-mcp-runq-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	_ = os.Setenv(runq.EnvPath, filepath.Join(dir, "runq.db"))
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 type fakeTmux struct {
