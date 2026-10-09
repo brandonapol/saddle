@@ -426,6 +426,13 @@ fixture `/proc` for tests.
 
 ### 6. Backpressure
 
+Shipped in #243. `backpressure_wait = "10m"` in `[runq]` sets the age
+limit; a negative value turns the age check off (the length check stays).
+Only enforce mode has waiters, so observe and off never refuse. A drained
+class (0 slots) doesn't count. Each refusal logs a `spawn_backpressure`
+event and sends the orchestrator a digest notice; autopilot treats it like
+the concurrency cap. `App.Backpressure()` is the signal for #40.
+
 - **Spawn refuses when the queue is backed up**, the same way the bots limit
   (#176) refuses at the cap. The trigger: any class has more than
   `2 × slots` waiters, or its oldest waiter has waited longer than
