@@ -63,7 +63,7 @@ func Names() []string {
 }
 
 func adapters() map[string]Adapter {
-	return map[string]Adapter{usage.Claude: Claude{}, usage.Codex: Codex{}, usage.Grok: Grok{}}
+	return map[string]Adapter{usage.Claude: Claude{}, usage.Codex: Codex{}, GeminiName: Gemini{}, usage.Grok: Grok{}}
 }
 
 // Claude is the Claude Code adapter: hooks and the saddle MCP server are wired

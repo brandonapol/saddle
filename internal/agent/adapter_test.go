@@ -56,7 +56,7 @@ func TestClaudeTranscriptPath(t *testing.T) {
 }
 
 func TestByName(t *testing.T) {
-	for name, want := range map[string]string{"": "claude", "claude": "claude", "codex": "codex", "grok": "grok"} {
+	for name, want := range map[string]string{"": "claude", "claude": "claude", "codex": "codex", "gemini": "gemini", "grok": "grok"} {
 		a, err := ByName(name)
 		if err != nil || a.Name() != want {
 			t.Errorf("ByName(%q) = %v, %v", name, a, err)

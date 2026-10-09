@@ -28,11 +28,7 @@ func (a *App) adapterCmd(name string) (string, []string) {
 // taskAdapter is the adapter a task was launched with.
 func (a *App) taskAdapter(t store.Task) agent.Adapter {
 	run := a.stateDir("run", t.ID)
-	name := agent.Recorded(run)
-	if name == usage.Grok && agent.GrokHarnessOn(run) {
-		return agent.GrokWithHooks{}
-	}
-	ad, err := agent.ByName(name)
+	ad, err := agent.ByName(agent.Recorded(run))
 	if err != nil {
 		return agent.Claude{}
 	}

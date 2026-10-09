@@ -30,8 +30,9 @@ func hooklessPrompt(l Launch) string {
 }
 
 // writeHookless writes the run dir for an agent without saddle hooks and a
-// launch.sh that runs the shell line argv in the task's directory.
-func (l Launch) writeHookless(name string, argv []string) (string, error) {
+// launch.sh that runs the shell line argv in the task's directory, after the
+// shell lines in setup.
+func (l Launch) writeHookless(name string, setup, argv []string) (string, error) {
 	if err := l.record(name); err != nil {
 		return "", err
 	}
@@ -49,6 +50,9 @@ func (l Launch) writeHookless(name string, argv []string) (string, error) {
 	fmt.Fprintf(&sh, "export PATH=%s:\"$PATH\"\n", l.shellPath())
 	fmt.Fprintf(&sh, "cd %s || exit 1\n", shellQuote(l.Dir))
 	fmt.Fprintf(&sh, "run=%s\n", shellQuote(l.RunDir))
+	for _, line := range setup {
+		sh.WriteString(line + "\n")
+	}
 	sh.WriteString(strings.Join(argv, " ") + "\n")
 	fmt.Fprintf(&sh, "%s exited %s >/dev/null 2>&1\n", shellQuote(l.Bin), shellQuote(l.Task))
 	sh.WriteString("echo; echo \"[saddle] agent exited. Re-run: bash $run/launch.sh\"; exec \"${SHELL:-bash}\"\n")
@@ -111,7 +115,7 @@ func (Codex) Launch(l Launch) (string, error) {
 			strconv.Quote(env["SADDLE_ROOT"]), strconv.Quote(env["SADDLE_TASK"]))))
 	argv = append(argv, quoteAll(l.Args)...)
 	argv = append(argv, `"$(cat "$run/prompt.md")"`)
-	return l.writeHookless(usage.Codex, argv)
+	return l.writeHookless(usage.Codex, nil, argv)
 }
 
 func (c Codex) Usage() UsageSource {
@@ -166,30 +170,81 @@ func rolloutCwd(path string) string {
 	return filepath.Clean(meta.Payload.Cwd)
 }
 
-// Grok is the Grok CLI adapter, for one-shot work such as image generation:
-// it runs headless with the prompt and tees its output to the run dir, where
-// usage is read best effort. Grok gets no saddle hooks or MCP server, so
-// claims are advisory and it finishes with the saddle CLI.
-type Grok struct{}
+// Gemini is the Google Gemini CLI adapter: an interactive session (-i runs
+// the first message and stays open) with the saddle MCP server in a run-dir
+// settings file passed as gemini's system settings. Gemini merges mcpServers
+// across settings files, so the user's own servers stay. It runs no saddle
+// hooks: claims are advisory and notices are typed in.
+type Gemini struct{}
 
-func (Grok) Name() string                 { return usage.Grok }
-func (Grok) Hooks() bool                  { return false }
-func (Grok) Inject(notices string) string { return hooklessInject(notices) }
+// GeminiName is the gemini adapter's name; usage has no gemini parser yet.
+const GeminiName = "gemini"
 
-// grokTranscript is the tee'd output in the run dir.
-const grokTranscript = "transcript.jsonl"
+const geminiSettings = "gemini-settings.json"
 
-func (Grok) Launch(l Launch) (string, error) {
-	if l.Kind == KindGrok {
-		return l.writeGrok()
+func (Gemini) Name() string                 { return GeminiName }
+func (Gemini) Hooks() bool                  { return false }
+func (Gemini) Inject(notices string) string { return hooklessInject(notices) }
+
+func (Gemini) Launch(l Launch) (string, error) {
+	if err := os.MkdirAll(l.RunDir, 0o755); err != nil {
+		return "", err
 	}
-	argv := []string{shellQuote(l.cmdOr("grok")), "--directory", shellQuote(l.Dir)}
+	settings := map[string]any{"mcpServers": map[string]any{
+		"saddle": map[string]any{"command": l.Bin, "args": []string{"mcp"}, "env": l.env(), "trust": true},
+	}}
+	b, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(l.RunDir, geminiSettings), b, 0o644); err != nil {
+		return "", err
+	}
+	argv := []string{shellQuote(l.cmdOr("gemini"))}
 	if l.Model != "" {
 		argv = append(argv, "--model", shellQuote(l.Model))
 	}
+	argv = append(argv, "--approval-mode", shellQuote(geminiApproval(l.Mode)), "--skip-trust")
 	argv = append(argv, quoteAll(l.Args)...)
-	argv = append(argv, `--prompt "$(cat "$run/prompt.md")"`, "2>&1", "|", `tee -a "$run/`+grokTranscript+`"`)
-	return l.writeHookless(usage.Grok, argv)
+	argv = append(argv, `-i "$(cat "$run/prompt.md")"`)
+	setup := []string{`export GEMINI_CLI_SYSTEM_SETTINGS_PATH="$run/` + geminiSettings + `"`}
+	return l.writeHookless(GeminiName, setup, argv)
+}
+
+// geminiApproval maps a Claude permission mode to gemini's --approval-mode.
+// Workers run unattended, so anything else is yolo.
+func geminiApproval(mode string) string {
+	switch mode {
+	case "acceptEdits":
+		return "auto_edit"
+	case "plan", "default":
+		return mode
+	}
+	return "yolo"
+}
+
+// Usage has no gemini transcript parser, so gemini work is not metered.
+func (Gemini) Usage() UsageSource {
+	return UsageSource{Agent: GeminiName, Transcript: func(string, string, string) string { return "" }}
+}
+
+// Grok is the Grok CLI adapter. Every grok worker runs the full harness: an
+// interactive session in the worktree with saddle's project hooks and MCP
+// server installed (see writeGrok), so it claims, spawns and calls done like
+// Claude Code (#181).
+type Grok struct{}
+
+func (Grok) Name() string         { return usage.Grok }
+func (Grok) Hooks() bool          { return true }
+func (Grok) Inject(string) string { return WakeLine }
+
+// grokTranscript is where grok usage is read from the run dir, best effort:
+// nothing writes it while grok's own session files go unparsed.
+const grokTranscript = "transcript.jsonl"
+
+func (Grok) Launch(l Launch) (string, error) {
+	l.Kind = KindGrok
+	return l.writeGrok()
 }
 
 func (Grok) Usage() UsageSource {
@@ -197,16 +252,3 @@ func (Grok) Usage() UsageSource {
 		return filepath.Join(runDir, grokTranscript)
 	}}
 }
-
-// GrokWithHooks is a grok worker started with harness = "grok": project hooks
-// and the saddle MCP server are installed, so claims are enforced.
-type GrokWithHooks struct{}
-
-func (GrokWithHooks) Name() string         { return usage.Grok }
-func (GrokWithHooks) Hooks() bool          { return true }
-func (GrokWithHooks) Inject(string) string { return WakeLine }
-func (GrokWithHooks) Launch(l Launch) (string, error) {
-	l.Kind = KindGrok
-	return l.writeGrok()
-}
-func (GrokWithHooks) Usage() UsageSource { return Grok{}.Usage() }
