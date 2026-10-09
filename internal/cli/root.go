@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -18,6 +19,7 @@ import (
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/banner"
 	"github.com/brandonapol/saddle/internal/ciwatch"
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/doctor"
 	"github.com/brandonapol/saddle/internal/hook"
 	"github.com/brandonapol/saddle/internal/mcpserver"
@@ -115,15 +117,32 @@ Without a terminal, pass --trust (or set SADDLE_TRUST=1).`,
 func upCmd() *cobra.Command {
 	var skipDoctor, trusted bool
 	cmd := &cobra.Command{
-		Use:   "up [epic-file|-]",
+		Use:   "up [claude|grok|codex] [epic-file|-]",
 		Short: "Open the Saddle TUI: chat with the orchestrator, watch your agents",
 		Long: `Opens Saddle's TUI. The orchestrator lives in
 the chat on the right (Claude Code, or the Grok CLI when harness = "grok").
 Tell it what to work on, e.g. "do #46 and #47 in parallel".
 It starts agents in a hidden tmux session, watches them, and tells you when one
-needs you. Quitting leaves the agents running; run saddle up again to come back.`,
-		Args: cobra.MaximumNArgs(1),
-		PreRunE: func(cmd *cobra.Command, _ []string) error {
+needs you. Quitting leaves the agents running; run saddle up again to come back.
+
+Name an agent to use it for this run only: the orchestrator and every
+worker it spawns without an explicit adapter. Config is not changed; the
+next bare saddle up uses harness from config again. Agents already running
+keep the CLI they were spawned with.
+
+  saddle up              harness from config (default claude)
+  saddle up grok         Grok CLI for this run
+  saddle up codex epic.md
+  saddle up ./grok       a file named grok, read as an epic`,
+		Args: cobra.MaximumNArgs(2),
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			harness, _, err := parseUpArgs(args)
+			if err != nil {
+				return err
+			}
+			if err := applyUpHarness(harness); err != nil {
+				return err
+			}
 			return upTrustErr(gateTrust(cmd.OutOrStdout(), cmd.InOrStdin(), trusted))
 		},
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, args []string) error {
@@ -148,8 +167,8 @@ needs you. Quitting leaves the agents running; run saddle up again to come back.
 				fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+warn)
 			}
 			first := ""
-			if len(args) == 1 {
-				b, err := readArg(args[0])
+			if _, epic, _ := parseUpArgs(args); epic != "" {
+				b, err := readArg(epic)
 				if err != nil {
 					return err
 				}
@@ -226,6 +245,36 @@ func downCmd() *cobra.Command {
 			return nil
 		}),
 	}
+}
+
+// parseUpArgs splits saddle up's arguments into an agent name and an epic
+// file (or "-"). A known agent name is always the agent, even when a file of
+// that name exists; ./name reads the file.
+func parseUpArgs(args []string) (harness, epic string, err error) {
+	if len(args) > 0 && slices.Contains(config.Harnesses(), args[0]) {
+		harness, args = args[0], args[1:]
+	}
+	switch {
+	case len(args) == 0:
+		return harness, "", nil
+	case len(args) > 1:
+		return "", "", fmt.Errorf("saddle up takes an agent (%s) and one epic file or -", strings.Join(config.Harnesses(), ", "))
+	case args[0] == "-":
+		return harness, "-", nil
+	}
+	if _, err := os.Stat(args[0]); err != nil {
+		return "", "", fmt.Errorf("%q is not an agent (%s) or a readable epic file", args[0], strings.Join(config.Harnesses(), ", "))
+	}
+	return harness, args[0], nil
+}
+
+// applyUpHarness makes harness this process tree's agent: config.Load reads
+// it, and launches pass it on to the orchestrator's MCP server and workers.
+func applyUpHarness(harness string) error {
+	if harness == "" {
+		return nil
+	}
+	return os.Setenv(config.HarnessEnv, harness)
 }
 
 func readArg(arg string) ([]byte, error) {
@@ -328,6 +377,7 @@ func statusCmd() *cobra.Command {
 			if err := w.Flush(); err != nil {
 				return err
 			}
+			writeAdapters(cmd.OutOrStdout(), st.Adapters)
 			if st.HeavyRuns != nil {
 				writeHeavyRuns(cmd.OutOrStdout(), *st.HeavyRuns)
 			}
@@ -337,6 +387,20 @@ func statusCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	return cmd
+}
+
+// writeAdapters prints which coding CLIs a worker can run on (#182).
+func writeAdapters(out io.Writer, ss []agent.Status) {
+	if len(ss) == 0 {
+		return
+	}
+	line := "adapters: " + strings.Join(agent.Usable(ss), ", ")
+	for _, s := range ss {
+		if !s.OK {
+			line += fmt.Sprintf("; %s unavailable (%s)", s.Name, s.Reason)
+		}
+	}
+	fmt.Fprintln(out, line)
 }
 
 // writeCIRed prints each red layer and what it holds back (#213).

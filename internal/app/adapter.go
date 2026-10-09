@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -23,6 +24,35 @@ func (a *App) adapterCmd(name string) (string, []string) {
 	}
 	c := a.Cfg.Adapters[name]
 	return c.Cmd, c.Args
+}
+
+// Adapters lists which adapters can run on this machine (#182).
+func (a *App) Adapters() []agent.Status { return a.adapterStatus() }
+
+// adapterStatus lists which adapters can run on this machine.
+func (a *App) adapterStatus() []agent.Status {
+	if a.AdapterStatus != nil {
+		return a.AdapterStatus()
+	}
+	cmds := map[string]string{usage.Claude: a.Cfg.Claude.Cmd, usage.Grok: a.Cfg.Grok.Cmd}
+	for n, c := range a.Cfg.Adapters {
+		if c.Cmd != "" {
+			cmds[n] = c.Cmd
+		}
+	}
+	return agent.Availability(cmds)
+}
+
+// checkAdapter refuses an adapter that can't run here, naming the reason and
+// the ones that can (#182). It never substitutes another adapter.
+func (a *App) checkAdapter(name string) error {
+	ss := a.adapterStatus()
+	for _, s := range ss {
+		if s.Name == name && !s.OK {
+			return agent.Unavailable(name, errors.New(s.Reason), ss)
+		}
+	}
+	return nil
 }
 
 // taskAdapter is the adapter a task was launched with.

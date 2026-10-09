@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/usage"
 )
 
 // Kind selects which CLI a launch drives. Empty means Claude Code.
@@ -298,6 +299,10 @@ func shellQuote(s string) string {
 // set, continues an earlier session.
 func (l Launch) headlessClaude(resume string) (*exec.Cmd, error) {
 	if err := l.writeFiles(); err != nil {
+		return nil, err
+	}
+	// The orchestrator resumes only a session of the same agent (#150).
+	if err := l.record(usage.Claude); err != nil {
 		return nil, err
 	}
 	args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json",
