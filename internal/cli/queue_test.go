@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,8 +24,9 @@ func runQueue(t *testing.T, args ...string) string {
 	return out.String()
 }
 
-// #25: saddle queue lists, moves, holds and releases waiting entries.
-func TestQueueCommands(t *testing.T) {
+// queueRepo is a repo with t1 and t2 done and queued in that order.
+func queueRepo(t *testing.T) *app.App {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
@@ -65,7 +67,12 @@ func TestQueueCommands(t *testing.T) {
 		}
 	}
 	t.Chdir(root)
+	return a
+}
 
+// #25: saddle queue lists, moves, holds and releases waiting entries.
+func TestQueueCommands(t *testing.T) {
+	queueRepo(t)
 	if out := runQueue(t); out != "1. t1 queued\n2. t2 queued\n" {
 		t.Fatalf("queue:\n%s", out)
 	}
@@ -77,6 +84,49 @@ func TestQueueCommands(t *testing.T) {
 	runQueue(t, "release", "t1")
 	if out := runQueue(t); !strings.Contains(out, "2. t1 queued") {
 		t.Fatalf("queue after release:\n%s", out)
+	}
+}
+
+// #166: saddle queue --json is the queue the mod's snapshot reads, next
+// first, with each entry's position, plus who holds the engine lock so the
+// mod polls only while saddle runs.
+func TestQueueJSON(t *testing.T) {
+	a := queueRepo(t)
+	runQueue(t, "hold", "t2", "wait")
+	var got queueJSON
+	if err := json.Unmarshal([]byte(runQueue(t, "--json")), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Engine != "" {
+		t.Fatalf("engine = %q with no engine running", got.Engine)
+	}
+	want := []queueEntryJSON{{Position: 1, Task: "t1", State: "queued"}, {Position: 2, Task: "t2", State: "on_hold", Note: "wait"}}
+	if len(got.Entries) != 2 {
+		t.Fatalf("entries %+v", got.Entries)
+	}
+	for i, e := range got.Entries {
+		e.Seq, e.Attempts = 0, 0
+		if e != want[i] {
+			t.Fatalf("entry %d = %+v, want %+v", i, e, want[i])
+		}
+	}
+
+	release, err := a.AcquireLock(app.LockEngine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if err := json.Unmarshal([]byte(runQueue(t, "--json")), &got); err != nil || got.Engine != app.LockEngine {
+		t.Fatalf("engine = %q (%v) while the engine runs", got.Engine, err)
+	}
+}
+
+// An empty queue is [] in JSON, never null, so a reader needn't guard it.
+func TestQueueJSONEmpty(t *testing.T) {
+	a := automergeRepo(t)
+	t.Chdir(a.Root)
+	if out := runQueue(t, "--json"); !strings.Contains(out, `"entries": []`) {
+		t.Fatalf("empty queue json:\n%s", out)
 	}
 }
 
