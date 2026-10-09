@@ -276,7 +276,10 @@ func TestRunCallbacks(t *testing.T) {
 	h := acquire(t, q, Request{Class: "go-test"})
 	var mu sync.Mutex
 	var queued, started int
+	released := make(chan struct{})
+	defer func() { <-released }() // the Release writes to the queue in TempDir
 	go func() {
+		defer close(released)
 		waitFor(t, "queued", func() bool { mu.Lock(); defer mu.Unlock(); return queued > 0 })
 		time.Sleep(100 * time.Millisecond)
 		_ = h.Release()

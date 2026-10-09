@@ -229,8 +229,14 @@ func TestAgingPreventsStarvation(t *testing.T) {
 	q := open(t, o)
 	h := acquire(t, q, Request{Class: "go-test", Label: "holder"})
 	got := make(chan string, 2)
+	// Every waiter has released (written to the queue) before the test
+	// returns and its TempDir is removed.
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	enqueue := func(ctx context.Context, label string, prio int) {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			l, err := q.Acquire(ctx, Request{Class: "go-test", Prio: prio, Label: label})
 			if errors.Is(err, context.Canceled) {
 				return
@@ -468,10 +474,15 @@ func TestReleaseWakesWaiter(t *testing.T) {
 	q := open(t, o)
 	h := acquire(t, q, Request{Class: "go-test"})
 	got := make(chan time.Time, 1)
+	done := make(chan struct{})
+	defer func() { <-done }() // its Release writes to the queue in TempDir
 	go func() {
+		defer close(done)
 		l, err := q.Acquire(context.Background(), Request{Class: "go-test"})
 		if err != nil {
 			t.Error(err)
+			got <- time.Now()
+			return
 		}
 		got <- time.Now()
 		_ = l.Release()
