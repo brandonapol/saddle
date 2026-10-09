@@ -144,13 +144,15 @@ func TestJourneyTUIPeekCycleAndBrief(t *testing.T) {
 
 // helpDescs is every binding's description in the help overlay.
 var helpDescs = []string{
-	"views", "plan view", "merge view", "keys", "next/prev agent", "prev agent", "switch pane", "scroll up", "scroll down",
+	"views", "infinite mode on/off", "keys", "next/prev agent", "switch pane", "scroll up", "scroll down",
 	"restart orchestrator", "quit (agents keep running)",
-	"send", "newline", "complete", "back to orchestrator", "ask narrator", "send agent's screen",
-	"select", "up", "open window", "skill in agent", "spawn", "pause (esc)", "brief/peek", "kill", "land", "orchestrator",
-	"approve/reopen", "edit in $EDITOR", "replan with a note", "task model", "task model down", "go: run the plan",
-	"next/prev plan", "prev plan", "bots limit", "bots limit down",
-	"auto-merge on/off", "hold/release", "rebase stack", "move in queue", "move up in queue", "take over (open agent)",
+	"send", "newline", "orchestrator's skills & commands", "back to orchestrator", "interrupt the orchestrator's turn",
+	"ask narrator", "send agent's screen",
+	"select", "open window", "run a skill in that agent", "spawn", "pause (esc)", "brief/peek", "kill (asks first)",
+	"land (asks first)", "orchestrator",
+	"approve/reopen", "edit in $EDITOR", "replan with a note", "task model", "go: run the plan", "next/prev plan", "bots limit",
+	"auto-merge on/off", "hold/release", "rebase stack", "move in queue", "take over (open agent)",
+	"kill lease (asks first)",
 	"terminal", "chat", "history",
 }
 
@@ -164,7 +166,7 @@ func TestJourneyTUIHelpOverlay(t *testing.T) {
 	u.Keys("F1")
 	u.WaitScreen("KEYS")
 	s := u.Screen()
-	for _, g := range []string{"Anywhere", "Chat", "Agents", "Plan view", "Merge view", "Terminal"} {
+	for _, g := range []string{"Anywhere", "Chat", "Agents", "Plan view", "Merge view", "Runs view", "Terminal", "Copy"} {
 		if !strings.Contains(s, g) {
 			t.Errorf("help lacks the %q group", g)
 		}
