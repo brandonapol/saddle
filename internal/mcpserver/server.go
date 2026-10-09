@@ -148,7 +148,8 @@ type AutomergeIn struct {
 
 // AutopilotIn steers the autopilot driver.
 type AutopilotIn struct {
-	Action     string `json:"action" jsonschema:"on, off, status, pause or resume"`
+	Action     string `json:"action" jsonschema:"on, off, status, pause, resume or infinite"`
+	Mode       string `json:"mode,omitempty" jsonschema:"for infinite: on, off or status; defaults to status"`
 	Until      string `json:"until,omitempty" jsonschema:"for on: stop spawning at this time (HH:MM, or RFC 3339)"`
 	UntilUsage string `json:"until_usage,omitempty" jsonschema:"for on: stop spawning at this share of a plan-limit window (e.g. 90%)"`
 	MaxTasks   int    `json:"max_tasks,omitempty" jsonschema:"for on: stop after spawning this many tasks; 0 means no limit"`
@@ -553,7 +554,7 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, st, err
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "autopilot", Description: "Autopilot (off by default): while on, saddle itself lands, tops up from open issues labelled ready up to the concurrency cap and nudges you when the pipeline stalls. on starts a run (optional until, until_usage, max_tasks, ready_label); off ends it; pause and resume hold and continue it; status reads it. Only turn it on when the owner asked."},
+	mcp.AddTool(s, &mcp.Tool{Name: "autopilot", Description: "Autopilot (off by default): while on, saddle itself lands, tops up from open issues labelled ready up to the concurrency cap and nudges you when the pipeline stalls. on starts a run (optional until, until_usage, max_tasks, ready_label); off ends it; pause and resume hold and continue it; status reads it. infinite (mode on, off or status) is autopilot with no stop condition, as saddle autopilot infinite: an empty ready queue asks you to find more work, a full plan-limit window parks tasks until it resets; on over a running bounded run keeps that run, off ends the run. Only turn it on when the owner asked."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in AutopilotIn) (*mcp.CallToolResult, autopilot.State, error) {
 			d := a.NewAutopilot(nil)
 			var st autopilot.State
@@ -582,10 +583,19 @@ func New(a *app.App, task string) *mcp.Server {
 				st, err = d.Pause()
 			case "resume":
 				st, err = d.Resume()
+			case "infinite":
+				switch in.Mode {
+				case "on", "off":
+					st, err = d.SetInfinite(in.Mode == "on")
+				case "status", "":
+					st, err = d.Status()
+				default:
+					err = fmt.Errorf("infinite mode %q: want on, off or status", in.Mode)
+				}
 			case "status", "":
 				st, err = d.Status()
 			default:
-				err = fmt.Errorf("unknown action %q: want on, off, status, pause or resume", in.Action)
+				err = fmt.Errorf("unknown action %q: want on, off, status, pause, resume or infinite", in.Action)
 			}
 			return nil, st, err
 		})
