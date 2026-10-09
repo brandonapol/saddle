@@ -45,12 +45,13 @@ func TestJourneyLintDetectMakeFi(t *testing.T) {
 	}
 
 	// Spawning installs the repo's hook for every worktree (#223), so the
-	// agent's own commit is refused; the second commit skips hooks, as an
-	// agent whose hooks don't run would, and done's gate catches it.
+	// agent's own commit is refused; the second skips hooks, as an agent
+	// whose hooks don't run would (saddle's would deny it), and done's gate
+	// catches it.
 	w.Spawn("t1", "Loose", []string{"LOOSE"},
 		fa.Write("LOOSE", "x\n"),
 		fa.Run("git add -A && ! git commit -q -m loose"),
-		fa.Run("git -c core.hooksPath=/dev/null commit -q -m loose"),
+		fa.Step{Run: "git -c core.hooksPath=/dev/null commit -q -m loose", Unhooked: true},
 		fa.Step{Done: "Adds LOOSE.", Optional: true}, // refused: the gate is red
 		fa.Run("make fix"), fa.Commit("make fix"),
 		fa.Done("Adds nothing loose."))

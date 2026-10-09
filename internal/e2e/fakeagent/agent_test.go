@@ -177,15 +177,22 @@ func TestDeniedWriteStopsScript(t *testing.T) {
 
 // TestBashRunsThroughPreToolUse: as in Claude Code, a Bash step runs the
 // command the PreToolUse hook hands back in updatedInput, and a denied one
-// doesn't run at all.
+// doesn't run at all. An Unhooked step skips the hook.
 func TestBashRunsThroughPreToolUse(t *testing.T) {
-	r := newRig(t, Script{Steps: []Step{Run("heavy"), Run("touch blocked/x"), Write("after", "x")}})
+	r := newRig(t, Script{Steps: []Step{Run("heavy"), {Run: "mkdir blocked && touch blocked/y", Unhooked: true},
+		Run("touch blocked/x"), Write("after", "x")}})
 	r.waitLog("stuck:")
 	if got := sh(t, r.work, "cat ran.txt"); got != "queued heavy" {
 		t.Fatalf("ran.txt = %q, want the rewritten command's output", got)
 	}
 	if !strings.Contains(r.log(), "denied: [saddle] t9 owns blocked/") {
 		t.Fatalf("denial not logged:\n%s", r.log())
+	}
+	if _, err := os.Stat(filepath.Join(r.work, "blocked", "y")); err != nil {
+		t.Fatalf("the unhooked step didn't run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(r.work, "blocked", "x")); err == nil {
+		t.Fatal("the denied command ran")
 	}
 	if _, err := os.Stat(filepath.Join(r.work, "after")); err == nil {
 		t.Fatal("script went on after a denied command")

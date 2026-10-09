@@ -281,6 +281,8 @@ func (a *Agent) step(st Step) error {
 		return a.bash("rm -f -- " + shellQuote(st.Remove))
 	case st.Commit != "":
 		return a.bash("git add -A && git commit -q -m " + shellQuote(st.Commit))
+	case st.Run != "" && st.Unhooked:
+		return a.exec(st.Run)
 	case st.Run != "":
 		return a.bash(st.Run)
 	case st.Done != "":
@@ -320,9 +322,14 @@ func (a *Agent) bash(cmd string) error {
 	case "allow", "ask":
 		if c, _ := d.Specific.UpdatedInput["command"].(string); c != "" {
 			a.Log("rewritten", c)
-			cmd = c
+			return a.exec(c)
 		}
 	}
+	return a.exec(cmd)
+}
+
+// exec runs cmd in the worktree, then the PostToolUse hook for it.
+func (a *Agent) exec(cmd string) error {
 	c := exec.Command("sh", "-c", cmd)
 	c.Dir = a.Work
 	out, err := c.CombinedOutput()

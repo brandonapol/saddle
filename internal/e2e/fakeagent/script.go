@@ -1,7 +1,7 @@
 // Package fakeagent is a scripted stand-in for Claude Code in saddle's e2e
 // tests. Saddle launches it through the Claude adapter ([claude] cmd), with
 // the same arguments it gives claude. Like Claude Code it runs the hooks in
-// --settings (SessionStart, PreToolUse on writes, PostToolUse, Stop,
+// --settings (SessionStart, PreToolUse on writes and Bash, PostToolUse, Stop,
 // UserPromptSubmit, Notification) and talks to `saddle mcp`, so status,
 // claims and notices go through saddle's real paths.
 //
@@ -32,8 +32,12 @@ type Step struct {
 	Remove  string `json:"remove,omitempty"`
 	// Commit stages everything and commits with this message.
 	Commit string `json:"commit,omitempty"`
-	// Run runs a shell command in the worktree.
+	// Run runs a shell command in the worktree, as the PreToolUse hook
+	// allows or rewrites it.
 	Run string `json:"run,omitempty"`
+	// Unhooked runs Run without asking the PreToolUse hook, as an agent
+	// whose hooks don't run would.
+	Unhooked bool `json:"unhooked,omitempty"`
 	// Done calls `saddle done -s <Done>`.
 	Done string `json:"done,omitempty"`
 	// MCP calls a saddle MCP tool with Args.
