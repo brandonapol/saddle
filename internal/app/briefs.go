@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/lintgate"
 	"github.com/brandonapol/saddle/internal/store"
@@ -59,7 +60,7 @@ func gateRule(g lintgate.Gate) string {
 func (a *App) orchestratorBrief() string {
 	return a.orchestratorBriefFor(fmt.Sprintf(`# Saddle orchestrator
 
-You are the chat agent inside Saddle's TUI. The user talks to you in a sidebar while you run a team of %s agents working on this repo in parallel. You don't write code. You plan, launch, watch and land.
+You are the chat agent inside Saddle's TUI. The user talks to you in a sidebar while you run a team of coding agents (%s by default) working on this repo in parallel. You don't write code. You plan, launch, watch and land.
 
 The user cannot see the agents' terminals unless they go looking. You are their eyes: keep them informed in short messages, and tell them right away when something needs a human.
 
@@ -75,7 +76,7 @@ The user cannot see the agents' terminals unless they go looking. You are their 
 func (a *App) PluginBrief() string {
 	return a.orchestratorBriefFor(`# Saddle orchestrator
 
-You are orchestrating Saddle from the user's own Claude Code session. The user talks to you here while you run a team of `+a.harnessName()+` agents working on this repo in parallel, each in its own worktree and hidden tmux window. While orchestrating you don't write code yourself. You plan, launch, watch and land through the saddle MCP tools (spawn, status, peek, send_keys, message, land, prs, restack and the rest).
+You are orchestrating Saddle from the user's own `+a.harnessName()+` session. The user talks to you here while you run a team of coding agents (`+a.harnessName()+` by default) working on this repo in parallel, each in its own worktree and hidden tmux window. While orchestrating you don't write code yourself. You plan, launch, watch and land through the saddle MCP tools (spawn, status, peek, send_keys, message, land, prs, restack and the rest).
 
 The user cannot see the agents' terminals unless they go looking (`+"`tmux attach -t "+a.Cfg.Session+"`"+`). You are their eyes: keep them informed in short messages, and tell them right away when something needs a human.
 
@@ -98,6 +99,7 @@ func (a *App) orchestratorBriefFor(intro, waiting, talking string) string {
 - Directory moves, renames and big restructures are BARRIERS. Run one alone, land it, then start the work that depends on it.
 - Shared registries (route tables, wiring, lockfiles, migrations) belong to exactly one task. Serial files (%s) are owned by the merge train.
 - Default to %q for workers. Use a smaller model for small, mechanical tasks. Run at most %d at once; `+"`concurrency`"+` reads or changes that cap (saddle concurrency N), only when the owner asks. Lowering it stops nothing; spawn refuses until fewer run.
+`+a.workersBrief()+`
 - Give each task a self-contained prompt: goal, files, constraints, how to verify, which tests must exist, done-when. The agent sees only that prompt and the repo. Pass issue=<n> when a task implements an issue.
 - If spawn says it needs confirmation, every claim covers work that already landed or is queued. Tell the user why, and retry with confirm=true only if they agree.
 - Before spawning, show the plan in a few lines (task, model, claims, order) and wait for a go-ahead, unless the user already said to just go.
@@ -145,18 +147,42 @@ This session runs as a hierarchy. You are the lead: you plan, drive saddle and r
 }
 
 func (a *App) harnessName() string {
-	if a.Cfg.Harness == config.HarnessGrok {
+	switch a.Cfg.Harness {
+	case config.HarnessGrok:
 		return "Grok"
+	case config.HarnessCodex:
+		return "Codex"
 	}
 	return "Claude Code"
+}
+
+// workersBrief tells the orchestrator which adapters a worker can run on
+// (#182). It picks per task; saddle does not rank them.
+func (a *App) workersBrief() string {
+	var off []string
+	ss := a.adapterStatus()
+	for _, s := range ss {
+		if !s.OK {
+			off = append(off, fmt.Sprintf("%s (%s)", s.Name, s.Reason))
+		}
+	}
+	on := strings.Join(agent.Usable(ss), ", ")
+	if on == "" {
+		on = "none"
+	}
+	b := fmt.Sprintf("- Workers can run on any available adapter: pass adapter=<name> to spawn, picked for the task (code, review, a cheap mechanical edit, a model that still has quota). Spawns without one use %s. Available here: %s.", a.Cfg.Harness, on)
+	if len(off) > 0 {
+		b += " Not available: " + strings.Join(off, "; ") + "."
+	}
+	return b + " Claude and grok workers run saddle hooks, so their claims are enforced; codex and gemini have no hooks, so nothing enforces their claims."
 }
 
 func (a *App) workerDefaultName() string {
 	if m := a.workerModel(); m != "" {
 		return m
 	}
-	if a.Cfg.Harness == config.HarnessGrok {
-		return "grok's default"
+	if a.Cfg.Harness != config.HarnessClaude {
+		return a.Cfg.Harness + "'s default"
 	}
 	return "opus"
 }

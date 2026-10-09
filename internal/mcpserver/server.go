@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/automerge"
 	"github.com/brandonapol/saddle/internal/autopilot"
@@ -24,7 +25,7 @@ type SpawnIn struct {
 	Claims []string `json:"claims,omitempty" jsonschema:"repo-relative path globs this task owns, e.g. internal/meter/**; must not overlap other live tasks"`
 	Model  string   `json:"model,omitempty" jsonschema:"model for the adapter, e.g. claude's opus, sonnet or haiku; defaults to config for claude and to the CLI's default otherwise"`
 	// Adapter picks the agent CLI; see agent.ByName.
-	Adapter string `json:"adapter,omitempty" jsonschema:"agent to run: claude (default), codex (general-purpose) or grok (image generation, e.g. hero art). Codex and Grok have no saddle hooks, so their claims are advisory"`
+	Adapter string `json:"adapter,omitempty" jsonschema:"agent to run: claude, codex, gemini or grok, any one listed as available in the brief or status. Omitted means the session default (saddle up <agent>, else harness in config). Claude and grok run saddle hooks; codex and gemini claims are advisory. An unavailable adapter fails with the reason, never a substitute"`
 	ID      string `json:"id,omitempty" jsonschema:"optional task id; defaults to the next tN"`
 	Issue   int    `json:"issue,omitempty" jsonschema:"GitHub issue number this task implements; its PR will close it"`
 	// After becomes explicit stack edges; see app.SpawnReq.After.
@@ -103,7 +104,9 @@ type StatusOut struct {
 	// HeavyRuns is the machine's heavy-run queue (saddle run); absent while
 	// it is idle.
 	HeavyRuns *app.HeavyRuns `json:"heavy_runs,omitempty" jsonschema:"the machine's heavy-run queue per class: slots, holders (task, repo, cmd, age, overdue past max_run) and waiters (position, task, wait, eta); absent while idle"`
-	Tasks     []TaskView     `json:"tasks"`
+	// Adapters says which coding CLIs a worker can run on here (#182).
+	Adapters []agent.Status `json:"adapters" jsonschema:"each adapter (claude, codex, gemini, grok) and whether it can run here: CLI on PATH and logged in; reason when not"`
+	Tasks    []TaskView     `json:"tasks"`
 }
 
 // OrchContext is the orchestrator's context use against its compact threshold.
@@ -283,6 +286,7 @@ func Status(a *app.App) (StatusOut, error) {
 	} else if v.Busy() {
 		out.HeavyRuns = &v
 	}
+	out.Adapters = a.Adapters()
 	out.Tasks, err = Tasks(a)
 	return out, err
 }

@@ -165,7 +165,7 @@ func (e *autopilotEnv) Land() (int, error) {
 
 func (e *autopilotEnv) Spawn(r autopilot.SpawnReq) (string, error) {
 	model := r.Model
-	if e.a.Cfg.Harness == config.HarnessGrok {
+	if e.a.Cfg.Harness != config.HarnessClaude {
 		model = "" // model scope names Claude models
 	}
 	t, err := e.a.Spawn(SpawnReq{Title: r.Title, Prompt: r.Prompt, Claims: r.Claims, Model: model, Issue: r.Issue, After: r.After})

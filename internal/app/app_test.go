@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/lintgate"
 	"github.com/brandonapol/saddle/internal/refguard"
@@ -196,6 +197,14 @@ func setup(t *testing.T) (*App, *fakeTmux) {
 	ft := &fakeTmux{windows: map[string]bool{}, sent: map[string][]string{}, names: map[string]string{}}
 	a.Tmux = ft
 	a.Cfg.CloseOnLand = true
+	// Tests don't depend on which coding CLIs this machine has.
+	a.AdapterStatus = func() []agent.Status {
+		var out []agent.Status
+		for _, n := range agent.Names() {
+			out = append(out, agent.Status{Name: n, OK: true})
+		}
+		return out
+	}
 	return a, ft
 }
 

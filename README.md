@@ -27,7 +27,8 @@ make install          # puts saddle on your PATH
 cd your-repo
 saddle init           # asks if you trust the folder, then config, git exclude, ref guard hooks
 saddle doctor         # preflight checks, each with a fix
-saddle up             # opens the TUI
+saddle up             # opens the TUI (harness from config, default claude)
+saddle up grok        # or claude / codex, for this run only
 ```
 
 New to Saddle? [docs/QUICKSTART.md](docs/QUICKSTART.md) walks through
@@ -97,6 +98,15 @@ or `XAI_API_KEY`). Workers come up in a tmux window with saddle's hooks and
 MCP server installed in that worktree (gitignored). The chat on the right is
 one headless grok turn per message, resumed for the rest of the session.
 Leave the key unset, or set `harness = "claude"`, to keep Claude Code.
+`harness = "codex"` makes the Codex CLI the default worker (the chat stays
+on Claude Code for now). `saddle up claude|grok|codex [epic]` picks the
+harness for one run without touching config.
+
+Any orchestrator can still spawn a worker on any adapter that can run here
+(`claude`, `codex`, `gemini`, `grok`: CLI on `PATH` and signed in) by passing
+`adapter` to spawn; `saddle status` lists which are available. Claude and
+Grok workers run saddle's hooks, so their claims are enforced; Codex and
+Gemini claims are advisory.
 
 ### Under the hood
 

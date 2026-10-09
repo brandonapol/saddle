@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,29 +56,44 @@ func TestCodexLaunchWiresMCPAndBrief(t *testing.T) {
 	}
 }
 
-func TestGrokLaunchIsHeadlessAndTeesUsage(t *testing.T) {
-	l := Launch{Root: "/repo", Bin: "/bin/saddle", Task: "t6", Title: "hero art", Dir: "/repo/wt", Model: "grok-4",
-		Brief: "BRIEF", Prompt: "draw", RunDir: t.TempDir()}
+// #181: a grok spawn, with no grok harness configured, used to launch
+// --directory and --prompt, which the grok CLI rejects, and attached no
+// saddle MCP server. Every grok worker now runs the full harness.
+func TestGrokAdapterLaunchesTheHarness(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir)
+	l := Launch{Root: dir, Bin: "/bin/saddle", Task: "t6", Title: "meter", Dir: dir, Model: "grok-4",
+		Brief: "BRIEF", Prompt: "fix it", RunDir: t.TempDir()}
 	a, err := ByName("grok")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, script, prompt := launchScript(t, a, l)
-	for _, want := range []string{"'grok'", "--model 'grok-4'", "--directory '/repo/wt'", `--prompt "$(cat "$run/prompt.md")"`,
-		`tee -a "$run/transcript.jsonl"`} {
+	if !a.Hooks() {
+		t.Error("a grok worker runs saddle hook through its project hooks")
+	}
+	if got := a.Inject("1. [action] rebase"); got != WakeLine {
+		t.Errorf("grok gets notices from its hook, so inject only wakes it: %q", got)
+	}
+	_, script, _ := launchScript(t, a, l)
+	for _, bad := range []string{"--directory", "--prompt", "tee -a"} {
+		if strings.Contains(script, bad) {
+			t.Errorf("launch.sh uses %s, which grok rejects or which ends the session:\n%s", bad, script)
+		}
+	}
+	for _, want := range []string{"cd '" + dir + "'", "'--model' 'grok-4'", "'--permission-mode' 'bypassPermissions'", `args+=(-- "$(cat "$run/prompt.md")")`} {
 		if !strings.Contains(script, want) {
 			t.Errorf("launch.sh lacks %s:\n%s", want, script)
 		}
 	}
-	// Grok has no MCP server from saddle: it finishes through the CLI.
-	if !strings.Contains(prompt, "saddle done") {
-		t.Errorf("prompt.md lacks the CLI done step: %q", prompt)
+	mcp, err := os.ReadFile(filepath.Join(dir, ".grok", "config.toml"))
+	if err != nil || !strings.Contains(string(mcp), "[mcp_servers.saddle]") {
+		t.Errorf("no saddle MCP server for the worker: %s %v", mcp, err)
 	}
-	if got := a.Usage().Transcript(l.Dir, l.RunDir, ""); got != filepath.Join(l.RunDir, "transcript.jsonl") {
-		t.Errorf("transcript %q", got)
+	if _, err := os.Stat(filepath.Join(dir, ".grok", "hooks", "saddle.json")); err != nil {
+		t.Errorf("no saddle hooks: %v", err)
 	}
-	if Recorded(l.RunDir) != "grok" {
-		t.Error("grok not recorded")
+	if Recorded(l.RunDir) != "grok" || !GrokHarnessOn(l.RunDir) {
+		t.Error("grok worker not recorded as the harness")
 	}
 }
 
@@ -124,5 +140,59 @@ func TestCodexTranscriptIsNewestRolloutForWorktree(t *testing.T) {
 	writeRollout(t, filepath.Join(day, "rollout-c.jsonl"), "/repo/other", now.Add(time.Minute))
 	if got := c.Usage().Transcript("/repo/wt", "", ""); got != mine {
 		t.Errorf("got %q want %q", got, mine)
+	}
+}
+
+// #182: gemini launches interactively in the worktree with the saddle MCP
+// server from a run-dir system settings file, so nothing lands in the repo.
+func TestGeminiLaunchWiresMCPAndBrief(t *testing.T) {
+	l := Launch{Root: "/repo", Bin: "/bin/saddle", Task: "t7", Title: "x", Dir: "/repo/wt", Model: "gemini-2.5-pro",
+		Mode: "acceptEdits", Brief: "BRIEF", Prompt: "PROMPT", RunDir: t.TempDir(), Args: []string{"--sandbox"}}
+	a, err := ByName("gemini")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Hooks() {
+		t.Fatal("gemini runs no saddle hooks")
+	}
+	_, script, prompt := launchScript(t, a, l)
+	for _, want := range []string{"'gemini'", "--model 'gemini-2.5-pro'", "--approval-mode 'auto_edit'", "--skip-trust",
+		"'--sandbox'", `-i "$(cat "$run/prompt.md")"`, `export GEMINI_CLI_SYSTEM_SETTINGS_PATH="$run/gemini-settings.json"`,
+		"cd '/repo/wt'", "'/bin/saddle' exited 't7'"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("launch.sh lacks %s:\n%s", want, script)
+		}
+	}
+	if !strings.HasPrefix(prompt, "BRIEF") || !strings.HasSuffix(prompt, "PROMPT") || !strings.Contains(prompt, "advisory") {
+		t.Errorf("prompt.md = %q", prompt)
+	}
+	b, err := os.ReadFile(filepath.Join(l.RunDir, "gemini-settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings struct {
+		MCPServers map[string]struct {
+			Command string            `json:"command"`
+			Args    []string          `json:"args"`
+			Env     map[string]string `json:"env"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(b, &settings); err != nil {
+		t.Fatal(err)
+	}
+	s := settings.MCPServers["saddle"]
+	if s.Command != "/bin/saddle" || len(s.Args) != 1 || s.Args[0] != "mcp" || s.Env["SADDLE_TASK"] != "t7" || s.Env["SADDLE_ROOT"] != "/repo" {
+		t.Errorf("saddle MCP server = %+v", s)
+	}
+	if Recorded(l.RunDir) != "gemini" {
+		t.Error("gemini not recorded")
+	}
+}
+
+func TestGeminiApprovalMode(t *testing.T) {
+	for mode, want := range map[string]string{"": "yolo", "bypassPermissions": "yolo", "acceptEdits": "auto_edit", "plan": "plan", "default": "default"} {
+		if got := geminiApproval(mode); got != want {
+			t.Errorf("geminiApproval(%q) = %q, want %q", mode, got, want)
+		}
 	}
 }

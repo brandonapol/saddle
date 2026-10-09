@@ -29,6 +29,9 @@ type App struct {
 	Store *store.Store
 	Tmux  tmux.Driver
 	Bin   string
+	// AdapterStatus lists which adapters can run here (#182); nil means
+	// agent.Availability with the configured commands.
+	AdapterStatus func() []agent.Status
 
 	wake wakeState // idle notice wake-ups (#183)
 }
@@ -191,14 +194,22 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if strings.TrimSpace(r.Title) == "" {
 		return t, errors.New("spawn: title is required")
 	}
-	if r.Adapter == "" && a.Cfg.Harness == config.HarnessGrok {
-		r.Adapter = usage.Grok
+	// Availability is checked for a chosen adapter, or a session default
+	// other than claude; the plain claude default spawns as it always has.
+	checkAvail := r.Adapter != "" || a.Cfg.Harness != config.HarnessClaude
+	if r.Adapter == "" {
+		r.Adapter = a.Cfg.Harness // the session default (#150); claude when unset
 	}
 	ad, err := agent.ByName(r.Adapter)
 	if err != nil {
 		return t, err
 	}
 	if !r.Force {
+		if checkAvail {
+			if err := a.checkAdapter(ad.Name()); err != nil {
+				return t, err
+			}
+		}
 		n, err := a.activeWorkers()
 		if err != nil {
 			return t, err
@@ -258,7 +269,7 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	}
 	model := r.Model
 	if model == "" {
-		if a.Cfg.Harness == config.HarnessGrok && ad.Name() == usage.Grok {
+		if ad.Name() == usage.Grok {
 			model = a.Cfg.Grok.Model
 		} else if ad.Name() == usage.Claude {
 			model = a.Cfg.Claude.Model
@@ -380,9 +391,9 @@ func (a *App) start(t store.Task, cl []string, ad agent.Adapter, resume, prompt 
 		Mode: a.Cfg.Claude.PermissionMode, Cmd: cmdName, Args: args, RunDir: a.stateDir("run", t.ID),
 		Brief: a.workerBrief(t, cl), Prompt: prompt, Resume: resume, ShimDir: a.WriteShims(),
 	}
-	// harness = "grok" runs the full Grok CLI (hooks, MCP, tmux), not the
-	// one-shot image adapter. [adapters.grok] cmd and args still apply.
-	if a.Cfg.Harness == config.HarnessGrok && ad.Name() == usage.Grok {
+	// Grok workers run the full Grok CLI harness (hooks, MCP, tmux) with the
+	// [grok] settings (#181). [adapters.grok] cmd and args still apply.
+	if ad.Name() == usage.Grok {
 		l.Kind = agent.KindGrok
 		if l.Cmd == "" {
 			l.Cmd = a.Cfg.Grok.Cmd
@@ -440,7 +451,13 @@ func (a *App) Orchestrator() (agent.Launch, string, error) {
 	if err := a.applyAdvisor(&l); err != nil {
 		return agent.Launch{}, "", err
 	}
-	return l, t.SessionID, nil
+	// A session started on another agent can't be resumed here (#150). Its
+	// id stays stored until the new session reports its own.
+	resume := t.SessionID
+	if agent.Recorded(l.RunDir) != a.orchestratorAgent() {
+		resume = ""
+	}
+	return l, resume, nil
 }
 
 // newLaunch fills the CLI-specific fields from config. Workers pass nil allow
@@ -467,8 +484,11 @@ func (a *App) newLaunch(t store.Task, dir, model, brief, prompt string, allow, d
 }
 
 func (a *App) workerModel() string {
-	if a.Cfg.Harness == config.HarnessGrok {
+	switch a.Cfg.Harness {
+	case config.HarnessGrok:
 		return a.Cfg.Grok.Model
+	case config.HarnessCodex:
+		return "" // codex's own default
 	}
 	return a.Cfg.Claude.Model
 }

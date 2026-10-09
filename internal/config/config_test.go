@@ -239,10 +239,40 @@ orchestrator_model = "grok-4.5"
 
 func TestHarnessUnknown(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv(HarnessEnv, "")
+	root := t.TempDir()
+	writeConfig(t, root, "harness = \"cursor\"\n")
+	if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "harness") || !strings.Contains(err.Error(), "codex") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// #150: codex is a harness like claude and grok.
+func TestHarnessCodex(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv(HarnessEnv, "")
 	root := t.TempDir()
 	writeConfig(t, root, "harness = \"codex\"\n")
-	if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "harness") {
-		t.Fatalf("err = %v", err)
+	cfg, err := Load(root)
+	if err != nil || cfg.Harness != HarnessCodex {
+		t.Fatalf("harness = %q, err = %v", cfg.Harness, err)
+	}
+}
+
+// #150: saddle up <agent> sets SADDLE_HARNESS for its process tree, which
+// wins over the config file without rewriting it.
+func TestHarnessEnvOverridesConfig(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	writeConfig(t, root, "harness = \"claude\"\n")
+	t.Setenv(HarnessEnv, "grok")
+	cfg, err := Load(root)
+	if err != nil || cfg.Harness != HarnessGrok {
+		t.Fatalf("harness = %q, err = %v", cfg.Harness, err)
+	}
+	t.Setenv(HarnessEnv, "cursor")
+	if _, err := Load(root); err == nil || !strings.Contains(err.Error(), HarnessEnv) {
+		t.Fatalf("bad env harness: err = %v", err)
 	}
 }
 
