@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -44,11 +45,14 @@ func backedUp(t *testing.T, db string, n, prio int) (drain func()) {
 			t.Fatalf("waiters never queued: %+v %v", st, err)
 		}
 	}
+	var once sync.Once
 	drop := func() {
-		stop()
-		for range n {
-			<-done
-		}
+		once.Do(func() {
+			stop()
+			for range n {
+				<-done
+			}
+		})
 	}
 	t.Cleanup(func() { drop(); _ = holder.Release() })
 	return drop
