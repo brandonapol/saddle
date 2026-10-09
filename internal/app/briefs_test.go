@@ -173,3 +173,14 @@ func TestOrchestratorBriefAdvisorOn(t *testing.T) {
 		}
 	}
 }
+
+// #334: both orchestrator briefs point at the glossary for saddle's terms.
+func TestOrchestratorBriefsLinkGlossary(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	for name, brief := range map[string]string{"tui": a.orchestratorBrief(), "plugin": a.PluginBrief()} {
+		if !strings.Contains(brief, GlossaryURL) {
+			t.Errorf("%s brief does not link the glossary %s", name, GlossaryURL)
+		}
+	}
+}
