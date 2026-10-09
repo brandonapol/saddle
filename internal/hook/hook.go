@@ -21,6 +21,7 @@ type Input struct {
 	ToolInput      map[string]any `json:"tool_input"`
 	Message        string         `json:"message"`
 	StopHookActive bool           `json:"stop_hook_active"`
+	PermissionMode string         `json:"permission_mode"`
 	// Grok is set when the payload came from the Grok CLI (camelCase keys).
 	Grok bool `json:"-"`
 }
@@ -30,6 +31,9 @@ type specific struct {
 	PermissionDecision       string `json:"permissionDecision,omitempty"`
 	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
 	AdditionalContext        string `json:"additionalContext,omitempty"`
+	// UpdatedInput replaces the tool's input (PreToolUse); Claude Code
+	// applies it only with an allow or ask decision.
+	UpdatedInput map[string]any `json:"updatedInput,omitempty"`
 }
 
 type Output struct {
@@ -52,6 +56,9 @@ func Handle(a *app.App, task string, in Input) *Output {
 			if why := BypassesHooks(cmd); why != "" {
 				st.Event(task, "no_verify_denied", cmd)
 				return deny(in, RuleNoVerify, why+". The repo's gate must pass: fix what it reports (run its fixer if it has one), then commit normally. done runs the same check.")
+			}
+			if out := heavyBash(a, task, in); out != nil {
+				return out
 			}
 		}
 		p := filePath(in.ToolInput)
@@ -169,6 +176,8 @@ type inputWire struct {
 	NoticeType     string         `json:"notificationType"`
 	StopSnake      bool           `json:"stop_hook_active"`
 	StopCamel      bool           `json:"stopHookActive"`
+	ModeSnake      string         `json:"permission_mode"`
+	ModeCamel      string         `json:"permissionMode"`
 }
 
 func decodeInput(b []byte) (Input, error) {
@@ -183,6 +192,7 @@ func decodeInput(b []byte) (Input, error) {
 		ToolInput:      w.InputSnake,
 		Message:        w.Message,
 		StopHookActive: w.StopSnake || w.StopCamel,
+		PermissionMode: first(w.ModeSnake, w.ModeCamel),
 		Grok:           w.EventCamel != "" || w.SessionIDCamel != "" || w.ToolCamel != "",
 	}
 	if in.ToolInput == nil {

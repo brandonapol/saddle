@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/brandonapol/saddle/internal/doctor"
 	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/runq"
 	"github.com/spf13/cobra"
 )
 
@@ -37,7 +40,8 @@ warnings alone exit zero.`,
 					return fmt.Errorf("not in a git repo: %w", err)
 				}
 			}
-			return reportDoctor(cmd.OutOrStdout(), doctor.Run(doctor.WithSkillsProbe(root)), asJSON)
+			rs := append(doctor.Run(doctor.WithSkillsProbe(root)), shimCheck(filepath.Join(root, ".saddle", "shims"), os.Getenv))
+			return reportDoctor(cmd.OutOrStdout(), rs, asJSON)
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
@@ -58,4 +62,23 @@ func reportDoctor(out io.Writer, rs []doctor.Result, asJSON bool) error {
 		return errors.New("saddle doctor found failing checks")
 	}
 	return nil
+}
+
+// shimCheck (#240) checks the heavy-run shims agents get on PATH: each finds
+// its real tool, and none is shadowed. Inside an agent pane (SADDLE_TASK
+// set) it checks the pane's own PATH; elsewhere the PATH a pane would get.
+func shimCheck(dir string, getenv func(string) string) doctor.Result {
+	const name = "runq shims"
+	if _, err := os.Stat(filepath.Join(dir, runq.ShimMarker)); err != nil {
+		return doctor.Result{Name: name, Status: doctor.OK, Detail: "none yet; saddle writes them when it spawns an agent"}
+	}
+	path := getenv("PATH")
+	if getenv("SADDLE_TASK") == "" {
+		path = dir + string(os.PathListSeparator) + path
+	}
+	if ps := runq.CheckShims(dir, path); len(ps) > 0 {
+		return doctor.Result{Name: name, Status: doctor.Warn, Detail: strings.Join(ps, "; "),
+			Fix: "agents' panes need " + dir + " first on PATH; respawn the agent, or set SADDLE_RUNQ=off to skip the queue"}
+	}
+	return doctor.Result{Name: name, Status: doctor.OK, Detail: dir + " resolves every shimmed tool"}
 }
