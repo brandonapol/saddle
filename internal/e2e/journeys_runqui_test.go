@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/runq"
 )
 
 // heavyRunsOf decodes the heavy_runs of saddle status --json or the MCP
@@ -27,8 +28,8 @@ func heavyRunsOf(t *testing.T, js string) *app.HeavyRuns {
 }
 
 // checkHeavyPositions fails unless go-test has t83 holding (overdue) and
-// otherrepo/t84 then t85 waiting at positions 1 and 2.
-func checkHeavyPositions(t *testing.T, where string, v *app.HeavyRuns) {
+// <otherLabel>/t84 then t85 waiting at positions 1 and 2.
+func checkHeavyPositions(t *testing.T, where, otherLabel string, v *app.HeavyRuns) {
 	t.Helper()
 	if v == nil || len(v.Classes) != 1 {
 		t.Fatalf("%s: heavy_runs %+v", where, v)
@@ -38,7 +39,7 @@ func checkHeavyPositions(t *testing.T, where string, v *app.HeavyRuns) {
 		t.Fatalf("%s: class %+v", where, c)
 	}
 	h, w1, w2 := c.Holders[0], c.Waiters[0], c.Waiters[1]
-	if h.Who(v.Repo) != "t83" || !h.Overdue || w1.Position != 1 || w1.Who(v.Repo) != "otherrepo/t84" || w2.Position != 2 || w2.Who(v.Repo) != "t85" {
+	if h.Who(v.Repo) != "t83" || !h.Overdue || w1.Position != 1 || w1.Who(v.Repo) != otherLabel+"/t84" || w2.Position != 2 || w2.Who(v.Repo) != "t85" {
 		t.Fatalf("%s: holder %+v, waiters %+v %+v", where, h, w1, w2)
 	}
 }
@@ -56,6 +57,7 @@ func TestJourneyHeavyRunsQueueVisible(t *testing.T) {
 	must(t, os.WriteFile(filepath.Join(w.Repo, ".saddle", "runq.toml"),
 		[]byte("[classes.go-test]\nslots = 1\nmax_run = \"1s\"\n"), 0o644))
 	other := filepath.Join(t.TempDir(), "otherrepo")
+	otherLabel := runq.RepoLabel(other)
 	must(t, os.MkdirAll(filepath.Join(other, ".saddle"), 0o755))
 	must(t, os.WriteFile(filepath.Join(other, ".saddle", "config.toml"), nil, 0o644))
 
@@ -87,18 +89,18 @@ func TestJourneyHeavyRunsQueueVisible(t *testing.T) {
 	if !ok {
 		t.Fatalf("saddle status has no Heavy runs section:\n%s", text)
 	}
-	for _, want := range []string{"go-test: 1/1 slots busy, 2 waiting", "▸ t83", "#1 otherrepo/t84", "#2 t85"} {
+	for _, want := range []string{"go-test: 1/1 slots busy, 2 waiting", "▸ t83", "#1 " + otherLabel + "/t84", "#2 t85"} {
 		if !strings.Contains(sect, want) {
 			t.Fatalf("saddle status lacks %q:\n%s", want, text)
 		}
 	}
-	checkHeavyPositions(t, "saddle status --json", heavyRunsOf(t, w.MustSaddle("status", "--json").Stdout))
-	checkHeavyPositions(t, "mcp status", heavyRunsOf(t, w.MustMCP("t0", "status", nil)))
+	checkHeavyPositions(t, "saddle status --json", otherLabel, heavyRunsOf(t, w.MustSaddle("status", "--json").Stdout))
+	checkHeavyPositions(t, "mcp status", otherLabel, heavyRunsOf(t, w.MustMCP("t0", "status", nil)))
 
 	u := w.StartTUI(160, 40)
 	u.WaitScreen("go-test ▸t83", "· 2 waiting")
 	u.Keys("M-4")
-	u.WaitScreen("HEAVY RUNS · enforce", "▸ t83", "#1 otherrepo/t84", "#2 t85")
+	u.WaitScreen("HEAVY RUNS · enforce", "▸ t83", "#1 "+otherLabel+"/t84", "#2 t85")
 	if err := u.Fits(160); err != nil {
 		t.Fatal(err)
 	}
