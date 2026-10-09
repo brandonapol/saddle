@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
 )
 
 // TestJourneyFirstUpSetsUpTheRepo (#163): in a fresh repo with gh, tmux and
