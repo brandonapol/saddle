@@ -262,35 +262,35 @@ Tests: `internal/remote/*_test.go`. The acceptance test is
 
 ## Follow-up tickets
 
-1. **Server and transport hardening.** Run `serve` under the engine and
+1. **Server and transport hardening.** (#308) Run `serve` under the engine and
    `saddle up` with a lifecycle and lock. Add the ssh forced-command `stdio`
    mode and an optional TLS plus `allow_public` gate. **Model scope: Opus.**
    Security-sensitive lifecycle and transport work.
-2. **Auth, scopes and audit, finished.** Add a per-token repo allowlist, a
+2. **Auth, scopes and audit, finished.** (#309) Add a per-token repo allowlist, a
    confirmation round trip for `admin` tools, audit rotation, and
    `saddle remote audit`. **Model scope: Opus.** Permission design.
-3. **Snapshot and needs-you queue.** Add item ids, parsed answer options,
+3. **Snapshot and needs-you queue.** (#310) Add item ids, parsed answer options,
    usage and limits, a stacks graph, and `peek` with secret scrubbing.
    **Model scope: Opus.** Prompt parsing and scrubbing need judgment.
-4. **Push.** Add the `wait_needs_you` long-poll and a `[remote.push]` ntfy or
+4. **Push.** (#311) Add the `wait_needs_you` long-poll and a `[remote.push]` ntfy or
    webhook for interrupt-class notices only. **Model scope: Opus.** Ties
    into the #222 notice policy.
-5. **Multi-repo addressing.** Serve `/mcp/<repo>` from one listener, with a
+5. **Multi-repo addressing.** (#312) Serve `/mcp/<repo>` from one listener, with a
    trusted-repo list. **Model scope: Opus.** Routing and trust interplay.
-6. **Remote-safe action semantics.** Add explicit targets, `if_version`
+6. **Remote-safe action semantics.** (#313) Add explicit targets, `if_version`
    optimistic checks and idempotent verbs for every `act` and `land` tool,
    then serve them remotely. **Model scope: Opus.** This is the #209 race
    class.
-7. **TUI indicator of connected controllers.** Show token names seen recently
+7. **TUI indicator of connected controllers.** (#314) Show token names seen recently
    in the header, and remote events in the log view. **Model scope: Sonnet.**
    A small UI read of existing events.
-8. **Doctor check.** Report what is exposed: enabled or not, the listen
+8. **Doctor check.** (#315) Report what is exposed: enabled or not, the listen
    address, live tokens and their scopes, and warn on loose file modes or
    long TTLs. **Model scope: Sonnet.** A mechanical check over existing
    functions.
-9. **Panic pause.** `saddle remote pause|resume` and the `pause` tool.
+9. **Panic pause.** (#316) `saddle remote pause|resume` and the `pause` tool.
    **Model scope: Opus.** It touches automerge, autopilot and the action
    path.
-10. **e2e journeys.** Two controllers racing, a revoked token, panic pause,
+10. **e2e journeys.** (#317) Two controllers racing, a revoked token, panic pause,
     and a read token denied land, all over a real listener. **Model scope:
     Opus.** Multi-process e2e.
