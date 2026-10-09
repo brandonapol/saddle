@@ -161,9 +161,10 @@ type hookOut struct {
 	Decision string `json:"decision"`
 	Reason   string `json:"reason"`
 	Specific struct {
-		PermissionDecision       string `json:"permissionDecision"`
-		PermissionDecisionReason string `json:"permissionDecisionReason"`
-		AdditionalContext        string `json:"additionalContext"`
+		PermissionDecision       string         `json:"permissionDecision"`
+		PermissionDecisionReason string         `json:"permissionDecisionReason"`
+		AdditionalContext        string         `json:"additionalContext"`
+		UpdatedInput             map[string]any `json:"updatedInput"`
 	} `json:"hookSpecificOutput"`
 }
 
@@ -307,9 +308,21 @@ func (a *Agent) saddle() string {
 	return "saddle"
 }
 
-// bash runs cmd in the worktree as Claude's Bash tool would, then the
-// PostToolUse hook.
+// bash runs cmd in the worktree as Claude's Bash tool would: the PreToolUse
+// hook may deny it or, with allow, hand back a rewritten command (saddle
+// routes heavy runs through its queue that way). Then the PostToolUse hook.
 func (a *Agent) bash(cmd string) error {
+	d := a.hook("PreToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": cmd}})
+	switch d.Specific.PermissionDecision {
+	case "deny":
+		a.Log("denied", d.Specific.PermissionDecisionReason)
+		return errors.New("command denied: " + d.Specific.PermissionDecisionReason)
+	case "allow", "ask":
+		if c, _ := d.Specific.UpdatedInput["command"].(string); c != "" {
+			a.Log("rewritten", c)
+			cmd = c
+		}
+	}
 	c := exec.Command("sh", "-c", cmd)
 	c.Dir = a.Work
 	out, err := c.CombinedOutput()

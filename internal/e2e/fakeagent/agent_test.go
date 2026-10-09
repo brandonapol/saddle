@@ -14,13 +14,15 @@ import (
 )
 
 // hookScript answers like saddle's hook: it logs each payload, denies writes
-// under blocked/, adds context to UserPromptSubmit and blocks the first Stop
+// and commands under blocked/, rewrites the Bash command "heavy" as saddle
+// routes heavy runs through its queue, adds context to UserPromptSubmit and blocks the first Stop
 // once with a notice.
 const hookScript = `#!/bin/sh
 in=$(cat)
 printf '%s\n' "$in" >> "$LOGDIR/hooks.jsonl"
 case "$in" in
   *'"PreToolUse"'*blocked/*) echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"[saddle] t9 owns blocked/"}}' ;;
+  *'"PreToolUse"'*'"command":"heavy"'*) echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"echo queued heavy > ran.txt"}}}' ;;
   *'"UserPromptSubmit"'*) echo '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"[saddle] notice: rebase please"}}' ;;
   *'"Stop"'*) if [ ! -e "$LOGDIR/stopped" ]; then touch "$LOGDIR/stopped"; echo '{"decision":"block","reason":"[saddle] pending: land failed"}'; fi ;;
 esac
@@ -151,7 +153,7 @@ func TestWritesCommitsAndCallsDone(t *testing.T) {
 		t.Fatalf("saddle calls = %q", calls)
 	}
 	evs := strings.Join(r.hookEvents(), ",")
-	if !strings.HasPrefix(evs, "SessionStart,PreToolUse,PostToolUse,PostToolUse,PostToolUse") {
+	if !strings.HasPrefix(evs, "SessionStart,PreToolUse,PostToolUse,PreToolUse,PostToolUse,PreToolUse,PostToolUse") {
 		t.Fatalf("hook events = %s", evs)
 	}
 	if !strings.Contains(r.log(), "prompt: do the thing") {
@@ -170,6 +172,23 @@ func TestDeniedWriteStopsScript(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(r.work, "after")); err == nil {
 		t.Fatal("script went on after a failed step")
+	}
+}
+
+// TestBashRunsThroughPreToolUse: as in Claude Code, a Bash step runs the
+// command the PreToolUse hook hands back in updatedInput, and a denied one
+// doesn't run at all.
+func TestBashRunsThroughPreToolUse(t *testing.T) {
+	r := newRig(t, Script{Steps: []Step{Run("heavy"), Run("touch blocked/x"), Write("after", "x")}})
+	r.waitLog("stuck:")
+	if got := sh(t, r.work, "cat ran.txt"); got != "queued heavy" {
+		t.Fatalf("ran.txt = %q, want the rewritten command's output", got)
+	}
+	if !strings.Contains(r.log(), "denied: [saddle] t9 owns blocked/") {
+		t.Fatalf("denial not logged:\n%s", r.log())
+	}
+	if _, err := os.Stat(filepath.Join(r.work, "after")); err == nil {
+		t.Fatal("script went on after a denied command")
 	}
 }
 
