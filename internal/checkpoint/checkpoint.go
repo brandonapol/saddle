@@ -157,6 +157,16 @@ func Prune(root, task string) error {
 	return err
 }
 
+// dirtyFiles lists dir's changed files, each file in a new directory on
+// its own line.
+func dirtyFiles(dir string) ([]string, error) {
+	out, err := gitx.Run(dir, "status", "--porcelain", "--untracked-files=all")
+	if err != nil || out == "" {
+		return nil, err
+	}
+	return strings.Split(out, "\n"), nil
+}
+
 // Target is a worktree the watcher checkpoints.
 type Target struct{ Task, Worktree string }
 
@@ -258,7 +268,7 @@ func (w *Watcher) tick(t Target) {
 	if head != st.head {
 		st.head, st.dirtySince, st.nudged = head, time.Time{}, false
 	}
-	dirty, err := gitx.Dirty(t.Worktree)
+	dirty, err := dirtyFiles(t.Worktree)
 	if err != nil {
 		w.host.Event(t.Task, "checkpoint_error", err.Error())
 		return

@@ -241,3 +241,21 @@ func TestWatcherForgetsTasksThatLeave(t *testing.T) {
 		t.Fatalf("state kept for a task that left: %v", w.state)
 	}
 }
+
+// Untracked files in a new directory count one by one, not as the one
+// "?? dir/" line git status shows by default.
+func TestWatcherCountsFilesInsideNewDirectories(t *testing.T) {
+	root, wt := repo(t)
+	h := &fakeHost{targets: []Target{{Task: "t1", Worktree: wt}}}
+	w := NewWatcher(root, h, Policy{NudgeFiles: 3})
+	if err := os.Mkdir(filepath.Join(wt, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"x", "y", "z"} {
+		write(t, wt, "pkg/"+f+".txt", f+"\n")
+	}
+	w.Tick()
+	if len(h.nudges) != 1 {
+		t.Fatalf("three new files in pkg/: nudges = %v", h.nudges)
+	}
+}
