@@ -14,18 +14,6 @@ import (
 	"github.com/brandonapol/saddle/internal/store"
 )
 
-// Every gate takes a heavy-run lease (#239). Point this package's tests at a
-// private queue so they never touch the machine's, and drop any lease the
-// test binary inherited from a gate it runs under. Tests that look at the
-// queue set their own with heavyTest.
-func init() {
-	dir, err := os.MkdirTemp("", "saddle-app-runq-")
-	if err == nil {
-		_ = os.Setenv(runq.EnvPath, filepath.Join(dir, "runq.db"))
-	}
-	_ = os.Unsetenv(runq.EnvLease)
-}
-
 func TestGateClass(t *testing.T) {
 	t.Parallel()
 	cfg := runq.Config{Classes: map[string]runq.ClassConfig{
