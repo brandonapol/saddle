@@ -129,6 +129,7 @@ func (h Heavy) Run(ctx context.Context, o HeavyOpts, cmd *exec.Cmd) (runq.Result
 	res, err := q.RunWith(ctx, runq.RunOptions{
 		Class:   o.Class,
 		Prio:    o.Prio,
+		Repo:    repoName(h.Root),
 		Status:  o.Status,
 		WaitMax: wait,
 		Signals: o.Signals,

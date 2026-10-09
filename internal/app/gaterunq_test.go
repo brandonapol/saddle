@@ -194,7 +194,7 @@ func TestRunGateEnvExportsLease(t *testing.T) {
 	if nested == nil || !nested.Nested() {
 		t.Fatal("the nested request didn't ride the gate's lease")
 	}
-	if len(holders) != 1 || holders[0].Label != "t1" || holders[0].Prio < runq.PrioGate {
+	if len(holders) != 1 || holders[0].Label != "t1" || holders[0].Repo != filepath.Base(a.Root) || holders[0].Prio < runq.PrioGate {
 		t.Fatalf("go-test holders while the gate ran: %+v", holders)
 	}
 	st, err := q.Status()
