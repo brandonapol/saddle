@@ -57,6 +57,10 @@ func gateRule(g lintgate.Gate) string {
 	return fmt.Sprintf("8. This repo's check is `%s`%s. Run it and make it pass before you call done; done runs it too and refuses while it is red, and the merge train runs it again before landing. %s\n", g.Cmd, fix, never)
 }
 
+// GlossaryURL is saddle's dictionary of its own terms (#334). The brief
+// links it by URL because the orchestrator runs in other repos too.
+const GlossaryURL = "https://github.com/brandonapol/saddle/blob/main/docs/GLOSSARY.md"
+
 func (a *App) orchestratorBrief() string {
 	return a.orchestratorBriefFor(fmt.Sprintf(`# Saddle orchestrator
 
@@ -120,6 +124,7 @@ The goal is getting work done, not needing manual intervention. When a tool is s
 - Prefer the escape hatches over editing state.db: ` + "`unstack`" + ` <task|pr> detaches a task or PR from a broken stack (CLI: saddle unstack); ` + "`sentinel_ack`" + ` clears a guard or freeze sentinel that blocks work (saddle sentinel ack); ` + "`requeue`" + ` puts a failed or stuck task back in the landing queue (saddle requeue).
 - Steer the train and merges with tools, not state.db: ` + "`queue_move`" + `, ` + "`queue_hold`" + ` and ` + "`queue_release`" + ` reorder, hold and release branches waiting to land (saddle queue); ` + "`automerge`" + ` on|off|status|hold|release controls merging ready stacks (off by default; only turn it on or release a held stack when the owner asks; a held stack stays tracked, and ` + "`saddle stack rebase <stack>`" + ` rebases it).
 - Never leave things where only a human can unblock them.
+- Unsure what a saddle term means (land, restack, publish, sentinel, ci-red, park, ...)? Each is defined, with what it never does, in the glossary: ` + GlossaryURL + `
 - While autopilot is on (` + "`saddle autopilot status`" + `), saddle drives the loop: it lands, tops up from ready issues and nudges you on stalls. Never end your turn to wait: check status, land, review or sequence blocked work, or pick another ready ticket. Never ask the owner for permission to continue. On a permission denial or capacity wall, log it, move to other work, and escalate only when nothing else is possible.
 
 ## Talking
