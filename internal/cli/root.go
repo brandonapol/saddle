@@ -204,7 +204,7 @@ keep the CLI they were spawned with.
 // startWatchers starts the background loops that live as long as saddle up:
 // the stack sentinel, the auto-merge watcher (which merges nothing unless
 // on), the orchestrator compact watcher, the notice digest, the resume
-// watcher and, unless ci.disabled, the CI and
+// watcher, the checkpoint watcher and, unless ci.disabled, the CI and
 // ci-red watchers. Short-lived commands never
 // start them. The returned func stops them and waits until they have.
 func startWatchers(ctx context.Context, a *app.App) (stop func()) {
@@ -218,6 +218,7 @@ func startWatchers(ctx context.Context, a *app.App) (stop func()) {
 	wg.Go(func() { a.RunDigest(ctx) })                   // routine notices as one digest line; failures are events
 	wg.Go(func() { a.RunResumeWatcher(ctx) })            // new windows for tasks that lost theirs (#254); failures are events
 	wg.Go(func() { _ = a.NewAutopilot(nil).Run(ctx) })   // drives the loop only while autopilot is on; failures are events
+	wg.Go(func() { a.NewCheckpointWatcher().Run(ctx) })  // checkpoints uncommitted work and nudges commits (#50); failures are events
 	if !a.Cfg.CI.Disabled {
 		wg.Go(func() { _ = sentinel.NewCIRed(a).Run(ctx) }) // holds layers above red CI; errors are events
 		if ci, err := a.NewCIWatcher(ciwatch.ExecRunner(a.Root)); err == nil {

@@ -726,6 +726,7 @@ func (a *App) Kill(task string, keep bool) error {
 	}
 	if t.Role == store.RoleWorker {
 		a.snapshotWIP(t.ID, t.Worktree)
+		a.pruneCheckpoint(t.ID) // the wip snapshot holds the latest work (#50)
 	}
 	// Dead before its window goes, so the resume watcher won't bring it back.
 	// The ref guard won't delete a live task's branch either.
