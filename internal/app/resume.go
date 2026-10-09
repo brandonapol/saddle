@@ -1,16 +1,15 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/checkpoint"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
@@ -297,42 +296,7 @@ func (a *App) Pause() ([]string, error) {
 // snapshotCommit commits everything in dir's worktree, untracked files
 // included, on top of HEAD without touching the worktree, its index or its
 // branch. It returns "" when there is nothing uncommitted.
-func snapshotCommit(dir, msg string) (string, error) {
-	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-		return "", nil
-	}
-	dirty, err := gitx.Dirty(dir)
-	if err != nil || len(dirty) == 0 {
-		return "", err
-	}
-	tmp, err := os.MkdirTemp("", "saddle-snapshot")
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = os.RemoveAll(tmp) }()
-	env := append(os.Environ(), "GIT_INDEX_FILE="+filepath.Join(tmp, "index"))
-	g := func(args ...string) (string, error) {
-		cmd := exec.Command("git", append([]string{"-c", "user.name=saddle", "-c", "user.email=saddle@localhost"}, args...)...)
-		cmd.Dir, cmd.Env = dir, env
-		var out, errb bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &out, &errb
-		if err := cmd.Run(); err != nil {
-			return "", fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(errb.String()))
-		}
-		return strings.TrimSpace(out.String()), nil
-	}
-	if _, err := g("read-tree", "HEAD"); err != nil {
-		return "", err
-	}
-	if _, err := g("add", "-A"); err != nil {
-		return "", err
-	}
-	tree, err := g("write-tree")
-	if err != nil {
-		return "", err
-	}
-	return g("commit-tree", tree, "-p", "HEAD", "-m", msg)
-}
+func snapshotCommit(dir, msg string) (string, error) { return checkpoint.Commit(dir, msg) }
 
 // wipRef is where a task's uncommitted work is snapshotted before kill, gc
 // and down (#50).
