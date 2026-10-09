@@ -153,3 +153,32 @@ func TestStatusShowsOrphans(t *testing.T) {
 		t.Fatalf("without its window: %+v", v)
 	}
 }
+
+// #91: a failed spawn shows as failed, with why, not as a kill.
+func TestStatusShowsFailedSpawnReason(t *testing.T) {
+	a, _ := stackSetup(t)
+	id, err := a.Store.NextID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt := filepath.Join(a.Root, ".saddle", "worktrees", id+"-blocked")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, "squatter.txt"), []byte("in the way\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Spawn(app.SpawnReq{Title: "blocked"}); err == nil {
+		t.Fatal("spawn into an occupied path succeeded")
+	}
+	for _, v := range callStatus(t, a).Tasks {
+		if v.ID != id {
+			continue
+		}
+		if v.Status != app.StatusFailed || !strings.Contains(v.Reason, "worktree add") {
+			t.Fatalf("failed spawn in status: %+v", v)
+		}
+		return
+	}
+	t.Fatalf("%s missing from status", id)
+}
