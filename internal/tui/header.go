@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -76,7 +77,7 @@ func (m *model) viewHeader() string {
 	if m.narr != nil {
 		extra += " · narrator"
 	}
-	right := sDim.Render(fmt.Sprintf("orchestrator %s · %s%s · $%.2f ", m.launch.Model, state, extra, m.cost))
+	right := sDim.Render(fmt.Sprintf("orchestrator %s · %s%s · $%.2f ", m.orchModel(), state, extra, m.cost))
 	short := sDim.Render("orch " + state + " ")
 
 	line := sLogo.Render("SADDLE")
@@ -141,4 +142,24 @@ func (m *model) viewHeader() string {
 		line += strings.Repeat(" ", gap) + right
 	}
 	return lipgloss.NewStyle().MaxWidth(m.width).Render(line)
+}
+
+// harness names the orchestrator's CLI.
+func (m *model) harness() string {
+	if m.launch.Kind == agent.KindGrok {
+		return "grok"
+	}
+	return "claude"
+}
+
+// orchModel names the orchestrator's model: the configured one, else what
+// the session reported, else the harness's default (#263).
+func (m *model) orchModel() string {
+	switch {
+	case m.launch.Model != "":
+		return m.launch.Model
+	case m.model != "":
+		return m.model
+	}
+	return m.harness() + " default"
 }

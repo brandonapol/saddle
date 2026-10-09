@@ -98,6 +98,15 @@ type model struct {
 	proc    orchProc
 	resumed bool // the current process was started with --resume
 	gotInit bool
+	// newProc starts an orchestrator process; nil means the launch's.
+	newProc func(resume string) (orchProc, error)
+	// savedSession is the session ctrl+r resumes; nil reads the store.
+	savedSession func() string
+	model        string                           // the model the session reported, if config names none
+	retry        string                           // the turn's latest API retry, shown in place of "thinking…"
+	confirm      *confirmAsk                      // a destructive key waiting on y
+	killer       func(task string) error          // x's kill; nil means the app's
+	lander       func() ([]app.LandResult, error) // L's land; nil means the app's
 
 	width, height int
 	focus         int
@@ -194,9 +203,14 @@ type screenState struct {
 }
 
 type (
-	tickMsg    time.Time
-	evMsg      struct{ e orch.Event }
-	closedMsg  struct{}
+	tickMsg time.Time
+	// evMsg and closedMsg carry the process they came from, so that a
+	// replaced process's last events are dropped (#259).
+	evMsg struct {
+		e orch.Event
+		p orchProc
+	}
+	closedMsg  struct{ p orchProc }
 	refreshMsg struct {
 		err     error
 		tasks   []mcpserver.TaskView
@@ -240,7 +254,7 @@ func Run(a *app.App, first string) error {
 	if err := m.startProc(resume); err != nil {
 		return err
 	}
-	defer func() { m.registerCompact(nil); m.proc.Close() }()
+	defer m.stopProc()
 
 	// saddle up holds the repo's TUI lock, so this is the one process that
 	// meters usage, narrates and wakes agents sitting on old notices.
@@ -260,7 +274,7 @@ func Run(a *app.App, first string) error {
 	}()
 
 	hist, _ := a.Store.Chat(300)
-	for _, c := range hist {
+	for _, c := range visibleHistory(hist) {
 		m.chat = append(m.chat, chatLine{role: c.Role, text: c.Text})
 	}
 	if len(m.chat) == 0 {
@@ -286,18 +300,63 @@ func Run(a *app.App, first string) error {
 	return err
 }
 
+// startProc replaces the orchestrator process with a new one. The old one
+// is closed and its remaining events drained, so it can't leak (#259).
 func (m *model) startProc(resume string) error {
-	cmd, err := m.launch.Headless(resume)
+	start := m.newProc
+	if start == nil {
+		start = m.headless
+	}
+	m.stopProc()
+	p, err := start(resume)
 	if err != nil {
 		return err
 	}
-	p, err := orch.Start(cmd)
-	if err != nil {
-		return fmt.Errorf("start orchestrator: %w", err)
-	}
 	m.proc, m.resumed, m.gotInit = p, resume != "", false
+	m.retry = ""
 	m.registerCompact(p)
 	return nil
+}
+
+func (m *model) headless(resume string) (orchProc, error) {
+	cmd, err := m.launch.Headless(resume)
+	if err != nil {
+		return nil, err
+	}
+	p, err := orch.Start(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("start orchestrator: %w", err)
+	}
+	return p, nil
+}
+
+// stopProc closes the orchestrator process, if any. Its events are drained
+// so its reader can reach Wait and reap it; the TUI drops the ones still
+// in flight because they name a process that is no longer m.proc.
+func (m *model) stopProc() {
+	p := m.proc
+	if p == nil {
+		return
+	}
+	m.proc = nil
+	m.registerCompact(nil)
+	p.Close()
+	go func() {
+		for range p.Events() {
+		}
+	}()
+}
+
+// sessionToResume is the orchestrator's saved session id.
+func (m *model) sessionToResume() string {
+	if m.savedSession != nil {
+		return m.savedSession()
+	}
+	t, err := m.app.Store.Task(app.OrchestratorID)
+	if err != nil {
+		return ""
+	}
+	return t.SessionID
 }
 
 // orchInput is what the compact watcher needs of the orchestrator process.
@@ -336,13 +395,17 @@ func tick() tea.Cmd {
 }
 
 func (m *model) waitEvent() tea.Cmd {
-	ch := m.proc.Events()
+	p := m.proc
+	if p == nil {
+		return nil
+	}
+	ch := p.Events()
 	return func() tea.Msg {
 		e, ok := <-ch
 		if !ok {
-			return closedMsg{}
+			return closedMsg{p}
 		}
-		return evMsg{e}
+		return evMsg{e, p}
 	}
 }
 
@@ -621,6 +684,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.deliver()
 
 	case evMsg:
+		if msg.p != m.proc {
+			break // a process ctrl+r or a failed resume replaced
+		}
 		cmds = append(cmds, m.handleEvent(msg.e), m.waitEvent())
 
 	case narrMsg:
@@ -648,7 +714,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case closedMsg:
 		// The process is gone; ctrl+r restarts it.
-		m.registerCompact(nil)
+		if msg.p == m.proc {
+			m.registerCompact(nil)
+		}
 
 	case quitExpiry:
 		// Only the latest arming may clear the hint.
@@ -792,11 +860,7 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		return m.refresh(), true
 	case key.Matches(k, keys.Restart):
-		if m.proc != nil {
-			m.proc.Close()
-		}
-		_, resume, _ := m.app.Orchestrator()
-		if err := m.startProc(resume); err != nil {
+		if err := m.startProc(m.sessionToResume()); err != nil {
 			m.addChat(store.ChatEvent, "Restart failed: "+err.Error())
 			return nil, true
 		}
@@ -860,31 +924,10 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		m.briefOn = !m.briefOn
 	case key.Matches(k, keys.Kill):
 		if t, ok := m.selected(); ok {
-			id := t.ID
-			a := m.app
-			return func() tea.Msg {
-				if err := a.Kill(id, false); err != nil {
-					return flashMsg(err.Error())
-				}
-				return flashMsg("killed " + id)
-			}, true
+			m.askKill(t.ID)
 		}
 	case key.Matches(k, keys.Land):
-		a := m.app
-		return func() tea.Msg {
-			rs, err := a.Land()
-			if err != nil {
-				return flashMsg("land: " + err.Error())
-			}
-			var parts []string
-			for _, r := range rs {
-				parts = append(parts, r.Task+" "+r.State)
-			}
-			if len(parts) == 0 {
-				return flashMsg("train is empty")
-			}
-			return flashMsg("land: " + strings.Join(parts, ", "))
-		}, true
+		m.askLand()
 	}
 	return nil, true
 }
@@ -943,6 +986,10 @@ func (m *model) sendUser(text string) {
 func (m *model) sendNow(text string) {
 	m.eventTurn = false
 	m.addChat(store.ChatUser, text)
+	if m.proc == nil {
+		m.addChat(store.ChatEvent, "The orchestrator isn't running. Press ctrl+r to restart it.")
+		return
+	}
 	if err := m.proc.Send(text); err != nil {
 		m.addChat(store.ChatEvent, "Could not reach the orchestrator ("+err.Error()+"). Press ctrl+r to restart it.")
 	}
@@ -966,10 +1013,42 @@ func (m *model) addChat(role, text string) {
 	_ = m.app.Store.AddChat(role, text)
 }
 
+// clearedNote marks a /clear in the chat; history before it isn't shown.
+const clearedNote = "Conversation cleared. The orchestrator starts fresh; earlier messages are gone from its context."
+
+// visibleHistory is the stored chat from the last /clear on.
+func visibleHistory(hist []store.ChatLine) []store.ChatLine {
+	for i := len(hist) - 1; i >= 0; i-- {
+		if hist[i].Role == store.ChatEvent && hist[i].Text == clearedNote {
+			return hist[i:]
+		}
+	}
+	return hist
+}
+
 func (m *model) handleEvent(e orch.Event) tea.Cmd {
+	if e.Kind != orch.Retry && e.Kind != orch.Commands {
+		m.retry = "" // the API answered, or the turn ended
+	}
 	switch e.Kind {
+	case orch.Retry:
+		m.retry = e.Text
+	case orch.Compacted:
+		note := "Conversation compacted."
+		if e.Text == "auto" {
+			note = "Conversation compacted automatically."
+		}
+		m.addChat(store.ChatEvent, note)
+	case orch.Cleared:
+		m.streaming.Reset()
+		m.chat = nil
+		m.cost = 0
+		m.addChat(store.ChatEvent, clearedNote)
 	case orch.Init:
 		m.gotInit = true
+		if e.Model != "" && e.Model != "unknown" {
+			m.model = e.Model
+		}
 		m.setCommands(e.Commands)
 		if e.SessionID != "" {
 			_ = m.app.Store.SetField(app.OrchestratorID, "session_id", e.SessionID)
@@ -1032,6 +1111,9 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 		m.streaming.Reset()
 		m.turnText = false
 		text := strings.TrimSpace(e.Text)
+		if text == "" {
+			text = "the turn failed and gave no reason. Check that the " + m.harness() + " CLI is signed in and can reach its API."
+		}
 		if n := len(m.chat); n > 0 && m.chat[n-1].role == store.ChatAssistant && strings.TrimSpace(m.chat[n-1].text) == text {
 			// The turn said the error as text first; show it once, as an error.
 			m.chat[n-1] = chatLine{role: store.ChatEvent, text: "Orchestrator error: " + text}
@@ -1044,6 +1126,7 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 		m.registerCompact(nil) // a restart registers the new process
 		if m.resumed && !m.gotInit {
 			// The saved session couldn't be resumed; start a fresh one.
+			// startProc closes this one first.
 			_ = m.app.Store.SetField(app.OrchestratorID, "session_id", "")
 			if err := m.startProc(""); err == nil {
 				m.addChat(store.ChatEvent, "Couldn't resume the last conversation; started a new one.")
@@ -1309,6 +1392,8 @@ func (m *model) renderChat() {
 		b.WriteString("\n")
 	} else if m.proc != nil && m.proc.Interrupting() {
 		b.WriteString(sDim.Render("  interrupting…") + "\n")
+	} else if m.proc != nil && m.proc.Busy() && m.retry != "" {
+		b.WriteString(lipgloss.NewStyle().Foreground(cAlert).Render("  "+m.retry) + sDim.Render(" (esc to interrupt)") + "\n")
 	} else if m.proc != nil && m.proc.Busy() {
 		b.WriteString(sDim.Render("  thinking… (esc to interrupt)") + "\n")
 	}
@@ -1388,6 +1473,9 @@ func (m *model) viewFooter() string {
 	}
 	if m.hv.confirm != "" {
 		line = " " + lipgloss.NewStyle().Foreground(cAlert).Render(m.heavyPrompt())
+	}
+	if m.confirm != nil {
+		line = " " + lipgloss.NewStyle().Foreground(cAlert).Render(m.confirm.prompt)
 	}
 	if m.quitArmed() {
 		hint := "Press Ctrl+C again to quit"
