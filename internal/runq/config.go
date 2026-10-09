@@ -22,6 +22,7 @@ import (
 //	gate_max_wait = "10m"
 //	wait_max = "30m"         # saddle run --wait-max default
 //	max_run = "30m"          # a holder running longer shows as overdue
+//	backpressure_wait = "10m" # spawn refuses once a waiter waited this long ("-1s" off)
 //	default_slots = 1        # for classes named nowhere
 //	max_load_per_cpu = 1.0   # load gate: hold while load1/cores is over this (0 off)
 //	max_cpu_pressure = 60    # ... or CPU PSI "some avg10" is over this % (0 off)
@@ -37,15 +38,18 @@ import (
 //	match = ["go test*", "make check"]
 //	max_run = "45m"          # this class's own max_run
 type Config struct {
-	Mode         Mode                   `toml:"mode"`
-	Heartbeat    Duration               `toml:"heartbeat"`
-	StaleAfter   Duration               `toml:"stale_after"`
-	AgingStep    Duration               `toml:"aging_step"`
-	GateMaxWait  Duration               `toml:"gate_max_wait"`
-	WaitMax      Duration               `toml:"wait_max"`
-	MaxRun       Duration               `toml:"max_run"`
-	DefaultSlots int                    `toml:"default_slots"`
-	Classes      map[string]ClassConfig `toml:"classes"`
+	Mode        Mode     `toml:"mode"`
+	Heartbeat   Duration `toml:"heartbeat"`
+	StaleAfter  Duration `toml:"stale_after"`
+	AgingStep   Duration `toml:"aging_step"`
+	GateMaxWait Duration `toml:"gate_max_wait"`
+	WaitMax     Duration `toml:"wait_max"`
+	MaxRun      Duration `toml:"max_run"`
+	// BackpressureWait: spawn refuses once a class's oldest non-gate waiter
+	// has waited this long (DefaultBackpressureWait; negative turns it off).
+	BackpressureWait Duration               `toml:"backpressure_wait"`
+	DefaultSlots     int                    `toml:"default_slots"`
+	Classes          map[string]ClassConfig `toml:"classes"`
 
 	// The load gate (docs/runq.md Q3). Nil means the default; 0 turns that
 	// check off.
@@ -155,6 +159,9 @@ func LoadConfig(paths ...string) (Config, error) {
 			if d.src.D > 0 {
 				*d.dst = *d.src
 			}
+		}
+		if f.BackpressureWait.D != 0 {
+			c.BackpressureWait = f.BackpressureWait
 		}
 		if f.DefaultSlots > 0 {
 			c.DefaultSlots = f.DefaultSlots

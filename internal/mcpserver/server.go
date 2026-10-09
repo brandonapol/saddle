@@ -362,7 +362,7 @@ func New(a *app.App, task string) *mcp.Server {
 		return nil
 	}
 
-	mcp.AddTool(s, &mcp.Tool{Name: "spawn", Description: fmt.Sprintf("Start a new parallel agent on its own branch and worktree in a new tmux window. Give it disjoint claims. When it builds on another task's unmerged work (a make target, file or API that task adds), pass after with that task's id so its PR stacks on that task's PR instead of failing CI on base. Sub-tasks are capped in depth below the orchestrator (spawn.max_depth, default %d) and in working children per task (spawn.max_children, default %d).", app.DefaultMaxDepth, app.DefaultMaxChildren)},
+	mcp.AddTool(s, &mcp.Tool{Name: "spawn", Description: fmt.Sprintf("Start a new parallel agent on its own branch and worktree in a new tmux window. Give it disjoint claims. When it builds on another task's unmerged work (a make target, file or API that task adds), pass after with that task's id so its PR stacks on that task's PR instead of failing CI on base. Sub-tasks are capped in depth below the orchestrator (spawn.max_depth, default %d) and in working children per task (spawn.max_children, default %d). Spawn refuses while the heavy-run queue is backed up; the error names the class and when it should clear.", app.DefaultMaxDepth, app.DefaultMaxChildren)},
 		func(_ context.Context, _ *mcp.CallToolRequest, in SpawnIn) (*mcp.CallToolResult, SpawnOut, error) {
 			if err := self(); err != nil {
 				return nil, SpawnOut{}, err

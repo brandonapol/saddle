@@ -172,7 +172,7 @@ func (e *autopilotEnv) Spawn(r autopilot.SpawnReq) (string, error) {
 	switch {
 	case errors.Is(err, ErrLaunchesPaused):
 		return "", fmt.Errorf("%w: %v", autopilot.ErrPaused, err)
-	case err != nil && strings.Contains(err.Error(), "at concurrency cap"):
+	case err != nil && (strings.Contains(err.Error(), "at concurrency cap") || errors.Is(err, ErrBackpressure)):
 		return "", fmt.Errorf("%w: %v", autopilot.ErrAtCap, err)
 	}
 	return t.ID, err

@@ -274,7 +274,7 @@ func spawnCmd() *cobra.Command {
 	f.StringVar(&r.Parent, "parent", "", "parent task id")
 	f.StringVar(&r.Base, "base", "", "base ref (default: integration branch)")
 	f.StringVarP(&promptFile, "prompt-file", "f", "", "read the prompt from a file (- for stdin)")
-	f.BoolVar(&r.Force, "force", false, "ignore claim conflicts and the concurrency cap")
+	f.BoolVar(&r.Force, "force", false, "ignore claim conflicts, the concurrency cap and heavy-run queue backpressure")
 	return cmd
 }
 
