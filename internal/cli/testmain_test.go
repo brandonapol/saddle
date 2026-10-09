@@ -40,6 +40,8 @@ func runIsolated(m *testing.M) int {
 	_ = os.Setenv("TMPDIR", base)
 	_ = os.Setenv("GOTMPDIR", base) // t.TempDir prefers it to TMPDIR
 	_ = os.Setenv("GIT_CEILING_DIRECTORIES", base)
+	// The commands that point TMPDIR at the scratch root find it in here.
+	_ = os.Setenv("XDG_CACHE_HOME", filepath.Join(base, "cache"))
 	_ = os.Setenv(trust.EnvFile, filepath.Join(base, "trust.json"))
 	_ = os.Setenv(runq.EnvPath, filepath.Join(base, "runq.db")) // status reads the heavy-run queue
 	return m.Run()
