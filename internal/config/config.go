@@ -38,7 +38,7 @@ type Config struct {
 	Test  Test  `toml:"test"`
 	Train Train `toml:"train"`
 	// Harness is which coding CLI workers and the orchestrator run.
-	// "claude" (default) or "grok".
+	// "claude" (default), "grok" or "codex". $SADDLE_HARNESS overrides it.
 	Harness string `toml:"harness"`
 	Claude  Claude `toml:"claude"`
 	Grok    Grok   `toml:"grok"`
@@ -298,7 +298,16 @@ type Grok struct {
 const (
 	HarnessClaude = "claude"
 	HarnessGrok   = "grok"
+	HarnessCodex  = "codex"
 )
+
+// HarnessEnv overrides harness for one process tree: saddle up <agent> sets
+// it, so the orchestrator, its MCP server and every worker follow the name
+// without the config file changing (#150).
+const HarnessEnv = "SADDLE_HARNESS"
+
+// Harnesses lists the valid harness names.
+func Harnesses() []string { return []string{HarnessClaude, HarnessCodex, HarnessGrok} }
 
 func Default() Config {
 	return Config{
@@ -388,8 +397,12 @@ func Load(root string) (Config, error) {
 	if cfg.Harness == "" {
 		cfg.Harness = HarnessClaude
 	}
-	if cfg.Harness != HarnessClaude && cfg.Harness != HarnessGrok {
-		return cfg, fmt.Errorf("harness %q: want %q or %q", cfg.Harness, HarnessClaude, HarnessGrok)
+	src := "harness"
+	if h := os.Getenv(HarnessEnv); h != "" {
+		cfg.Harness, src = h, "$"+HarnessEnv
+	}
+	if !slices.Contains(Harnesses(), cfg.Harness) {
+		return cfg, fmt.Errorf("%s %q: want one of %s", src, cfg.Harness, strings.Join(Harnesses(), ", "))
 	}
 	if cfg.Claude.Advisor.Lead == "" {
 		cfg.Claude.Advisor.Lead = cfg.Claude.OrchestratorModel
@@ -504,7 +517,7 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # integration = "saddle/integration"
 # concurrency = 5            # saddle concurrency N (or the TUI plan view) overrides it at runtime
 # close_on_land = true
-# harness = "claude"          # claude | grok
+# harness = "claude"          # claude | grok | codex (saddle up <name> overrides)
 # serial = ["go.sum", "db/migrations/**"]
 
 [test]

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/brandonapol/saddle/internal/config"
 )
 
 func TestClaudeAdapterLaunchesLikeWrite(t *testing.T) {
@@ -64,5 +66,28 @@ func TestByName(t *testing.T) {
 	}
 	if _, err := ByName("nope"); err == nil || !strings.Contains(err.Error(), "claude") {
 		t.Errorf("unknown adapter should list known ones: %v", err)
+	}
+}
+
+// #150: a session's harness (saddle up <agent>) reaches every worker's
+// launch script and MCP server, so their own spawns follow it.
+func TestLaunchCarriesSessionHarness(t *testing.T) {
+	t.Setenv(config.HarnessEnv, "codex")
+	for _, name := range Names() {
+		dir := t.TempDir()
+		gitInit(t, dir)
+		l := Launch{Root: dir, Bin: "/bin/saddle", Task: "t3", Title: "x", Dir: dir, Cmd: name, Brief: "b", Prompt: "p", RunDir: t.TempDir()}
+		a, _ := ByName(name)
+		_, script, _ := launchScript(t, a, l)
+		if !strings.Contains(script, "export SADDLE_HARNESS='codex'") {
+			t.Errorf("%s launch.sh does not export the session harness:\n%s", name, script)
+		}
+	}
+	if (Launch{}).env()[config.HarnessEnv] != "codex" {
+		t.Error("MCP server env lacks the session harness")
+	}
+	t.Setenv(config.HarnessEnv, "")
+	if _, ok := (Launch{}).env()[config.HarnessEnv]; ok {
+		t.Error("unset harness should not be passed on")
 	}
 }
