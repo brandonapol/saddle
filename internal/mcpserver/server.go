@@ -100,7 +100,10 @@ type StatusOut struct {
 	// OrchestratorContext is how full the orchestrator's context is; absent
 	// before its transcript has a reading.
 	OrchestratorContext *OrchContext `json:"orchestrator_context,omitempty"`
-	Tasks               []TaskView   `json:"tasks"`
+	// HeavyRuns is the machine's heavy-run queue (saddle run); absent while
+	// it is idle.
+	HeavyRuns *app.HeavyRuns `json:"heavy_runs,omitempty" jsonschema:"the machine's heavy-run queue per class: slots, holders (task, repo, cmd, age, overdue past max_run) and waiters (position, task, wait, eta); absent while idle"`
+	Tasks     []TaskView     `json:"tasks"`
 }
 
 // OrchContext is the orchestrator's context use against its compact threshold.
@@ -275,6 +278,11 @@ func Status(a *app.App) (StatusOut, error) {
 		out.OrchestratorContext = &OrchContext{Percent: int(math.Round(u.Fraction() * 100)), Tokens: u.Prompt,
 			Window: u.Window, CompactAt: int(math.Round(a.CompactAt() * 100)), Model: u.Model}
 	}
+	if v, err := a.HeavyRuns(); err != nil {
+		out.Warnings = append(out.Warnings, "heavy-run queue: "+err.Error())
+	} else if v.Busy() {
+		out.HeavyRuns = &v
+	}
 	out.Tasks, err = Tasks(a)
 	return out, err
 }
@@ -383,7 +391,7 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, OK{Message: "released"}, a.Store.Release(task, in.Paths...)
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "List every saddle task with status, claims and merge-train state, plus warnings, stack_at_risk when the stack sentinel has flagged the PR stack, and orchestrator_context: how full your context is against the compact_at threshold."},
+	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "List every saddle task with status, claims and merge-train state, plus warnings, heavy_runs (the machine's heavy-run queue: holders and waiters per class) while it is busy, stack_at_risk when the stack sentinel has flagged the PR stack, and orchestrator_context: how full your context is against the compact_at threshold."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, StatusOut, error) {
 			out, err := Status(a)
 			return nil, out, err

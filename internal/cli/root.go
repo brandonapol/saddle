@@ -324,7 +324,13 @@ func statusCmd() *cobra.Command {
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, status, t.Model, t.Window, trunc(t.Title, 36),
 					trunc(strings.Join(t.Claims, ","), 40), t.Train)
 			}
-			return w.Flush()
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			if st.HeavyRuns != nil {
+				writeHeavyRuns(cmd.OutOrStdout(), *st.HeavyRuns)
+			}
+			return nil
 		}),
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")

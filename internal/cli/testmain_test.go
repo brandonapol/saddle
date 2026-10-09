@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brandonapol/saddle/internal/runq"
 	"github.com/brandonapol/saddle/internal/trust"
 )
 
@@ -40,6 +41,7 @@ func runIsolated(m *testing.M) int {
 	_ = os.Setenv("GOTMPDIR", base) // t.TempDir prefers it to TMPDIR
 	_ = os.Setenv("GIT_CEILING_DIRECTORIES", base)
 	_ = os.Setenv(trust.EnvFile, filepath.Join(base, "trust.json"))
+	_ = os.Setenv(runq.EnvPath, filepath.Join(base, "runq.db")) // status reads the heavy-run queue
 	return m.Run()
 }
 

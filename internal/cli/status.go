@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -165,4 +166,39 @@ func (s segment) render(color bool, width int) string {
 		}
 	}
 	return strings.Join(out, sep)
+}
+
+// writeHeavyRuns prints the machine's heavy-run queue under saddle status
+// (#242): per busy class its slots, then the holders with their command,
+// age and lease, and the waiters in grant order with their wait and ETA.
+// An idle queue prints nothing.
+func writeHeavyRuns(out io.Writer, v app.HeavyRuns) {
+	if !v.Busy() {
+		return
+	}
+	fmt.Fprintf(out, "\nHeavy runs (%s)\n", v.Mode)
+	for _, c := range v.Classes {
+		if !c.Busy() {
+			continue
+		}
+		drained := ""
+		if c.Drained {
+			drained = " (drained: saddle runq slots " + c.Class + " N resumes it)"
+		}
+		fmt.Fprintf(out, "  %s: %d/%d slots busy, %d waiting%s\n", c.Class, len(c.Holders), c.Slots, len(c.Waiters), drained)
+		for _, h := range c.Holders {
+			over := ""
+			if h.Overdue {
+				over = fmt.Sprintf("  overdue (max_run %s)", app.RoughDuration(c.MaxRun()))
+			}
+			fmt.Fprintf(out, "    ▸ %s  %s  %s%s  lease %s\n", h.Who(v.Repo), trunc(h.Cmd, 40), app.RoughDuration(h.Age()), over, shortLease(h.Lease))
+		}
+		for _, w := range c.Waiters {
+			eta := ""
+			if w.ETAMS > 0 {
+				eta = ", ~" + app.RoughDuration(w.ETA()) + " to go"
+			}
+			fmt.Fprintf(out, "    #%d %s  %s  waiting %s%s  lease %s\n", w.Position, w.Who(v.Repo), trunc(w.Cmd, 40), app.RoughDuration(w.Age()), eta, shortLease(w.Lease))
+		}
+	}
 }
