@@ -38,7 +38,7 @@ func (a *App) NewNarrator(apiKey string, sink narrator.Sink, http narrator.Doer)
 		Model:       a.Cfg.Narrator.Model,
 		DailyCapUSD: a.Cfg.Narrator.DailyCapUSD,
 		Prices:      a.Cfg.Limits.Prices,
-	}, narrator.Deps{Source: src, Roster: a.Store, HTTP: http, Sink: sink, Ledger: a.Store})
+	}, narrator.Deps{Source: src, Roster: a.Store, HTTP: http, Sink: sink, Ledger: a.Store, Heavy: narratorHeavy{a}})
 }
 
 // RunNarrator drives n until ctx is done, recording each distinct error once.

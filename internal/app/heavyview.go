@@ -6,12 +6,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/narrator"
 	"github.com/brandonapol/saddle/internal/runq"
 )
 
 // EventRunqBackpressure is logged when spawn refuses because the heavy-run
 // queue is backed up (#243). The narrator mentions it (#242).
-const EventRunqBackpressure = "runq_backpressure"
+const EventRunqBackpressure = narrator.EventBackpressure
 
 // HeavyRuns is the machine's heavy-run queue as saddle status, the MCP
 // status tool, the TUI and the narrator show it (#242, docs/runq.md Q5).
@@ -175,4 +176,29 @@ func (a *App) KillHeavyLease(token string) error {
 	}
 	defer func() { _ = q.Close() }()
 	return q.Kill(token)
+}
+
+// narratorHeavy feeds the narrator the heavy-run queue, so it can mention
+// long waits and overdue holders.
+type narratorHeavy struct{ a *App }
+
+func (h narratorHeavy) HeavyLeases() ([]narrator.HeavyLease, error) {
+	v, err := h.a.HeavyRuns()
+	if err != nil {
+		return nil, err
+	}
+	var out []narrator.HeavyLease
+	for _, c := range v.Classes {
+		var holders []string
+		for _, e := range c.Holders {
+			holders = append(holders, e.Who(v.Repo))
+			out = append(out, narrator.HeavyLease{Lease: e.Lease, Class: c.Class, Who: e.Who(v.Repo), Cmd: e.Cmd, Holder: true,
+				Age: e.Age(), MaxRun: c.MaxRun(), Overdue: e.Overdue})
+		}
+		for _, e := range c.Waiters {
+			out = append(out, narrator.HeavyLease{Lease: e.Lease, Class: c.Class, Who: e.Who(v.Repo), Cmd: e.Cmd,
+				Position: e.Position, Age: e.Age(), Holders: strings.Join(holders, ", ")})
+		}
+	}
+	return out, nil
 }

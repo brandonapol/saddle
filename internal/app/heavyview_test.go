@@ -155,3 +155,27 @@ func TestKillHeavyLease(t *testing.T) {
 		t.Fatal("killing an unknown lease should fail")
 	}
 }
+
+// TestNarratorHeavyLeases: the narrator sees each lease with its class,
+// who it is, the class's max_run and, for waiters, who holds the class.
+func TestNarratorHeavyLeases(t *testing.T) {
+	a, _ := setup(t)
+	db := heavyTest(t, a, "mode = \"enforce\"\nmax_load_per_cpu = 0\nmax_cpu_pressure = 0\nheartbeat = \"200ms\"\n[classes.go-test]\nslots = 1\nmax_run = \"1ms\"\n")
+	q := openQueue(t, db)
+	h, err := q.Acquire(context.Background(), runq.Request{Class: "go-test", Label: "t83", Repo: filepath.Base(a.Root), Cmd: "make check"})
+	must(t, err)
+	t.Cleanup(func() { _ = h.Release() })
+	queueWaiter(t, a, q, "go-test", "t84", "other")
+	ls, err := narratorHeavy{a}.HeavyLeases()
+	must(t, err)
+	if len(ls) != 2 {
+		t.Fatalf("leases %+v", ls)
+	}
+	ho, w := ls[0], ls[1]
+	if !ho.Holder || ho.Who != "t83" || ho.Class != "go-test" || !ho.Overdue || ho.MaxRun != time.Millisecond || ho.Cmd != "make check" {
+		t.Fatalf("holder %+v", ho)
+	}
+	if w.Holder || w.Who != "other/t84" || w.Position != 1 || w.Holders != "t83" {
+		t.Fatalf("waiter %+v", w)
+	}
+}
