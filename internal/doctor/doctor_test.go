@@ -69,17 +69,22 @@ func healthy(t *testing.T) *fakeEnv {
 		},
 		paths: map[string]bool{
 			"gh": true, "tmux": true, "claude": true, "go": true,
-			filepath.Join(root, ".saddle"): true,
-			"/usr/bin/saddle":              true,
+			filepath.Join(root, ".saddle"):                true,
+			filepath.Join(root, ".saddle", "config.toml"): true,
+			"/usr/bin/saddle":                             true,
 		},
 		trainGit: map[string]res{
 			"push --dry-run origin HEAD:refs/heads/saddle/doctor-push-check": {out: "To github.com:o/r.git\n * [new branch] HEAD -> saddle/doctor-push-check"},
 		},
 		allow: []string{"Read", "Bash(saddle:*)", "mcp__saddle"},
-		hooks: []refguard.HookState{
-			{Name: "reference-transaction", Path: "/r/.git/hooks/reference-transaction", Present: true, Saddle: true, Bin: "/usr/bin/saddle"},
-			{Name: "pre-push", Path: "/r/.git/hooks/pre-push", Present: true, Saddle: true, Bin: "/usr/bin/saddle"},
-		},
+		hooks: saddleHooks(),
+	}
+}
+
+func saddleHooks() []refguard.HookState {
+	return []refguard.HookState{
+		{Name: "reference-transaction", Path: "/r/.git/hooks/reference-transaction", Present: true, Saddle: true, Bin: "/usr/bin/saddle"},
+		{Name: "pre-push", Path: "/r/.git/hooks/pre-push", Present: true, Saddle: true, Bin: "/usr/bin/saddle"},
 	}
 }
 
@@ -218,13 +223,13 @@ func TestChecks(t *testing.T) {
 
 		{"base unprotected", CheckProtection, func(f *fakeEnv) {
 			f.gh["api repos/{owner}/{repo}/branches/main/protection"] = res{err: errors.New("gh: Branch not protected (HTTP 404)")}
-		}, Warn, "Settings -> Branches"},
+		}, Warn, "github.com/o/r/settings/branches"},
 		{"protection unreadable", CheckProtection, func(f *fakeEnv) {
 			f.gh["api repos/{owner}/{repo}/branches/main/protection"] = res{err: errors.New("gh: Resource not accessible (HTTP 403)")}
 		}, Warn, "admin"},
 		{"no required checks", CheckProtection, func(f *fakeEnv) {
 			f.gh["api repos/{owner}/{repo}/branches/main/protection"] = res{out: `{"enforce_admins":{"enabled":false}}`}
-		}, Warn, "required status check"},
+		}, Warn, "Require status checks to pass"},
 		{"protection uses detected default branch", CheckProtection, func(f *fakeEnv) {
 			f.cfg.Base = "trunk"
 			f.git["symbolic-ref --short refs/remotes/origin/HEAD"] = res{out: "origin/trunk"}
@@ -254,7 +259,7 @@ func TestChecks(t *testing.T) {
 		{"foreign hook", CheckHooks, func(f *fakeEnv) {
 			f.hooks[1] = refguard.HookState{Name: "pre-push", Path: "/r/.git/hooks/pre-push", Present: true}
 		}, Fail, "chains it"},
-		{"hook binary gone", CheckHooks, func(f *fakeEnv) { f.paths["/usr/bin/saddle"] = false }, Warn, "make install"},
+		{"hook binary gone", CheckHooks, func(f *fakeEnv) { f.paths["/usr/bin/saddle"] = false }, Warn, "current binary"},
 		{"hooks unreadable", CheckHooks, func(f *fakeEnv) { f.hooksErr = errors.New("not a git repo") }, Warn, ""},
 
 		{"gate shipped but not installed", CheckGate, func(f *fakeEnv) {

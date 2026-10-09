@@ -61,6 +61,12 @@ type Result struct {
 	Status Status `json:"status"`
 	Detail string `json:"detail"`
 	Fix    string `json:"fix,omitempty"`
+	// About says in plain words what the check is for.
+	About string `json:"about,omitempty"`
+	// Fixable means saddle doctor --fix (saddle init) repairs it locally.
+	Fixable bool `json:"fixable,omitempty"`
+	// Fixed means saddle repaired it during this run.
+	Fixed bool `json:"fixed,omitempty"`
 }
 
 // Env is everything the checks read from outside the process.
@@ -105,6 +111,7 @@ type run struct {
 	cfg    config.Config
 	remote string
 	base   string // the detected default branch, else cfg.Base
+	repo   string // owner/repo on GitHub, "" when unknown
 	gh     bool   // gh is installed and logged in
 }
 
@@ -126,7 +133,7 @@ func Run(env Env) []Result {
 	if se, ok := env.(SkillsEnv); ok && r.cfg.Harness != config.HarnessGrok {
 		rs = append(rs, r.skills(se))
 	}
-	return rs
+	return describe(rs)
 }
 
 // RepoHooksEnv is an Env that can read the hooks the repo ships (#223). The
@@ -170,11 +177,11 @@ func (r *run) repoHooks(he RepoHooksEnv) Result {
 	if len(off) == 0 {
 		return ok(CheckRepoHooks, strings.Join(on, ", ")+" run on agent commits in every worktree")
 	}
-	return warn(CheckRepoHooks,
+	return local(warn(CheckRepoHooks,
 		fmt.Sprintf("%s ship with the repo but don't run on agent commits: git looks for %s and finds nothing", strings.Join(off, ", "), strings.Join(where, ", ")),
 		"run `saddle init`: it installs a wrapper per hook in the shared hooks directory that runs each worktree's own copy, "+
 			"the heavy ones (pre-commit, pre-push) one at a time across worktrees; SADDLE_FAST_HOOK=1 skips a tree that just passed. "+
-			"Don't set core.hooksPath to the repo's hooks directory instead: that turns off saddle's ref guard")
+			"Don't set core.hooksPath to the repo's hooks directory instead: that turns off saddle's ref guard"))
 }
 
 // TrustEnv is an Env that knows whether the user trusts the repo (#215).
@@ -219,6 +226,13 @@ func (r *run) config() Result {
 		return fail(CheckConfig, err.Error(), "fix .saddle/config.toml (or ~/.config/saddle/config.toml); the other checks used the defaults")
 	}
 	r.cfg = cfg
+	if dir := filepath.Join(r.env.Root(), ".saddle"); !r.env.Exists(filepath.Join(dir, "config.toml")) {
+		detail := fmt.Sprintf("defaults (no .saddle/config.toml): base %s, integration %s", cfg.Base, cfg.Integration)
+		if r.env.Exists(filepath.Join(dir, "state.db")) {
+			detail = "half set up: .saddle/state.db exists but saddle init never ran; using " + detail
+		}
+		return local(warn(CheckConfig, detail, fixInit+" writes it, with test.cmd detected from the project"))
+	}
 	return ok(CheckConfig, fmt.Sprintf("base %s, integration %s", cfg.Base, cfg.Integration))
 }
 
@@ -242,6 +256,7 @@ func (r *run) gitRemote() Result {
 		r.remote = remotes[0]
 	}
 	url, _ := r.env.Git("remote", "get-url", r.remote)
+	r.repo = repoSlug(url)
 	return ok(CheckRemote, strings.TrimSpace(r.remote+" "+url))
 }
 
@@ -329,6 +344,9 @@ func (r *run) mergeSettings() Result {
 		return warn(CheckMergeSettings, "could not read: "+err.Error(),
 			"use a gh login with admin or push access, or check by hand that merge commits are off and squash is on")
 	}
+	if s.Repo != "" {
+		r.repo = s.Repo
+	}
 	if s.Merge {
 		// CheckRepoMergeSettings words the refusal saddle up, land and prs give.
 		e := app.CheckRepoMergeSettings(cached, io.Discard)
@@ -392,8 +410,7 @@ func (r *run) protection() Result {
 	out, err := r.env.GH("api", "repos/{owner}/{repo}/branches/"+r.base+"/protection")
 	if err != nil {
 		if msg := err.Error(); strings.Contains(msg, "404") || strings.Contains(msg, "not protected") {
-			return warn(CheckProtection, r.base+" is not protected",
-				"Settings -> Branches: protect "+r.base+" and require your CI checks, so nothing merges on red")
+			return warn(CheckProtection, r.base+" is not protected, so red or unreviewed work can merge", r.protectionSteps())
 		}
 		return warn(CheckProtection, "could not read: "+err.Error(), "needs admin access to the repo; check Settings -> Branches by hand")
 	}
@@ -425,8 +442,7 @@ func (r *run) protection() Result {
 		detail += ", admins included"
 	}
 	if checks == 0 {
-		return warn(CheckProtection, detail,
-			"Settings -> Branches: add a required status check on "+r.base+", so auto-merge can tell green from red")
+		return warn(CheckProtection, detail+"; auto-merge can't tell green from red", r.protectionSteps())
 	}
 	return ok(CheckProtection, detail)
 }
@@ -434,11 +450,11 @@ func (r *run) protection() Result {
 func (r *run) testCmd() Result {
 	cmd := r.cfg.Test.Cmd
 	if strings.TrimSpace(cmd) == "" {
-		fix := "set cmd under [test] in .saddle/config.toml; without it the merge train lands untested"
 		if d := app.DetectTestCmd(r.env.Root()); d != "" {
-			fix = fmt.Sprintf("add cmd = %q under [test] in .saddle/config.toml; without it the merge train lands untested", d)
+			return local(warn(CheckTestCmd, "not set; detected "+d,
+				fmt.Sprintf("%s writes cmd = %q under [test] in .saddle/config.toml; without it the merge train lands untested", fixInit, d)))
 		}
-		return warn(CheckTestCmd, "not set", fix)
+		return warn(CheckTestCmd, "not set", "set cmd under [test] in .saddle/config.toml; without it the merge train lands untested")
 	}
 	prog := program(cmd)
 	if _, err := r.env.LookPath(prog); err != nil {
@@ -479,13 +495,13 @@ func (r *run) hooks() Result {
 	for _, h := range hs {
 		switch {
 		case !h.Present:
-			return fail(CheckHooks, h.Name+" hook missing", "saddle init installs it; without it agents can move saddle's branches")
+			return local(fail(CheckHooks, h.Name+" hook missing", fixInit+" installs it; without it agents can move saddle's branches"))
 		case !h.Saddle:
-			return fail(CheckHooks, h.Path+" was not written by saddle, so the guard is off",
-				"saddle init chains it: it moves to "+h.Path+lintgate.ChainSuffix+" and saddle's hook runs it after its own check")
+			return local(fail(CheckHooks, h.Path+" was not written by saddle, so the guard is off",
+				fixInit+" chains it: it moves to "+h.Path+lintgate.ChainSuffix+" and saddle's hook runs it after its own check"))
 		case !r.env.Exists(h.Bin):
-			return warn(CheckHooks, h.Name+" runs "+h.Bin+", which is gone, so the guard is off",
-				"make install && saddle init, to point the hooks at the current binary")
+			return local(warn(CheckHooks, h.Name+" runs "+h.Bin+", which is gone, so the guard is off",
+				fixInit+" points the hooks at the current binary"))
 		}
 		name := h.Name
 		if h.Chained != "" {
@@ -641,8 +657,8 @@ func installHint(kind string) string {
 
 func (r *run) ignored() Result {
 	if _, err := r.env.Git("check-ignore", "-q", ".saddle/"); err != nil {
-		return fail(CheckIgnored, ".saddle/ is not ignored, so state and worktrees could be committed",
-			"saddle init adds /.saddle/ to .git/info/exclude; or add /.saddle/ to .gitignore")
+		return local(fail(CheckIgnored, ".saddle/ is not ignored, so state and worktrees could be committed",
+			fixInit+" adds /.saddle/ to .git/info/exclude; or add /.saddle/ to .gitignore"))
 	}
 	return ok(CheckIgnored, ".saddle/ is ignored")
 }
@@ -650,7 +666,7 @@ func (r *run) ignored() Result {
 func (r *run) stateDB() Result {
 	dir := filepath.Join(r.env.Root(), ".saddle")
 	if !r.env.Exists(dir) {
-		return fail(CheckStateDB, "repo not initialized", "saddle init")
+		return local(fail(CheckStateDB, "repo not initialized", fixInit+" creates it"))
 	}
 	path := filepath.Join(dir, "state.db")
 	if err := r.env.OpenStore(path); err != nil {
@@ -675,46 +691,42 @@ func (r *run) leftovers() Result {
 	return ok(CheckLeftovers, "none"+note)
 }
 
-// WriteTable prints one row per check, then the fixes for every check that
-// isn't ok.
+// WriteTable prints one row per check, then every check that isn't plain ok
+// grouped by who acts on it, with its fix, and the next steps once nothing
+// blocks.
 func WriteTable(w io.Writer, rs []Result) {
+	rs = describe(rs)
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "STATUS\tCHECK\tDETAIL")
 	for _, r := range rs {
 		st := string(r.Status)
-		if r.Status == Fail {
+		switch {
+		case r.Fixed:
+			st = "fixed"
+		case r.Status == Fail:
 			st = "FAIL"
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\n", st, r.Name, r.Detail)
 	}
 	_ = tw.Flush()
-	for _, r := range rs {
-		if r.Fix == "" {
-			continue
-		}
-		fix := strings.ReplaceAll(r.Fix, "\n", "\n    ")
-		fmt.Fprintf(w, "\n%s fix: %s", r.Name, fix)
-	}
-	if hasFix(rs) {
-		fmt.Fprintln(w)
-	}
+	writeGroups(w, rs)
 }
 
-func hasFix(rs []Result) bool {
-	for _, r := range rs {
-		if r.Fix != "" {
-			return true
-		}
-	}
-	return false
-}
-
-// WriteJSON prints {"ok": <no check failed>, "checks": [...]}.
+// WriteJSON prints {"ok": <no check failed>, "checks": [...]}, each check
+// with its group (ok, fixed, fixable, manual or optional).
 func WriteJSON(w io.Writer, rs []Result) error {
+	type check struct {
+		Result
+		Group string `json:"group"`
+	}
+	cs := make([]check, len(rs))
+	for i, r := range describe(rs) {
+		cs[i] = check{r, r.Group()}
+	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(struct {
-		OK     bool     `json:"ok"`
-		Checks []Result `json:"checks"`
-	}{!Failed(rs), rs})
+		OK     bool    `json:"ok"`
+		Checks []check `json:"checks"`
+	}{!Failed(rs), cs})
 }

@@ -1396,10 +1396,19 @@ var errNoTestCmd = errors.New(`set [test] cmd in .saddle/config.toml, or cmd = "
 var makeCheckRe = regexp.MustCompile(`(?m)^check[ \t]*:([^=]|$)`)
 
 // DetectTestCmd guesses a repo's test command from its build files: `make
-// check` when the Makefile has that target, else the ecosystem's default.
+// check` when the Makefile has that target, `npm run check` when package.json
+// has a check script, else the ecosystem's default.
 func DetectTestCmd(root string) string {
 	if b, err := os.ReadFile(filepath.Join(root, "Makefile")); err == nil && makeCheckRe.Match(b) {
 		return "make check"
+	}
+	if b, err := os.ReadFile(filepath.Join(root, "package.json")); err == nil {
+		var pkg struct {
+			Scripts map[string]string `json:"scripts"`
+		}
+		if json.Unmarshal(b, &pkg) == nil && pkg.Scripts["check"] != "" {
+			return "npm run check"
+		}
 	}
 	for _, c := range []struct{ file, cmd string }{
 		{"go.mod", "go test ./..."},
