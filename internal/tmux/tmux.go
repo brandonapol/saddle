@@ -4,6 +4,7 @@ package tmux
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -41,7 +42,8 @@ func (t Tmux) HasSession() bool {
 
 // NewSession creates the session detached, with its first window running cmd.
 func (t Tmux) NewSession(window, dir, cmd string) (string, error) {
-	id, err := run("new-session", "-d", "-s", t.Session, "-n", window, "-c", dir, "-P", "-F", "#{window_id}", cmd)
+	args := append([]string{"new-session", "-d", "-s", t.Session, "-n", window, "-c", dir, "-P", "-F", "#{window_id}"}, envArgs()...)
+	id, err := run(append(args, cmd)...)
 	if err != nil {
 		return id, err
 	}
@@ -87,7 +89,24 @@ func (t Tmux) configureSession(clip string) error {
 
 // NewWindow opens a background window at the end of the session and returns its id (@N).
 func (t Tmux) NewWindow(name, dir, cmd string) (string, error) {
-	return run("new-window", "-d", "-t", t.Session+":", "-n", name, "-c", dir, "-P", "-F", "#{window_id}", cmd)
+	args := append([]string{"new-window", "-d", "-t", t.Session + ":", "-n", name, "-c", dir, "-P", "-F", "#{window_id}"}, envArgs()...)
+	return run(append(args, cmd)...)
+}
+
+// forwardEnv are the variables a new window gets from saddle's own
+// environment: a window otherwise starts from the tmux server's, so an agent
+// would write its temp files to /tmp instead of saddle's scratch root (#322).
+var forwardEnv = []string{"TMPDIR", "GOTMPDIR"}
+
+// envArgs are new-window's -e flags for forwardEnv's set variables.
+func envArgs() []string {
+	var args []string
+	for _, k := range forwardEnv {
+		if v := os.Getenv(k); v != "" {
+			args = append(args, "-e", k+"="+v)
+		}
+	}
+	return args
 }
 
 func (t Tmux) KillWindow(id string) error {
