@@ -278,3 +278,25 @@ func TestAdaptersStatusShowsProviderAndQuota(t *testing.T) {
 		t.Errorf("codex = %+v", c)
 	}
 }
+
+// #321: a claimed task resumed onto codex (no hooks) tells the owner its
+// claims are now advisory.
+func TestResumeOntoHooklessAdapterWarnsAboutClaims(t *testing.T) {
+	t.Parallel()
+	a, ft, _ := rotationApp(t)
+	w, err := a.Spawn(SpawnReq{Title: "claimed work", Claims: []string{"billing/**"}})
+	must(t, err)
+	far := time.Now().Add(time.Hour)
+	must(t, a.MarkExhausted(usage.Claude, far, ""))
+	must(t, a.MarkExhausted(usage.Grok, far, ""))
+	_ = orchNotices(t, a, "")
+	must(t, ft.KillWindow(w.Window))
+	_, err = a.Resume(w.ID)
+	must(t, err)
+	if got := agent.Recorded(a.stateDir("run", w.ID)); got != usage.Codex {
+		t.Fatalf("resumed on %s, want codex", got)
+	}
+	if ns := orchNotices(t, a, "advisory"); len(ns) != 1 || !strings.Contains(ns[0], w.ID) {
+		t.Errorf("claims warning = %q", ns)
+	}
+}

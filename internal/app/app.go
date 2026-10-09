@@ -316,13 +316,8 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	t.Window = win
 	a.Store.Event(id, "spawn", fmt.Sprintf("parent=%s adapter=%s model=%s claims=%s%s", r.Parent, ad.Name(), model, strings.Join(r.Claims, ","), hint))
 	if rotated != "" {
-		a.Store.Event(id, EventAdapterRotated, rotated+" -> "+ad.Name())
-		if len(r.Claims) > 0 && !ad.Hooks() {
-			if err := a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
-				"%s %q runs on %s because %s is out of quota. %s has no hooks, so its claims (%s) are advisory: nothing stops it writing other tasks' files. Kill it and respawn on a hooked adapter if that matters.",
-				id, r.Title, ad.Name(), rotated, ad.Name(), strings.Join(r.Claims, ", "))); err != nil {
-				return t, err
-			}
+		if err := a.rotatedTask(t, rotated, ad, r.Claims); err != nil {
+			return t, err
 		}
 	}
 	if r.Parent != "" && r.Parent != OrchestratorID {

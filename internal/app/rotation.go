@@ -302,6 +302,18 @@ func (a *App) spawnAdapter(requested string, force bool) (name, rotated string, 
 	return next, rotated, nil
 }
 
+// rotatedTask records that t runs on ad because from is out of quota, and
+// warns the owner when that leaves its claims unenforced.
+func (a *App) rotatedTask(t store.Task, from string, ad agent.Adapter, claims []string) error {
+	a.Store.Event(t.ID, EventAdapterRotated, from+" -> "+ad.Name())
+	if len(claims) == 0 || ad.Hooks() {
+		return nil
+	}
+	return a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
+		"%s %q runs on %s because %s is out of quota. %s has no hooks, so its claims (%s) are advisory: nothing stops it writing other tasks' files. Kill it and respawn on a hooked adapter if that matters.",
+		t.ID, t.Title, ad.Name(), from, ad.Name(), strings.Join(claims, ", ")))
+}
+
 // tellOwner sends text to the orchestrator (and so the TUI chat) and to the
 // owner's configured notifier.
 func (a *App) tellOwner(text string) error {

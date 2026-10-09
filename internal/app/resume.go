@@ -115,12 +115,14 @@ func (a *App) resume(t store.Task) (Resumed, error) {
 	// next one with quota (#321). Its session can't move across adapters.
 	if next, err := a.nextAdapter(ad.Name(), a.ExhaustedAdapters(time.Now())); err == nil && next != ad.Name() {
 		if nad, err := agent.ByName(next); err == nil {
-			a.Store.Event(t.ID, EventAdapterRotated, ad.Name()+" -> "+next)
-			ad = nad
 			t.Model = a.modelFor(next, t.Model)
 			if err := a.Store.SetField(t.ID, "model", t.Model); err != nil {
 				return r, err
 			}
+			if err := a.rotatedTask(t, ad.Name(), nad, all[t.ID]); err != nil {
+				return r, err
+			}
+			ad = nad
 		}
 	} else if a.canResume(t) {
 		r.Session, prompt = t.SessionID, resumedNote
