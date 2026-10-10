@@ -145,6 +145,18 @@ func short(sha string) string {
 // printAutomerge prints the live graph, or the last check's when GitHub
 // can't be read.
 func printAutomerge(out io.Writer, a *app.App, asJSON bool) error {
+	if !asJSON {
+		gate, err := a.Gate()
+		if err != nil {
+			return err
+		}
+		if gate.Environment != "" {
+			fmt.Fprintln(out, gate.Environment)
+		}
+		for _, red := range gate.Red {
+			fmt.Fprintf(out, "pre-publish gate holds %s: %s (`%s`) in %s\n%s\n", red.Task, red.Check.Name, red.Check.Cmd, red.Directory, red.Tail)
+		}
+	}
 	st, err := a.NewAutomerge(nil).Plan()
 	stale := ""
 	if err != nil {
