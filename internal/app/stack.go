@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -452,10 +453,37 @@ func (a *App) returnConflict(c *RestackConflict) {
 // compare-and-swap and recorded in events. A task base already has all of
 // leaves the stack as merged, keeping its landed range.
 func (a *App) moveStack(plan []restacked, integ, base string, res *RestackResult) error {
+	// Git's worktree registry includes the main and operator checkouts, not
+	// just the worktree remembered on a task. Refuse those before any move.
+	checkouts, err := gitx.Run(a.Root, "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return err
+	}
+	var path string
+	for _, field := range strings.Split(checkouts, "\x00") {
+		if p, ok := strings.CutPrefix(field, "worktree "); ok {
+			path = p
+		}
+		ref, ok := strings.CutPrefix(field, "branch ")
+		if !ok {
+			continue
+		}
+		if ref == "refs/heads/"+a.Cfg.Integration {
+			return fmt.Errorf("%s is checked out in %s; switch to another branch or detach HEAD, then restack again; nothing was moved", ref, path)
+		}
+		for _, r := range plan {
+			if r.gone() || r.NewTo == r.To || ref != "refs/heads/"+r.Branch {
+				continue
+			}
+			if filepath.Clean(path) != filepath.Clean(r.Worktree) {
+				return fmt.Errorf("%s is checked out in %s; switch to another branch or detach HEAD, then restack again; nothing was moved", ref, path)
+			}
+		}
+	}
 	// Refuse before moving anything if a branch to move is checked out dirty.
 	for _, r := range plan {
 		if !r.gone() && r.NewTo != r.To && a.checkedOut(r.Task) {
-			if dirty, _ := gitx.Dirty(r.Worktree); len(dirty) > 0 {
+			if dirty, err := gitx.Dirty(r.Worktree); err != nil || len(dirty) > 0 {
 				return fmt.Errorf("%s's worktree %s has uncommitted changes; nothing was moved", r.ID, r.Worktree)
 			}
 		}
