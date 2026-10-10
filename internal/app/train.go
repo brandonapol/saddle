@@ -157,6 +157,18 @@ func (a *App) touches(task string, frozen map[string]string) string {
 // integration branch or landed task branches. While it waits, a holder that
 // is dead or stuck past any gate loses the lock (stealTrainLock).
 func (a *App) lockTrain() (unlock func(), err error) {
+	unlock, err = a.lockTrainForRecovery()
+	if err != nil {
+		return nil, err
+	}
+	if err := a.pendingRestack(); err != nil {
+		unlock()
+		return nil, err
+	}
+	return unlock, nil
+}
+
+func (a *App) lockTrainForRecovery() (unlock func(), err error) {
 	for wait := 50 * time.Millisecond; ; wait = min(2*wait, time.Second) {
 		unlock, ok, err := a.TryLockTrain()
 		if err != nil || ok {

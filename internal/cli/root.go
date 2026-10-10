@@ -41,6 +41,7 @@ func Root() *cobra.Command {
 		SilenceUsage: true,
 	}
 	root.AddCommand(
+		restackCmd(),
 		&cobra.Command{
 			Use:   "version",
 			Short: "Print the saddle version",
