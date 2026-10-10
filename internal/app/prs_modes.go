@@ -37,6 +37,9 @@ func (a *App) preview() *App {
 // Replayed commits are computed as unreachable objects, without moving refs.
 func (a *App) PreviewPRs() (PRsPlan, error) {
 	plan := PRsPlan{Checks: a.GateChecks(false), Note: "Local landing and cached base snapshot; no fetch, reconciliation, gate, push or PR update."}
+	if setup := strings.TrimSpace(a.Cfg.Train.Prepublish.Setup); setup != "" && len(plan.Checks) > 0 {
+		plan.Checks = append([]GateCheck{{Name: "setup", Cmd: setup}}, plan.Checks...)
+	}
 	stack, err := a.landedStack()
 	if err != nil {
 		return plan, err

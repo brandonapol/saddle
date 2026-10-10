@@ -15,6 +15,7 @@ func TestPRsPreviewChangesNoRefsStateWorktreesOrRemote(t *testing.T) {
 	second := landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})
 	marker := filepath.Join(t.TempDir(), "ran")
 	a.Cfg.Train.Prepublish.Cmd = "echo gate > " + shellQuote(marker)
+	a.Cfg.Train.Prepublish.Setup = "echo dependencies > " + shellQuote(marker)
 	must(t, os.WriteFile(filepath.Join(a.Root, ".git", "hooks", "post-commit"), []byte("#!/bin/sh\necho hook > "+shellQuote(marker)+"\n"), 0o755))
 	refs := git(t, a.Root, "for-each-ref", "--format=%(refname) %(objectname)")
 	worktrees := git(t, a.Root, "worktree", "list", "--porcelain")
@@ -22,7 +23,7 @@ func TestPRsPreviewChangesNoRefsStateWorktreesOrRemote(t *testing.T) {
 	must(t, err)
 	plan, err := a.PreviewPRs()
 	must(t, err)
-	if len(plan.Layers) != 2 || !plan.Layers[1].Recut || plan.Layers[1].Base != "main" || len(plan.Checks) != 1 {
+	if len(plan.Layers) != 2 || !plan.Layers[1].Recut || plan.Layers[1].Base != "main" || len(plan.Checks) != 2 || plan.Checks[0].Name != "setup" {
 		t.Fatalf("preview=%+v", plan)
 	}
 	if got := git(t, a.Root, "for-each-ref", "--format=%(refname) %(objectname)"); got != refs {
