@@ -33,11 +33,11 @@ func TestOperatorOverrideMovesAndPushesWithAudit(t *testing.T) {
 	if err := r.run("", "update-ref", "refs/heads/saddle/t1-one", r.rev("HEAD")); err == nil || !strings.Contains(err.Error(), "SADDLE_REFGUARD=off") {
 		t.Fatalf("denial must explain recovery: %v", err)
 	}
-	for _, args := range [][]string{
-		{"update-ref", "refs/heads/saddle/t1-one", r.rev("HEAD")},
-		{"-c", "alias.testpush=!printf 'refs/heads/saddle/t1-one abc refs/heads/saddle/t1-one def\\n' | \"$1\" refguard pre-push", "testpush", r.bin},
-	} {
-		cmd := exec.Command("git", append([]string{"-C", r.root}, args...)...)
+	move := exec.Command("git", "-C", r.root, "update-ref", "refs/heads/saddle/t1-one", r.rev("HEAD"))
+	push := exec.Command(r.bin, "refguard", "pre-push")
+	push.Dir = r.root
+	push.Stdin = strings.NewReader("refs/heads/saddle/t1-one abc refs/heads/saddle/t1-one def\n")
+	for _, cmd := range []*exec.Cmd{move, push} {
 		cmd.Env = append(os.Environ(), "SADDLE_TASK=", "SADDLE_TRAIN=", "SADDLE_REFGUARD=off")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("operator command: %v: %s", err, out)
