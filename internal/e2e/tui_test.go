@@ -22,5 +22,7 @@ func TestHarnessTUIDriver(t *testing.T) {
 	u.Type("hello from e2e")
 	u.Keys("Enter")
 	u.WaitScreen("fake orchestrator ack")
+	u.Keys("C-c")
+	u.WaitScreen("again to quit")
 	u.Quit()
 }
