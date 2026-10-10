@@ -296,7 +296,11 @@ type Train struct {
 // layer and everything above it stay unpublished. Restack runs only Cmd on
 // each layer it re-cut, so keep it cheap (spelling, migration numbers).
 type Prepublish struct {
-	Cmd string `toml:"cmd"`
+	// Setup prepares dependencies in a gate checkout before its checks. It
+	// runs after each checkout with uncached checks, so lockfile changes are
+	// honored. The gate's clean environment and timeout apply to it too.
+	Setup string `toml:"setup"`
+	Cmd   string `toml:"cmd"`
 	// Parallel is how many layers are checked at once; 1 by default.
 	Parallel int `toml:"parallel"`
 	// Timeout caps each check on each layer; a check that runs over is red.
@@ -648,6 +652,7 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # to top. A red layer and those above it stay unpublished. Restack re-runs
 # prepublish.cmd alone on each layer it re-cut, so keep it cheap.
 # prepublish.cmd = "make check/spelling check/migrations"
+# prepublish.setup = "flutter pub get" # dependencies needed by checks in fresh worktrees
 # prepublish.parallel = 1
 # prepublish.timeout = "30m"
 # prepublish.off = false
