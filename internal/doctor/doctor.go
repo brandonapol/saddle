@@ -546,6 +546,10 @@ var orchAllowRules = []string{"Bash(saddle:*)", "mcp__saddle"}
 // orchAllow checks that a Claude session in the repo has the orchestrator's
 // allowlist (#220), and that it doesn't hand the model git push.
 func (r *run) orchAllow() Result {
+	invalid, warnings := settingsProblems(r.env.Root())
+	if len(invalid) > 0 {
+		return fail(CheckOrchAllow, strings.Join(invalid, "; "), "repair the named settings file; saddle doctor --fix preserves malformed files")
+	}
 	have := map[string]bool{}
 	for _, a := range r.env.ClaudeAllow() {
 		have[a] = true
@@ -561,9 +565,12 @@ func (r *run) orchAllow() Result {
 		for i, m := range missing {
 			q[i] = fmt.Sprintf("%q", m)
 		}
-		return warn(CheckOrchAllow, "your Claude settings don't allow "+strings.Join(missing, ", ")+
+		return local(warn(CheckOrchAllow, strings.Join(append(warnings, "your Claude settings don't allow "+strings.Join(missing, ", ")+
 			", so an orchestrator in your own Claude session (the saddle plugin) can be blocked by the auto-mode classifier; saddle up's orchestrator has them",
-			`add them to .claude/settings.local.json: {"permissions": {"allow": [`+strings.Join(q, ", ")+`]}}; push through saddle publish, not git push`)
+		), "; "), `run saddle doctor --fix to merge into .claude/settings.local.json: {"permissions": {"allow": [`+strings.Join(q, ", ")+`]}}; push through saddle publish, not git push`))
+	}
+	if len(warnings) > 0 {
+		return warn(CheckOrchAllow, strings.Join(warnings, "; "), "correct the named entries; Saddle tool permissions use mcp__saddle and the server name is saddle")
 	}
 	return ok(CheckOrchAllow, strings.Join(orchAllowRules, ", ")+" allowed; git push goes through saddle publish")
 }

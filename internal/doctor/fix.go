@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -85,6 +86,11 @@ func describe(rs []Result) []Result {
 // Fix returns its error with the first run's results.
 func Fix(env Env, init func() error) ([]Result, error) {
 	before := Run(env)
+	for _, r := range before {
+		if r.Name == CheckOrchAllow && r.Status == Fail {
+			return before, errors.New(r.Detail)
+		}
+	}
 	broken := map[string]bool{}
 	for _, r := range before {
 		if r.Status != OK && r.Fixable {
@@ -96,6 +102,11 @@ func Fix(env Env, init func() error) ([]Result, error) {
 	}
 	if err := init(); err != nil {
 		return before, err
+	}
+	if broken[CheckOrchAllow] {
+		if err := fixOrchAllow(env.Root()); err != nil {
+			return before, err
+		}
 	}
 	after := Run(env)
 	for i, r := range after {
