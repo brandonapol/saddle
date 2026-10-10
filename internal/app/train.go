@@ -1275,6 +1275,7 @@ func short(sha string) string {
 // move the integration branch and other tasks' branches, and it knows the
 // train by SADDLE_TRAIN=1, set for this command alone.
 func trainGit(dir string, args ...string) (string, error) {
+	args = gitx.RefLogArgs(args)
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(), "SADDLE_TRAIN=1")
 	var out, errb bytes.Buffer

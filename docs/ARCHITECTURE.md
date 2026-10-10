@@ -300,3 +300,12 @@ plugin/              Claude Code plugin (MCP, hooks, /saddle:* commands)
 5. Planner (#7–#9) and the control TUI (#33 #34). From here you hand Saddle an
    epic and let it run.
 6. Reactor and git watcher (#45 #46), then the forecaster and dispatcher.
+
+### Restacking checked-out branches
+
+Restack checks `git worktree list` before moving refs. If a branch to re-cut is
+checked out in the main directory or another operator worktree, it stops before
+any move and names that path. Switch that checkout to another branch or detach
+HEAD, then run restack again. Clean managed task worktrees are refreshed with
+their branch; dirty task worktrees block the operation. Ref updates carry a
+`saddle:` reflog message so a later recovery can identify Saddle's moves.

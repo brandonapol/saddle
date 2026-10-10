@@ -19,6 +19,7 @@ func Calls() int64 { return calls.Load() }
 
 // Run executes git in dir and returns trimmed stdout. Errors carry stderr.
 func Run(dir string, args ...string) (string, error) {
+	args = RefLogArgs(args)
 	calls.Add(1)
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	var out, errb bytes.Buffer
@@ -31,6 +32,20 @@ func Run(dir string, args ...string) (string, error) {
 		return out.String(), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, msg)
 	}
 	return strings.TrimSpace(out.String()), nil
+}
+
+// RefLogArgs gives Saddle's ref updates an attributable reflog message,
+// preserving any more specific message supplied by the caller.
+func RefLogArgs(args []string) []string {
+	if len(args) == 0 || args[0] != "update-ref" {
+		return args
+	}
+	for _, arg := range args[1:] {
+		if arg == "-m" {
+			return args
+		}
+	}
+	return append([]string{"update-ref", "-m", "saddle: update refs"}, args[1:]...)
 }
 
 // Root returns the main checkout of the repo containing dir, even from inside a worktree.
