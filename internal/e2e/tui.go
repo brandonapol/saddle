@@ -103,6 +103,12 @@ func (u *TUI) WaitGone(s string) {
 // saddle up to exit.
 func (u *TUI) Quit() {
 	u.w.T.Helper()
+	// A journey may have armed quitting while interrupting a turn. Clear
+	// that state first, so the initial Ctrl+C cannot exit before our wait.
+	if strings.Contains(u.Screen(), "again to quit") {
+		u.Keys("Escape")
+		u.WaitGone("again to quit")
+	}
 	u.Keys("C-c")
 	u.WaitScreen("again to quit")
 	u.Keys("C-c")
