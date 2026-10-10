@@ -830,10 +830,7 @@ func (a *App) publish() (published, error) {
 	// stack is in layout order, so each group's tasks are bottom first.
 	for i, t := range stack {
 		var b strings.Builder
-		b.WriteString(t.Summary)
-		if t.Issue > 0 {
-			fmt.Fprintf(&b, "\n\nCloses #%d", t.Issue)
-		}
+		b.WriteString(stackCommentMarker + "\n")
 		var mine []store.Task
 		for j, u := range stack {
 			if groups[j] == groups[i] {
@@ -852,8 +849,14 @@ func (a *App) publish() (published, error) {
 		} else {
 			b.WriteString("\n\n---\nOpened by saddle; it doesn't depend on another saddle PR.\n")
 		}
-		b.WriteString("\nBase: `" + a.Cfg.Base + "`\n")
-		if _, err := gh(a.Root, "pr", "edit", t.PR, "--body", b.String()); err != nil {
+		base := a.Cfg.Base
+		for j, u := range mine {
+			if u.ID == t.ID && j > 0 {
+				base = mine[j-1].Branch
+			}
+		}
+		b.WriteString("\nBase: `" + base + "`\n")
+		if err := a.upsertStackComment(t.PR, b.String()); err != nil {
 			return res, err
 		}
 		res.urls = append(res.urls, t.PR)
