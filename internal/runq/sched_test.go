@@ -335,7 +335,9 @@ func fakeSystemdRun(t *testing.T, o *Options, socket bool) string {
 // TestScopeOffByDefault: without scope = "systemd" the child never goes
 // through systemd-run, even where it exists.
 func TestScopeOffByDefault(t *testing.T) {
-	o := Config{}.Apply(testOpts(t))
+	base := testOpts(t)
+	base.Getenv = envOf(map[string]string{EnvProcRoot: procRoot(t, "0.00", -1)})
+	o := Config{}.Apply(base)
 	log := fakeSystemdRun(t, &o, true)
 	q := open(t, o)
 	if err := q.Run(context.Background(), "go-test", PrioWorker, exec.Command("true"), nil); err != nil {
