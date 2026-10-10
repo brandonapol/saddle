@@ -145,8 +145,8 @@ func TestCustomStackOverridesClustering(t *testing.T) {
 	if !strings.Contains(pushed[0], t3.Branch) && !strings.Contains(pushed[1], t3.Branch) {
 		t.Fatalf("t3's PR wasn't opened before t1's: %q", pushed)
 	}
-	// The PR body lists the stack in its order.
-	body := lastBody(t, mustTask(t, a, t1.ID).PR)
+	// The managed PR comment lists the stack in its order.
+	body := lastStackComment(t, mustTask(t, a, t1.ID).PR)
 	i3, i1 := strings.Index(body, "t3 work"), strings.Index(body, "t1 work")
 	if i3 < 0 || i1 < 0 || !strings.Contains(body, "**Stack**") {
 		t.Fatalf("t1's body doesn't list the stack:\n%s", body)
@@ -303,24 +303,6 @@ func mustTask(t *testing.T, a *App, id string) store.Task {
 	tk, err := a.Store.Task(id)
 	must(t, err)
 	return tk
-}
-
-// lastBody is the last --body the fake gh got for pr. Bodies span lines, so
-// it reads the raw call log.
-func lastBody(t *testing.T, pr string) string {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join(fakeGHDir(t), "gh.log"))
-	must(t, err)
-	log := string(b)
-	i := strings.LastIndex(log, "pr edit "+pr+" --body ")
-	if i < 0 {
-		return ""
-	}
-	body := log[i:]
-	if j := strings.Index(body, "\nBase: `"); j >= 0 {
-		body = body[:j]
-	}
-	return body
 }
 
 // fakeStackGH stands in for gh's stack calls (see ghStackRun): it records

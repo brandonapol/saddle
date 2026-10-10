@@ -647,6 +647,7 @@ func (a *App) republish(plan []restacked, res *RestackResult) error {
 		return err
 	}
 	var groups []int
+	var bases []string
 	var linked []store.Task
 	for _, i := range order {
 		r := live[i]
@@ -676,6 +677,10 @@ func (a *App) republish(plan []restacked, res *RestackResult) error {
 		a.Store.Event(r.ID, "restack_retarget", r.PR+" → "+base)
 		linked = append(linked, r.Task)
 		groups = append(groups, layout[i].Group)
+		bases = append(bases, base)
+	}
+	if err := a.updateStackComments(linked, groups, bases); err != nil {
+		return err
 	}
 	a.linkStacks(linked, groups)
 	return nil
