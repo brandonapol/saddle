@@ -16,6 +16,5 @@ that operation:
   permanent branches, pushing, or contacting GitHub. A failure still exits
   with an error and its diagnostic output.
 
-Use `--json` with any mode for machine-readable results. A dry run is a
-snapshot: fetching a newer base or changing local landing state can change
-the next publication's plan.
+A dry run is a snapshot: fetching a newer base or changing local landing state
+can change the next publication's plan.
