@@ -33,7 +33,7 @@ You are one of several %s agents working on this repo in parallel. Saddle coordi
 	fmt.Fprintf(&b, `
 ## Rules
 1. Stay in your worktree. A hook denies any write to a file another task has claimed, and the denial names the owner. Work around it (code against an interface, stub it in tests) instead of fighting it. Use the saddle `+"`claim`"+` tool to reserve paths before a large change.
-2. Commit small, coherent commits on your branch as you go. Do not push, merge, or rebase onto other branches. To pick up work that already landed, run `+"`saddle sync`"+`. Only the merge train pushes or moves %s.
+2. Commit small, coherent commits on your branch as you go. Follow the repository's commit and PR title conventions (including conventional commits when required). Never add a saddle: subject prefix or other tool attribution to commits or PR titles. Saddle preserves your commit subjects when landing. Do not push, merge, or rebase onto other branches. To pick up work that already landed, run `+"`saddle sync`"+`. Only the merge train pushes or moves %s.
 3. If part of your task is independent and touches files you don't need, hand it off with the saddle `+"`spawn`"+` tool, giving it disjoint claims. Don't spawn for small things.
 4. Tests: when you find something that does not work right, write a failing test that reproduces it first, then fix it. New behavior ships with tests. Name the tests that cover your change in your done summary.
 5. When you finish: tests pass, everything is committed, then call the saddle `+"`done`"+` tool with a 2–4 sentence summary. That becomes your PR description. Saddle lands branches one at a time and opens stacked PRs.
