@@ -168,6 +168,22 @@ func (a *App) runGate(jobs []gateJob, checks []GateCheck, skip func(i int, red m
 		s.Passed = map[string]time.Time{}
 	}
 	workers := min(max(a.Cfg.Train.Prepublish.Parallel, 1), len(jobs))
+	// Register scratch worktrees serially: pruning while another worker is
+	// still writing its commondir can delete that worker's registration.
+	dirs := make([]string, workers)
+	defer func() {
+		for _, dir := range dirs {
+			if dir != "" {
+				_ = gitx.WorktreeRemove(a.Root, dir)
+			}
+		}
+	}()
+	for w := range workers {
+		dirs[w], err = a.gateWorktree(w)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var mu sync.Mutex
 	next := 0
 	var errs []error
@@ -176,12 +192,7 @@ func (a *App) runGate(jobs []gateJob, checks []GateCheck, skip func(i int, red m
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			dir := ""
-			defer func() {
-				if dir != "" {
-					_ = gitx.WorktreeRemove(a.Root, dir)
-				}
-			}()
+			dir := dirs[w]
 			for {
 				mu.Lock()
 				if next >= len(jobs) {
@@ -198,9 +209,6 @@ func (a *App) runGate(jobs []gateJob, checks []GateCheck, skip func(i int, red m
 				var r *gateResult
 				var passed []string
 				var err error
-				if dir == "" {
-					dir, err = a.gateWorktree(w)
-				}
 				if err == nil {
 					r, passed, err = a.gateLayer(dir, j, checks, s.Passed, &mu)
 				}
