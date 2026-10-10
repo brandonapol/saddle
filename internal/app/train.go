@@ -784,6 +784,7 @@ func (a *App) publish() (published, error) {
 	}
 	var stack []store.Task
 	var groups []int
+	var bases []string
 	done := map[int]bool{}
 	for _, i := range order {
 		if i >= stopAt {
@@ -826,36 +827,12 @@ func (a *App) publish() (published, error) {
 		done[i] = true
 		stack = append(stack, t)
 		groups = append(groups, layout[i].Group)
+		bases = append(bases, prBase)
 	}
-	// stack is in layout order, so each group's tasks are bottom first.
-	for i, t := range stack {
-		var b strings.Builder
-		b.WriteString(t.Summary)
-		if t.Issue > 0 {
-			fmt.Fprintf(&b, "\n\nCloses #%d", t.Issue)
-		}
-		var mine []store.Task
-		for j, u := range stack {
-			if groups[j] == groups[i] {
-				mine = append(mine, u)
-			}
-		}
-		if len(mine) > 1 {
-			b.WriteString("\n\n---\n**Stack** (opened by saddle; merge bottom-up)\n\n")
-			for j := len(mine) - 1; j >= 0; j-- {
-				mark := ""
-				if mine[j].ID == t.ID {
-					mark = " 👈"
-				}
-				fmt.Fprintf(&b, "%d. %s %s%s\n", j+1, mine[j].PR, mine[j].Title, mark)
-			}
-		} else {
-			b.WriteString("\n\n---\nOpened by saddle; it doesn't depend on another saddle PR.\n")
-		}
-		b.WriteString("\nBase: `" + a.Cfg.Base + "`\n")
-		if _, err := gh(a.Root, "pr", "edit", t.PR, "--body", b.String()); err != nil {
-			return res, err
-		}
+	if err := a.updateStackComments(stack, groups, bases); err != nil {
+		return res, err
+	}
+	for _, t := range stack {
 		res.urls = append(res.urls, t.PR)
 	}
 	res.links = a.linkStacks(stack, groups)

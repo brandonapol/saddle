@@ -139,8 +139,17 @@ func TestJourneyParallelLandPRsAutomerge(t *testing.T) {
 	if low.Base != "main" || high.Base != low.Head {
 		t.Fatalf("stack bases: %s on %s, %s on %s; want t2 stacked on t1 on main", low.Head, low.Base, high.Head, high.Base)
 	}
-	if !strings.Contains(high.Body, "Stack") {
-		t.Fatalf("top PR body lacks the stack list:\n%s", high.Body)
+	if len(high.Comments) != 1 || !strings.Contains(high.Comments[0].Body, "<!-- saddle:stack -->") || !strings.Contains(high.Comments[0].Body, "Base: `"+low.Head+"`") {
+		t.Fatalf("top PR lacks its stack comment and actual base: %+v", high.Comments)
+	}
+	const authorBody = "Reviewer notes.\n\nCloses #42"
+	if r := w.Exec(w.Repo, "gh", "pr", "edit", urls["t2"], "--body", authorBody); r.Code != 0 {
+		t.Fatalf("edit author description: %s", r)
+	}
+	w.MustSaddle("prs")
+	high = prNumber(t, w.GHState(), urls["t2"])
+	if high.Body != authorBody || len(high.Comments) != 1 {
+		t.Fatalf("repeat prs changed the author body or duplicated comments: %+v", high)
 	}
 
 	// Off by default: a tick merges nothing.
@@ -161,6 +170,9 @@ func TestJourneyParallelLandPRsAutomerge(t *testing.T) {
 	s = w.GHState()
 	if p := prNumber(t, s, urls["t2"]); p.Base != "main" {
 		t.Fatalf("after t1 merged, t2's PR targets %s, want main (restack retargets it)", p.Base)
+	}
+	if p := prNumber(t, s, urls["t2"]); p.Body != authorBody || len(p.Comments) != 1 || !strings.Contains(p.Comments[0].Body, "Base: `main`") {
+		t.Fatalf("restack changed the author body or missed the updated stack comment: %+v", p)
 	}
 	if p := prNumber(t, s, urls["t1"]); p.State != "MERGED" || p.MergedBy != "squash" {
 		t.Fatalf("t1's PR = %+v", p)
