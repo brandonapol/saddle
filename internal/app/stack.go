@@ -488,55 +488,43 @@ func (a *App) moveStack(plan []restacked, integ, base string, res *RestackResult
 			}
 		}
 	}
-	move := func(task, ref, old, new string) error {
-		if _, err := trainGit(a.Root, "update-ref", ref, new, old); err != nil {
-			return fmt.Errorf("%s moved during restack: %w", ref, err)
-		}
-		res.Moves = append(res.Moves, RestackMove{Task: task, Ref: ref, Old: old, New: new})
-		a.Store.Event(task, "restack", fmt.Sprintf("%s %s → %s", ref, short(old), short(new)))
-		return nil
-	}
+	j := restackJournal{Plan: plan}
 	for _, r := range plan {
-		switch {
-		case r.gone():
-			res.Merged = append(res.Merged, r.ID)
-			a.Store.Event(r.ID, "restack_merged", "base already has "+r.ID+"'s work")
-			if err := a.Store.SetTrain(r.ID, TrainMerged, r.rangeNote(), false); err != nil {
-				return err
-			}
-			continue
-		case r.NewTo != r.To:
-			if err := move(r.ID, "refs/heads/"+r.Branch, r.To, r.NewTo); err != nil {
-				return err
-			}
+		if !r.gone() && r.NewTo != r.To {
+			j.Moves = append(j.Moves, RestackMove{Task: r.ID, Ref: "refs/heads/" + r.Branch, Old: r.To, New: r.NewTo})
 			if a.checkedOut(r.Task) {
-				if _, err := trainGit(r.Worktree, "reset", "-q", "--hard"); err != nil {
-					return err
-				}
+				j.Checkouts = append(j.Checkouts, r.Task)
 			}
-		}
-		if err := a.Store.SetTrain(r.ID, store.TrainOK, r.NewFrom+".."+r.NewTo, false); err != nil {
-			return err
 		}
 	}
 	tip := base
 	if len(plan) > 0 {
 		tip = plan[len(plan)-1].NewTo
 	}
-	if tip == integ {
-		return nil
-	}
-	if _, err := gitx.Run(a.Root, "merge-base", "--is-ancestor", integ, tip); err != nil {
-		// A rewrite, not a fast-forward: keep the old tip so recovery is
-		// one update-ref (#219).
-		backup := fmt.Sprintf("refs/saddle/integration-backups/%s-%s", time.Now().UTC().Format("20060102T150405Z"), short(integ))
-		if _, err := trainGit(a.Root, "update-ref", backup, integ, ""); err != nil {
-			return fmt.Errorf("saving %s's old tip before restack: %w", a.Cfg.Integration, err)
+	if tip != integ {
+		j.Moves = append(j.Moves, RestackMove{Ref: "refs/heads/" + a.Cfg.Integration, Old: integ, New: tip})
+		if _, err := gitx.Run(a.Root, "merge-base", "--is-ancestor", integ, tip); err != nil {
+			backup := fmt.Sprintf("refs/saddle/integration-backups/%s-%s", time.Now().UTC().Format("20060102T150405.000000000Z"), short(integ))
+			if _, err := trainGit(a.Root, "update-ref", backup, integ, ""); err != nil {
+				return err
+			}
+			res.Backup = backup
+			a.Store.Event("", "restack_backup", backup+" "+short(integ))
 		}
-		res.Backup = backup
-		a.Store.Event("", "restack_backup", backup+" "+short(integ))
 	}
-	return move("", "refs/heads/"+a.Cfg.Integration, integ, tip)
+	if err := a.writeRestackJournal(j); err != nil {
+		return err
+	}
+	if err := a.applyRestackJournal(j, false); err != nil {
+		return err
+	}
+	res.Moves = j.Moves
+	for _, r := range plan {
+		if r.gone() {
+			res.Merged = append(res.Merged, r.ID)
+		}
+	}
+	return nil
 }
 
 // verifyKept checks the rebuilt stack against the landed one before any ref
