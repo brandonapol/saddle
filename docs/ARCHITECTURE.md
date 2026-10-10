@@ -300,29 +300,3 @@ plugin/              Claude Code plugin (MCP, hooks, /saddle:* commands)
 5. Planner (#7–#9) and the control TUI (#33 #34). From here you hand Saddle an
    epic and let it run.
 6. Reactor and git watcher (#45 #46), then the forecaster and dispatcher.
-
-### Restacking checked-out branches
-
-Restack checks `git worktree list` before moving refs. If a branch to re-cut is
-checked out in the main directory or another operator worktree, it stops before
-any move and names that path. Switch that checkout to another branch or detach
-HEAD, then run restack again. Clean managed task worktrees are refreshed with
-their branch; dirty task worktrees block the operation. Ref updates carry a
-`saddle:` reflog message so a later recovery can identify Saddle's moves.
-
-### Interrupted restack recovery
-
-Restack computes the rebuilt tips before changing branches, saves a synced
-`.saddle/restack-journal.json`, then updates the task and integration refs with
-one `git update-ref --stdin` transaction using compare-and-swap old tips. It
-detaches clean managed checkouts before the transaction, so an interrupted
-refresh leaves their files matching their detached HEAD. SQLite ranges and
-checkouts are refreshed afterwards; only then is the journal removed.
-
-While a journal exists, train operations stop with recovery instructions and
-`saddle doctor` reports it. `saddle restack --continue` finishes the saved ref,
-range and checkout updates; `saddle restack --abort` restores the old tips and
-ranges. Both handle interruption before or after the Git commit and retain any
-uncommitted work. Abort preserves a ref changed externally rather than erasing
-it; subsequent drift checks identify it. Run `saddle prs` after recovery to
-retry remote publication. No hook removal or database editing is needed.
