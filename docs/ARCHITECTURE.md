@@ -300,11 +300,3 @@ plugin/              Claude Code plugin (MCP, hooks, /saddle:* commands)
 5. Planner (#7–#9) and the control TUI (#33 #34). From here you hand Saddle an
    epic and let it run.
 6. Reactor and git watcher (#45 #46), then the forecaster and dispatcher.
-
-### Repairing orchestrator permissions
-
-`saddle doctor --fix` merges `Bash(saddle:*)` and `mcp__saddle` into
-`.claude/settings.local.json`, preserving other settings and permission rules.
-Malformed JSON is reported with its path and left untouched. Doctor also warns
-about single-underscore `mcp_saddle...` permission rules and Saddle tool names
-in `enabledMcpjsonServers`; that list takes the server name `saddle`.
