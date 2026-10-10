@@ -189,6 +189,7 @@ func TestJourneyTerminalToggleEncodings(t *testing.T) {
 		t.Fatalf("a toggle sequence leaked into the shell:\n%s", s)
 	}
 	u.Keys("Escape")
+	u.WaitGone("esc chat") // wait for terminal focus to return before Ctrl+C
 	u.Quit()
 }
 

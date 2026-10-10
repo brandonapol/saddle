@@ -493,6 +493,9 @@ func (r *run) tool(name, cmd, versionFlag, fix string) Result {
 }
 
 func (r *run) hooks() Result {
+	if app.RestackInterrupted(r.env.Root()) {
+		return fail(CheckHooks, "interrupted restack journal in .saddle/"+app.RestackJournalFile, "run saddle restack --continue or saddle restack --abort")
+	}
 	hs, err := r.env.Hooks()
 	if err != nil {
 		return warn(CheckHooks, "could not read: "+err.Error(), "run saddle init inside the repo")

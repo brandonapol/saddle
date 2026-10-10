@@ -28,10 +28,11 @@ func TestJourneyGateHangTimesOut(t *testing.T) {
 	gate := fmt.Sprintf("if [ -e %[1]s ]; then rm %[1]s; sleep 600 & echo $! > %[2]s; echo gate-hanging; wait; fi; true", shq(hang), shq(child))
 	w := world(t, Options{TestCmd: gate, Tables: "[train]\nno_auto_rebase = true\ngate_timeout = \"2s\"\n"})
 	w.Spawn("t1", "Alpha work", []string{"alpha/**"}, finished("alpha", "alpha\n")...)
+	// The one-shot hang belongs to the first queued task. Wait for t1's
+	// done call before starting t2, whose worker could otherwise finish first.
+	w.WaitTask("t1", "queued", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
 	w.Spawn("t2", "Beta work", []string{"beta/**"}, finished("beta", "beta\n")...)
-	for _, id := range []string{"t1", "t2"} {
-		w.WaitTask(id, "queued", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
-	}
+	w.WaitTask("t2", "queued", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
 	must(t, os.WriteFile(hang, nil, 0o644))
 
 	start := time.Now()
