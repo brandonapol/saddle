@@ -50,9 +50,12 @@ func runTests(m *testing.M) int {
 		"XDG_CONFIG_HOME": filepath.Join(tmp, "config"),
 		// Tests act as nobody in particular unless they say otherwise; the
 		// ref guard Init installs reads these.
-		"SADDLE_ROOT":         "",
-		"SADDLE_TASK":         "",
-		"SADDLE_TRAIN":        "",
+		"SADDLE_ROOT":  "",
+		"SADDLE_TASK":  "",
+		"SADDLE_TRAIN": "",
+		// Ordinary gate tests must not queue behind the host's live load.
+		// Load-gate tests supply their own proc fixture explicitly.
+		runq.EnvProcRoot:      filepath.Join(tmp, "no-proc"),
 		"GIT_AUTHOR_NAME":     "t",
 		"GIT_AUTHOR_EMAIL":    "t@example.com",
 		"GIT_COMMITTER_NAME":  "t",
