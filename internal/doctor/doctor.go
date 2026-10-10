@@ -515,7 +515,7 @@ func (r *run) hooks() Result {
 		}
 		names = append(names, name)
 	}
-	return ok(CheckHooks, strings.Join(names, ", "))
+	return ok(CheckHooks, strings.Join(names, ", ")+"; operator recovery: SADDLE_REFGUARD=off git ... (outside a task; logged)")
 }
 
 // pushScratch is the ref the push check pretends to create. --dry-run never

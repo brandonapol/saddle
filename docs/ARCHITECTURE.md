@@ -300,3 +300,13 @@ plugin/              Claude Code plugin (MCP, hooks, /saddle:* commands)
 5. Planner (#7–#9) and the control TUI (#33 #34). From here you hand Saddle an
    epic and let it run.
 6. Reactor and git watcher (#45 #46), then the forecaster and dispatcher.
+
+### Operator recovery of guarded refs
+
+From a normal shell outside a Saddle task, use `SADDLE_REFGUARD=off git
+update-ref -m 'operator recovery' <ref> <new> <old>` to repair a branch, or
+`SADDLE_REFGUARD=off git push ...` to publish a repair. The guard records each
+protected ref update or push with actor `operator` in `.saddle/state.db`, which
+must be available. Task processes with `SADDLE_TASK` set cannot use this override.
+The repository's chained hooks still run. The denial message and `saddle doctor`
+both show this recovery path; deleting the hooks is unnecessary.
