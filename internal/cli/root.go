@@ -572,20 +572,48 @@ func syncCmd() *cobra.Command {
 }
 
 func prsCmd() *cobra.Command {
-	return &cobra.Command{
+	var dryRun, pushOnly, gateOnly bool
+	cmd := &cobra.Command{
 		Use:   "prs",
 		Short: "Push landed branches and open or update a stack of PRs",
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
+			if dryRun {
+				plan, err := a.PreviewPRs()
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), plan.Note)
+				for _, layer := range plan.Layers {
+					fmt.Fprintf(cmd.OutOrStdout(), "stack %d: %s (%s) -> %s; head %s; re-cut=%t\n", layer.Group+1, layer.Task, layer.Branch, layer.Base, short(layer.Head), layer.Recut)
+				}
+				for _, check := range plan.Checks {
+					fmt.Fprintf(cmd.OutOrStdout(), "gate %s: %s\n", check.Name, check.Cmd)
+				}
+				return nil
+			}
+			if gateOnly {
+				_, err := a.PRsWithOptions(app.PRsOptions{GateOnly: true})
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "pre-publish gate passed; no branches pushed or PRs changed")
+				return nil
+			}
 			if err := a.CheckMergeSettings(cmd.ErrOrStderr()); err != nil {
 				return err
 			}
-			urls, err := a.PRs()
+			urls, err := a.PRsWithOptions(app.PRsOptions{PushOnly: pushOnly})
 			for _, u := range urls {
 				fmt.Fprintln(cmd.OutOrStdout(), u)
 			}
 			return err
 		}),
 	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview stack layout and gate commands without ref, state, remote or PR changes")
+	cmd.Flags().BoolVar(&pushOnly, "push-only", false, "check and push branches without creating or updating PRs")
+	cmd.Flags().BoolVar(&gateOnly, "gate-only", false, "run pre-publish checks without restacking or pushing")
+	cmd.MarkFlagsMutuallyExclusive("dry-run", "push-only", "gate-only")
+	return cmd
 }
 
 func messageCmd() *cobra.Command {

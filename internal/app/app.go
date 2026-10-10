@@ -36,7 +36,8 @@ type App struct {
 	// (#321); nil means the [notify] desktop and webhook settings.
 	OwnerNotify func(text string)
 
-	wake wakeState // idle notice wake-ups (#183)
+	wake          wakeState // idle notice wake-ups (#183)
+	previewLayout bool      // compute layout with Git objects, without worktree refs or hooks
 }
 
 // Open finds the repo from dir (SADDLE_ROOT wins) and opens its state.

@@ -747,7 +747,9 @@ type published struct {
 
 // publish is PRs. Layers go out in the layout's order (see stackLayout), so
 // a PR's base branch is pushed before the PR targets it.
-func (a *App) publish() (published, error) {
+func (a *App) publish() (published, error) { return a.publishMode(false) }
+
+func (a *App) publishMode(pushOnly bool) (published, error) {
 	var res published
 	unlock, err := a.lockTrain()
 	if err != nil {
@@ -832,6 +834,11 @@ func (a *App) publish() (published, error) {
 		t := l.Task
 		if err := a.pushLanded(t.Branch, layout[i].Head); err != nil {
 			return res, err
+		}
+		if pushOnly {
+			done[i] = true
+			res.urls = append(res.urls, t.Branch)
+			continue
 		}
 		if layout[i].Head != l.To {
 			a.Store.Event(t.ID, "pr_layout", fmt.Sprintf("%s published as %s on %s", short(l.To), short(layout[i].Head), a.prBase(landed, layout, i)))

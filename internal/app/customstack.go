@@ -537,7 +537,7 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 			if tip == l.From {
 				continue
 			}
-			if dir == "" {
+			if dir == "" && !a.previewLayout {
 				dir = a.stateDir("layout")
 				_ = os.RemoveAll(dir)
 				_, _ = gitx.Run(a.Root, "worktree", "prune")
@@ -546,7 +546,7 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 					return nil, nil, err
 				}
 			}
-			head, ok, err := replayOnto(dir, tip, l.From, l.To)
+			head, ok, err := a.replayLayout(dir, tip, l.From, l.To)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -561,8 +561,10 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 		}
 		if c, ok := inCustom[conflict]; ok && ordered[c] {
 			ordered[c] = false
-			a.Store.Event(stack[conflict].ID, "custom_stack_order",
-				"its commits don't apply in the stack's order, so the stack is published in train order")
+			if !a.previewLayout {
+				a.Store.Event(stack[conflict].ID, "custom_stack_order",
+					"its commits don't apply in the stack's order, so the stack is published in train order")
+			}
 			continue
 		}
 		j, ok := needs(conflict, files, find)
