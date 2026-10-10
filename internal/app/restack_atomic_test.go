@@ -88,6 +88,13 @@ func TestInterruptedRestackCanContinueOrAbort(t *testing.T) {
 				if _, err := a.PRs(); err == nil || !strings.Contains(err.Error(), "--continue") {
 					t.Fatalf("publish must wait for recovery: %v", err)
 				}
+				unlock, ok, err := a.TryLockTrain()
+				if unlock != nil {
+					unlock()
+				}
+				if ok || err == nil || !strings.Contains(err.Error(), "--continue") {
+					t.Fatalf("watcher must wait for recovery: ok=%t err=%v", ok, err)
+				}
 				// Simulate process death after detaching a checkout, optionally
 				// after Git committed but before SQLite or checkout refresh.
 				asTrain(t, task.Worktree, "checkout", "-q", "--detach")

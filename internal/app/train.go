@@ -170,7 +170,7 @@ func (a *App) lockTrain() (unlock func(), err error) {
 
 func (a *App) lockTrainForRecovery() (unlock func(), err error) {
 	for wait := 50 * time.Millisecond; ; wait = min(2*wait, time.Second) {
-		unlock, ok, err := a.TryLockTrain()
+		unlock, ok, err := a.tryLockTrain()
 		if err != nil || ok {
 			return unlock, err
 		}
@@ -187,6 +187,19 @@ const EventTrainLockStolen = "train_lock_stolen"
 // The holder writes its pid and when it took the lock into the file, for
 // stealTrainLock.
 func (a *App) TryLockTrain() (unlock func(), ok bool, err error) {
+	unlock, ok, err = a.tryLockTrain()
+	if err != nil || !ok {
+		return unlock, ok, err
+	}
+	if err := a.pendingRestack(); err != nil {
+		unlock()
+		return nil, false, err
+	}
+	return unlock, true, nil
+}
+
+// Recovery takes the same lock while allowing a pending restack journal.
+func (a *App) tryLockTrain() (unlock func(), ok bool, err error) {
 	path := a.stateDir("train.lock")
 	for {
 		lock, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
