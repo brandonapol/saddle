@@ -689,6 +689,7 @@ func hookCmd() *cobra.Command {
 func refguardCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "refguard <state|pre-push>",
+		Long:   "Git hook entrypoint. For operator recovery outside a Saddle task, run SADDLE_REFGUARD=off git ... . Each guarded move or push is logged as operator in .saddle/state.db; repository hooks still run.",
 		Short:  "Git reference-transaction and pre-push hook guarding saddle's branches",
 		Args:   cobra.ExactArgs(1),
 		Hidden: true,
