@@ -35,8 +35,9 @@ const (
 
 // Actors that aren't tasks.
 const (
-	Train   = "train"
-	Unknown = "unknown"
+	Train    = "train"
+	Unknown  = "unknown"
+	Operator = "operator"
 )
 
 // marker identifies a hook saddle wrote, so Install never clobbers anyone else's.
@@ -61,6 +62,9 @@ func Actor(getenv func(string) string) string {
 	}
 	if t := getenv("SADDLE_TASK"); t != "" {
 		return t
+	}
+	if getenv("SADDLE_REFGUARD") == "off" {
+		return Operator
 	}
 	return Unknown
 }
@@ -229,6 +233,9 @@ func Hook(state string, r io.Reader, getenv func(string) string) error {
 	}
 
 	actor := Actor(getenv)
+	if actor == Operator && st == nil {
+		return errors.New("[saddle] operator override needs .saddle/state.db to record the recovery; run saddle init first")
+	}
 	var denied []error
 	for _, u := range us {
 		// git passes a zero old value when the caller didn't pin one, so read
@@ -245,7 +252,7 @@ func Hook(state string, r io.Reader, getenv func(string) string) error {
 			Denied: check(actor, strings.TrimPrefix(u.ref, "refs/heads/"), cfg.Integration, isZero(u.new), exists, live)}
 		record(st, e)
 		if e.Denied != "" {
-			denied = append(denied, fmt.Errorf("[saddle] %s may not update %s: %s", actor, u.ref, e.Denied))
+			denied = append(denied, fmt.Errorf("[saddle] %s may not update %s: %s. %s", actor, u.ref, e.Denied, recoveryHint))
 		}
 	}
 	return errors.Join(denied...)
@@ -266,7 +273,7 @@ func Push(remote string, r io.Reader, getenv func(string) string) error {
 			continue
 		}
 		e := Event{Ref: f[2], Old: f[3], New: f[1], Actor: actor, Remote: remote}
-		if actor != Train {
+		if actor != Train && actor != Operator {
 			e.Denied = "only the merge train pushes saddle's branches"
 		}
 		es = append(es, e)
@@ -281,11 +288,14 @@ func Push(remote string, r io.Reader, getenv func(string) string) error {
 	if st != nil {
 		defer func() { _ = st.Close() }()
 	}
+	if actor == Operator && st == nil {
+		return errors.New("[saddle] operator override needs .saddle/state.db to record the recovery; run saddle init first")
+	}
 	var denied []error
 	for _, e := range es {
 		record(st, e)
 		if e.Denied != "" {
-			denied = append(denied, fmt.Errorf("[saddle] %s may not push %s: %s", actor, e.Ref, e.Denied))
+			denied = append(denied, fmt.Errorf("[saddle] %s may not push %s: %s. %s", actor, e.Ref, e.Denied, recoveryHint))
 		}
 	}
 	return errors.Join(denied...)
@@ -330,7 +340,7 @@ func record(st *store.Store, e Event) {
 
 // check returns why actor may not update branch, or "" to allow it.
 func check(actor, branch, integration string, del, exists bool, live func(string) bool) string {
-	if actor == Train {
+	if actor == Train || actor == Operator {
 		return ""
 	}
 	if branch == integration {
@@ -350,6 +360,8 @@ func check(actor, branch, integration string, del, exists bool, live func(string
 	}
 	return ""
 }
+
+const recoveryHint = "For operator recovery from a normal shell outside a task, use SADDLE_REFGUARD=off git ...; the override is logged in .saddle/state.db and keeps the repo's own hooks"
 
 // Owner returns the task a saddle branch belongs to: saddle/<task>-<slug>.
 func Owner(branch string) string {
