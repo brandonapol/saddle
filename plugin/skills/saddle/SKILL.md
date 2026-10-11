@@ -6,7 +6,7 @@ description: Run several Claude Code agents on this repo in parallel with saddle
 Saddle is orchestrated from this session through its MCP tools and a background engine.
 
 1. Run `saddle plugin brief` and read all of it. It is your operating manual as orchestrator and ends with where things stand right now.
-2. Follow it for the rest of the session. In particular: start `saddle plugin engine` in the background if it isn't running, show the plan before spawning, and keep one background `saddle plugin wait` running while agents work.
+2. Follow it for the rest of the session. In particular: start `saddle plugin engine` in the background if it isn't running, show the plan before spawning, and, unless the brief says the saddle mod is active in this session, keep one background `saddle plugin wait` running while agents work. When the mod is active it wakes you on events itself; don't start a wait.
 
 In a repo saddle isn't trusted in, `saddle plugin brief` prints a "Do you trust" prompt instead and writes nothing: ask the user that question in chat with both options, run `saddle trust --yes` only if they choose 1, then run the brief again. If they choose 2, stop.
 
