@@ -197,6 +197,9 @@ func TestRestackNamesBaseItChangesBack(t *testing.T) {
 	if got := baseEdits(ghLog()[before:])[t1.PR]; got != "main" {
 		t.Fatalf("t1's base = %q, want main", got)
 	}
+	if slices.Contains(a.TaskAfter("t1"), "t2") {
+		t.Fatal("a retarget onto a later layer was recorded as an edge the layout can't keep")
+	}
 	if !eventWith(t, a, "t1", EventPRBase, t2.Branch+" → main") {
 		t.Fatal("no pr_base event naming the old and new base")
 	}
@@ -248,6 +251,28 @@ func TestRestackHoldsLayerUntilDependencyMerges(t *testing.T) {
 	}
 	if got := baseEdits(ghLog()[before:])[t2.PR]; got != "main" {
 		t.Fatalf("after t1 merged, t2's base = %q, want main", got)
+	}
+}
+
+// #358 item 3: when a PR another layer builds on merges, saddle logs it
+// and the orchestrator's notice says the next restack moves that layer onto
+// base.
+func TestMergedDependencyNamesItsDependents(t *testing.T) {
+	t.Parallel()
+	a := trainSetup(t)
+	_, _ = originWithGh(t, a)
+	t1 := landSpec(t, a, SpawnReq{ID: "t1", Title: "one"}, map[string]string{"one.txt": "one\n"})
+	landSpec(t, a, SpawnReq{ID: "t2", Title: "two", After: []string{"t1"}}, map[string]string{"two.txt": "two\n"})
+	if _, err := a.PRs(); err != nil {
+		t.Fatal(err)
+	}
+	t1, _ = a.Store.Task(t1.ID)
+	setPR(t, t1.PR, "MERGED", "main")
+	if _, err := a.ReconcileStack(a.ghLookup); err != nil {
+		t.Fatal(err)
+	}
+	if !eventWith(t, a, "t1", "dependents_unblocked", "t2") {
+		t.Fatal("no dependents_unblocked event naming t2")
 	}
 }
 

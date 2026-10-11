@@ -39,7 +39,7 @@ func originWithGh(t *testing.T, a *App) (string, func() []string) {
 	must(t, os.MkdirAll(bin, 0o755))
 	log := filepath.Join(bin, "gh.log")
 	// pr view answers from a per-PR file (see setPR), else as an open PR;
-// issue view answers from a per-issue file (see setIssue);
+	// issue view answers from a per-issue file (see setIssue);
 	// pr edit --base fails on a closed or merged PR, as GitHub does.
 	script := `#!/bin/sh
 echo "$*" >> "` + log + `"

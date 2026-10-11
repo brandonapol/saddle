@@ -22,9 +22,10 @@ import (
 //
 //   - the task's title, prompt or issue names an earlier stacked task: its
 //     id, issue, PR or branch ("follow-up to #3093");
-//   - someone retargeted the task's PR onto another stacked task's branch
-//     outside saddle (gh pr edit --base). Saddle remembers the base it last
-//     set on each PR, so a base it didn't set is a person's.
+//   - someone retargeted the task's PR onto the branch of a stacked task
+//     that landed before it, outside saddle (gh pr edit --base). Saddle
+//     remembers the base it last set on each PR, so a base it didn't set is
+//     a person's.
 //
 // Saddle changes a PR's base only out loud: when the base it sets differs
 // from the one GitHub has, it logs a pr_base event naming both, and tells the
@@ -155,8 +156,10 @@ func (a *App) noteDependencies(stack []landedTask, info map[string]PRInfo) error
 		if l.PR == "" || live == "" || live == saved[l.ID] || live == a.Cfg.Base {
 			continue
 		}
+		// Only a layer that landed before it can sit under it; a retarget
+		// anywhere else is changed back, out loud (see notePRBase).
 		j := slices.IndexFunc(stack, func(o landedTask) bool { return o.Branch == live })
-		if j < 0 || j == i {
+		if j < 0 || j >= i {
 			continue
 		}
 		added, err := a.addAfter(l.ID, stack[j].ID, fmt.Sprintf("manual retarget: %s was moved onto %s outside saddle", l.PR, live))

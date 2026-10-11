@@ -116,6 +116,20 @@ stacks on the latest earlier task that changed the same files, not on
 whatever landed just before it (#226). Saddle restacks a stack when
 a lower layer changes and retargets it when a lower layer merges.
 
+**Dependencies stack whatever the file overlap (#193, #358).** A task stacks
+on the earlier tasks it runs after, and those edges (`.saddle/deps/<task>`,
+each logged as a `depends_on` event) come from three places: `after` on
+spawn; the task's title, prompt or issue naming an earlier stacked task's id,
+issue, PR or branch ("follow-up to #3093"), which `prs` and `restack` read
+before laying out the stack; and a PR someone retargeted by hand (below). A
+layer whose dependency is out of its stack but still has an open PR (in the
+merge queue, say) is left where it is rather than moved onto base without
+it; once that PR merges, the orchestrator hears which layers built on it and
+the next restack moves them onto base. The pre-publish gate checks each
+layer at its PR head on its PR's own base, in `prs` and in `restack`, never
+at the integration tip, which holds other stacks' work too: a red head is
+neither published nor pushed.
+
 ### Stack upkeep when people use GitHub (#119, #123)
 
 The stack is only the landed tasks whose train entry is `landed` and that
@@ -141,6 +155,14 @@ close PRs and delete branches, and it handles those without anyone editing
 - **Freezing only what is affected.** The sentinel flag makes `prs` publish
   the layers below the first broken one and stop there. `land` holds back only
   queued work that changes files the broken layers changed.
+- **Manual retargets stick (#359).** Saddle remembers the base it last set
+  on each PR (`.saddle/pr-bases.json`). A base GitHub reports that saddle
+  didn't set, on the branch of a stacked task that landed earlier, is kept:
+  it becomes a recorded dependency, so `restack` and `prs` stack the PR there.
+  Saddle never changes a base silently: each change from what GitHub had is a
+  `pr_base` event naming the old and new base, and undoing a hand-set base
+  (onto main, a later layer or a branch outside the stack) also tells the
+  orchestrator why and how to keep tasks together (`saddle stack create`).
 - **needs-human means a decision.** Only a conflict labels PRs, and the comment
   names the conflict. Base moving, a merged bottom PR or a drifted branch just
   flag the stack for `restack`.
