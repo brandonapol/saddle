@@ -8,5 +8,13 @@
   "homepage": "https://github.com/brandonapol/saddle",
   "repository": "https://github.com/brandonapol/saddle",
   "keywords": ["agents", "parallel", "orchestration", "worktrees", "merge-train"],
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "claimGuard": {
+      "type": "boolean",
+      "title": "Claim guard in worker sessions",
+      "description": "In saddle's worker sessions, hold Edit, Write and NotebookEdit calls (and obvious Bash writes) on paths the task has not claimed, and ask the worker to claim first. The orchestrator's session is never guarded.",
+      "default": false
+    }
+  }
 }

@@ -28,9 +28,11 @@ settings hooks under `hooks`. A session on an older Claude Code ignores
   and the saddle command each of its buttons runs.
 - `hooks/commands.ts`: parsing `/saddle`'s arguments into the saddle command
   it runs, and its reply.
+- `hooks/claimguard.tsx`: the claim guard for worker sessions (below): claim
+  matching, the Bash write targets, its `tool.call` hook and its band.
 - `types/index.d.ts`: the state contract (`SaddleSnapshot`, the pane's
   view `SaddlePane`: its tab and scroll offset, and the band's `SaddleBand`:
-  the screen Peek fetched). Later hooks
+  the screen Peek fetched, and the claim guard's `SaddleGuard`). Later hooks
   (the pane, the needs-you band, the commands) read it with
   `read($, atom({ plugin: 'saddle', key: 'snapshot' } as const, null))`.
 
@@ -110,6 +112,36 @@ These are separate from the plugin's markdown commands, which Claude runs
 as a turn: `/saddle:status` (Claude sets saddle up if needed and summarizes
 status) and `/saddle:orchestrate`. Note the space in `/saddle status`
 versus the colon in `/saddle:status`.
+
+### The claim guard (worker sessions)
+
+`hooks/claimguard.tsx` is an opt-in guard for saddle's worker sessions
+(#171). Turn it on with the plugin's `claimGuard` option (`/config`, or
+`pluginConfigs.saddle.options.claimGuard: true` in settings). It acts only
+where `SADDLE_TASK` is set, so the orchestrator's own session is never
+guarded.
+
+saddle's PreToolUse hook already denies a write into another task's claims
+or a serial file. The guard covers the gap: a write inside the worktree on a
+path no task has claimed. It holds Edit, Write and NotebookEdit calls on such
+a path and, best effort, obvious Bash writes (redirects, `tee`, `touch`,
+`rm`, `cp`, `mv`, `install`, `sed -i`; it stops at a `cd` and skips words
+holding `$` or a glob). The held call fails with a message asking the worker
+to claim the path first. Claims match as `internal/claims` matches them: a
+plain path covers everything under it, and globs match segment by segment.
+It reads the claims from `saddle status --json`, and reads them again before
+it holds a call, so a fresh claim lets the retry through.
+
+It is never the only way out:
+
+- **Claim** the path (the saddle `claim` tool), then retry.
+- **Retry** the same call: the guard holds each path only once a session.
+- **Proceed**: a band above the prompt lists each held call, with Proceed
+  (submits a `[saddle]` prompt telling the worker it may go ahead) and
+  Dismiss.
+- **Fail open**: when saddle can't say what the task claimed (status fails,
+  the task is unknown), the call goes through. Paths outside the worktree
+  (the scratchpad, `.git`) are never held.
 
 ## Dev loop
 

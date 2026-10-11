@@ -15,6 +15,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { SaddlePaneTab, SaddleSnapshot } from '../types'
+import { registerClaimGuard } from './claimguard'
 import { ARGUMENT_HINT, parseSaddle, replyOf } from './commands'
 import { ACTION_LABELS, actionArgv, askPrompt, needLine, needsYou } from './needsyou'
 import type { Need, NeedAction } from './needsyou'
@@ -165,7 +166,10 @@ async function press($: EngineInterface, cwd: string, n: Need, action: NeedActio
   $.ui.toast('text' in r ? (r.text.trim().split('\n')[0] ?? `saddle ${argv[0]}: done`) : r.error)
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  // The claim guard (#171), for worker sessions when its option is on.
+  registerClaimGuard(on, options)
+
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     if (!e.isInteractive || e.surface === null) {
