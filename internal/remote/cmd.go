@@ -38,7 +38,7 @@ Every caller needs a token from 'saddle remote token create'. Tokens and the
 audit log live in ~/.config/saddle/remote (0600), never in the repo.
 See docs/remote-control.md.`,
 	}
-	cmd.AddCommand(serveCmd(open), stdioCmd(open), tokenCmd(), auditCmd())
+	cmd.AddCommand(serveCmd(open), stdioCmd(open), tokenCmd(), auditCmd(), pauseCmd(open), resumeCmd())
 	return cmd
 }
 

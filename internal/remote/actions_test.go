@@ -207,7 +207,7 @@ func TestActionsNeedAdminAndConfirm(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tl := range lt.Tools {
-		if Mutating(tl.Name) {
+		if Mutating(tl.Name) && tl.Name != PauseTool {
 			t.Errorf("act+land token sees mutating tool %q", tl.Name)
 		}
 	}

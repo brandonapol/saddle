@@ -59,6 +59,8 @@ var ToolScopes = map[string]Scope{
 	"unstack":       ScopeAct,
 	"requeue":       ScopeAct,
 	"publish":       ScopeAct,
+	// pause is the panic button (remote-only); see PauseTool
+	PauseTool: ScopeAct,
 	// land
 	"land":         ScopeLand,
 	"prs":          ScopeLand,
@@ -78,7 +80,7 @@ var ToolScopes = map[string]Scope{
 }
 
 // RemoteOnlyTools exist only on the remote server, not in mcpserver.
-var RemoteOnlyTools = []string{"needs_you", "wait_needs_you", "answer", ConfirmTool}
+var RemoteOnlyTools = []string{"needs_you", "wait_needs_you", "answer", ConfirmTool, PauseTool}
 
 // Allows reports whether a token holding granted may call tool.
 func Allows(granted []Scope, tool string) bool {
@@ -102,9 +104,9 @@ func Mutating(tool string) bool {
 // RemoteAllows is what the remote server lets a token call: what Allows
 // grants, and for a mutating tool, only with admin besides (and then only
 // after a confirm round trip). Act and land name a tool's class; remotely,
-// changing anything takes admin.
+// changing anything takes admin, except pause, which only takes power away.
 func RemoteAllows(granted []Scope, tool string) bool {
-	return Allows(granted, tool) && (!Mutating(tool) || slices.Contains(granted, ScopeAdmin))
+	return Allows(granted, tool) && (!Mutating(tool) || tool == PauseTool || slices.Contains(granted, ScopeAdmin))
 }
 
 // ParseScopes reads a comma-separated scope list. Every token can read, so

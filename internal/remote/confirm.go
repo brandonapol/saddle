@@ -22,8 +22,10 @@ const ConfirmTool = "confirm"
 const ConfirmTTL = 2 * time.Minute
 
 // NeedsConfirm reports whether tool is held for confirmation: every
-// mutating tool except confirm itself.
-func NeedsConfirm(tool string) bool { return tool != ConfirmTool && Mutating(tool) }
+// mutating tool except confirm itself and the panic pause.
+func NeedsConfirm(tool string) bool {
+	return tool != ConfirmTool && tool != PauseTool && Mutating(tool)
+}
 
 // ConfirmRequired is what a held admin call returns instead of running.
 type ConfirmRequired struct {

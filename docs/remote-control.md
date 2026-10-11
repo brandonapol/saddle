@@ -43,7 +43,7 @@ Attackers considered:
 | A malicious or compromised repo (a clone with a checked-in `.saddle/config.toml`) | turn the listener on | ✓ `[remote]` is read **only** from the user's config (`~/.config/saddle/config.toml`), never from the repo, and so is `[remote] repos`. ✓ `serve` refuses a repo that `saddle trust` (#215) hasn't trusted, and trust is checked again on every request, so revoking it stops serving that repo at once. |
 | A leaked token | replay | ✓ tokens expire (default 24h, at most 30d). ✓ `saddle remote token revoke` takes effect on the next request, because the file is re-read every time. ✓ the `saddle_rc_` prefix makes leaks greppable (secret scanners). ✓ scopes limit the blast radius. ✓ a token can be limited to named repos (`--repo`). |
 | Token guessing | brute force | ✓ 256-bit random secrets. ✓ constant-time compare, run over every token. ✓ failed logins are rate limited per client address (10/min by default, then 429). |
-| A runaway or prompt-injected remote Claude | many calls, destructive calls | ✓ per-token rate limit (120/min). ✓ scope allowlist: unknown tools are denied. ✓ every tool that changes state needs `admin` *and* a confirmation round trip (`confirm` with a one-time code bound to the token and repo, 2 min). ✓ actions are versioned and idempotent, so a replayed or racing call can't undo a newer change. ○ panic pause. |
+| A runaway or prompt-injected remote Claude | many calls, destructive calls | ✓ per-token rate limit (120/min). ✓ scope allowlist: unknown tools are denied. ✓ every tool that changes state needs `admin` *and* a confirmation round trip (`confirm` with a one-time code bound to the token and repo, 2 min). ✓ actions are versioned and idempotent, so a replayed or racing call can't undo a newer change. ✓ panic pause (`pause`, act, no confirm), lifted only by `saddle remote resume` on the host. |
 | Repudiation ("who held my stack?") | none | ✓ every failed login and every tool call, allowed or denied, goes to the audit log (JSONL) with the token name, client address, repo and (for a change) its arguments, scrubbed, and is mirrored into that repo's event log (`kind = remote`). ✓ a call is refused if its audit line can't be written. ✓ the log rotates (10 MiB, 5 kept by default) and `saddle remote audit` reads it. |
 | Prompt injection *through* saddle output | a task title or peeked screen carrying instructions to the remote Claude | ✓ item text is clipped (500 runes), prompt options to 200, and scrubbed. ✓ peek output has escapes stripped, known secret patterns redacted, lines capped (100) and clipped, and sits between two fence lines carrying a random nonce, so the screen can't fake the closing one. ✓ the server's instructions and tool descriptions say this text is untrusted data. This risk can't be removed, only reduced, which is one more reason the default token is read-only. |
 
@@ -158,7 +158,7 @@ fails when an MCP tool is added without a scope.
 | `spawn`, `kill`, `autopilot` | admin | every admin tool needs a confirmation round trip |
 | `confirm` | admin | remote-only; runs a held call (see below) |
 | `claim`, `release`, `ask_owner`, `done` | local | a worker's own tools; never remote |
-| `pause` (planned) | act | the panic button; see failure modes |
+| `pause` | act | remote-only; the panic button, with no admin or confirm needed; see Panic pause |
 | `down`, config writes (planned) | admin | confirmation round trip |
 
 ### Confirmation round trip
@@ -219,7 +219,8 @@ against the table, so a hidden tool can't be called by name.
   ```
 
   The PR stack bottom up from the base, the merge train queue in landing
-  order, then named stacks.
+  order, then named stacks. `paused` (who, when, why) is set while a panic
+  pause holds.
 - **`needs_you`**: one item per agent waiting at a prompt, with the latest
   `Notification` hook text, plus t0's undelivered **action** notices (the
   interrupt class from #222). Reading consumes nothing. Each item has an
@@ -401,7 +402,36 @@ repos = ["/src/saddle", "~/src/quark"]   # absolute paths; ~/ expands
 - **Panic:** `saddle remote pause` (local) or the `pause` tool (`act`) stops
   accepting actions and stops auto-merge and autopilot until the owner runs
   `saddle remote resume` locally. Reads keep working. It is the self-service
-  escape hatch AGENTS.md asks for: one local command undoes it.
+  escape hatch AGENTS.md asks for: one local command undoes it. See Panic
+  pause.
+
+## Panic pause
+
+`saddle remote pause [--reason …]` on the host, or the `pause {reason}`
+tool from any token with `act`, writes `paused.json` next to the tokens
+(`~/.config/saddle/remote`, 0600). While it exists:
+
+- every remote call that changes state is refused, on every repo and every
+  listener (HTTP and ssh `stdio`), before it is held for a confirm. A call
+  held before the pause can't be confirmed during it. Refusals are audited.
+- reads (`status`, `needs_you`, `wait_needs_you`, `brief`, `peek`,
+  `ticket`) keep working, and `status.paused` says who paused, when and why.
+- auto-merge is turned off and autopilot is paused in each repo it covers:
+  the repos the listener serves for the tool, and `[remote] repos` (else the
+  repo in the working directory) for the command. Running agents go on.
+
+`pause` skips admin and the confirm round trip on purpose: it only takes
+power away, and a panic button behind a round trip is no panic button. A
+stolen act token can pause, which costs the owner one local command.
+Pausing again is harmless and keeps the first pause's who and when.
+
+There is no remote way back. `saddle remote resume`, on the host, turns
+auto-merge back on and resumes autopilot where the pause stopped them
+(unless the owner did meanwhile, or ended the autopilot run), then removes
+the pause. It removes the pause even when a repo can't be restored or the
+file is unreadable, and names what it couldn't restore. Auto-merge that was
+already off, or stopped after a failure, is left alone by both. A pause
+file that can't be read still pauses (it fails closed).
 
 ## Audit log
 
@@ -552,9 +582,7 @@ and `TestPushLockIsExclusive`. #312 is covered by
    a later call.
 7. ~~**TUI indicator of connected controllers.**~~ Done in #314.
 8. ~~**Doctor check.**~~ Done in #315.
-9. **Panic pause.** `saddle remote pause|resume` and the `pause` tool.
-   **Model scope: Opus.** It touches automerge, autopilot and the action
-   path.
+9. ~~**Panic pause.**~~ Done in #316.
 10. **e2e journeys.** Two controllers racing, a revoked token, panic pause,
     and a read token denied land, all over a real listener. **Model scope:
     Opus.** Multi-process e2e.
