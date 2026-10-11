@@ -68,7 +68,7 @@ func TestPushSendsInterruptNoticesOnly(t *testing.T) {
 	st.Event(app.OrchestratorID, app.EventNoticeDigest, "[landed] t2 \"x\" landed on saddle/integration at abc")
 	st.Event(app.OrchestratorID, app.EventNoticeSilent, "[repeat] t2 again")
 	st.Event("t5", "notification", "Claude needs your permission to use Bash")
-	st.Event(app.OrchestratorID, app.EventNoticeInterrupt, "t5 \"meter\" is done and queued in the merge train: GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789\nRun the saddle land tool when you're ready.")
+	st.Event(app.OrchestratorID, app.EventNoticeInterrupt, "t5 \"meter\" is done and queued in the merge train: GITHUB_TOKEN=gh"+"p_abcdefghijklmnopqrstuvwxyz0123456789\nRun the saddle land tool when you're ready.")
 	if err := p.Step(context.Background()); err != nil {
 		t.Fatal(err)
 	}

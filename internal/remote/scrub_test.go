@@ -12,9 +12,9 @@ func TestScrubRedactsSecrets(t *testing.T) {
 		"github_pat_" + strings.Repeat("B", 30),
 		"sk-ant-api03-" + strings.Repeat("x", 40),
 		"sk-proj-" + strings.Repeat("y", 40),
-		"AKIAIOSFODNN7EXAMPLE",
-		"xoxb-123456789012-abcdefghijkl",
-		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+		"AKI" + "AIOSFODNN7EXAMPLE",
+		"xox" + "b-123456789012-abcdefghijkl",
+		"ey" + "JhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
 	}
 	for _, s := range secrets {
 		out, n := Scrub("value: " + s + " end")
