@@ -59,6 +59,9 @@ func (m *model) viewHeader() string {
 		}
 		parts = append(parts, train)
 	}
+	if rc := m.remoteSegment(); rc != "" {
+		parts = append(parts, rc)
+	}
 	parts = append(parts, m.heavySegments()...)
 	opt(counts[store.Landed], cDone, "✓ %d landed")
 	tail := []string{sBright.Render(m.app.Cfg.Session), sDim.Render(m.app.Cfg.Base + " → " + m.app.Cfg.Integration)}

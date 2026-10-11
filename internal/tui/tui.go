@@ -163,6 +163,7 @@ type model struct {
 	stackSel  string                                       // the merge view's selected stack
 	pl        planState                                    // the plan review view
 	tr        trainState                                   // the merge view's train panel
+	rc        remoteState                                  // remote controllers seen, for the header (#314)
 	hv        heavyState                                   // the heavy-run queue: header segment and runs view
 	narr      narrSink                                     // narrator lines; nil when the narrator is off
 	asker     asker                                        // answers questions; nil when the narrator is off
@@ -229,6 +230,7 @@ type (
 		conc    *app.Concurrency
 		// rotation is the adapter rotation banner, "" with nothing out.
 		rotation string
+		remote   remoteRead
 	}
 	flashMsg   string
 	quitExpiry time.Time // the arming a timer was set for
@@ -425,6 +427,7 @@ func (m *model) refresh() tea.Cmd {
 		sel = m.tasks[m.sel].ID
 	}
 	a, amGen, apGen := m.app, m.amGen, m.apGen
+	rcCursor, rcPrimed := m.rc.cursor, m.rc.primed
 	peekShown := m.view == viewControl && !m.briefOn && !m.helpOpen && !m.cp.on
 	sweep := m.refreshN%sweepEvery == 0
 	m.refreshN++
@@ -456,6 +459,7 @@ func (m *model) refresh() tea.Cmd {
 			msg.conc = &c
 		}
 		msg.rotation = a.RotationBanner(time.Now())
+		msg.remote = readRemote(a.Store, rcCursor, rcPrimed)
 		return msg
 	}
 }
@@ -662,6 +666,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if shown != (m.rotation != "") && m.width > 0 {
 			m.layout() // the banner changes the footer's height
 		}
+		m.applyRemote(msg.remote)
 		m.watchScreens(msg.tasks, msg.screens)
 		cmds = append(cmds, m.noticeTransitions(msg.tasks)...)
 		selID := ""
