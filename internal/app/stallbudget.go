@@ -344,7 +344,9 @@ func (a *App) dependentLayers(stack []landedTask, at int, ups []string) []string
 			return nil
 		}
 		fs, _ := gitx.ChangedFiles(a.Root, l.From, l.To)
-		return slices.DeleteFunc(fs, func(f string) bool { return slices.ContainsFunc(a.Cfg.Serial, func(g string) bool { return claims.Match(g, f) }) })
+		return slices.DeleteFunc(fs, func(f string) bool {
+			return slices.ContainsFunc(a.Cfg.Serial, func(g string) bool { return claims.Match(g, f) })
+		})
 	}
 	on := []string{stack[at].ID}
 	touched := map[string]bool{}

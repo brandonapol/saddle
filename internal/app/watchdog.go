@@ -22,11 +22,11 @@ import (
 
 // Root causes, most fundamental first: Diagnose names the first that holds.
 const (
-	CauseGHAuth   = "gh-auth"   // gh can't reach GitHub: nothing opens or merges
-	CauseQuota    = "quota"     // every adapter is out of quota: nothing starts
-	CausePrompts  = "prompts"   // every live worker sits on a prompt
-	CauseOverload = "overload"  // the machine is too loaded to make headway
-	CauseUnknown  = "unknown"   // none of the above
+	CauseGHAuth   = "gh-auth"  // gh can't reach GitHub: nothing opens or merges
+	CauseQuota    = "quota"    // every adapter is out of quota: nothing starts
+	CausePrompts  = "prompts"  // every live worker sits on a prompt
+	CauseOverload = "overload" // the machine is too loaded to make headway
+	CauseUnknown  = "unknown"  // none of the above
 )
 
 // WatchStatus is what the watchdog looks at.
