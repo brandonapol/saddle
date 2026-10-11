@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/config"
@@ -135,6 +136,9 @@ func Run(env Env) []Result {
 	}
 	if se, ok := env.(ScratchEnv); ok {
 		rs = append(rs, scratchCheck(se))
+	}
+	if re, ok := env.(RemoteEnv); ok {
+		rs = append(rs, remoteCheck(re, time.Now()))
 	}
 	if se, ok := env.(SkillsEnv); ok && r.cfg.Harness != config.HarnessGrok {
 		rs = append(rs, r.skills(se))

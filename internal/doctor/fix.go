@@ -66,6 +66,7 @@ var about = map[string]string{
 	CheckLeftovers:     "old worktrees and branches saddle gc can clean up",
 	CheckTrust:         "whether you said saddle may set up and run agents in this folder",
 	CheckScratch:       "the one dir saddle keeps its temp files in, how full it is, and whether anything still writes to /tmp",
+	CheckRemoteControl: "whether other Claude sessions can drive saddle over remote control, on what address, with which tokens",
 	CheckSkills:        "the skills and slash commands the orchestrator can use",
 	"runq shims":       "wrappers that queue heavy commands (tests, builds) so agents take turns",
 }
