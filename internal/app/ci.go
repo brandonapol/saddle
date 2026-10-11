@@ -124,6 +124,10 @@ func (a *App) ciFailed(f ciwatch.Failed) error {
 			"%s\n%s is itself a CI repair for %s, so saddle won't spawn a repair of a repair (#405). Fold the fix into %s's repair yourself, or decide what to do with it.",
 			about, owner.ID, orig, orig))
 	}
+	fails := []CIRedFailure{{Check: f.Check.Label(), RunURL: f.RunURL, Step: f.Step, LogTail: f.LogTail}}
+	if why := a.ciRepairScreen(owner.ID, owner.PR, "", fails); why != "" {
+		return a.Notify(OrchestratorID, store.NoticeInfo, about+"\n"+why) // #338
+	}
 	if sib, thing, ok := a.dependencyExplains(owner.ID, f.Step+"\n"+f.LogTail); ok {
 		a.Store.Event(owner.ID, EventCIExplained, fmt.Sprintf("%s: %s adds %s", f.Check.Label(), sib, thing))
 		return a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
