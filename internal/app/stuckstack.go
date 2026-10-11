@@ -118,7 +118,8 @@ func (a *App) stuckLayers() ([]stuckLayer, error) {
 // orchestrator once for each stack and reason that has been red or
 // conflicting for [train] stuck_after with no task fixing it. The sentinel
 // calls it every cycle. A cycle that would alert while the train is busy
-// waits for the next one, since naming the stack reads the PR layout.
+// waits for the next one, since naming the stack reads the PR layout. It
+// then runs the stall budget (StallTick).
 func (a *App) CheckStuck(now time.Time) ([]StuckAlarm, error) {
 	after := a.Cfg.Train.StuckAfter
 	if after <= 0 {
@@ -166,7 +167,23 @@ func (a *App) CheckStuck(now time.Time) ([]StuckAlarm, error) {
 			}
 		}
 	}
-	return alarms, a.setStuckState(s)
+	if err := a.setStuckState(s); err != nil {
+		return alarms, err
+	}
+	// Cards whose stall budget ran out get their route-around default (#406).
+	_, err = a.StallTick(now)
+	return alarms, err
+}
+
+// alertedFor finds the stack|reason key the orchestrator was told about
+// layer under, if any.
+func alertedFor(alerted map[string][]string, layer, reason string) (string, bool) {
+	for k, ls := range alerted {
+		if strings.HasSuffix(k, "|"+reason) && slices.Contains(ls, layer) {
+			return k, true
+		}
+	}
+	return "", false
 }
 
 // alarmStuck tells the orchestrator about each due layer whose stack and
@@ -188,6 +205,11 @@ func (a *App) alarmStuck(due []stuckLayer, seen map[string]time.Time, now time.T
 			stack = l.Layer // out of the PR stack: it stands for itself
 		}
 		key := stack + "|" + l.Reason
+		// One card per blocker: a layer already told about under another
+		// stack name (the layer below it merged since) stays quiet (#406).
+		if k, ok := alertedFor(s.Alerted, l.Layer, l.Reason); ok && k != key {
+			continue
+		}
 		if _, told := s.Alerted[key]; told {
 			if !slices.Contains(s.Alerted[key], l.Layer) {
 				s.Alerted[key] = append(s.Alerted[key], l.Layer)
