@@ -11,7 +11,7 @@ that runs inside Claude Code 2.1.287 or newer (epic #165).
 settings hooks under `hooks`. A session on an older Claude Code ignores
 `modules`, and the settings hooks work either way.
 
-- `hooks/register.ts`: at session start, when the session draws a UI, the
+- `hooks/register.tsx`: at session start, when the session draws a UI, the
   repo has `.saddle/` and this isn't one of saddle's worker sessions, it
   starts a timer. Every 3 s it runs `saddle queue --json`. While the engine
   lock is held (`saddle plugin engine` or `saddle up`), it also runs `saddle
@@ -19,11 +19,38 @@ settings hooks under `hooks`. A session on an older Claude Code ignores
   GitHub. The result is written to `$.state` as `saddle.snapshot`, and only
   when something a drawing shows has changed. That write redraws every hook
   that read the snapshot.
+  It also registers `/saddle-pane` and draws the saddle pane (below).
 - `hooks/snapshot.ts`: the pure parts: parsing each command's JSON, change
   detection and the version check.
-- `types/index.d.ts`: the state contract (`SaddleSnapshot`). Later hooks
+- `hooks/pane.ts`: the pane's rows for each tab, built from the snapshot.
+- `types/index.d.ts`: the state contract (`SaddleSnapshot`, and the pane's
+  view `SaddlePane`: its tab and scroll offset). Later hooks
   (the pane, the needs-you band, the commands) read it with
   `read($, atom({ plugin: 'saddle', key: 'snapshot' } as const, null))`.
+
+### The saddle pane
+
+`/saddle-pane` shows or hides a pane with what `saddle up` shows. In the
+fullscreen layout it docks beside the transcript. Without that layout it
+opens inline, focused, and Escape closes it, as `/diff` does. It draws only
+from the snapshot and runs nothing itself, so it updates on each write the
+refresh makes.
+
+- **Agents** (`1`): id, state, model and title, with the last activity under
+  each. Finished tasks go last.
+- **Claims** (`2`): each live task and its globs.
+- **Train** (`3`): the merge queue, next first, with the auto-merge holds.
+- **Stacks** (`4`): the auto-merge watcher, then each PR stack bottom first:
+  base, CI, mergeability, merge state and how far it is behind base.
+
+The header and the tab buttons stay put. The rows under them scroll by the
+wheel (three rows a tick) or the scroll keys while the pane has the keyboard
+(ctrl+x tab, or a click). Once the pane has the keyboard, the digit keys
+switch tabs. Any refresh that failed shows as a `!` line at the top.
+
+`saddle status --json` doesn't report an agent's live activity yet. Until it
+does, the activity line falls back to the failure reason, the train state or
+the count of pending notices.
 
 ## Dev loop
 

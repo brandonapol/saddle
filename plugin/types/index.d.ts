@@ -1,6 +1,7 @@
 // The saddle mod's state contract (#166): one snapshot of saddle's state,
-// refreshed on a timer by hooks/register.ts, that the pane, the needs-you
-// band and the commands read with `read($, snapshot)`.
+// refreshed on a timer by hooks/register.tsx, that the pane, the needs-you
+// band and the commands read with `read($, snapshot)`; and the pane's own
+// view (#167): its tab and where its rows are scrolled.
 
 /** One task as `saddle status --json` lists it. */
 export type SaddleTask = {
@@ -14,6 +15,8 @@ export type SaddleTask = {
   claims?: string[]
   train?: string
   pending_notices?: number
+  /** What it is doing now, when status reports it. */
+  activity?: string
   pr?: string
   window?: string
   worktree?: string
@@ -37,13 +40,46 @@ export type SaddleQueueEntry = {
   attempts?: number
 }
 
+/** One PR of a stack, bottom first, as the auto-merge watcher read it. */
+export type SaddleStackNode = {
+  task: string
+  branch?: string
+  pr: string
+  /** The branch it targets: base, or the PR below it. */
+  base: string
+  draft?: boolean
+  /** ChecksPass, ChecksPending, ChecksFail or ChecksNone. */
+  checks?: string
+  /** MERGEABLE, CONFLICTING or UNKNOWN. */
+  mergeable?: string
+  /** CLEAN, BLOCKED, BEHIND, DIRTY, UNSTABLE, UNKNOWN... */
+  merge_state?: string
+  labels?: string[]
+  at_risk?: string
+  error?: string
+}
+
+/** One PR stack, named by its bottom task. */
+export type SaddleStackGraph = {
+  id: string
+  nodes: SaddleStackNode[]
+  held?: boolean
+  /** Commits base has that the stack's top lacks. */
+  behind?: number
+  next: string
+  ready: boolean
+  why?: string
+  blocked?: string
+}
+
 /** `saddle stack --json`: the PR stacks and the auto-merge watcher. */
 export type SaddleStack = {
   enabled: boolean
   source: string
   stopped?: string
+  busy?: boolean
   holds?: string[]
-  stacks?: unknown[]
+  stacks?: SaddleStackGraph[]
   checked?: string
   next_check?: string
   [field: string]: unknown
@@ -63,8 +99,17 @@ export type SaddleSnapshot = {
   changedAt: number
 }
 
+/** The pane's tabs, in the order they are drawn. */
+export type SaddlePaneTab = 'agents' | 'claims' | 'train' | 'stacks'
+
+/** The pane's view: the tab shown and the first body row shown. */
+export type SaddlePane = {
+  tab: SaddlePaneTab
+  offset: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    saddle: { snapshot: SaddleSnapshot | null }
+    saddle: { snapshot: SaddleSnapshot | null; pane: SaddlePane }
   }
 }

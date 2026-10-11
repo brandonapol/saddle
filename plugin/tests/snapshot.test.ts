@@ -91,6 +91,7 @@ function world(on: On, w: World) {
         return { value: { exitCode: 1, stdout: '', stderr: `unknown ${cmd}`, isStdoutTruncated: false, isStderrTruncated: false } }
     }
   })
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
   mock.env(on, {})
   return mock.clock(on, { now: 1000 })
 }
