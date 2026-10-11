@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -24,8 +25,23 @@ const EnvDir = "SADDLE_REMOTE_DIR"
 type Config struct {
 	// Enabled opts in. Off by default.
 	Enabled bool `toml:"enabled"`
-	// Listen is a loopback host:port.
+	// Listen is a host:port, loopback unless AllowPublic and TLS are set.
 	Listen string `toml:"listen"`
+	// AllowPublic lets Listen be an address that isn't loopback (a LAN or
+	// tailnet IP, or 0.0.0.0). It also needs TLSCert and TLSKey.
+	AllowPublic bool `toml:"allow_public"`
+	// TLSCert and TLSKey are PEM files. When set, the server speaks only
+	// TLS (1.2 or newer). The key must be 0600.
+	TLSCert string `toml:"tls_cert"`
+	TLSKey  string `toml:"tls_key"`
+	// Hosts are extra names the Host header may carry (the box's DNS or
+	// tailnet name). Loopback names, and the listen IP itself, always pass.
+	// Anything else is refused, which keeps DNS rebinding out.
+	Hosts []string `toml:"hosts"`
+	// AuditMaxMB rotates the audit log past this size (default 10).
+	// AuditKeep is how many rotated logs are kept (default 5).
+	AuditMaxMB int `toml:"audit_max_mb"`
+	AuditKeep  int `toml:"audit_keep"`
 	// PerMinute caps calls per token; FailsPerMinute caps failed logins
 	// per client address.
 	PerMinute      int `toml:"per_minute"`
@@ -42,6 +58,18 @@ func (c Config) Limits() Limits {
 		l.FailsPerMinute = 10
 	}
 	return l
+}
+
+// AuditLimits returns the audit rotation settings, defaulted.
+func (c Config) AuditLimits() (maxBytes int64, keep int) {
+	maxBytes, keep = DefaultAuditMaxBytes, DefaultAuditKeep
+	if c.AuditMaxMB > 0 {
+		maxBytes = int64(c.AuditMaxMB) << 20
+	}
+	if c.AuditKeep > 0 {
+		keep = c.AuditKeep
+	}
+	return maxBytes, keep
 }
 
 // UserConfigPath is ~/.config/saddle/config.toml (honoring XDG_CONFIG_HOME).
@@ -85,8 +113,78 @@ func LoadConfig(path string) (Config, error) {
 	return f.Remote, nil
 }
 
-// CheckListen refuses any address that isn't loopback. A public or LAN
-// listener needs TLS and is out of scope for the spike.
+// Check refuses a bind that would expose saddle beyond this machine unless
+// the owner asked for it twice: allow_public = true, and TLS. A loopback
+// bind may use TLS too, but needn't.
+func (c Config) Check() error {
+	if (c.TLSCert == "") != (c.TLSKey == "") {
+		return errors.New("[remote] needs both tls_cert and tls_key, or neither")
+	}
+	if c.TLSCert != "" {
+		if _, err := os.Stat(c.TLSCert); err != nil {
+			return fmt.Errorf("tls_cert: %w", err)
+		}
+		fi, err := os.Stat(c.TLSKey)
+		if err != nil {
+			return fmt.Errorf("tls_key: %w", err)
+		}
+		if fi.Mode().Perm()&0o077 != 0 {
+			return fmt.Errorf("tls_key %s is readable by others (mode %v); run chmod 600 on it", c.TLSKey, fi.Mode().Perm())
+		}
+	}
+	err := CheckListen(c.Listen)
+	if err == nil || !errors.Is(err, errNotLoopback) {
+		return err
+	}
+	if !c.AllowPublic {
+		return fmt.Errorf("%w; to bind it anyway set allow_public = true and tls_cert/tls_key under [remote]", err)
+	}
+	if c.TLSCert == "" {
+		return fmt.Errorf("listen %q: a public bind needs tls_cert and tls_key under [remote]", c.Listen)
+	}
+	return nil
+}
+
+// TLS reports whether the server speaks TLS.
+func (c Config) TLS() bool { return c.TLSCert != "" }
+
+// AllowedHosts are the Host header values the handler accepts besides
+// loopback ones: the configured names, and the listen IP when it is one.
+func (c Config) AllowedHosts() []string {
+	hs := append([]string(nil), c.Hosts...)
+	if h, _, err := net.SplitHostPort(c.Listen); err == nil {
+		if ip := net.ParseIP(h); ip != nil && !ip.IsUnspecified() {
+			hs = append(hs, h)
+		}
+	}
+	return hs
+}
+
+// listen opens the listener: TLS 1.2 or newer when a cert is set, plain TCP
+// otherwise. It doesn't Check; callers do that first.
+func (c Config) listen() (net.Listener, error) {
+	var tc *tls.Config
+	if c.TLS() {
+		cert, err := tls.LoadX509KeyPair(c.TLSCert, c.TLSKey)
+		if err != nil {
+			return nil, err
+		}
+		tc = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	}
+	ln, err := net.Listen("tcp", c.Listen)
+	if err != nil {
+		return nil, err
+	}
+	if tc != nil {
+		ln = tls.NewListener(ln, tc)
+	}
+	return ln, nil
+}
+
+var errNotLoopback = errors.New("only loopback addresses (127.0.0.1, ::1, localhost) are allowed; reach it from elsewhere with ssh -L")
+
+// CheckListen refuses any address that isn't loopback. Config.Check lets a
+// public bind through when allow_public and TLS are both set.
 func CheckListen(addr string) error {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -96,7 +194,7 @@ func CheckListen(addr string) error {
 		return fmt.Errorf("listen %q: no port", addr)
 	}
 	if !loopbackHost(host) {
-		return fmt.Errorf("listen %q: only loopback addresses (127.0.0.1, ::1, localhost) are allowed; reach it from elsewhere with ssh -L", addr)
+		return fmt.Errorf("listen %q: %w", addr, errNotLoopback)
 	}
 	return nil
 }

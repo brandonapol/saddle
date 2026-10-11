@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -43,6 +44,45 @@ type Token struct {
 	Created time.Time  `json:"created"`
 	Expires time.Time  `json:"expires"`
 	Revoked *time.Time `json:"revoked,omitempty"`
+	// Repos limits the token to these repos: each is a repo's directory
+	// name or its absolute path. Empty means any repo the host serves.
+	Repos []string `json:"repos,omitempty"`
+}
+
+// AllowsRepo reports whether the token may reach the repo at root.
+func (t Token) AllowsRepo(root string) bool {
+	if len(t.Repos) == 0 {
+		return true
+	}
+	if root == "" {
+		return false
+	}
+	root = filepath.Clean(root)
+	for _, r := range t.Repos {
+		if filepath.IsAbs(r) && filepath.Clean(r) == root || !filepath.IsAbs(r) && r == filepath.Base(root) {
+			return true
+		}
+	}
+	return false
+}
+
+// cleanRepos checks a repo allowlist: names or absolute paths, nothing
+// relative (which would depend on where the server runs).
+func cleanRepos(repos []string) ([]string, error) {
+	var out []string
+	for _, r := range repos {
+		r = strings.TrimSpace(r)
+		switch {
+		case r == "":
+			return nil, errors.New("a repo in the allowlist is blank")
+		case filepath.IsAbs(r):
+			r = filepath.Clean(r)
+		case strings.ContainsRune(r, filepath.Separator):
+			return nil, fmt.Errorf("repo %q: give a repo name or an absolute path", r)
+		}
+		out = append(out, r)
+	}
+	return out, nil
 }
 
 func (t Token) live(now time.Time) bool { return t.Revoked == nil && now.Before(t.Expires) }
@@ -128,8 +168,8 @@ func hashSecret(secret string) string {
 }
 
 // Create issues a token and returns its secret, which is shown once and
-// never stored.
-func (ts *Tokens) Create(name string, scopes []Scope, ttl time.Duration) (string, error) {
+// never stored. repos, when given, limits the token to those repos.
+func (ts *Tokens) Create(name string, scopes []Scope, ttl time.Duration, repos ...string) (string, error) {
 	if !tokenName.MatchString(name) {
 		return "", fmt.Errorf("token name %q: use letters, digits, '.', '_' or '-'", name)
 	}
@@ -138,6 +178,10 @@ func (ts *Tokens) Create(name string, scopes []Scope, ttl time.Duration) (string
 	}
 	if len(scopes) == 0 {
 		return "", errors.New("a token needs at least one scope")
+	}
+	repos, err := cleanRepos(repos)
+	if err != nil {
+		return "", err
 	}
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -156,7 +200,7 @@ func (ts *Tokens) Create(name string, scopes []Scope, ttl time.Duration) (string
 		return "", err
 	}
 	secret := SecretPrefix + base64.RawURLEncoding.EncodeToString(raw)
-	toks = append(toks, Token{Name: name, Hash: hashSecret(secret), Scopes: scopes, Created: now, Expires: now.Add(ttl)})
+	toks = append(toks, Token{Name: name, Hash: hashSecret(secret), Scopes: scopes, Created: now, Expires: now.Add(ttl), Repos: repos})
 	return secret, ts.save(toks)
 }
 

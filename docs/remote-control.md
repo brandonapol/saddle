@@ -1,8 +1,9 @@
 # Remote control (#251)
 
-Status: design plus a read-only spike (`internal/remote`, `saddle remote`).
-Nothing in this doc that goes beyond the spike exists yet. The follow-up
-tickets at the end build it.
+Status: design plus a read-only spike (`internal/remote`, `saddle remote`),
+with server and transport hardening (#308) and auth, scopes and audit
+(#309) done. "What exists now" below lists what is built. The remaining
+follow-up tickets at the end build the rest.
 
 ## Goal
 
@@ -33,14 +34,14 @@ Attackers considered:
 
 | Attacker | Vector | Mitigation (spike ✓ / follow-up ○) |
 |---|---|---|
-| Other users or processes on the LAN or internet | connect to the listener | ✓ binds loopback only; `CheckListen` refuses anything else. Remote machines come in over ssh `-L` or a tailnet proxy, never a public bind. ○ a non-loopback bind would need TLS plus an explicit `allow_public = true`. |
-| A web page in the owner's browser | `fetch` to `127.0.0.1:7431`, DNS rebinding | ✓ requests with an `Origin` header are refused (403). ✓ the `Host` must be loopback (403 otherwise). ✓ no cookies; auth is a bearer header, which a browser won't attach by itself. |
+| Other users or processes on the LAN or internet | connect to the listener | ✓ binds loopback by default; `Config.Check` refuses anything else unless **both** `allow_public = true` and `tls_cert`/`tls_key` are set (TLS 1.2+, key must be 0600). Remote machines normally come in over ssh `-L`, the ssh `stdio` forced command, or a tailnet proxy. |
+| A web page in the owner's browser | `fetch` to `127.0.0.1:7431`, DNS rebinding | ✓ requests with an `Origin` header are refused (403). ✓ the `Host` must be loopback, the listen IP, or a name in `[remote] hosts` (403 otherwise). ✓ no cookies; auth is a bearer header, which a browser won't attach by itself. |
 | Another local user on a shared box | read the token file, connect to loopback | ✓ tokens and the audit log live in `~/.config/saddle/remote/` (0700 dir, 0600 files). A tokens file others can read is refused, like ssh with a loose key. ✓ only SHA-256 hashes are stored, never secrets. |
 | A malicious or compromised repo (a clone with a checked-in `.saddle/config.toml`) | turn the listener on | ✓ `[remote]` is read **only** from the user's config (`~/.config/saddle/config.toml`), never from the repo. ✓ `serve` refuses a repo that `saddle trust` (#215) hasn't trusted. |
-| A leaked token | replay | ✓ tokens expire (default 24h, at most 30d). ✓ `saddle remote token revoke` takes effect on the next request, because the file is re-read every time. ✓ the `saddle_rc_` prefix makes leaks greppable (secret scanners). ✓ scopes limit the blast radius. |
+| A leaked token | replay | ✓ tokens expire (default 24h, at most 30d). ✓ `saddle remote token revoke` takes effect on the next request, because the file is re-read every time. ✓ the `saddle_rc_` prefix makes leaks greppable (secret scanners). ✓ scopes limit the blast radius. ✓ a token can be limited to named repos (`--repo`). |
 | Token guessing | brute force | ✓ 256-bit random secrets. ✓ constant-time compare, run over every token. ✓ failed logins are rate limited per client address (10/min by default, then 429). |
-| A runaway or prompt-injected remote Claude | many calls, destructive calls | ✓ per-token rate limit (120/min). ✓ scope allowlist: unknown tools are denied. ○ destructive tools need `admin` *and* a confirmation round trip. ○ panic pause. |
-| Repudiation ("who held my stack?") | none | ✓ every failed login and every tool call, allowed or denied, goes to the audit log (JSONL) with the token name and client address, and is mirrored into the repo's event log (`kind = remote`). ✓ a call is refused if its audit line can't be written. |
+| A runaway or prompt-injected remote Claude | many calls, destructive calls | ✓ per-token rate limit (120/min). ✓ scope allowlist: unknown tools are denied. ✓ admin tools need `admin` *and* a confirmation round trip (`confirm` with a one-time code bound to the token, 2 min). ○ panic pause. |
+| Repudiation ("who held my stack?") | none | ✓ every failed login and every tool call, allowed or denied, goes to the audit log (JSONL) with the token name and client address, and is mirrored into the repo's event log (`kind = remote`). ✓ a call is refused if its audit line can't be written. ✓ the log rotates (10 MiB, 5 kept by default) and `saddle remote audit` reads it. |
 | Prompt injection *through* saddle output | a task title or peeked screen carrying instructions to the remote Claude | ○ item text is clipped (500 runes) today. ○ peek output is scrubbed of known secret patterns and fenced as data. This risk can't be removed, only reduced, which is one more reason the default token is read-only. |
 
 Out of scope: a compromised host account (it owns everything anyway), and
@@ -95,7 +96,10 @@ or (c) underneath, plus a second copy of the repo. It adds nothing.
   `command="saddle remote stdio --scope read",restrict ssh-ed25519 …`. There
   is no listener at all, ssh authenticates, and the forced command pins the
   scope. It reuses the same scoped server (`newServer`) over a stdio
-  transport, which is a small follow-up.
+  transport: `saddle remote stdio --scope read --repo /src/saddle --name
+  phone` (built in #308). The forced command starts in `$HOME`, hence
+  `--repo`. Calls are audited as `ssh:NAME` from the `SSH_CONNECTION`
+  client address.
 - **Also documented: (a)** for the owner who only wants their phone.
 
 ## Token and scope model
@@ -138,10 +142,43 @@ fails when an MCP tool is added without a scope.
 | `unstack`, `requeue`, `publish` | act | |
 | `land`, `prs`, `restack` | land | |
 | `sentinel_ack` | land | it lowers a safety hold, so it isn't act |
-| `spawn`, `kill`, `autopilot` | admin | `kill` needs a confirmation round trip |
+| `spawn`, `kill`, `autopilot` | admin | every admin tool needs a confirmation round trip |
+| `confirm` | admin | remote-only; runs a held admin call (see below) |
 | `claim`, `release`, `ask_owner`, `done` | local | a worker's own tools; never remote |
 | `pause` (planned) | act | the panic button; see failure modes |
 | `down`, config writes (planned) | admin | confirmation round trip |
+
+### Confirmation round trip for admin tools
+
+Every `admin` tool except `confirm` is held. The first call runs nothing.
+It is audited as `pending` and returns `{confirm_required, code, tool,
+arguments, expires}` plus a sentence telling the remote Claude to show the
+owner what will run. `confirm {code}` then runs the held call exactly as it
+was first sent. The code:
+
+- works once;
+- expires after 2 minutes (`ConfirmTTL`);
+- is bound to the token's hash, so another token, even an admin one, or a
+  re-issued token with the same name, can't use it;
+- is checked against the token's scopes again at confirm time.
+
+The executed call is audited as `allowed` with `confirmed, code …`; a bad,
+reused, expired or foreign code is audited as a denied `confirm`. The state
+lives in the handler, not the MCP session, because the HTTP transport is
+stateless. Its value is the second, separate tool call: Claude Code asks the
+human for permission per tool, so the owner sees `confirm` with the
+description of what it will run. It doesn't stop a remote Claude that has
+blanket permission. That is what scopes, short TTLs and the audit log are
+for. No admin tool is served remotely yet, so today the round trip is only
+exercised by tests with a fake `kill`.
+
+### Repo allowlist
+
+`saddle remote token create ci --repo saddle --repo /src/quark` limits a
+token to those repos. An entry is a repo's directory name or its absolute
+path. Relative paths are refused. A token without `--repo` reaches any repo
+the host serves. A token used against a repo it doesn't list gets 403, and
+the refusal is audited. `token list` shows a REPOS column.
 
 Enforcement happens twice. A caller is only *shown* the tools its scopes
 reach. A receiving middleware then checks and audits *every* `tools/call`
@@ -225,18 +262,58 @@ on separate ports is the stopgap.
   `saddle remote resume` locally. Reads keep working. It is the self-service
   escape hatch AGENTS.md asks for: one local command undoes it.
 
-## The spike
+## Audit log
+
+`~/.config/saddle/remote/audit.log`, JSON lines, 0600. Past `audit_max_mb`
+(default 10) it rotates: `audit.log.N-1` moves to `audit.log.N`, and the
+current log to `audit.log.1`. `audit_keep` old files are kept (default 5).
+Several processes may write it at once (a managed serve and ssh `stdio`
+sessions). Before each write, a writer checks that `audit.log` is still the
+file it has open and reopens it if another process rotated it.
+
+`saddle remote audit` prints it oldest first, across the rotated files:
+`--token NAME`, `--tool NAME`, `--denied`, `--since 1h`, `-n 50` (the
+default, 0 for all), `--json`.
+
+## Lifecycle
+
+`remote.Service` owns the listener. It checks the bind (`Config.Check`),
+takes a lock, listens (TLS when configured), serves until its context ends,
+then shuts down gracefully (5s) and frees the lock.
+
+- **Lock.** `~/.config/saddle/remote/serve-<listen>.lock` (flock) holds
+  who is serving that address. Only one process serves an address.
+- **Foreground `saddle remote serve`** fails at once when the lock is
+  held, and the error names the holder.
+- **Managed (`remote.RunManaged`)** is for `saddle up` and the plugin
+  engine to run beside their other watchers. It returns at once when
+  `[remote] enabled` is off, and opens nothing. When on, it waits rather
+  than fails while a foreground serve holds the address or the port is
+  busy, and retries every 30s. It reports each new reason once to the repo's
+  event log (`kind = remote`). So a foreground serve can come and go, and
+  `saddle up` takes over when it stops. Problems never stop `saddle up`.
+- **Wiring:** `internal/cli/root.go`'s `startWatchers` needs one line,
+  `wg.Go(func() { remote.RunManaged(ctx, a, nil) })`. #308 couldn't
+  touch that file (another task held it), so it is the one remaining step
+  for "serve under the engine and saddle up".
+
+## The spike, hardened
 
 What exists now:
 
-- `internal/remote`: the token store (`token.go`), scope table (`scope.go`),
-  audit log (`audit.go`), `[remote]` config and loopback check (`config.go`),
-  snapshot and needs-you reader (`source.go`), and the HTTP and MCP handler
-  (`server.go`).
+- `internal/remote`: the token store with repo allowlists (`token.go`),
+  scope table (`scope.go`), rotating audit log (`audit.go`), `[remote]`
+  config with the loopback, TLS and `allow_public` check (`config.go`),
+  snapshot and needs-you reader (`source.go`), the HTTP and MCP handler
+  (`server.go`), the admin confirmation round trip (`confirm.go`), and the
+  lifecycle, lock, managed runner and stdio transport (`service.go`).
 - `saddle remote serve`: off unless `[remote] enabled = true` is in the user
-  config. It refuses non-loopback addresses and untrusted repos, and prints
+  config. It refuses untrusted repos, and any non-loopback address unless
+  `allow_public` and TLS are both set. It takes the serve lock and prints
   the `claude mcp add` line.
-- `saddle remote token create|list|revoke`.
+- `saddle remote stdio`: the ssh forced-command transport.
+- `saddle remote token create [--repo …]|list|revoke`.
+- `saddle remote audit`.
 - Tools served: `status` and `needs_you`. Every other tool is denied, even
   to a token scoped for it, until the remote-safe action semantics above
   exist.
@@ -255,20 +332,43 @@ saddle remote serve                         # in the repo
 ssh -N -L 7431:127.0.0.1:7431 box &
 claude mcp add --transport http saddle-box http://127.0.0.1:7431/mcp \
   --header "Authorization: Bearer saddle_rc_…"
+
+# or, with no listener: ~/.ssh/authorized_keys on the host
+command="saddle remote stdio --scope read --repo /src/saddle --name laptop",restrict ssh-ed25519 AAAA…
+# and on the other machine
+claude mcp add saddle-box -- ssh box saddle remote stdio
+```
+
+A public bind, only when you mean it:
+
+```toml
+[remote]
+enabled = true
+listen = "100.64.0.5:7431"     # a tailnet or LAN address
+allow_public = true             # required for anything but loopback
+tls_cert = "/home/me/.config/saddle/remote/cert.pem"
+tls_key  = "/home/me/.config/saddle/remote/key.pem"   # must be 0600
+hosts = ["box.tailnet.ts.net"]  # Host names to accept besides loopback and the listen IP
+audit_max_mb = 10
+audit_keep = 5
 ```
 
 Tests: `internal/remote/*_test.go`. The acceptance test is
-`TestReadTokenCannotLand`.
+`TestReadTokenCannotLand`. #308 is covered by
+`TestCheckPublicNeedsAllowPublicAndTLS`, `TestCheckRefusesLooseTLSKey`,
+`TestListenServesTLS`, `TestPublicHostsAreAllowlisted`,
+`TestStdioServesScopedTools`, `TestServeLockIsExclusive`,
+`TestServiceLifecycle` and `TestRunManagedIsOffByDefault`. #309 is covered
+by `TestTokenRepoAllowlist`, `TestTokenForOtherRepoIsRefused`,
+`TestAdminToolNeedsConfirmation`, `TestConfirmationIsBoundToToken`,
+`TestConfirmationExpires`, `TestConfirmNeedsAdmin`, `TestAuditRotates`,
+`TestAuditFollowsRotationByAnotherProcess` and `TestAuditCommand`.
 
 ## Follow-up tickets
 
-1. **Server and transport hardening.** Run `serve` under the engine and
-   `saddle up` with a lifecycle and lock. Add the ssh forced-command `stdio`
-   mode and an optional TLS plus `allow_public` gate. **Model scope: Opus.**
-   Security-sensitive lifecycle and transport work.
-2. **Auth, scopes and audit, finished.** Add a per-token repo allowlist, a
-   confirmation round trip for `admin` tools, audit rotation, and
-   `saddle remote audit`. **Model scope: Opus.** Permission design.
+1. ~~**Server and transport hardening.**~~ Done in #308, except the
+   one-line `startWatchers` call (see Lifecycle).
+2. ~~**Auth, scopes and audit, finished.**~~ Done in #309.
 3. **Snapshot and needs-you queue.** Add item ids, parsed answer options,
    usage and limits, a stacks graph, and `peek` with secret scrubbing.
    **Model scope: Opus.** Prompt parsing and scrubbing need judgment.
