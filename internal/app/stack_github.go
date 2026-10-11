@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/gitx"
@@ -126,7 +127,26 @@ func (a *App) leaveStack(l landedTask, state, why string) error {
 	if state == TrainSuperseded {
 		msg += " The next restack drops its commits from " + a.Cfg.Integration + "."
 	}
+	if deps := a.dependents(l.ID); state == TrainMerged && len(deps) > 0 {
+		msg += fmt.Sprintf(" %s built on it; the next restack moves them onto %s (#358).", strings.Join(deps, ", "), a.Cfg.Base)
+		a.Store.Event(l.ID, "dependents_unblocked", strings.Join(deps, ","))
+	}
 	return a.Notify(OrchestratorID, store.NoticeInfo, msg)
+}
+
+// dependents lists the stacked tasks that run after id.
+func (a *App) dependents(id string) []string {
+	stack, err := a.landedStack()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range stack {
+		if l.ID != id && slices.Contains(a.TaskAfter(l.ID), id) {
+			out = append(out, l.ID)
+		}
+	}
+	return out
 }
 
 // reland handles a PR merged into the stacked branch into instead of base:

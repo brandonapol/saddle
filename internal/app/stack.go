@@ -119,7 +119,8 @@ func (a *App) restack() (RestackResult, error) {
 	if res.Base, err = gitx.RevParse(a.Root, remote); err != nil {
 		return res, err
 	}
-	if _, err := a.ReconcileStack(a.ghLookup); err != nil {
+	info, err := a.ReconcileStack(a.ghLookup)
+	if err != nil {
 		return res, err
 	}
 	all, err := a.landedAll()
@@ -137,6 +138,11 @@ func (a *App) restack() (RestackResult, error) {
 	}
 	a.healBranches(stack)
 	if err := a.checkDrift(stack); err != nil {
+		return res, err
+	}
+	// A retarget someone made by hand, or a dependency the task's text
+	// names, is an edge the layout keeps (#358, #359; see prbase.go).
+	if err := a.noteDependencies(stack, info); err != nil {
 		return res, err
 	}
 	integ, err := gitx.RevParse(a.Root, a.Cfg.Integration)
@@ -211,12 +217,19 @@ func (a *App) restack() (RestackResult, error) {
 	if err := a.moveStack(plan, integ, res.Base, &res); err != nil {
 		return res, err
 	}
-	// Re-cutting changes what each tip holds (spelling words, migration
-	// numbers), so the cheap checks run again on every layer that moved.
-	for _, g := range a.gateRestack(plan) {
+	rs, err := a.restackLayout(plan)
+	if err != nil {
+		return res, err
+	}
+	// Re-cutting changes what each PR head holds (spelling words, migration
+	// numbers), so the cheap checks run again on every head that moved: the
+	// head its PR will show, on its PR's own base, not the integration tip
+	// (#358).
+	reds, held := a.gateRestack(rs)
+	for _, g := range reds {
 		res.GateRed = append(res.GateRed, g.Task)
 	}
-	if err := a.republish(plan, &res); err != nil {
+	if err := a.republishLayout(rs, held, info, &res); err != nil {
 		return res, err
 	}
 	res.Repairs = a.spawnRepairs()
@@ -232,7 +245,7 @@ func (a *App) restack() (RestackResult, error) {
 		msg += " The old " + a.Cfg.Integration + " is kept at " + res.Backup + "."
 	}
 	if len(res.GateRed) > 0 {
-		msg += " Their new tips fail [train] prepublish.cmd, so prs holds them: " + strings.Join(res.GateRed, ", ") + "."
+		msg += " Their new PR heads fail [train] prepublish.cmd, so they and the layers above them weren't pushed, and prs holds them: " + strings.Join(res.GateRed, ", ") + "."
 	}
 	if len(res.Repairing) > 0 {
 		msg += " Conflicting with no agent to resolve it, so out of the stack until a repair task re-lands their work: " + strings.Join(res.Repairing, ", ") + "."
@@ -624,38 +637,78 @@ func (a *App) checkedOut(t store.Task) bool {
 	return err == nil && br == t.Branch
 }
 
-// republish force-with-lease pushes the moved branches that have PRs and
-// retargets those PRs by the PR layout of the rebuilt stack (see stackLayout):
-// each targets the layer below it in its stack, or base. A merged task's PR
-// is left alone, and a PR GitHub refuses to retarget because it is closed
-// takes its task out of the stack instead of failing. With stack_backend =
-// "gh-stack" the stacks are linked on GitHub again afterwards.
-func (a *App) republish(plan []restacked, res *RestackResult) error {
-	var live []restacked
-	var stack []landedTask
+// restackPlan is the rebuilt stack laid out as PRs: the layers still in it
+// (their ranges the rebuilt ones), and their layout (see stackLayout).
+type restackPlan struct {
+	live   []restacked
+	stack  []landedTask
+	layout []prLayer
+	order  []int
+}
+
+// restackLayout lays out the layers of plan that are still stacked.
+func (a *App) restackLayout(plan []restacked) (restackPlan, error) {
+	var rs restackPlan
 	for _, r := range plan {
 		if r.gone() {
 			continue
 		}
 		l := r.landedTask
 		l.From, l.To = r.NewFrom, r.NewTo
-		live = append(live, r)
-		stack = append(stack, l)
+		rs.live = append(rs.live, r)
+		rs.stack = append(rs.stack, l)
 	}
-	layout, order, err := a.stackLayout(stack)
+	var err error
+	rs.layout, rs.order, err = a.stackLayout(rs.stack)
+	return rs, err
+}
+
+// republish is republishLayout for plan's layout, holding nothing back for
+// the gate and with no word from GitHub on the current bases.
+func (a *App) republish(plan []restacked, res *RestackResult) error {
+	rs, err := a.restackLayout(plan)
 	if err != nil {
 		return err
 	}
+	return a.republishLayout(rs, nil, nil, res)
+}
+
+// republishLayout force-with-lease pushes the moved branches that have PRs and
+// retargets those PRs by the PR layout of the rebuilt stack (see stackLayout):
+// each targets the layer below it in its stack, or base. A merged task's PR
+// is left alone, and a PR GitHub refuses to retarget because it is closed
+// takes its task out of the stack instead of failing. Layers in held (red at
+// their new PR head, or above one that is) are left as they were, and so is
+// a layer whose dependency outside the stack still has an open PR, rather
+// than moved onto base without it (#358). info is what GitHub said about
+// each PR; a base it changes is logged (see setPRBase). With stack_backend =
+// "gh-stack" the stacks are linked on GitHub again afterwards.
+func (a *App) republishLayout(rs restackPlan, held map[int]string, info map[string]PRInfo, res *RestackResult) error {
 	var groups []int
 	var bases []string
 	var linked []store.Task
-	for _, i := range order {
-		r := live[i]
+	waiting := map[int]bool{}
+	for _, i := range rs.order {
+		r := rs.live[i]
 		if r.PR == "" {
 			continue
 		}
-		base := a.prBase(stack, layout, i)
-		head := layout[i].Head
+		if g, ok := held[i]; ok {
+			a.Store.Event(r.ID, "restack_held", "pre-publish gate red at "+g)
+			continue
+		}
+		if b := rs.layout[i].Below; b >= 0 && waiting[b] {
+			waiting[i] = true
+			continue
+		}
+		if dep, pr := a.waitingOn(rs.stack[i], rs.stack, a.ghLookup); dep != "" {
+			a.holdForDependency(rs.stack[i], dep, pr, "restack")
+			waiting[i] = true
+			continue
+		}
+		a.releaseDependencyHold(r.ID)
+		base := a.prBase(rs.stack, rs.layout, i)
+		head := rs.layout[i].Head
 		published, _ := gitx.RevParse(a.Root, "refs/remotes/origin/"+r.Branch)
 		if r.NewTo != r.To || head != published {
 			if err := a.pushLanded(r.Branch, head); err != nil {
@@ -663,7 +716,8 @@ func (a *App) republish(plan []restacked, res *RestackResult) error {
 			}
 			a.Store.Event(r.ID, "restack_push", r.Branch+" "+short(head))
 		}
-		if _, err := gh(a.Root, "pr", "edit", r.PR, "--base", base); err != nil {
+		live := info[r.PR].BaseRefName
+		if err := a.setPRBase(r.Task, live, base, "restack"); err != nil {
 			if !strings.Contains(err.Error(), "closed pull request") {
 				return err
 			}
@@ -674,9 +728,13 @@ func (a *App) republish(plan []restacked, res *RestackResult) error {
 			continue
 		}
 		res.Retargeted = append(res.Retargeted, r.ID)
-		a.Store.Event(r.ID, "restack_retarget", r.PR+" → "+base)
+		if live != "" && live != base {
+			a.Store.Event(r.ID, "restack_retarget", r.PR+" "+live+" → "+base)
+		} else {
+			a.Store.Event(r.ID, "restack_retarget", r.PR+" → "+base)
+		}
 		linked = append(linked, r.Task)
-		groups = append(groups, layout[i].Group)
+		groups = append(groups, rs.layout[i].Group)
 		bases = append(bases, base)
 	}
 	if err := a.updateStackComments(linked, groups, bases); err != nil {

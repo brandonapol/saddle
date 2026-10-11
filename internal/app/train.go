@@ -733,7 +733,10 @@ func overlaps(wt, base string, files []string) bool {
 // ReconcileStack). Layers below the first broken or flagged one are
 // published; from there up nothing is pushed or changed, and the error says
 // why. Each layer must pass the pre-publish gate at its own head first (see
-// prgate.go): a red one and those above it stay unpublished.
+// prgate.go): a red one and those above it stay unpublished. A task stacks
+// on the earlier tasks it depends on, declared or not, and a PR base someone
+// set by hand on another stacked branch is kept as such a dependency; a base
+// saddle changes is logged, never silent (see prbase.go).
 func (a *App) PRs() ([]string, error) {
 	res, err := a.publish()
 	return res.urls, err
@@ -756,7 +759,8 @@ func (a *App) publishMode(pushOnly bool) (published, error) {
 		return res, err
 	}
 	defer unlock()
-	if _, err := a.ReconcileStack(a.ghLookup); err != nil {
+	info, err := a.ReconcileStack(a.ghLookup)
+	if err != nil {
 		return res, err
 	}
 	all, err := a.landedAll()
@@ -768,6 +772,11 @@ func (a *App) publishMode(pushOnly bool) (published, error) {
 	}
 	landed := stacked(all)
 	a.healBranches(landed)
+	// Dependencies nobody declared stack too, whatever the file overlap
+	// (#358, #359; see prbase.go).
+	if err := a.noteDependencies(landed, info); err != nil {
+		return res, err
+	}
 	flag, flagged, err := a.Flag()
 	if err != nil {
 		return res, err
@@ -832,6 +841,11 @@ func (a *App) publishMode(pushOnly bool) (published, error) {
 		}
 		l := landed[i]
 		t := l.Task
+		if dep, pr := a.waitingOn(l, landed, a.ghLookup); dep != "" {
+			a.holdForDependency(l, dep, pr, "prs")
+			continue // its work isn't whole until dep's PR merges
+		}
+		a.releaseDependencyHold(t.ID)
 		if err := a.pushLanded(t.Branch, layout[i].Head); err != nil {
 			return res, err
 		}
@@ -853,7 +867,10 @@ func (a *App) publishMode(pushOnly bool) (published, error) {
 			if err := a.Store.SetField(t.ID, "pr", t.PR); err != nil {
 				return res, err
 			}
-		} else if _, err := gh(a.Root, "pr", "edit", t.PR, "--base", prBase); err != nil {
+			if err := a.notePRBase(t, "", prBase, "prs"); err != nil {
+				return res, err
+			}
+		} else if err := a.setPRBase(t, info[t.PR].BaseRefName, prBase, "prs"); err != nil {
 			return res, err
 		}
 		done[i] = true
