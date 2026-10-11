@@ -36,7 +36,7 @@ func pluginCmd() *cobra.Command {
 		Use:   "plugin",
 		Short: "Entrypoints for the saddle Claude Code plugin (orchestrate from your own Claude Code session)",
 	}
-	cmd.AddCommand(pluginMCPCmd(), pluginHookCmd(), pluginSetupCmd(), pluginInstallCmd(), pluginBriefCmd(), pluginEngineCmd(), pluginWaitCmd())
+	cmd.AddCommand(pluginMCPCmd(), pluginHookCmd(), pluginSetupCmd(), pluginInstallCmd(), pluginBriefCmd(), pluginEngineCmd(), pluginWaitCmd(), pluginEventsCmd())
 	return cmd
 }
 
@@ -241,7 +241,7 @@ func runPluginHook(r io.Reader, w io.Writer) error {
 		return nil
 	}
 	defer a.Close()
-	if a.LockOwner() != app.LockEngine {
+	if a.LockOwner() != app.LockEngine || a.ModActive(time.Now()) {
 		return nil
 	}
 	out := hook.HandleOrchestrator(a, in)
@@ -305,6 +305,11 @@ func writeBrief(w io.Writer, a *app.App) error {
 		fmt.Fprintln(w, "- ‼ saddle up is running in another terminal, and its TUI orchestrator gets the agents' events. Quit it before orchestrating from here (agents keep running), or use the TUI.")
 	default:
 		fmt.Fprintln(w, "- Engine: not running. Start `saddle plugin engine` in the background before spawning.")
+	}
+	if a.ModActive(time.Now()) {
+		fmt.Fprintln(w, "- Mod: active. It wakes you when an event needs you; don't run `saddle plugin wait`.")
+	} else {
+		fmt.Fprintln(w, "- Mod: not active. Keep one background `saddle plugin wait` running while agents work.")
 	}
 	ts, err := mcpserver.Tasks(a)
 	if err != nil {
@@ -415,6 +420,10 @@ func waitNotices(ctx context.Context, a *app.App, poll time.Duration, w io.Write
 	t := time.NewTicker(poll)
 	defer t.Stop()
 	for {
+		if a.ModActive(time.Now()) {
+			fmt.Fprintln(w, "The saddle mod in this session wakes you when an event needs you, so no wait is needed. Don't start another.")
+			return nil
+		}
 		n, err := a.Store.PendingActionNotices(app.OrchestratorID)
 		if err != nil {
 			return err

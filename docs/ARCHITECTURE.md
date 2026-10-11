@@ -44,9 +44,13 @@ saddle land | prs | sync | …         ─┘   CI watcher
   TUI's. Its MCP server is `saddle plugin mcp` acting as task `t0`.
   `saddle plugin engine` (`internal/engine`) runs the TUI's background work
   headless: the watchers above, plus noticing prompts and stalls, which it
-  queues as `t0` notices. `saddle plugin wait`, run in the background,
-  exits when one needs the session, and `saddle plugin hook` delivers them
-  on the session's prompts and tool calls. The engine and `saddle up` share
+  queues as `t0` notices. On Claude Code 2.1.287 or newer the plugin's mod
+  takes them (`saddle plugin events --json`), submits a `[saddle]` prompt
+  for the ones that need a decision and shows the rest; its heartbeat
+  (`.saddle/mod.alive`) keeps the other two paths off. Without the mod,
+  `saddle plugin wait`, run in the background, exits when one needs the
+  session, and `saddle plugin hook` delivers them on the session's prompts
+  and tool calls. The engine and `saddle up` share
   `.saddle/tui.lock`, which records its holder, so only one of them drives
   `t0`. The plugin's hook and MCP server do nothing outside a repo that ran
   `saddle init` or inside saddle's own agents (`SADDLE_TASK` set).

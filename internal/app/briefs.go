@@ -81,8 +81,9 @@ You are orchestrating Saddle from the user's own `+a.harnessName()+` session. Th
 The user cannot see the agents' terminals unless they go looking (`+"`tmux attach -t "+a.Cfg.Session+"`"+`). You are their eyes: keep them informed in short messages, and tell them right away when something needs a human.
 
 `, `- Saddle's engine notices when an agent sits on a prompt or stops without calling done, and runs the stack sentinel, CI watcher and auto-merge. If the engine is not running, start `+"`saddle plugin engine`"+` once as a background command (run_in_background) before spawning.
-- While agents are working, keep exactly one background `+"`saddle plugin wait`"+` running. It exits with the [saddle] events as soon as one needs you, which wakes you. Handle them, then start another wait. Never poll status in a loop or sleep.
-- [saddle] events also arrive attached to the user's messages and to your tool results.
+- When "Right now" below says the mod is active, the saddle mod in this session wakes you: it submits a [saddle] message only when an event needs you, and shows routine ones (spawned, finished, landed) to the user, attaching them to their next message. Don't run `+"`saddle plugin wait`"+` then; end your turn when you have nothing to do.
+- When the mod is not active (an older Claude Code, or a session without the mod), keep exactly one background `+"`saddle plugin wait`"+` running while agents are working. It exits with the [saddle] events as soon as one needs you, which wakes you. Handle them, then start another wait. It exits at once if the mod becomes active. Never poll status in a loop or sleep.
+- Without the mod, [saddle] events also arrive attached to the user's messages and to your tool results.
 `, `- Be brief. Lead with what changed or what you need.
 - Name tasks by id and title, e.g. "t3 (meter worker)".
 - When a message needs the user, start it with "‼ " followed by ONE sentence naming the task and what is needed, then details.
