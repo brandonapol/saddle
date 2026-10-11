@@ -44,7 +44,7 @@ func upgradeEnv(t *testing.T, body string) (root, exe string, src *memSource) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Close()
+	_ = s.Close()
 	t.Setenv("SADDLE_ROOT", root)
 
 	exe = filepath.Join(t.TempDir(), "saddle")
@@ -67,8 +67,8 @@ func upgradeEnv(t *testing.T, body string) (root, exe string, src *memSource) {
 	if _, err := tw.Write([]byte(body)); err != nil {
 		t.Fatal(err)
 	}
-	tw.Close()
-	gz.Close()
+	_ = tw.Close()
+	_ = gz.Close()
 	name := release.ArchiveName("v0.2.0", runtime.GOOS, runtime.GOARCH)
 	h := sha256.Sum256(buf.Bytes())
 	src = &memSource{
@@ -92,7 +92,7 @@ func addWorker(t *testing.T, root, id, status string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if err := s.CreateTask(store.Task{ID: id, Title: id, Role: store.RoleWorker, Status: status}); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestMigrateCmd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Close()
+	_ = s.Close()
 	out, _, err = runRoot(t, "migrate")
 	if err != nil || !strings.Contains(out, "nothing to migrate") {
 		t.Fatalf("migrate on a current db = %q, %v", out, err)

@@ -189,7 +189,7 @@ func ReplaceBinary(exe string, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("write the new binary next to %s: %w", exe, err)
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return err

@@ -112,7 +112,7 @@ func runningAgents(path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ts, err := s.Tasks()
 	if err != nil {
 		return nil, err

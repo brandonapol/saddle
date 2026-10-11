@@ -27,13 +27,13 @@ func TestOpenBacksUpBeforeMigrating(t *testing.T) {
 	if _, err := db.Exec(`PRAGMA user_version = 1; INSERT INTO tasks(id, title, status, created_at, updated_at) VALUES('t1', 'old', 'running', 0, 0)`); err != nil {
 		t.Fatal(err)
 	}
-	db.Close()
+	_ = db.Close()
 
 	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Close()
+	_ = s.Close()
 
 	backups, _ := filepath.Glob(path + ".bak-schema1-*")
 	if len(backups) != 1 {
@@ -52,7 +52,7 @@ func TestOpenBacksUpBeforeMigrating(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Close()
+	_ = s.Close()
 	if again, _ := filepath.Glob(path + ".bak-*"); len(again) != 1 {
 		t.Fatalf("backups after reopen = %v, want still one", again)
 	}
@@ -64,7 +64,7 @@ func TestOpenNewDatabaseMakesNoBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Close()
+	_ = s.Close()
 	if b, _ := filepath.Glob(filepath.Join(dir, "*.bak-*")); len(b) != 0 {
 		t.Fatalf("fresh database was backed up: %v", b)
 	}
@@ -76,7 +76,7 @@ func TestBackupCopiesData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	dst := filepath.Join(dir, "copy.db")
 	if err := Backup(filepath.Join(dir, "state.db"), dst); err != nil {
 		t.Fatal(err)

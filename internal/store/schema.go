@@ -24,7 +24,7 @@ func FileSchemaVersion(path string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var v int
 	err = db.QueryRow(`PRAGMA user_version`).Scan(&v)
 	return v, err
@@ -41,7 +41,7 @@ func Backup(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	return backupDB(db, dst)
 }
 
