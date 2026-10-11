@@ -14,7 +14,7 @@ func stuckNotices(t *testing.T, a *App) []store.Notice {
 	must(t, err)
 	var out []store.Notice
 	for _, n := range ns {
-		if strings.HasPrefix(n.Text, "Stuck stack:") {
+		if strings.HasPrefix(n.Text, "‼ Stuck stack:") {
 			out = append(out, n)
 		}
 	}
@@ -78,6 +78,14 @@ func TestCheckStuckAlarmsOncePerStackAndReason(t *testing.T) {
 	must(t, a.SetCIRed(CIRedState{Red: []CIRedLayer{{Task: "t2", Head: "ghi", Checks: []string{"CI / test"}, Since: now}}}))
 	if al, _ := a.CheckStuck(now.Add(80 * time.Minute)); len(al) != 1 || al[0].Reason != StuckCIRed {
 		t.Fatalf("red again: %+v", al)
+	}
+	// The cleared card closed, so the new one reaches the owner (#404).
+	if ns := stuckNotices(t, a); len(ns) != 1 {
+		t.Fatalf("red again sent %d cards, want 1", len(ns))
+	}
+	open, _ := a.OpenDecisions()
+	if len(open) != 2 || open[1].ID != DecisionStuckStack+":t1|ci-red" || !open[1].Opened.Equal(now.Add(80*time.Minute)) {
+		t.Fatalf("open cards = %+v, want the prepublish one and the new ci-red one", open)
 	}
 }
 

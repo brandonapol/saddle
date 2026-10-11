@@ -7,8 +7,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/brandonapol/saddle/internal/store"
 )
 
 // The stuck-stack alarm (#223). A red or conflicting layer that nothing is
@@ -163,6 +161,9 @@ func (a *App) CheckStuck(now time.Time) ([]StuckAlarm, error) {
 		_, reason, _ := strings.Cut(k, "|")
 		if !slices.ContainsFunc(layers, func(l stuckLayer) bool { return l.Reason == reason && slices.Contains(ls, l.Layer) }) {
 			delete(s.Alerted, k)
+			if err := a.ResolveDecision(DecisionStuckStack+":"+k, now); err != nil {
+				return alarms, err
+			}
 		}
 	}
 	return alarms, a.setStuckState(s)
@@ -175,7 +176,7 @@ func (a *App) alarmStuck(due []stuckLayer, seen map[string]time.Time, now time.T
 	if err != nil || !ok {
 		return nil, err
 	}
-	stackOf, err := a.stackNames()
+	stackOf, above, err := a.stackNames()
 	unlock()
 	if err != nil {
 		return nil, err
@@ -194,7 +195,9 @@ func (a *App) alarmStuck(due []stuckLayer, seen map[string]time.Time, now time.T
 			continue
 		}
 		al := StuckAlarm{Stack: stack, Layer: l.Layer, Reason: l.Reason, Detail: l.Detail, For: now.Sub(seen[l.Layer+"|"+l.Reason]).Round(time.Minute)}
-		if err := a.Notify(OrchestratorID, store.NoticeAction, stuckNotice(al)); err != nil {
+		card := stuckCard(al, a.taskLabel(l.Layer), above[l.Layer])
+		card.Opened = now
+		if err := a.OpenDecision(card); err != nil {
 			return out, err
 		}
 		a.Store.Event(l.Layer, "stack_stuck", key)
@@ -204,30 +207,29 @@ func (a *App) alarmStuck(due []stuckLayer, seen map[string]time.Time, now time.T
 	return out, nil
 }
 
-// stackNames maps each stacked task to its stack's bottom layer.
-func (a *App) stackNames() (map[string]string, error) {
+// stackNames maps each stacked task to its stack's bottom layer, and to the
+// layers above it in that stack.
+func (a *App) stackNames() (map[string]string, map[string][]string, error) {
 	stack, err := a.landedStack()
 	if err != nil || len(stack) == 0 {
-		return nil, err
+		return nil, nil, err
 	}
 	layout, _, err := a.stackLayout(stack)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	out := map[string]string{}
+	out, above := map[string]string{}, map[string][]string{}
 	for i, l := range stack {
 		g := layout[i].Group
 		if g < 0 || g >= len(stack) {
 			g = i
 		}
 		out[l.ID] = stack[g].ID
+		for _, b := range stack[:i] {
+			if out[b.ID] == out[l.ID] {
+				above[b.ID] = append(above[b.ID], l.ID)
+			}
+		}
 	}
-	return out, nil
-}
-
-func stuckNotice(al StuckAlarm) string {
-	what := map[string]string{StuckCIRed: "red", StuckPrepublish: "red at its own tip", StuckAtRisk: "at risk"}[al.Reason]
-	return fmt.Sprintf("Stuck stack: the stack from %s has been %s at layer %s for %s and no task is fixing it: %s. "+
-		"Everything above %s is held until it's fixed; this needs you: spawn a fix for %s, restack, or `saddle unstack %s`.",
-		al.Stack, what, al.Layer, al.For, al.Detail, al.Layer, al.Layer, al.Layer)
+	return out, above, nil
 }
