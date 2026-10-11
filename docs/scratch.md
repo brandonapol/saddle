@@ -8,13 +8,17 @@ Once it filled, every gate failed with `disk quota exceeded` (#320, #322).
 
 The root is `[tmp] dir`. When that is unset it is `<user cache dir>/saddle/tmp`,
 which is `~/.cache/saddle/tmp` on Linux. A `[tmp] dir` inside the repo is
-ignored.
+ignored. Saddle reads `[tmp]` through its config package like every other
+section: the user's `~/.config/saddle/config.toml` first, then the repo's
+`.saddle/config.toml`, key by key. A relative `dir` is relative to the repo.
+The running sweeper re-reads it on each check, so an edit needs no restart.
 
 ```toml
 [tmp]
 # dir = "~/.cache/saddle/tmp"   # the scratch root
 # max_age = "60m"               # how old an entry must be before a sweep removes it
 # low_free_pct = 15             # free space under this % on the root's disk holds spawns; -1 turns it off
+# max_bytes = "20G"             # cap the root as if it were its own disk; free space is what its files leave
 ```
 
 `saddle up`, `saddle mcp` (the MCP server every agent and the orchestrator
@@ -64,7 +68,9 @@ never removes the root itself.
 ## Low space
 
 Before each spawn and on every sweep tick, saddle measures the free space on
-the disk that holds the root. When it is under `low_free_pct`:
+the disk that holds the root. With `max_bytes` set, the root also counts as a
+disk of that size on its own, and whichever is fuller counts. When free space
+is under `low_free_pct`:
 
 1. Saddle sweeps again with a 5-minute age threshold.
 2. If the disk is still low, new spawns are held. Spawn returns

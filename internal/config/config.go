@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -69,6 +71,84 @@ type Config struct {
 	Orchestrator Orchestrator `toml:"orchestrator"`
 	// Notices tunes how queued notices reach idle agents.
 	Notices Notices `toml:"notices"`
+	// Tmp is saddle's scratch root and its sweeper (internal/scratch).
+	Tmp Tmp `toml:"tmp"`
+}
+
+// Tmp is [tmp]: where saddle keeps its scratch and when it sweeps it
+// (#322). Zero values mean scratch's defaults; Load expands ~ in Dir and
+// makes a relative Dir absolute against the repo.
+type Tmp struct {
+	// Dir is the scratch root; empty means <user cache dir>/saddle/tmp.
+	Dir string `toml:"dir"`
+	// MaxAge is how old an entry must be before a sweep removes it.
+	MaxAge time.Duration `toml:"max_age"`
+	// LowFreePct is the free-space percentage under which spawns are held
+	// after a harder sweep; negative turns the pressure response off.
+	LowFreePct float64 `toml:"low_free_pct"`
+	// MaxBytes caps the scratch root's size as if it were a filesystem of
+	// its own: free space is what its files leave. 0 means no cap. Written
+	// as bytes or with a K, M, G or T suffix ("20G").
+	MaxBytes ByteSize `toml:"max_bytes"`
+}
+
+// ByteSize is a size in bytes, read from TOML as an integer or a string
+// with a binary K, M, G or T suffix.
+type ByteSize int64
+
+// UnmarshalTOML reads 1000, "1000", "64K" or "2G".
+func (b *ByteSize) UnmarshalTOML(v any) error {
+	switch x := v.(type) {
+	case int64:
+		*b = ByteSize(x)
+		return nil
+	case string:
+		n, err := ParseByteSize(x)
+		*b = n
+		return err
+	}
+	return fmt.Errorf("want bytes or a size like \"20G\", got %v", v)
+}
+
+// ParseByteSize reads "1000", "64K", "64KB", "2G" and so on, in binary units.
+func ParseByteSize(s string) (ByteSize, error) {
+	t := strings.ToUpper(strings.TrimSpace(s))
+	t = strings.TrimSuffix(strings.TrimSuffix(t, "IB"), "B")
+	mult := int64(1)
+	if i := strings.IndexAny(t, "KMGT"); i >= 0 && i == len(t)-1 {
+		mult = int64(1) << (10 * (1 + strings.IndexByte("KMGT", t[i])))
+		t = strings.TrimSpace(t[:i])
+	}
+	n, err := strconv.ParseInt(t, 10, 64)
+	if err != nil || n > math.MaxInt64/mult {
+		return 0, fmt.Errorf("size %q: want bytes or a number with K, M, G or T", s)
+	}
+	return ByteSize(n * mult), nil
+}
+
+// resolveTmp expands ~ in t.Dir, makes it absolute against root and checks
+// the numbers.
+func resolveTmp(t *Tmp, root string) error {
+	if d := t.Dir; d != "" {
+		if d == "~" || strings.HasPrefix(d, "~/") {
+			if h, err := os.UserHomeDir(); err == nil {
+				d = filepath.Join(h, strings.TrimPrefix(d, "~"))
+			}
+		}
+		if !filepath.IsAbs(d) {
+			d = filepath.Join(root, d)
+		}
+		t.Dir = filepath.Clean(d)
+	}
+	switch {
+	case t.MaxAge < 0:
+		return fmt.Errorf("tmp.max_age %v: must not be negative", t.MaxAge)
+	case t.LowFreePct > 100:
+		return fmt.Errorf("tmp.low_free_pct %v: want a percentage up to 100, or negative for off", t.LowFreePct)
+	case t.MaxBytes < 0:
+		return fmt.Errorf("tmp.max_bytes %d: must not be negative", t.MaxBytes)
+	}
+	return nil
 }
 
 // Notices configures notice delivery to agents.
@@ -476,6 +556,9 @@ func Load(root string) (Config, error) {
 			}
 			cfg.AdapterOrder = o.Adapters.Order
 		}
+	}
+	if err := resolveTmp(&cfg.Tmp, root); err != nil {
+		return cfg, err
 	}
 	if cfg.Session == "" {
 		cfg.Session = DefaultSession(root)

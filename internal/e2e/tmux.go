@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -18,11 +19,43 @@ type Tmux struct {
 	Env []string
 }
 
-// NewTmux makes a socket dir (short, under the system temp dir: socket
-// paths are length-limited) and kills the server when t ends.
+// maxSocketPath is the longest socket path that works everywhere: sun_path
+// is 108 bytes on Linux and 104 on macOS, the NUL included.
+const maxSocketPath = 103
+
+// socket is the default server's socket path under Dir.
+func (x *Tmux) socket() string {
+	return filepath.Join(x.Dir, fmt.Sprintf("tmux-%d", os.Getuid()), "default")
+}
+
+// socketDir makes the socket dir under the first parent short enough for
+// the socket path: the temp dir, then $XDG_RUNTIME_DIR (made for sockets),
+// then /tmp. Under a deep TMPDIR, such as the train's gate dirs, the temp
+// dir alone gives "File name too long".
+func socketDir() (string, error) {
+	var tooLong []string
+	for _, p := range []string{os.TempDir(), os.Getenv("XDG_RUNTIME_DIR"), "/tmp"} {
+		if p == "" {
+			continue
+		}
+		dir, err := os.MkdirTemp(p, "e2etmux")
+		if err != nil {
+			continue
+		}
+		if x := (&Tmux{Dir: dir}); len(x.socket()) <= maxSocketPath {
+			return dir, nil
+		}
+		_ = os.RemoveAll(dir)
+		tooLong = append(tooLong, p)
+	}
+	return "", fmt.Errorf("no temp dir short enough for a tmux socket (tried %v)", tooLong)
+}
+
+// NewTmux makes a socket dir (short: socket paths are length-limited, see
+// socketDir) and kills the server when t ends.
 func NewTmux(t testing.TB) *Tmux {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "e2etmux")
+	dir, err := socketDir()
 	if err != nil {
 		t.Fatal(err)
 	}

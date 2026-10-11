@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/scratch"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -36,8 +37,16 @@ var ErrScratchLow = errors.New("scratch space low")
 // ScratchSweepEvery is how often saddle up's sweeper runs.
 const ScratchSweepEvery = 10 * time.Minute
 
-// ScratchConfig is [tmp], read from the config files.
-func (a *App) ScratchConfig() scratch.Config { return scratch.LoadConfig(a.Root) }
+// ScratchConfig is [tmp], read afresh through the config package so an
+// edit reaches a running sweeper. A config that no longer loads leaves the
+// one saddle opened with.
+func (a *App) ScratchConfig() scratch.Config {
+	t := a.Cfg.Tmp
+	if cfg, err := config.Load(a.Root); err == nil {
+		t = cfg.Tmp
+	}
+	return scratch.Config{Dir: t.Dir, MaxAge: t.MaxAge, LowFreePct: t.LowFreePct, MaxBytes: int64(t.MaxBytes)}
+}
 
 // ScratchRoot is the scratch root. A [tmp] dir inside the repo is ignored,
 // for the reason GateTmpdir gives.
@@ -90,9 +99,11 @@ func (a *App) sweepScratchAfter(task string) {
 }
 
 // ScratchPressure checks the scratch filesystem and, when it is low, sweeps
-// harder (scratch.Respond). space nil is the real filesystem.
+// harder (scratch.Respond), capped at [tmp] max_bytes. space nil is the
+// real filesystem.
 func (a *App) ScratchPressure(space scratch.SpaceFunc) (scratch.Pressure, error) {
-	p, err := scratch.Respond(a.scratchOptions(false, 0), a.ScratchConfig().LowFree(), space)
+	c := a.ScratchConfig()
+	p, err := scratch.Respond(a.scratchOptions(false, 0), c.LowFree(), scratch.Capped(space, c.MaxBytes))
 	if p.Swept != nil && len(p.Swept.Removed) > 0 {
 		a.Store.Event("", EventScratchSwept, fmt.Sprintf("low space: %d entries, %s", len(p.Swept.Removed), scratch.Bytes(p.Swept.Freed)))
 	}
@@ -183,8 +194,9 @@ func (a *App) RunScratchSweeper(ctx context.Context) {
 // otherwise. It only measures, so status stays cheap.
 func (a *App) ScratchWarning() string {
 	root := a.ScratchRoot()
-	th := a.ScratchConfig().LowFree()
-	s, err := scratchSpace(root)
+	c := a.ScratchConfig()
+	th := c.LowFree()
+	s, err := scratch.Capped(scratchSpace, c.MaxBytes)(root)
 	if err != nil || th <= 0 || s.FreePct() >= th {
 		return ""
 	}

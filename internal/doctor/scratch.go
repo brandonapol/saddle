@@ -63,15 +63,15 @@ func scratchCheck(se ScratchEnv) Result {
 
 // Scratch measures the scratch root the way saddle uses it.
 func (s system) Scratch() (ScratchReport, error) {
-	cfg := scratch.LoadConfig(string(s))
 	a := &app.App{Root: string(s)}
+	cfg := a.ScratchConfig()
 	root := a.ScratchRoot()
 	rep := ScratchReport{Root: root, Threshold: cfg.LowFree()}
 	for _, e := range scratch.Top(root, 1<<30, false, true) {
 		rep.Bytes += e.Bytes
 		rep.Files += e.Files
 	}
-	sp, err := scratch.Statfs(root)
+	sp, err := scratch.Capped(scratch.Statfs, cfg.MaxBytes)(root)
 	if err != nil {
 		return rep, err
 	}

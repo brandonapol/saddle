@@ -309,6 +309,23 @@ is `observe`: runs are recorded with wait, duration, CPU and peak RSS, but none
 waits. `App.RunHeavy` is the entry point for saddle's own gates. Design:
 [runq.md](runq.md).
 
+## Scratch root, sweeper and spawn hold (#322)
+
+Saddle keeps its temp files under one root, `[tmp] dir`, which defaults to
+`~/.cache/saddle/tmp`. It is read through `internal/config` like any other
+section. `saddle up`, `mcp`, `spawn` and `land` point `TMPDIR` and `GOTMPDIR`
+there, so gates (in per-run `<root>/<repo hash>/gate-*` dirs), the train and
+agents inherit it. `internal/scratch` sweeps entries under the root, plus
+saddle-prefixed entries in the OS temp dir, that are older than `max_age` and
+held by no live process. It runs on `up`, every 10 minutes while `up` runs,
+and after done or kill. Before each spawn and on each sweep tick,
+`App.ScratchPressure` measures the root's disk, capped by `max_bytes`. When it
+is under `low_free_pct`, saddle sweeps again with a 5-minute threshold. If the
+disk is still low, it holds spawns: spawn fails with `ErrScratchLow`, the
+orchestrator gets a notice naming the biggest entries, and status shows a
+warning. The hold lifts once there is room, and spawn's `force` overrides it.
+Design: [scratch.md](scratch.md).
+
 ## Layout on disk
 
 ```

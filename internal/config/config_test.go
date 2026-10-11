@@ -702,3 +702,47 @@ func TestAdapterOrderAndNotify(t *testing.T) {
 		t.Fatalf("unknown adapter in order: err = %v", err)
 	}
 }
+
+// [tmp] is the scratch section (#322, #383): the user's file and the repo's
+// merge field by field, the repo's winning; ~ and a relative dir resolve.
+func TestTmpConfig(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	t.Setenv("HOME", "/home/u")
+	root := t.TempDir()
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tmp != (Tmp{}) {
+		t.Fatalf("defaults: %+v", cfg.Tmp)
+	}
+	if err := os.MkdirAll(filepath.Join(xdg, "saddle"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(xdg, "saddle", "config.toml"),
+		[]byte("[tmp]\ndir = \"~/scratch\"\nlow_free_pct = -1\nmax_bytes = \"2G\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeConfig(t, root, "[tmp]\nmax_age = \"30m\"\nmax_bytes = \"64K\"\n")
+	if cfg, err = Load(root); err != nil {
+		t.Fatal(err)
+	}
+	want := Tmp{Dir: "/home/u/scratch", MaxAge: 30 * time.Minute, LowFreePct: -1, MaxBytes: 64 << 10}
+	if cfg.Tmp != want {
+		t.Fatalf("got %+v, want %+v", cfg.Tmp, want)
+	}
+	writeConfig(t, root, "[tmp]\ndir = \"../elsewhere\"\nmax_bytes = 1000\n")
+	if cfg, err = Load(root); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tmp.Dir != filepath.Join(filepath.Dir(root), "elsewhere") || cfg.Tmp.MaxBytes != 1000 {
+		t.Fatalf("relative dir and plain bytes: %+v", cfg.Tmp)
+	}
+	for _, bad := range []string{"low_free_pct = 101", "max_bytes = \"lots\"", "max_bytes = -5", "max_age = \"-1m\""} {
+		writeConfig(t, root, "[tmp]\n"+bad+"\n")
+		if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "tmp.") {
+			t.Fatalf("%s: err = %v", bad, err)
+		}
+	}
+}

@@ -25,8 +25,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/BurntSushi/toml"
 )
 
 // Defaults for [tmp].
@@ -46,60 +44,19 @@ const (
 // everything saddle names itself.
 var Prefixes = []string{"go-build", "e2ebin", "saddle-"}
 
-// Config is the [tmp] section.
+// Config is the [tmp] section, as the config package reads it
+// (config.Tmp): Dir is already absolute.
 type Config struct {
 	// Dir is the scratch root; empty means DefaultRoot.
-	Dir string `toml:"dir"`
+	Dir string
 	// MaxAge is the sweep's age threshold; zero means DefaultMaxAge.
-	MaxAge time.Duration `toml:"max_age"`
+	MaxAge time.Duration
 	// LowFreePct is the low-space threshold in percent; zero means
 	// DefaultLowFreePct, negative turns the pressure response off.
-	LowFreePct float64 `toml:"low_free_pct"`
-}
-
-// LoadConfig reads [tmp] from the user's and the repo's config.toml, the
-// repo's winning. It reads the files itself so it works before (and
-// without) the config package knowing the section.
-func LoadConfig(repo string) Config {
-	var c Config
-	paths := []string{}
-	if home, err := os.UserConfigDir(); err == nil {
-		paths = append(paths, filepath.Join(home, "saddle", "config.toml"))
-	}
-	if repo != "" {
-		paths = append(paths, filepath.Join(repo, ".saddle", "config.toml"))
-	}
-	for _, p := range paths {
-		var f struct {
-			Tmp Config `toml:"tmp"`
-		}
-		if _, err := toml.DecodeFile(p, &f); err != nil {
-			continue
-		}
-		if f.Tmp.Dir != "" {
-			d := expandHome(f.Tmp.Dir)
-			if !filepath.IsAbs(d) && repo != "" {
-				d = filepath.Join(repo, d)
-			}
-			c.Dir = filepath.Clean(d)
-		}
-		if f.Tmp.MaxAge > 0 {
-			c.MaxAge = f.Tmp.MaxAge
-		}
-		if f.Tmp.LowFreePct != 0 {
-			c.LowFreePct = f.Tmp.LowFreePct
-		}
-	}
-	return c
-}
-
-func expandHome(p string) string {
-	if p == "~" || strings.HasPrefix(p, "~/") {
-		if h, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(h, strings.TrimPrefix(p, "~"))
-		}
-	}
-	return p
+	LowFreePct float64
+	// MaxBytes caps the root as if it were a filesystem of its own (Capped);
+	// zero means no cap.
+	MaxBytes int64
 }
 
 // Root is the scratch root c names, else DefaultRoot.
@@ -501,6 +458,27 @@ func Statfs(path string) (Space, error) {
 	}
 	bs := uint64(st.Bsize) //nolint:gosec,unconvert // positive; its type differs by OS
 	return Space{Path: path, Free: uint64(st.Bavail) * bs, Total: uint64(st.Blocks) * bs}, nil
+}
+
+// Capped measures path's filesystem with space, then, when maxBytes > 0,
+// as a filesystem of maxBytes holding only path: free is what path's files
+// leave. Whichever has less free space in percent wins, so a full real disk
+// still shows.
+func Capped(space SpaceFunc, maxBytes int64) SpaceFunc {
+	if space == nil {
+		space = Statfs
+	}
+	if maxBytes <= 0 {
+		return space
+	}
+	return func(path string) (Space, error) {
+		used, _ := size(path)
+		c := Space{Path: path, Free: uint64(max(maxBytes-used, 0)), Total: uint64(maxBytes)}
+		if s, err := space(path); err == nil && s.FreePct() < c.FreePct() {
+			return s, nil
+		}
+		return c, nil
+	}
 }
 
 // Pressure is the outcome of Respond.
