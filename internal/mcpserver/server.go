@@ -341,8 +341,13 @@ func Tasks(a *app.App) ([]TaskView, error) {
 	return out, nil
 }
 
+// Serve runs task's MCP server on stdio. When the client goes away it still
+// waits for any done gate it started (#368), so the task is queued even if
+// Claude Code dropped the call.
 func Serve(ctx context.Context, a *app.App, task string) error {
-	return New(a, task).Run(ctx, &mcp.StdioTransport{})
+	err := New(a, task).Run(ctx, &mcp.StdioTransport{})
+	a.WaitDoneJobs()
+	return err
 }
 
 // ServeIdle runs a server with no tools whose instructions say why: the
@@ -423,15 +428,16 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, AskOut{Owner: owner, Message: "Asked " + owner + "; the answer will arrive as a [saddle] message. Keep working on what you can meanwhile."}, nil
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "done", Description: "Finish your task: requires a clean, committed worktree. Queues your branch in the merge train."},
+	mcp.AddTool(s, &mcp.Tool{Name: "done", Description: "Finish your task: requires a clean, committed worktree. Queues your branch in the merge train. When the repo's gate has to check your tree, it returns at once with a job id and checks in the background; you get a [saddle] notice when the job ends. Calling done again while it runs starts no second check."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in DoneIn) (*mcp.CallToolResult, OK, error) {
 			if err := self(); err != nil {
 				return nil, OK{}, err
 			}
-			if err := a.Done(task, in.Summary); err != nil {
+			job, err := a.DoneAsync(task, in.Summary)
+			if err != nil {
 				return nil, OK{}, err
 			}
-			return nil, OK{Message: "Queued in the merge train. You can stop now. If it conflicts or fails tests, you will be told."}, nil
+			return nil, OK{Message: doneMessage(job)}, nil
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "message", Description: "Send a [saddle] message to another task. It wakes the agent if it is idle."},
@@ -664,4 +670,15 @@ func New(a *app.App, task string) *mcp.Server {
 		})
 
 	return s
+}
+
+// doneMessage is what the done tool tells the agent about job (#368).
+func doneMessage(job app.DoneJob) string {
+	switch {
+	case job.Joined:
+		return fmt.Sprintf("Done gate %s is already checking your branch; no second check started. You can stop now: a [saddle] notice says when it is queued, or why not.", job.ID)
+	case job.Running:
+		return fmt.Sprintf("Done gate %s is checking your branch in the background; it is queued in the merge train when the gate passes. You can stop now: a [saddle] notice says when it is queued, or why not. Don't call done again unless that notice asks.", job.ID)
+	}
+	return "Queued in the merge train. You can stop now. If it conflicts or fails tests, you will be told."
 }

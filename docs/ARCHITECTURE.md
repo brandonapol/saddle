@@ -89,6 +89,34 @@ To give gates something to wait on, agents are nudged to make small commits.
 Saddle also snapshots dirty trees to `refs/saddle/wip/<task>` without
 touching the agent's index.
 
+### Done and its background gate (#368)
+
+A worker's `done` must pass the repo's own gate (`[train] lint.cmd`, or the
+detected pre-commit gate such as `make check`) before it is queued. Run inside
+the MCP call, that gate could keep the call silent for over 30 minutes on a
+busy machine; Claude Code then gave up and retried, and checks piled up. So
+the MCP `done` tool calls `App.DoneAsync` (`internal/app/done.go`):
+
+1. The quick checks run inline: a worker, a clean worktree, commits to land.
+   A tree that already passed the gate (its stamp in
+   `<git common dir>/saddle-hooks`) is queued at once, as before.
+2. Otherwise done takes the task's job lock (`saddle-hooks/done-<task>.lock`,
+   a non-blocking flock that also holds the job id), starts the gate in a
+   goroutine and returns the job id right away.
+3. A `done` call while that lock is held starts nothing: it joins the
+   running job and gets its id back. The lock dies with its process, so a
+   server that went away mid-gate never blocks the next done.
+4. The job runs the gate under the repo hooks' lock, so gates from every
+   worktree of the repo run one at a time. When it passes, and HEAD's tree
+   is still the one it checked, the task is marked done and queued and the
+   agent gets an info notice. A red gate, an interrupt or a branch that
+   moved meanwhile sends the agent an action notice (which wakes it) with
+   the reason and the job id.
+
+`saddle mcp` waits for its running jobs before it exits, so a client that
+hangs up mid-gate still gets its task queued. The CLI's `saddle done` still
+runs the gate inline.
+
 ## Merge train
 
 There is an integration branch `saddle/epic-<n>`, and branches land on it one
