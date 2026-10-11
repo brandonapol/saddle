@@ -175,7 +175,7 @@ keep the CLI they were spawned with.
 				return err
 			}
 			defer release()
-			defer recordUp(a.Root)() // lets other commands spot a stale saddle up (#326)
+			defer recordUp(a.Root)()              // lets other commands spot a stale saddle up (#326)
 			a.CleanStaleLeases(cmd.ErrOrStderr()) // heavy-run leases a crash left behind (#238)
 			if warn := a.LocalBaseBehind(); warn != "" {
 				fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+warn)
