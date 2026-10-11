@@ -44,6 +44,8 @@ var ToolScopes = map[string]Scope{
 	"peek":      ScopeRead,
 	"ticket":    ScopeRead,
 	"needs_you": ScopeRead,
+	// answer picks an option at a needs-you prompt (remote-only)
+	"answer": ScopeAct,
 	// wait_needs_you long-polls the needs-you queue (remote-only)
 	"wait_needs_you": ScopeRead,
 	// act
@@ -76,7 +78,7 @@ var ToolScopes = map[string]Scope{
 }
 
 // RemoteOnlyTools exist only on the remote server, not in mcpserver.
-var RemoteOnlyTools = []string{"needs_you", "wait_needs_you", ConfirmTool}
+var RemoteOnlyTools = []string{"needs_you", "wait_needs_you", "answer", ConfirmTool}
 
 // Allows reports whether a token holding granted may call tool.
 func Allows(granted []Scope, tool string) bool {
@@ -85,6 +87,24 @@ func Allows(granted []Scope, tool string) bool {
 		return false
 	}
 	return slices.Contains(granted, need) || slices.Contains(granted, ScopeAdmin)
+}
+
+// Mutating reports whether tool changes state: every act, land and admin
+// tool.
+func Mutating(tool string) bool {
+	switch ToolScopes[tool] {
+	case ScopeAct, ScopeLand, ScopeAdmin:
+		return true
+	}
+	return false
+}
+
+// RemoteAllows is what the remote server lets a token call: what Allows
+// grants, and for a mutating tool, only with admin besides (and then only
+// after a confirm round trip). Act and land name a tool's class; remotely,
+// changing anything takes admin.
+func RemoteAllows(granted []Scope, tool string) bool {
+	return Allows(granted, tool) && (!Mutating(tool) || slices.Contains(granted, ScopeAdmin))
 }
 
 // ParseScopes reads a comma-separated scope list. Every token can read, so

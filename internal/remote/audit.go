@@ -35,7 +35,9 @@ type AuditEntry struct {
 	TS       time.Time `json:"ts"`
 	Token    string    `json:"token,omitempty"` // the token's name, never its secret
 	Addr     string    `json:"addr"`
+	Repo     string    `json:"repo,omitempty"` // the repo's name, as in /mcp/<repo>
 	Tool     string    `json:"tool,omitempty"`
+	Args     string    `json:"args,omitempty"` // a mutating call's arguments, scrubbed and clipped
 	Decision string    `json:"decision"`
 	Reason   string    `json:"reason,omitempty"`
 }

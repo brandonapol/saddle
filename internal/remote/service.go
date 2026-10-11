@@ -242,5 +242,5 @@ func StdioCaller(scopes []Scope, name, sshConnection string) caller {
 // ServeStdio serves the same scoped server Handler does over one
 // transport (stdin and stdout under ssh) until the client goes away.
 func ServeStdio(ctx context.Context, src Source, audit *Audit, c caller, t mcp.Transport) error {
-	return newServer(src, c, audit, newServerState(Options{})).Run(ctx, t)
+	return newServer(&route{ServedRepo: ServedRepo{Src: src}}, c, audit, newServerState(Options{})).Run(ctx, t)
 }
