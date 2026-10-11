@@ -1,6 +1,6 @@
 {
-  "description": "At session start, says how to install saddle when the binary is missing or older than the plugin (it never installs by itself). Delivers saddle's agent events (prompts, stalls, conflicts, landings) into the session orchestrating this repo. Does nothing unless `saddle plugin engine` is running for the repo. The hooks module (register.ts) is the Claude Code mod: it keeps a live snapshot of saddle's state for the mod's pane, band and commands, and does nothing on Claude Code older than 2.1.287 or where nothing is drawn.",
-  "modules": ["./register.ts"],
+  "description": "At session start, says how to install saddle when the binary is missing or older than the plugin (it never installs by itself). Delivers saddle's agent events (prompts, stalls, conflicts, landings) into the session orchestrating this repo. Does nothing unless `saddle plugin engine` is running for the repo. The hooks module (register.tsx) is the Claude Code mod: it keeps a live snapshot of saddle's state and draws it in a pane (`/saddle-pane`) beside the transcript, and does nothing on Claude Code older than 2.1.287 or where nothing is drawn.",
+  "modules": ["./register.tsx"],
   "hooks": {
     "SessionStart": [{ "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/saddle-check\"", "timeout": 10 }, { "type": "command", "command": "saddle plugin hook", "timeout": 10 }] }],
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "saddle plugin hook", "timeout": 10 }] }],

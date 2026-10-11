@@ -29,10 +29,10 @@ func TestHooksJSONKeepsSettingsHooksBesideModule(t *testing.T) {
 	if err := json.Unmarshal(b, &h); err != nil {
 		t.Fatal(err)
 	}
-	if len(h.Modules) != 1 || h.Modules[0] != "./register.ts" {
-		t.Fatalf("modules = %v, want [./register.ts]", h.Modules)
+	if len(h.Modules) != 1 || h.Modules[0] != "./register.tsx" {
+		t.Fatalf("modules = %v, want [./register.tsx]", h.Modules)
 	}
-	if _, err := os.Stat("hooks/register.ts"); err != nil {
+	if _, err := os.Stat("hooks/register.tsx"); err != nil {
 		t.Fatal(err)
 	}
 	for _, ev := range []string{"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"} {
@@ -103,8 +103,8 @@ func TestModValidates(t *testing.T) {
 	}
 }
 
-// The mod's own tests (tests/*.test.ts): snapshot parsing and the refresh
-// timer, run by the engine without a live session.
+// The mod's own tests (tests/*.test.ts): snapshot parsing, the refresh
+// timer and the pane's tabs, run by the engine without a live session.
 func TestModTests(t *testing.T) {
 	bin := claudeWithMods(t)
 	if out, err := exec.Command(bin, "plugin", "test", ".").CombinedOutput(); err != nil {
