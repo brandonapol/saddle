@@ -5,6 +5,7 @@ package e2e
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -30,4 +31,19 @@ func TestHarnessStopTmuxAwaitsPanes(t *testing.T) {
 		t.Fatalf("stopTmux returned before the pane process's last write: %v", err)
 	}
 	stopTmux(x) // a server that is already gone is a no-op
+}
+
+// TestHarnessTmuxSocketFitsUnderLongTempDir: under a deep TMPDIR (the
+// train's make check runs in <scratch>/gate-*/e2e-*/), the socket path
+// would pass the kernel's sun_path limit and tmux would fail with "File
+// name too long". NewTmux falls back to a shorter dir.
+func TestHarnessTmuxSocketFitsUnderLongTempDir(t *testing.T) {
+	long := filepath.Join(t.TempDir(), strings.Repeat("d", 90))
+	must(t, os.MkdirAll(long, 0o755))
+	t.Setenv("TMPDIR", long)
+	x := NewTmux(t)
+	if n := len(x.socket()); n > maxSocketPath {
+		t.Fatalf("socket path is %d bytes, over %d: %s", n, maxSocketPath, x.socket())
+	}
+	must(t, x.NewSession("short", 40, 10, t.TempDir(), "sleep 30"))
 }
