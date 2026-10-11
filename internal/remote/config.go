@@ -48,7 +48,8 @@ type Config struct {
 	PerMinute      int `toml:"per_minute"`
 	FailsPerMinute int `toml:"fails_per_minute"`
 	// Push is [remote.push]: a phone notification for interrupt-class
-	// notices. It works with the listener off.
+	// notices. It is independent of Enabled: on exactly when it names a
+	// target.
 	Push PushConfig `toml:"push"`
 }
 

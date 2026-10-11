@@ -245,3 +245,48 @@ func TestPushLockIsExclusive(t *testing.T) {
 		r3()
 	}
 }
+
+// TestUnconfiguredPushSendsNothing: push is off unless [remote.push] names
+// a target, whatever [remote] enabled says. With a config that has no push
+// section, RunManaged returns at once and interrupt notices go nowhere.
+func TestUnconfiguredPushSendsNothing(t *testing.T) {
+	for _, conf := range []string{"", "[remote]\nenabled = false\n", "[remote]\nenabled = false\n[remote.push]\n"} {
+		home := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", home)
+		if conf != "" {
+			if err := os.MkdirAll(filepath.Join(home, "saddle"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, "saddle", "config.toml"), []byte(conf), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cfg, err := LoadConfig(UserConfigPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Push.On() {
+			t.Fatalf("config %q turned push on", conf)
+		}
+		rec := &hookRecorder{}
+		srv := httptest.NewServer(rec)
+		st := pushStore(t)
+		a := &app.App{Root: t.TempDir(), Store: st}
+		st.Event(app.OrchestratorID, app.EventNoticeInterrupt, "t5 asks: which schema?")
+		done := make(chan struct{})
+		go func() {
+			RunManaged(context.Background(), a, func(f string, args ...any) { t.Errorf("RunManaged logged with push off: "+f, args...) })
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("config %q: RunManaged blocked with push and the listener off", conf)
+		}
+		st.Event(app.OrchestratorID, app.EventNoticeInterrupt, "t6 asks: which table?")
+		if n := len(rec.got()); n != 0 {
+			t.Fatalf("config %q: %d pushes sent with push unconfigured", conf, n)
+		}
+		srv.Close()
+	}
+}
