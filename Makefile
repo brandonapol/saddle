@@ -150,6 +150,7 @@ test/scripts: ## Test the shell scripts (upgrade, release, install)
 	bash scripts/upgrade_test.sh
 	bash scripts/release_test.sh
 	bash scripts/install_test.sh
+	bash scripts/templeak_test.sh
 
 .PHONY: test/race
 test/race: ## Run tests with the race detector
@@ -173,7 +174,7 @@ test/cover: ## Run tests and write coverage.html
 ##@ Code quality
 
 .PHONY: check
-check: check/format check/tidy check/vet test test/e2e test/scripts check/lint ## Run every check CI runs
+check: check/format check/tidy check/vet test check/templeak test/e2e test/scripts check/lint ## Run every check CI runs
 
 .PHONY: check/format
 check/format: ## Fail if any Go file needs gofmt
@@ -191,6 +192,13 @@ check/tidy: ## Fail if go.mod or go.sum is not tidy
 	    $(GO) mod tidy -diff || true
 	    exit 1
 	fi
+
+.PHONY: check/templeak
+check/templeak: ## Fail if a test binary leaves files in an empty TMPDIR just by starting
+	# A temp dir made in init or TestMain and never removed leaks one per run;
+	# internal/app's binary also runs as the ref guard hook on every ref
+	# update, which filled /tmp (#320).
+	GO=$(GO) ./scripts/templeak.sh $(GO_TAGFLAG) ./...
 
 .PHONY: check/vet
 check/vet: ## Run go vet
