@@ -4,10 +4,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/usage"
 )
 
 func TestCompactSnapshot(t *testing.T) {
@@ -63,7 +65,7 @@ func TestNeedsYouFromStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	items, err := NeedsYouFrom(st)
+	items, err := NeedsYouFrom(st, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,5 +81,60 @@ func TestNeedsYouFromStore(t *testing.T) {
 	// Reading needs-you must not consume the orchestrator's notices.
 	if n, _ := st.PendingActionNotices(app.OrchestratorID); n != 1 {
 		t.Fatalf("pending action notices = %d after a read, want 1", n)
+	}
+}
+
+// TestStackGraph: status draws the PR stack bottom up from the base, the
+// merge train queue in landing order, and named stacks, one short line
+// each, marking the layer at risk and CI-red PRs.
+func TestStackGraph(t *testing.T) {
+	tasks := []mcpserver.TaskView{
+		{ID: "t1", PR: "https://github.com/o/r/pull/11"},
+		{ID: "t2", PR: "https://github.com/o/r/pull/12"},
+		{ID: "t3", PR: "https://github.com/o/r/pull/13"},
+		{ID: "t4"}, {ID: "t5"},
+		{ID: "t8", Status: store.Killed, PR: "https://github.com/o/r/pull/18"},
+	}
+	train := []store.TrainEntry{
+		{Task: "t1", State: store.TrainOK},
+		{Task: "t2", State: app.TrainMerged},
+		{Task: "t8", State: store.TrainOK},
+		{Task: "t3", State: store.TrainOK},
+		{Task: "t4", State: store.Queued},
+		{Task: "t5", State: store.OnHold},
+	}
+	custom := []app.CustomStack{{Name: "api", Tasks: []string{"t6", "t7"}}}
+	cired := []app.CIRedHold{{Task: "t1", PR: "https://github.com/o/r/pull/11"}}
+	got := StackGraph("main", train, tasks, custom, "t3", cired)
+	want := []string{
+		"stack: main ← t1 #11 (ci red) ← t3 #13 (at risk)",
+		"queue: t4, t5 (held)",
+		"stack api: t6 ← t7",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("graph:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if g := StackGraph("main", nil, nil, nil, "", nil); len(g) != 0 {
+		t.Fatalf("empty state drew %v", g)
+	}
+}
+
+// TestLimitsLine: status carries plan-limit usage per window, compactly.
+func TestLimitsLine(t *testing.T) {
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	e := usage.LimitEstimate{Now: now, State: usage.Warn,
+		FiveHour: usage.WindowEstimate{Name: "5h", Percent: 0.856, State: usage.Warn, USD: 12.5,
+			Tokens: usage.Tokens{Input: 10, Output: 20}, ResetsAt: now.Add(90 * time.Minute), ResetIn: 90 * time.Minute, Cap: usage.Cap{USD: 15}},
+		Weekly: usage.WindowEstimate{Name: "weekly", Unlimited: true, Tokens: usage.Tokens{Input: 5}},
+	}
+	l := LimitsFrom(e)
+	if l.State != "warn" || l.LaunchesPaused {
+		t.Fatalf("limits = %+v", l)
+	}
+	if l.FiveHour.Percent != 86 || l.FiveHour.State != "warn" || l.FiveHour.Tokens != 30 || l.FiveHour.ResetIn != "1h30m" || l.FiveHour.USD != 12.5 {
+		t.Fatalf("5h = %+v", l.FiveHour)
+	}
+	if !l.Weekly.Unlimited || l.Weekly.Tokens != 5 {
+		t.Fatalf("weekly = %+v", l.Weekly)
 	}
 }

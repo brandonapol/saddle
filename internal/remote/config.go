@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +47,55 @@ type Config struct {
 	// per client address.
 	PerMinute      int `toml:"per_minute"`
 	FailsPerMinute int `toml:"fails_per_minute"`
+	// Push is [remote.push]: a phone notification for interrupt-class
+	// notices. It works with the listener off.
+	Push PushConfig `toml:"push"`
+}
+
+// PushConfig is [remote.push]: where interrupt-class notices go. Set one
+// of Ntfy or URL; neither means push is off.
+type PushConfig struct {
+	// Ntfy is an ntfy topic URL (https://ntfy.sh/your-secret-topic). The
+	// summary is the body and the task is in the title.
+	Ntfy string `toml:"ntfy"`
+	// URL is a generic webhook: a JSON PushPayload is POSTed to it.
+	URL string `toml:"url"`
+	// Token, when set, is sent as a bearer Authorization header.
+	Token string `toml:"token"`
+}
+
+// On reports whether push is configured.
+func (p PushConfig) On() bool { return p.Ntfy != "" || p.URL != "" }
+
+// target is where pushes go and whether it is ntfy.
+func (p PushConfig) target() (string, bool) {
+	if p.Ntfy != "" {
+		return p.Ntfy, true
+	}
+	return p.URL, false
+}
+
+// Check refuses a push target that isn't https, except plain http to
+// loopback, since a notice's text would cross the network in the clear.
+func (p PushConfig) Check() error {
+	if p.Ntfy != "" && p.URL != "" {
+		return errors.New("[remote.push] takes ntfy or url, not both")
+	}
+	if !p.On() {
+		return nil
+	}
+	raw, _ := p.target()
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("[remote.push] %q: %w", raw, err)
+	}
+	switch {
+	case u.Scheme == "https" && u.Host != "":
+		return nil
+	case u.Scheme == "http" && loopbackHost(u.Hostname()):
+		return nil
+	}
+	return fmt.Errorf("[remote.push] %q: want an https URL (plain http only to loopback)", raw)
 }
 
 // Limits returns the rate limits, defaulted.

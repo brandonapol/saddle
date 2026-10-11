@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,10 +24,17 @@ import (
 // saddle up, the plugin engine or a foreground saddle remote serve. A held
 // lock's error names its holder.
 func AcquireServeLock(dir, listen, holder string) (release func(), err error) {
+	name := "serve-" + strings.NewReplacer(":", "_", "[", "", "]", "", "/", "_").Replace(listen) + ".lock"
+	return acquireLock(dir, name, holder, "saddle remote is already serving "+listen)
+}
+
+// acquireLock takes the flock on dir/name, recording holder in it. A held
+// lock's error is busy plus its holder.
+func acquireLock(dir, name, holder, busy string) (release func(), err error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	p := filepath.Join(dir, "serve-"+strings.NewReplacer(":", "_", "[", "", "]", "", "/", "_").Replace(listen)+".lock")
+	p := filepath.Join(dir, name)
 	f, err := os.OpenFile(p, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -38,7 +46,7 @@ func AcquireServeLock(dir, listen, holder string) (release func(), err error) {
 		if who == "" {
 			who = "another saddle process"
 		}
-		return nil, fmt.Errorf("saddle remote is already serving %s: %s", listen, who)
+		return nil, fmt.Errorf("%s: %s", busy, who)
 	}
 	if err := f.Truncate(0); err != nil {
 		_ = f.Close()
@@ -164,9 +172,10 @@ func openAppAudit(a *app.App, dir string, cfg Config) (*Audit, error) {
 }
 
 // RunManaged serves remote control for the life of ctx when the user config
-// enables it, and returns at once otherwise. saddle up and the plugin
-// engine run it beside their other watchers. It waits, rather than fails,
-// while a foreground saddle remote serve holds the address. Problems go to
+// enables it, and runs [remote.push] when that is configured; with neither
+// it returns at once. saddle up and the plugin engine run it beside their
+// other watchers. It waits, rather than fails, while a foreground saddle
+// remote serve holds the address. Problems go to
 // logf, or to the repo's event log when logf is nil; they never stop the
 // caller.
 func RunManaged(ctx context.Context, a *app.App, logf func(format string, args ...any)) {
@@ -180,7 +189,15 @@ func RunManaged(ctx context.Context, a *app.App, logf func(format string, args .
 		}
 		return
 	}
-	if !cfg.Enabled || a == nil {
+	if a == nil {
+		return
+	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	if cfg.Push.On() {
+		wg.Go(func() { RunPush(ctx, a, cfg.Push, "", logf) })
+	}
+	if !cfg.Enabled {
 		return
 	}
 	h, audit, dir, err := appServer(a, cfg)
