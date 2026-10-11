@@ -36,6 +36,14 @@ type rig struct {
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
+	return newRigOpts(t, Options{})
+}
+
+func newRigOpts(t *testing.T, opts Options) *rig {
+	t.Helper()
+	if opts.Limits == (Limits{}) {
+		opts.Limits = Limits{PerMinute: 1000, FailsPerMinute: 1000}
+	}
 	r := &rig{dir: t.TempDir()}
 	r.tokens = NewTokens(r.dir)
 	audit, err := OpenAudit(r.dir)
@@ -44,7 +52,7 @@ func newRig(t *testing.T) *rig {
 	}
 	t.Cleanup(func() { _ = audit.Close() })
 	audit.Mirror = func(e AuditEntry) { r.events = append(r.events, e) }
-	r.srv = httptest.NewServer(Handler(fakeSource{}, r.tokens, audit, Limits{PerMinute: 1000, FailsPerMinute: 1000}))
+	r.srv = httptest.NewServer(Handler(fakeSource{}, r.tokens, audit, opts))
 	t.Cleanup(r.srv.Close)
 	return r
 }
@@ -251,7 +259,7 @@ func TestFailedAuthIsRateLimited(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = audit.Close() }()
-	srv := httptest.NewServer(Handler(fakeSource{}, NewTokens(dir), audit, Limits{PerMinute: 100, FailsPerMinute: 2}))
+	srv := httptest.NewServer(Handler(fakeSource{}, NewTokens(dir), audit, Options{Limits: Limits{PerMinute: 100, FailsPerMinute: 2}}))
 	defer srv.Close()
 	r := &rig{srv: srv}
 	var codes []int
@@ -271,7 +279,7 @@ func TestTokenRequestsAreRateLimited(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = audit.Close() }()
-	srv := httptest.NewServer(Handler(fakeSource{}, tokens, audit, Limits{PerMinute: 2, FailsPerMinute: 100}))
+	srv := httptest.NewServer(Handler(fakeSource{}, tokens, audit, Options{Limits: Limits{PerMinute: 2, FailsPerMinute: 100}}))
 	defer srv.Close()
 	r := &rig{srv: srv, tokens: tokens}
 	secret := r.token(t, "chatty", ScopeRead)

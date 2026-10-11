@@ -64,6 +64,8 @@ var ToolScopes = map[string]Scope{
 	"spawn":     ScopeAdmin,
 	"kill":      ScopeAdmin,
 	"autopilot": ScopeAdmin,
+	// confirm runs an admin call held for confirmation (remote-only)
+	ConfirmTool: ScopeAdmin,
 	// local: a worker's own tools, meaningless from outside
 	"claim":     ScopeLocal,
 	"release":   ScopeLocal,
@@ -72,7 +74,7 @@ var ToolScopes = map[string]Scope{
 }
 
 // RemoteOnlyTools exist only on the remote server, not in mcpserver.
-var RemoteOnlyTools = []string{"needs_you"}
+var RemoteOnlyTools = []string{"needs_you", ConfirmTool}
 
 // Allows reports whether a token holding granted may call tool.
 func Allows(granted []Scope, tool string) bool {
