@@ -67,13 +67,14 @@ func (a *App) scratchOptions(dry bool, maxAge time.Duration) scratch.Options {
 	if maxAge <= 0 {
 		maxAge = a.ScratchConfig().Age()
 	}
-	return scratch.Options{Root: a.ScratchRoot(), OSTemp: scratch.OSTemp(), MaxAge: maxAge, DryRun: dry}
+	return scratch.Options{Root: a.ScratchRoot(), OSTemp: scratch.OSTemp(), MaxAge: maxAge, DryRun: dry, Holders: a.taskTmpHolders}
 }
 
 // SweepScratch sweeps saddle's stale scratch now (scratch.Sweep) and
 // records what it removed. maxAge 0 is [tmp] max_age.
 func (a *App) SweepScratch(dry bool, maxAge time.Duration) scratch.Result {
 	res := scratch.Sweep(a.scratchOptions(dry, maxAge))
+	a.sweepTaskTmps(&res, dry)
 	if !dry && len(res.Removed) > 0 {
 		a.Store.Event("", EventScratchSwept, fmt.Sprintf("%d entries, %s", len(res.Removed), scratch.Bytes(res.Freed)))
 	}
@@ -92,6 +93,7 @@ func (a *App) sweepScratchAfter(task string) {
 	go func() {
 		defer sweeping.Store(false)
 		res := scratch.Sweep(a.scratchOptions(false, 0))
+		a.sweepTaskTmps(&res, false)
 		if len(res.Removed) > 0 {
 			a.Store.Event(task, EventScratchSwept, fmt.Sprintf("after %s: %d entries, %s", task, len(res.Removed), scratch.Bytes(res.Freed)))
 		}

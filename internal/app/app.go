@@ -450,6 +450,7 @@ func (a *App) start(t store.Task, cl []string, ad agent.Adapter, resume, prompt 
 	if err != nil {
 		return "", err
 	}
+	cmd = a.taskTmpCmd(t.ID, cmd)
 	var win string
 	if a.Tmux.HasSession() {
 		win, err = a.Tmux.NewWindow(t.ID+"-"+slug(t.Title), t.Worktree, cmd)
@@ -738,6 +739,7 @@ func (a *App) Kill(task string, keep bool) error {
 			return err
 		}
 	}
+	a.removeTaskTmp(t.ID)
 	note := ""
 	if !keep && t.Role == store.RoleWorker {
 		if note, err = a.cleanup(t); err != nil {

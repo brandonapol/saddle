@@ -30,8 +30,13 @@ when they start. Everything they start inherits it:
   done's lint gate each run in a fresh per-run dir, `<root>/<repo hash>/gate-*`.
   That dir is removed afterwards. `[train] tmpdir` still overrides the parent
   dir for the gates.
-- **Agents.** Their tmux windows are opened with `-e TMPDIR=… -e GOTMPDIR=…`,
-  so `make check` in an agent's worktree compiles and tests under the root.
+- **Agents.** Each spawned agent gets its own dir, `<root>/<repo hash>/task-<id>`,
+  and its window starts with `TMPDIR`, `GOTMPDIR` and `CLAUDE_CODE_TMPDIR`
+  pointed there (#327), so `make check` in an agent's worktree compiles and
+  tests under the root. Its brief tells it to keep scratch, clones and
+  downloads under `$TMPDIR`, never at a hardcoded `/tmp/<name>`. Killing or
+  landing the task removes the dir. `done` keeps it, since the agent may be
+  sent back to fix its branch.
 
 To run a check by hand the way saddle does, export the same variables:
 
@@ -55,6 +60,11 @@ A sweep only looks at two kinds of entries:
 2. Entries in the OS temp dir that you own and that carry one of saddle's own
    prefixes: `go-build*`, `e2ebin*` and `saddle-*`. "OS temp dir" means the
    `TMPDIR` saddle started with, or `/tmp`.
+
+A task's dir is the exception to both rules below. While its task is live
+the sweep never removes it, however old. Once the task is killed, landed,
+failed or gone, the sweep removes it however fresh, unless a live process
+holds it.
 
 It removes an entry only when both of these hold:
 
