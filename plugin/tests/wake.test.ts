@@ -7,7 +7,7 @@ import type { On } from 'claude-code'
 
 import type { SaddleSnapshot } from '../types'
 import { idle } from '../hooks/snapshot'
-import { HEARTBEAT, backlogContext, hasEvents, kept, parseEvents, planWake, wakePrompt, wakes } from '../hooks/wake'
+import { HEARTBEAT, backlogContext, hasEvents, kept, ownsSession, parseEvents, planWake, wakePrompt, wakes } from '../hooks/wake'
 import type { SaddleEvent } from '../hooks/wake'
 import { memoryState } from './fixtures'
 
@@ -41,6 +41,15 @@ describe('which events wake Claude', () => {
     expect(hasEvents(live(2))).toBe(true)
     // Under saddle up the TUI orchestrator owns t0's events.
     expect(hasEvents(live(2, 'up'))).toBe(false)
+    // Under saddle up --rc the orchestrator is an interactive session (#409).
+    expect(hasEvents(live(2, 'up-rc'))).toBe(true)
+  })
+
+  test("the mod runs in the user's session and saddle up --rc's orchestrator, not in workers", () => {
+    expect(ownsSession(null)).toBe(true)
+    expect(ownsSession('')).toBe(true)
+    expect(ownsSession('t0')).toBe(true)
+    expect(ownsSession('t3')).toBe(false)
   })
 
   test('the wake prompt leads with what needs a decision, then the backlog', () => {

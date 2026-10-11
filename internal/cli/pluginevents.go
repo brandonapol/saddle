@@ -35,7 +35,7 @@ func pluginEventsCmd() *cobra.Command {
 			if !asJSON {
 				return errors.New("saddle plugin events prints JSON only; pass --json")
 			}
-			a, why := openPlugin(wd())
+			a, why := openSession(wd())
 			if a == nil {
 				return errors.New(why)
 			}
@@ -48,10 +48,11 @@ func pluginEventsCmd() *cobra.Command {
 }
 
 // writeEvents takes and prints the orchestrator's notices, but only while
-// the plugin engine runs: under saddle up they are the TUI orchestrator's.
+// the plugin engine or saddle up --rc runs: under plain saddle up they are
+// the TUI orchestrator's.
 func writeEvents(w io.Writer, a *app.App) error {
 	out := eventsOut{Events: []event{}}
-	if a.LockOwner() == app.LockEngine {
+	if app.SessionWakes(a.LockOwner()) {
 		ns, err := a.Store.TakeNotices(app.OrchestratorID, false)
 		if err != nil {
 			return err

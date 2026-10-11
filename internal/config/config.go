@@ -176,6 +176,9 @@ type Orchestrator struct {
 	// CompactAt is the fraction of its context window at which the
 	// orchestrator is told to compact, and compacted once it is idle.
 	CompactAt float64 `toml:"compact_at"`
+	// RemoteControl runs the orchestrator as an interactive Claude Code
+	// session under Remote Control, as saddle up --rc does (#409).
+	RemoteControl bool `toml:"remote_control"`
 }
 
 // Adapter is how saddle launches an agent CLI. An empty Cmd means the
@@ -778,6 +781,9 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # tells it to compact, and sends /compact itself once the orchestrator is idle
 # and you aren't typing. A fraction above 0, at most 1.
 # compact_at = 0.7
+# Run the orchestrator as an interactive Claude Code session with Remote
+# Control on, so you can steer it from the Claude app (saddle up --rc).
+# remote_control = false
 
 [notices]
 # An idle agent whose action notices (failed tests, conflicts, messages)

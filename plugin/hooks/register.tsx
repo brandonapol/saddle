@@ -33,7 +33,7 @@ import {
   sameSnapshot,
   versionAtLeast,
 } from './snapshot'
-import { HEARTBEAT, backlogContext, hasEvents, parseEvents, planWake } from './wake'
+import { HEARTBEAT, backlogContext, hasEvents, ownsSession, parseEvents, planWake } from './wake'
 
 // The shared snapshot. Another hook in this module reads it with
 // `read($, snapshot)`, which subscribes its drawing to every change.
@@ -216,7 +216,9 @@ export const register: Register = (on, options) => {
     if (!versionAtLeast(base ?? version, MIN_VERSION)) {
       return started
     }
-    if (await $.env.get('SADDLE_TASK')) {
+    // saddle's own agents stay out, except the orchestrator saddle up --rc
+    // starts (#409): the mod wakes it as it wakes the user's session.
+    if (!ownsSession(await $.env.get('SADDLE_TASK'))) {
       return started
     }
     if (!(await $.fs.exists(`${e.cwd}/.saddle`))) {
