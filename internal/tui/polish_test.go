@@ -125,7 +125,7 @@ func TestSortTasksNumericIDs(t *testing.T) {
 func TestIdleIsNotNeedAttention(t *testing.T) {
 	m := newViewModel(200, 40)
 	m.tasks = []mcpserver.TaskView{{ID: "t1", Status: store.Idle}, {ID: "t2", Status: store.Idle}}
-	h := m.viewHeader()
+	h := m.viewCounters()
 	if strings.Contains(h, "need") || !strings.Contains(h, "2 idle") {
 		t.Fatalf("header = %q", h)
 	}

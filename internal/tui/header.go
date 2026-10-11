@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -10,11 +11,17 @@ import (
 	"github.com/brandonapol/saddle/internal/store"
 )
 
-// viewHeader is one line at any width: the logo and current view always,
-// the orchestrator's state at the right, then what needs the user, task
+// viewHeader is two lines at any width: the logo and the state headline
+// (#403) on top, then the counters line.
+func (m *model) viewHeader() string {
+	return renderHeadline(m.headline(time.Now()), m.width) + "\n" + m.viewCounters()
+}
+
+// viewCounters is the header's second line: the current view always, the
+// orchestrator's state at the right, then what needs the user, task
 // counts, the train, auto-merge and the session and branches as room
 // allows, most important first.
-func (m *model) viewHeader() string {
+func (m *model) viewCounters() string {
 	counts := map[string]int{}
 	queued, stuck := 0, 0
 	for _, t := range m.tasks {
@@ -83,11 +90,9 @@ func (m *model) viewHeader() string {
 	right := sDim.Render(fmt.Sprintf("orchestrator %s · %s%s · $%.2f ", m.orchModel(), state, extra, m.cost))
 	short := sDim.Render("orch " + state + " ")
 
-	line := sLogo.Render("SADDLE")
-	if full := line + "  " + strings.Join(tabs, "  "); lipgloss.Width(full)+lipgloss.Width(short) < m.width {
+	line := " " + current
+	if full := " " + strings.Join(tabs, "  "); lipgloss.Width(full)+lipgloss.Width(short) < m.width {
 		line = full
-	} else {
-		line += " " + current
 	}
 	// The short state is always kept room for.
 	fits := func(s string) bool { return lipgloss.Width(line+"  "+s)+lipgloss.Width(short) < m.width }

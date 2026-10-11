@@ -90,7 +90,7 @@ func TestHeaderShowsAutomergeState(t *testing.T) {
 			st := c.st
 			m.am = &st
 			h := m.viewHeader()
-			if lipgloss.Height(h) != 1 || lipgloss.Width(h) > w {
+			if lipgloss.Height(h) != 2 || lipgloss.Width(h) > w {
 				t.Errorf("%s at %d: header %q is %dx%d", c.name, w, h, lipgloss.Width(h), lipgloss.Height(h))
 			}
 			want := c.wide
