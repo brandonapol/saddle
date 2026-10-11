@@ -37,6 +37,7 @@ type Snapshot struct {
 	Context     *mcpserver.OrchContext `json:"orchestrator_context,omitempty"`
 	Limits      *PlanLimits            `json:"limits,omitempty" jsonschema:"plan-limit usage in the 5h and weekly windows"`
 	Stacks      []string               `json:"stacks,omitempty" jsonschema:"the PR stack bottom up from the base, the merge train queue in landing order, and named stacks, one line each"`
+	Versions    map[string]string      `json:"versions,omitempty" jsonschema:"a version per mutable object (queue, automerge, concurrency, stack); pass it as if_version to an action on that object"`
 }
 
 // PlanLimits is plan-limit usage, compact.

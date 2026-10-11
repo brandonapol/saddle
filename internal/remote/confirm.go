@@ -21,9 +21,9 @@ const ConfirmTool = "confirm"
 // ConfirmTTL is how long a held admin call waits for its confirm.
 const ConfirmTTL = 2 * time.Minute
 
-// NeedsConfirm reports whether tool is held for confirmation: every admin
-// tool except confirm itself.
-func NeedsConfirm(tool string) bool { return tool != ConfirmTool && ToolScopes[tool] == ScopeAdmin }
+// NeedsConfirm reports whether tool is held for confirmation: every
+// mutating tool except confirm itself.
+func NeedsConfirm(tool string) bool { return tool != ConfirmTool && Mutating(tool) }
 
 // ConfirmRequired is what a held admin call returns instead of running.
 type ConfirmRequired struct {
@@ -36,6 +36,7 @@ type ConfirmRequired struct {
 
 type pendingCall struct {
 	tokHash string // bound to the token, not just its name: a re-issued token can't confirm
+	repo    string // and to the repo it was held on
 	tool    string
 	args    json.RawMessage
 	expires time.Time
@@ -53,7 +54,7 @@ func newConfirmations(now func() time.Time) *confirmations {
 	return &confirmations{now: now, pending: map[string]pendingCall{}}
 }
 
-func (cs *confirmations) hold(tokHash, tool string, args json.RawMessage) (string, time.Time, error) {
+func (cs *confirmations) hold(tokHash, repo, tool string, args json.RawMessage) (string, time.Time, error) {
 	raw := make([]byte, 8)
 	if _, err := rand.Read(raw); err != nil {
 		return "", time.Time{}, err
@@ -68,17 +69,17 @@ func (cs *confirmations) hold(tokHash, tool string, args json.RawMessage) (strin
 		}
 	}
 	exp := now.Add(ConfirmTTL)
-	cs.pending[code] = pendingCall{tokHash: tokHash, tool: tool, args: args, expires: exp}
+	cs.pending[code] = pendingCall{tokHash: tokHash, repo: repo, tool: tool, args: args, expires: exp}
 	return code, exp, nil
 }
 
-// take removes and returns the call held under code for this token. A
-// code held for another token is left alone for its owner.
-func (cs *confirmations) take(tokHash, code string) (pendingCall, error) {
+// take removes and returns the call held under code for this token and
+// repo. A code held for another token or repo is left alone for its owner.
+func (cs *confirmations) take(tokHash, repo, code string) (pendingCall, error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	p, ok := cs.pending[code]
-	if !ok || p.tokHash != tokHash {
+	if !ok || p.tokHash != tokHash || p.repo != repo {
 		return pendingCall{}, fmt.Errorf("no pending call with code %q for this token", code)
 	}
 	delete(cs.pending, code)
@@ -92,22 +93,33 @@ type confirmIn struct {
 	Code string `json:"code" jsonschema:"the code an admin tool returned"`
 }
 
+// maxAuditArgs caps the arguments an audit entry records.
+const maxAuditArgs = 300
+
+// auditArgs is a call's arguments for the audit log: scrubbed and clipped.
+func auditArgs(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	return scrubText(string(raw), maxAuditArgs)
+}
+
 func addConfirmTool(s *mcp.Server) {
-	mcp.AddTool(s, &mcp.Tool{Name: ConfirmTool, Description: "Run an admin call held for confirmation. Admin tools (kill, spawn, autopilot, …) run nothing on the first call; " +
+	mcp.AddTool(s, &mcp.Tool{Name: ConfirmTool, Description: "Run a call held for confirmation. Every tool that changes state (answer, queue_hold, land, kill, …) runs nothing on the first call; " +
 		"they return a code. Show the owner what will run, then call confirm with the code within " + ConfirmTTL.String() + ". A code works once."},
 		func(context.Context, *mcp.CallToolRequest, confirmIn) (*mcp.CallToolResult, struct{}, error) {
 			return nil, struct{}{}, errors.New("confirm is handled by the server's middleware") // never reached
 		})
 }
 
-// holdForConfirm audits an admin call as pending and returns its code.
+// holdForConfirm audits a mutating call as pending and returns its code.
 func holdForConfirm(c caller, audit *Audit, cs *confirmations, p *mcp.CallToolParamsRaw) (mcp.Result, error) {
-	code, exp, err := cs.hold(c.tok.Hash, p.Name, p.Arguments)
+	code, exp, err := cs.hold(c.tok.Hash, c.repo, p.Name, p.Arguments)
 	if err != nil {
 		return nil, err
 	}
-	if err := audit.Log(AuditEntry{Token: c.tok.Name, Addr: c.addr, Tool: p.Name, Decision: DecisionPending,
-		Reason: "held for confirmation, code " + code}); err != nil {
+	if err := audit.Log(AuditEntry{Token: c.tok.Name, Addr: c.addr, Repo: c.repo, Tool: p.Name, Decision: DecisionPending,
+		Args: auditArgs(p.Arguments), Reason: "held for confirmation, code " + code}); err != nil {
 		return nil, fmt.Errorf("audit log unavailable, refusing %s: %w", p.Name, err)
 	}
 	args := string(p.Arguments)
@@ -129,15 +141,16 @@ func confirmCall(ctx context.Context, c caller, audit *Audit, cs *confirmations,
 	if p != nil && len(p.Arguments) > 0 {
 		_ = json.Unmarshal(p.Arguments, &in)
 	}
-	pc, err := cs.take(c.tok.Hash, in.Code)
-	e := AuditEntry{Token: c.tok.Name, Addr: c.addr, Tool: ConfirmTool, Decision: DecisionDenied}
+	pc, err := cs.take(c.tok.Hash, c.repo, in.Code)
+	e := AuditEntry{Token: c.tok.Name, Addr: c.addr, Repo: c.repo, Tool: ConfirmTool, Decision: DecisionDenied}
 	switch {
 	case err != nil:
 		e.Reason = err.Error()
-	case !Allows(c.tok.Scopes, pc.tool):
+	case !RemoteAllows(c.tok.Scopes, pc.tool):
 		e.Reason = fmt.Sprintf("token %q lacks the scope for %q", c.tok.Name, pc.tool)
 	default:
-		e = AuditEntry{Token: c.tok.Name, Addr: c.addr, Tool: pc.tool, Decision: DecisionAllowed, Reason: "confirmed, code " + in.Code}
+		e = AuditEntry{Token: c.tok.Name, Addr: c.addr, Repo: c.repo, Tool: pc.tool, Decision: DecisionAllowed,
+			Args: auditArgs(pc.args), Reason: "confirmed, code " + in.Code}
 	}
 	if err := audit.Log(e); err != nil {
 		return nil, fmt.Errorf("audit log unavailable, refusing %s: %w", e.Tool, err)

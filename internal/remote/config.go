@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -39,6 +41,11 @@ type Config struct {
 	// tailnet name). Loopback names, and the listen IP itself, always pass.
 	// Anything else is refused, which keeps DNS rebinding out.
 	Hosts []string `toml:"hosts"`
+	// Repos are the repos one listener serves, by absolute path, each at
+	// /mcp/<its directory name> (#312); the first is also at /mcp. Each
+	// must be trusted (saddle trust). Empty serves the repo saddle runs
+	// in. Set, it is also the list saddle remote stdio may serve.
+	Repos []string `toml:"repos"`
 	// AuditMaxMB rotates the audit log past this size (default 10).
 	// AuditKeep is how many rotated logs are kept (default 5).
 	AuditMaxMB int `toml:"audit_max_mb"`
@@ -164,10 +171,59 @@ func LoadConfig(path string) (Config, error) {
 	return f.Remote, nil
 }
 
+// repoName is what a repo's directory name must look like to be a path
+// segment.
+var repoName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// RepoList is Repos cleaned and checked: absolute paths ("~/" expands),
+// with directory names that are unique and fit in a URL path.
+func (c Config) RepoList() ([]string, error) {
+	var out []string
+	names := map[string]string{}
+	for _, r := range c.Repos {
+		if rest, ok := strings.CutPrefix(r, "~/"); ok {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return nil, err
+			}
+			r = filepath.Join(home, rest)
+		}
+		if !filepath.IsAbs(r) {
+			return nil, fmt.Errorf("[remote] repos: %q isn't an absolute path", r)
+		}
+		r = filepath.Clean(r)
+		n := filepath.Base(r)
+		if !repoName.MatchString(n) || n == "." || n == ".." {
+			return nil, fmt.Errorf("[remote] repos: %q: its name %q must be letters, digits, '.', '_' or '-' (it is served at /mcp/<name>)", r, n)
+		}
+		if prev, ok := names[n]; ok {
+			return nil, fmt.Errorf("[remote] repos: %s and %s are both named %q; /mcp/%s can only be one of them", prev, r, n, n)
+		}
+		names[n] = r
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// CheckListed refuses a repo that [remote] repos is set and doesn't name.
+func (c Config) CheckListed(root string) error {
+	rs, err := c.RepoList()
+	if err != nil || len(rs) == 0 {
+		return err
+	}
+	if slices.Contains(rs, filepath.Clean(root)) {
+		return nil
+	}
+	return fmt.Errorf("%s isn't listed in [remote] repos in %s", root, UserConfigPath())
+}
+
 // Check refuses a bind that would expose saddle beyond this machine unless
 // the owner asked for it twice: allow_public = true, and TLS. A loopback
-// bind may use TLS too, but needn't.
+// bind may use TLS too, but needn't. It also checks [remote] repos.
 func (c Config) Check() error {
+	if _, err := c.RepoList(); err != nil {
+		return err
+	}
 	if (c.TLSCert == "") != (c.TLSKey == "") {
 		return errors.New("[remote] needs both tls_cert and tls_key, or neither")
 	}

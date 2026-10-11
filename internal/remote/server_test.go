@@ -212,10 +212,9 @@ func TestReadTokenCannotLand(t *testing.T) {
 	}
 }
 
-// TestActTokenStillCannotRunUnimplementedActions: the spike exposes no action
-// tools at all, so even a token scoped for them reaches nothing that changes
-// state.
-func TestActTokenStillCannotRunUnimplementedActions(t *testing.T) {
+// TestActTokenCannotRunActionsWithoutAdmin: a token scoped act and land,
+// but not admin, reaches nothing that changes state.
+func TestActTokenCannotRunActionsWithoutAdmin(t *testing.T) {
 	r := newRig(t)
 	cs, err := r.connect(t, r.token(t, "laptop", ScopeRead, ScopeAct, ScopeLand))
 	if err != nil {
@@ -223,7 +222,7 @@ func TestActTokenStillCannotRunUnimplementedActions(t *testing.T) {
 	}
 	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "land"})
 	if err == nil && (res == nil || !res.IsError) {
-		t.Fatalf("land succeeded in the read-only spike: %+v", res)
+		t.Fatalf("land succeeded without admin: %+v", res)
 	}
 }
 

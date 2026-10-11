@@ -140,33 +140,121 @@ func (s *Service) serveOnce(ctx context.Context) error {
 	}
 }
 
-// appServer is what serving a repo needs: the handler and its audit log.
-func appServer(a *app.App, cfg Config) (http.Handler, *Audit, string, error) {
-	if rep, err := trust.Status(a.Root, nil); err != nil || rep.State != trust.StateTrusted {
-		return nil, nil, "", errors.New("this repo isn't trusted: run saddle trust before exposing it")
+// hosted is what serving needs: the handler, its audit log, and the repos
+// it serves. close closes the repos it opened besides the host's.
+type hosted struct {
+	h     http.Handler
+	audit *Audit
+	dir   string
+	repos []ServedRepo
+	close func()
+}
+
+// trusted refuses a repo saddle trust (#215) hasn't trusted. The listener
+// asks it on every request, so revoking trust stops serving at once.
+func trusted(root string) error {
+	rep, err := trust.Status(root, nil)
+	if err != nil {
+		return err
+	}
+	if rep.State != trust.StateTrusted {
+		return fmt.Errorf("state %s; run saddle trust in %s", rep.State, root)
+	}
+	return nil
+}
+
+// appServer builds the handler for the repos cfg serves: the repo a runs
+// in, or every repo in [remote] repos (#312), each at /mcp/<name>.
+func appServer(a *app.App, cfg Config, logf func(format string, args ...any)) (*hosted, error) {
+	roots, err := cfg.RepoList()
+	if err != nil {
+		return nil, err
+	}
+	if len(roots) == 0 {
+		if err := trusted(a.Root); err != nil {
+			return nil, errors.New("this repo isn't trusted: run saddle trust before exposing it")
+		}
+	}
+	repos, apps := servedRepos(a, roots, app.Open, logf)
+	if len(repos) == 0 {
+		return nil, errors.New("none of [remote] repos could be opened")
+	}
+	closeApps := func() {
+		for _, x := range apps {
+			_ = x.Close()
+		}
 	}
 	dir, err := Dir()
 	if err != nil {
-		return nil, nil, "", err
+		closeApps()
+		return nil, err
 	}
-	audit, err := openAppAudit(a, dir, cfg)
+	byName := map[string]*app.App{}
+	for _, x := range append([]*app.App{a}, apps...) {
+		byName[filepath.Base(x.Root)] = x
+	}
+	audit, err := openAudit(dir, cfg, func(name string) *app.App {
+		if x := byName[name]; x != nil {
+			return x
+		}
+		return a
+	})
 	if err != nil {
-		return nil, nil, "", err
+		closeApps()
+		return nil, err
 	}
-	h := Handler(AppSource{A: a}, NewTokens(dir), audit, Options{Limits: cfg.Limits(), Repo: a.Root, Hosts: cfg.AllowedHosts()})
-	return h, audit, dir, nil
+	h := ReposHandler(repos, NewTokens(dir), audit, Options{Limits: cfg.Limits(), Hosts: cfg.AllowedHosts(), Trusted: trusted})
+	return &hosted{h: h, audit: audit, dir: dir, repos: repos, close: closeApps}, nil
+}
+
+// servedRepos opens the repos at roots, reusing a for its own, and skips
+// (and reports) one that can't be opened. With no roots it serves a alone.
+// apps are the ones it opened, for the caller to close.
+func servedRepos(a *app.App, roots []string, open func(string) (*app.App, error), logf func(string, ...any)) (repos []ServedRepo, apps []*app.App) {
+	if len(roots) == 0 {
+		return []ServedRepo{{Name: filepath.Base(a.Root), Root: a.Root, Src: AppSource{A: a}}}, nil
+	}
+	for _, root := range roots {
+		x := a
+		if filepath.Clean(a.Root) != root {
+			o, err := open(root)
+			switch {
+			case err != nil:
+				logf("remote control: not serving %s: %v", root, err)
+				continue
+			case filepath.Clean(o.Root) != root:
+				// SADDLE_ROOT, or a path inside a repo, opened another one.
+				logf("remote control: not serving %s: it opened %s instead", root, o.Root)
+				_ = o.Close()
+				continue
+			}
+			x = o
+			apps = append(apps, o)
+		}
+		if err := trusted(root); err != nil {
+			logf("remote control: %s isn't trusted (%v); its requests are refused until it is", root, err)
+		}
+		repos = append(repos, ServedRepo{Name: filepath.Base(root), Root: root, Src: AppSource{A: x}})
+	}
+	return repos, apps
 }
 
 // openAppAudit opens the audit log with the configured rotation and mirrors
 // it into the repo's event log.
 func openAppAudit(a *app.App, dir string, cfg Config) (*Audit, error) {
+	return openAudit(dir, cfg, func(string) *app.App { return a })
+}
+
+// openAudit opens the audit log with the configured rotation and mirrors
+// each entry into the event log of the repo it names (appFor).
+func openAudit(dir string, cfg Config, appFor func(repo string) *app.App) (*Audit, error) {
 	audit, err := OpenAudit(dir)
 	if err != nil {
 		return nil, err
 	}
 	audit.MaxBytes, audit.Keep = cfg.AuditLimits()
 	audit.Mirror = func(e AuditEntry) {
-		a.Store.Event(app.OrchestratorID, "remote", fmt.Sprintf("%s %s %s from %s %s", e.Token, e.Decision, e.Tool, e.Addr, e.Reason))
+		appFor(e.Repo).Store.Event(app.OrchestratorID, "remote", fmt.Sprintf("%s %s %s from %s %s", e.Token, e.Decision, e.Tool, e.Addr, e.Reason))
 	}
 	return audit, nil
 }
@@ -200,28 +288,32 @@ func RunManaged(ctx context.Context, a *app.App, logf func(format string, args .
 	if !cfg.Enabled {
 		return
 	}
-	h, audit, dir, err := appServer(a, cfg)
+	hs, err := appServer(a, cfg, logf)
 	if err != nil {
 		logf("remote control not serving: %v", err)
 		return
 	}
-	defer func() { _ = audit.Close() }()
-	s := &Service{Cfg: cfg, Handler: h, Dir: dir, Wait: true, Logf: logf,
+	defer hs.close()
+	defer func() { _ = hs.audit.Close() }()
+	s := &Service{Cfg: cfg, Handler: hs.h, Dir: hs.dir, Wait: true, Logf: logf,
 		Holder: fmt.Sprintf("saddle (pid %d) for %s", os.Getpid(), a.Root),
 		OnServe: func(addr net.Addr) {
-			logf("remote control serving %s at %s", a.Root, serveURL(cfg, addr))
+			for _, r := range hs.repos {
+				logf("remote control serving %s at %s", r.Root, repoURL(cfg, addr, r.Name))
+			}
 		}}
 	if err := s.Run(ctx); err != nil {
 		logf("remote control not serving: %v", err)
 	}
 }
 
-func serveURL(cfg Config, addr net.Addr) string {
+// repoURL is where a served repo answers.
+func repoURL(cfg Config, addr net.Addr, name string) string {
 	scheme := "http"
 	if cfg.TLS() {
 		scheme = "https"
 	}
-	return scheme + "://" + addr.String() + MCPPath
+	return scheme + "://" + addr.String() + MCPPath + "/" + name
 }
 
 // StdioCaller is who an ssh forced-command session runs as: the scopes the
@@ -242,5 +334,5 @@ func StdioCaller(scopes []Scope, name, sshConnection string) caller {
 // ServeStdio serves the same scoped server Handler does over one
 // transport (stdin and stdout under ssh) until the client goes away.
 func ServeStdio(ctx context.Context, src Source, audit *Audit, c caller, t mcp.Transport) error {
-	return newServer(src, c, audit, newServerState(Options{})).Run(ctx, t)
+	return newServer(&route{ServedRepo: ServedRepo{Src: src}}, c, audit, newServerState(Options{})).Run(ctx, t)
 }
