@@ -128,14 +128,44 @@ func Install(root, bin string) error {
 			sc.guard + "[ -x \"$bin\" ] && { feed | " + sc.run + " || exit 1; }\n" +
 			"[ -x \"$orig\" ] || exit 0\n" +
 			"feed | \"$orig\" \"$@\"\n"
-		// Remove first: never write through a symlink into someone else's file.
-		_ = os.Remove(path)
-		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		if err := writeHook(path, body); err != nil {
 			return err
 		}
 	}
 	// The repo's own hooks run in every worktree too (#223).
 	_, err = InstallRepoHooks(root)
+	return err
+}
+
+// writeHook puts body at path, executable. saddle init runs on every spawn
+// and land while agents commit, so a hook git may be about to run is never
+// missing or half-written: an unchanged hook is left alone, and a changed
+// one is written beside it and renamed over it. The rename replaces a
+// symlink rather than writing through it into someone else's file.
+func writeHook(path, body string) error {
+	if b, err := os.ReadFile(path); err == nil && string(b) == body {
+		if fi, err := os.Lstat(path); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 {
+			return nil
+		}
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = f.WriteString(body)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(tmp, 0o755)
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+	}
 	return err
 }
 
