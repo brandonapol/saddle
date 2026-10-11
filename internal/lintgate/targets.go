@@ -177,8 +177,9 @@ var (
 	// target can't be checked against, or run from, the top of the repo.
 	makeElsewhere = []string{"-C", "-f", "--directory", "--file", "--makefile"}
 	// makeVarRe is make run through a variable, quoted or not: $MAKE,
-	// "${MAKE}", ${MAKE:-make} (#270). Not $MAKEFLAGS.
-	makeVarRe = regexp.MustCompile(`"?\$(?:\{MAKE(?::?[-=][^}]*)?\}|MAKE\b)"?`)
+	// "${MAKE}", ${MAKE:-make}, or $(MAKE) as copied from a recipe (#270).
+	// Not $MAKEFLAGS.
+	makeVarRe = regexp.MustCompile(`"?\$(?:\{MAKE(?::?[-=][^}]*)?\}|\(MAKE\)|MAKE\b)"?`)
 	// makeNames are the words that run make.
 	makeNames = []string{"make", "gmake"}
 )

@@ -29,6 +29,8 @@ func TestDetectHookMakeFollowedByFi(t *testing.T) {
 		{"quoted MAKE", "#!/bin/sh\n\"$MAKE\" -s lint\n", "make lint"},
 		{"MAKE with default", "#!/bin/sh\n${MAKE:-make} check\n", "make check"},
 		{"gmake", "#!/bin/sh\nexec gmake check\n", "make check"},
+		{"makefile-style MAKE", "#!/bin/sh\n$(MAKE) check\n", "make check"},
+		{"quoted makefile-style MAKE", "#!/bin/sh\nif ! \"$(MAKE)\" -s lint; then exit 1; fi\n", "make lint"},
 		{"MAKEFLAGS is not make", "#!/bin/sh\n$MAKEFLAGS check\n", "hook"},
 		{"echo of MAKE", "#!/bin/sh\necho \"Running ${MAKE} check...\"\n", "hook"},
 	}
@@ -121,7 +123,7 @@ func TestMakeLine(t *testing.T) {
 		`"${MAKE}" check`:        {"check"},
 		"${MAKE:-gmake} -s lint": {"lint"},
 		"$MAKEFLAGS check":       nil,
-		"$(MAKE) check":          nil,
+		"$(MAKE) check":          {"check"},
 		"make lint && make test": {"lint", "test"},
 		"make -C sub check":      nil,
 		"make -f other.mk check": nil,
@@ -184,6 +186,7 @@ func TestSameCmd(t *testing.T) {
 		{"make  check ", "make check", true},
 		{`"${MAKE}" check`, "make check", true},
 		{"gmake check", "make check", true},
+		{"$(MAKE) check", "make check", true},
 		{"make check", "make lint", false},
 		{"", "", false},
 	} {
