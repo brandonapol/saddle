@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/claims"
@@ -36,8 +37,9 @@ type App struct {
 	// (#321); nil means the [notify] desktop and webhook settings.
 	OwnerNotify func(text string)
 
-	wake          wakeState // idle notice wake-ups (#183)
-	previewLayout bool      // compute layout with Git objects, without worktree refs or hooks
+	wake          wakeState      // idle notice wake-ups (#183)
+	doneJobs      sync.WaitGroup // done gates running in the background (#368)
+	previewLayout bool           // compute layout with Git objects, without worktree refs or hooks
 }
 
 // Open finds the repo from dir (SADDLE_ROOT wins) and opens its state.
@@ -680,52 +682,6 @@ func (a *App) Notify(task, kind, text string) error {
 func (a *App) onPrompt(t store.Task) bool {
 	screen, err := a.Tmux.Capture(t.Window, 30)
 	return err != nil || DetectPrompt(screen) != PromptNone
-}
-
-// Done marks a task finished and queues its branch in the merge train.
-func (a *App) Done(task, summary string) error {
-	t, err := a.Store.Task(task)
-	if err != nil {
-		return err
-	}
-	if t.Role != store.RoleWorker {
-		return errors.New("only worker tasks can be done")
-	}
-	dirty, err := gitx.Dirty(t.Worktree)
-	if err != nil {
-		return err
-	}
-	if len(dirty) > 0 {
-		return fmt.Errorf("worktree has uncommitted changes; commit them first:\n%s", strings.Join(dirty, "\n"))
-	}
-	n, err := gitx.CommitsBetween(t.Worktree, a.Cfg.Integration, "HEAD")
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return errors.New("branch has no commits beyond the integration branch; nothing to land")
-	}
-	if err := a.lintDone(t); err != nil {
-		return err
-	}
-	if summary != "" {
-		if err := a.Store.SetField(task, "summary", summary); err != nil {
-			return err
-		}
-	}
-	if err := a.Store.SetStatus(task, store.Done); err != nil {
-		return err
-	}
-	if err := a.Store.Enqueue(task); err != nil {
-		return err
-	}
-	a.Store.Event(task, "done", summary)
-	advisory := ""
-	if !a.taskAdapter(t).Hooks() {
-		advisory = a.advisoryClaims(t)
-	}
-	return a.Notify(OrchestratorID, store.NoticeAction,
-		fmt.Sprintf("%s %q is done and queued in the merge train: %s\nRun the saddle land tool when you're ready.%s", task, t.Title, summary, advisory))
 }
 
 // Kill stops a task's window and releases its claims. Unless keep is set it
