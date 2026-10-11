@@ -66,7 +66,9 @@ naming the single root cause. The causes are checked in this order:
 The watchdog posts nothing more for the same cause and the same stall. When
 work moves again, the card closes by itself.
 
-## Not yet
+## Issues
 
-Filing or updating a GitHub issue for each route-around is left to the
-blockage-to-issue ticket.
+The stuck-stack alarm's `stack_stuck` event is what the blocker filer
+(#407) turns into a deduplicated GitHub issue. A blocker that gets routed
+around therefore already has its issue. The route-around itself is recorded
+as a `stall_routed` event. Commenting it onto that issue is a follow-up.
