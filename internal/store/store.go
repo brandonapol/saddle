@@ -135,7 +135,8 @@ CREATE INDEX usage_session ON usage(session);
 CREATE TABLE narrator_spend(day TEXT PRIMARY KEY, usd REAL NOT NULL DEFAULT 0);
 `}
 
-// Open opens (creating if needed) the database at path and applies migrations.
+// Open opens (creating if needed) the database at path and applies migrations,
+// first backing up a database an older binary wrote (see backupBeforeMigrate).
 func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -146,6 +147,10 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{db: db}
+	if _, err := backupBeforeMigrate(db, path, time.Now()); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, err
