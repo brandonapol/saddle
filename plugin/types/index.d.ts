@@ -2,7 +2,8 @@
 // refreshed on a timer by hooks/register.tsx, that the pane, the needs-you
 // band and the commands read with `read($, snapshot)`; and the pane's own
 // view (#167): its tab and where its rows are scrolled; and the needs-you
-// band's (#168): the screen it peeked, if any.
+// band's (#168): the screen it peeked, if any; and, in a worker session, the
+// claim guard's holds (#171).
 
 /** One task as `saddle status --json` lists it. */
 export type SaddleTask = {
@@ -129,8 +130,25 @@ export type SaddleBand = {
   peek: { task: string; screen: string } | null
 }
 
+/** A call the claim guard held (#171), shown in its band until handled. */
+export type SaddleGuardHold = {
+  /** The repo-relative path outside the task's claims. */
+  path: string
+  /** The tool whose call was held. */
+  tool: string
+}
+
+/**
+ * The claim guard's state in a worker session: the holds the band shows, and
+ * every path it has held once, which passes when the worker retries it.
+ */
+export type SaddleGuard = {
+  pending: SaddleGuardHold[]
+  held: string[]
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    saddle: { snapshot: SaddleSnapshot | null; pane: SaddlePane; band: SaddleBand }
+    saddle: { snapshot: SaddleSnapshot | null; pane: SaddlePane; band: SaddleBand; guard: SaddleGuard }
   }
 }
