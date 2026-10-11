@@ -103,8 +103,8 @@ func TestModValidates(t *testing.T) {
 	}
 }
 
-// The mod's own tests (tests/*.test.ts): snapshot parsing and the refresh
-// timer, run by the engine without a live session.
+// The mod's own tests (tests/*.test.ts): snapshot parsing, the refresh
+// timer and the pane's tabs, run by the engine without a live session.
 func TestModTests(t *testing.T) {
 	bin := claudeWithMods(t)
 	if out, err := exec.Command(bin, "plugin", "test", ".").CombinedOutput(); err != nil {
