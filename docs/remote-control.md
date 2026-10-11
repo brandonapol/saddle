@@ -2,8 +2,10 @@
 
 Status: design plus a read-only spike (`internal/remote`, `saddle remote`),
 with server and transport hardening (#308), auth, scopes and audit
-(#309), the snapshot and needs-you queue (#310) and push (#311) done. "What exists now" below lists what is built. The remaining
-follow-up tickets at the end build the rest.
+(#309), the snapshot and needs-you queue (#310), push (#311), multi-repo
+addressing (#312) and remote-safe actions (#313) done. "What exists now"
+below lists what is built. The remaining follow-up tickets at the end build
+the rest.
 
 ## Goal
 
@@ -13,8 +15,8 @@ a session on another machine, the owner's phone, or a teammate. They should
 be able to see agents, stacks and the needs-you queue, answer a question,
 hold a stack, toggle auto-merge, change the bots limit, and land.
 
-Default posture: **off, loopback only, read-only, every call authenticated
-and audited.**
+Default posture: **off, loopback only, read-only by default token, every
+call authenticated and audited, every change confirmed.**
 
 ## Threat model
 
@@ -37,11 +39,11 @@ Attackers considered:
 | Other users or processes on the LAN or internet | connect to the listener | ✓ binds loopback by default; `Config.Check` refuses anything else unless **both** `allow_public = true` and `tls_cert`/`tls_key` are set (TLS 1.2+, key must be 0600). Remote machines normally come in over ssh `-L`, the ssh `stdio` forced command, or a tailnet proxy. |
 | A web page in the owner's browser | `fetch` to `127.0.0.1:7431`, DNS rebinding | ✓ requests with an `Origin` header are refused (403). ✓ the `Host` must be loopback, the listen IP, or a name in `[remote] hosts` (403 otherwise). ✓ no cookies; auth is a bearer header, which a browser won't attach by itself. |
 | Another local user on a shared box | read the token file, connect to loopback | ✓ tokens and the audit log live in `~/.config/saddle/remote/` (0700 dir, 0600 files). A tokens file others can read is refused, like ssh with a loose key. ✓ only SHA-256 hashes are stored, never secrets. |
-| A malicious or compromised repo (a clone with a checked-in `.saddle/config.toml`) | turn the listener on | ✓ `[remote]` is read **only** from the user's config (`~/.config/saddle/config.toml`), never from the repo. ✓ `serve` refuses a repo that `saddle trust` (#215) hasn't trusted. |
+| A malicious or compromised repo (a clone with a checked-in `.saddle/config.toml`) | turn the listener on | ✓ `[remote]` is read **only** from the user's config (`~/.config/saddle/config.toml`), never from the repo, and so is `[remote] repos`. ✓ `serve` refuses a repo that `saddle trust` (#215) hasn't trusted, and trust is checked again on every request, so revoking it stops serving that repo at once. |
 | A leaked token | replay | ✓ tokens expire (default 24h, at most 30d). ✓ `saddle remote token revoke` takes effect on the next request, because the file is re-read every time. ✓ the `saddle_rc_` prefix makes leaks greppable (secret scanners). ✓ scopes limit the blast radius. ✓ a token can be limited to named repos (`--repo`). |
 | Token guessing | brute force | ✓ 256-bit random secrets. ✓ constant-time compare, run over every token. ✓ failed logins are rate limited per client address (10/min by default, then 429). |
-| A runaway or prompt-injected remote Claude | many calls, destructive calls | ✓ per-token rate limit (120/min). ✓ scope allowlist: unknown tools are denied. ✓ admin tools need `admin` *and* a confirmation round trip (`confirm` with a one-time code bound to the token, 2 min). ○ panic pause. |
-| Repudiation ("who held my stack?") | none | ✓ every failed login and every tool call, allowed or denied, goes to the audit log (JSONL) with the token name and client address, and is mirrored into the repo's event log (`kind = remote`). ✓ a call is refused if its audit line can't be written. ✓ the log rotates (10 MiB, 5 kept by default) and `saddle remote audit` reads it. |
+| A runaway or prompt-injected remote Claude | many calls, destructive calls | ✓ per-token rate limit (120/min). ✓ scope allowlist: unknown tools are denied. ✓ every tool that changes state needs `admin` *and* a confirmation round trip (`confirm` with a one-time code bound to the token and repo, 2 min). ✓ actions are versioned and idempotent, so a replayed or racing call can't undo a newer change. ○ panic pause. |
+| Repudiation ("who held my stack?") | none | ✓ every failed login and every tool call, allowed or denied, goes to the audit log (JSONL) with the token name, client address, repo and (for a change) its arguments, scrubbed, and is mirrored into that repo's event log (`kind = remote`). ✓ a call is refused if its audit line can't be written. ✓ the log rotates (10 MiB, 5 kept by default) and `saddle remote audit` reads it. |
 | Prompt injection *through* saddle output | a task title or peeked screen carrying instructions to the remote Claude | ✓ item text is clipped (500 runes), prompt options to 200, and scrubbed. ✓ peek output has escapes stripped, known secret patterns redacted, lines capped (100) and clipped, and sits between two fence lines carrying a random nonce, so the screen can't fake the closing one. ✓ the server's instructions and tool descriptions say this text is untrusted data. This risk can't be removed, only reduced, which is one more reason the default token is read-only. |
 
 Out of scope: a compromised host account (it owns everything anyway), and
@@ -99,7 +101,8 @@ or (c) underneath, plus a second copy of the repo. It adds nothing.
   transport: `saddle remote stdio --scope read --repo /src/saddle --name
   phone` (built in #308). The forced command starts in `$HOME`, hence
   `--repo`. Calls are audited as `ssh:NAME` from the `SSH_CONNECTION`
-  client address.
+  client address. When `[remote] repos` is set, stdio serves only a repo
+  it lists.
 - **Also documented: (a)** for the owner who only wants their phone.
 
 ## Token and scope model
@@ -118,9 +121,16 @@ secret once.
 | `admin` | start and stop work, config | everything |
 | `local` | saddle's own workers' tools; no token can hold it | n/a |
 
-**Recommended default:** `read`, 24h TTL. The owner's own remote sessions get
-`read,act` for a working day. `land` and `admin` are minted on demand with a
+**Recommended default:** `read`, 24h TTL. `admin` is minted on demand with a
 short TTL (for example `--ttl 1h`).
+
+**Remotely, every change takes admin.** `act` and `land` name a tool's
+class, but the remote server serves a tool that changes state (every `act`,
+`land` and `admin` tool) only to an `admin` token, and only through the
+confirmation round trip (`RemoteAllows`, `NeedsConfirm`). A token scoped
+`act,land` without `admin` sees and reaches only the read tools. Relaxing
+that, so an `act` token can hold a stack without a confirm, is a later
+decision once the round trip has been used for a while.
 
 ### Every tool mapped to a scope
 
@@ -129,14 +139,15 @@ fails when an MCP tool is added without a scope.
 
 | Tool | Scope | Notes |
 |---|---|---|
-| `status` | read | remote returns a compact snapshot (no worktree paths or window ids) |
+| `status` | read | remote returns a compact snapshot (no worktree paths or window ids) with `versions` |
 | `needs_you` | read | remote-only; prompts with their text, question and options, plus t0's action notices, each with an id |
 | `wait_needs_you` | read | remote-only; long-polls `needs_you` with a cursor |
 | `brief` | read | |
 | `peek` | read | scrubbed, capped at 100 lines, fenced as untrusted data |
+| `answer` | act | remote-only; `{item, option}` presses the option only while that needs-you item still stands |
 | `ticket` | read | reads GitHub through the host's gh |
 | `message` | act | |
-| `send_keys` | act | safe-send rules: never into a pane the owner is typing in |
+| `send_keys` | act | safe-send: never into a pane with the owner's draft, never at a prompt (use `answer`) |
 | `queue_move`, `queue_hold`, `queue_release` | act | |
 | `automerge` | act | `status` action is read-equivalent, but the tool is act |
 | `concurrency` | act | |
@@ -144,14 +155,15 @@ fails when an MCP tool is added without a scope.
 | `land`, `prs`, `restack` | land | |
 | `sentinel_ack` | land | it lowers a safety hold, so it isn't act |
 | `spawn`, `kill`, `autopilot` | admin | every admin tool needs a confirmation round trip |
-| `confirm` | admin | remote-only; runs a held admin call (see below) |
+| `confirm` | admin | remote-only; runs a held call (see below) |
 | `claim`, `release`, `ask_owner`, `done` | local | a worker's own tools; never remote |
 | `pause` (planned) | act | the panic button; see failure modes |
 | `down`, config writes (planned) | admin | confirmation round trip |
 
-### Confirmation round trip for admin tools
+### Confirmation round trip
 
-Every `admin` tool except `confirm` is held. The first call runs nothing.
+Every tool that changes state (`act`, `land` and `admin`) except `confirm`
+is held. The first call runs nothing.
 It is audited as `pending` and returns `{confirm_required, code, tool,
 arguments, expires}` plus a sentence telling the remote Claude to show the
 owner what will run. `confirm {code}` then runs the held call exactly as it
@@ -161,6 +173,8 @@ was first sent. The code:
 - expires after 2 minutes (`ConfirmTTL`);
 - is bound to the token's hash, so another token, even an admin one, or a
   re-issued token with the same name, can't use it;
+- is bound to the repo it was held on, so a code from `/mcp/saddle` can't
+  run on `/mcp/quark`;
 - is checked against the token's scopes again at confirm time.
 
 The executed call is audited as `allowed` with `confirmed, code …`; a bad,
@@ -170,13 +184,14 @@ stateless. Its value is the second, separate tool call: Claude Code asks the
 human for permission per tool, so the owner sees `confirm` with the
 description of what it will run. It doesn't stop a remote Claude that has
 blanket permission. That is what scopes, short TTLs and the audit log are
-for. No admin tool is served remotely yet, so today the round trip is only
-exercised by tests with a fake `kill`.
+for. `spawn`, `kill` and `autopilot` are not served remotely yet; the
+action tools below are.
 
 ### Repo allowlist
 
 `saddle remote token create ci --repo saddle --repo /src/quark` limits a
-token to those repos. An entry is a repo's directory name or its absolute
+token to those repos. With several repos on one listener the check is per
+route: the same token gets `/mcp/quark` and a 403 on `/mcp/saddle`. An entry is a repo's directory name or its absolute
 path. Relative paths are refused. A token without `--repo` reaches any repo
 the host serves. A token used against a repo it doesn't list gets 403, and
 the refusal is audited. `token list` shows a REPOS column.
@@ -187,7 +202,9 @@ against the table, so a hidden tool can't be called by name.
 
 ## What the remote instance sees
 
-- **`status`**: counts (running, needs-you, queued, landed), live tasks with
+- **`status`**: `versions`, one per mutable object (`queue`, `automerge`,
+  `concurrency`, `stack`; see Concurrency and consistency), counts
+  (running, needs-you, queued, landed), live tasks with
   needs-you first, train state, PR, stack at risk, CI-red holds, auto-merge
   state, orchestrator context use, warnings. Landed and killed tasks show up
   only as a count. `limits` is plan-limit usage per window (5h and weekly:
@@ -212,9 +229,8 @@ against the table, so a hidden tool can't be called by name.
   prompt as shown (its dialog box, or the lines around the question), so it
   is stable while the prompt stands and changes when it does, even when
   only the command it asks about changed. A notice's id is `n-<notice id>`.
-  The result has a `cursor` for `wait_needs_you`. Answering `{item,
-  option}` is an `act` tool and arrives with the remote-safe action
-  semantics (follow-up 6); the id is what binds an answer to the prompt the
+  The result has a `cursor` for `wait_needs_you`. `answer {item, option}`
+  answers a prompt item; the id is what binds the answer to the prompt the
   owner saw.
 - **`peek`** `{task, lines}`: the last lines of an agent's terminal (default
   40, at most 100, each clipped to 400 runes). Terminal escapes and control
@@ -278,19 +294,39 @@ turn them into a prompt for the user. So push has two parts:
 
 Two controllers (the local TUI and a remote one) will act at once.
 Last-writer-wins toggles are the #209 bug class. The rules for every action
-tool served remotely:
+tool served remotely (`actions.go`):
 
 - **Explicit targets.** No "the current stack": every call names its task,
-  stack or PR.
-- **Optimistic versions.** `status` returns a `version` per mutable object
-  (stack hold, automerge, concurrency, queue). Actions take `if_version` and
-  fail with the current state when it moved.
-- **Idempotent verbs.** `hold` on a held stack is a no-op success, not a
-  toggle.
-- **Safe send.** `send_keys` from a remote session goes through the same guard
-  as the orchestrator's (no typing into a pane with a draft). An answer is
-  bound to a needs-you item id, so a prompt that has already changed is not
-  answered.
+  stack or PR. A call without one is refused before anything runs.
+- **Optimistic versions.** `status` returns `versions`: a short hash per
+  mutable object. `queue` is the waiting branches in order with their
+  holds; `automerge` is on or off, why it stopped, and its holds;
+  `concurrency` is the limit and whether it overrides config; `stack` is
+  the landed layers with their PRs, the at-risk flag and the ci-red
+  layers. Every versioned action takes `if_version` (required) and is
+  refused with the object's current version and contents when it moved.
+  The check runs when the call runs, which is after its `confirm`, so a
+  change between hold and confirm is caught too. Calls on one repo run one
+  at a time, so two remote controllers can't both pass the check.
+- **Idempotent verbs.** Asking for the state that already holds is a no-op
+  success (`noop: true`) whatever the version, so a retry is safe and
+  nothing toggles. `queue_hold` on a held branch, `queue_release` on a
+  branch in line, `queue_move` to where it is, `automerge on` when on (and
+  not stopped), `off` when off, `hold` of a held stack, `release` with no
+  holds, `concurrency` at the limit in force (or `reset` with none),
+  `unstack` of a task already out, `requeue` of a waiting task, `land` with
+  nothing queued and `sentinel_ack` with nothing unacknowledged all change
+  nothing. `prs`, `restack` and `publish` are idempotent by nature.
+- **Safe send.** `send_keys` refuses a pane with the owner's draft in its
+  input (`tmux.HasDraft` on a styled capture) and a pane at a prompt. A
+  prompt is answered with `answer {item, option}`, which re-reads the
+  needs-you queue and presses the option only if an item with that id is
+  still there and offers that option. The id hashes the prompt as shown,
+  so a prompt that changed or was answered is not answered again.
+- **Same semantics as local.** The work itself is the orchestrator's own
+  MCP tool, called in process (`AppSource.Call`), so a remote `land` does
+  what the orchestrator's `land` does. A remote `message` is signed
+  `(remote, TOKEN)`.
 - **Visibility.** The TUI header shows connected controllers: `⇄ phone,
   laptop`, the token names seen in the last 15 minutes. Remote events
   (`kind = remote`) appear in the chat as `⇄ remote: …` event lines with
@@ -303,14 +339,49 @@ tool served remotely:
   refuse, and warns when the remote dir or its files are readable by
   others or a token lives longer than 7 days.
 
+| Tool | Object | Target |
+|---|---|---|
+| `answer` | needs-you item id | `item`, `option` |
+| `send_keys` | safe-send | `task`, `text` or `keys` |
+| `message` | none (append only) | `task`, `message` |
+| `queue_move`, `queue_hold`, `queue_release` | `queue` | `task` |
+| `requeue`, `land` | `queue` | `task` / none |
+| `automerge` | `automerge` | `action`, `stack` for hold and release |
+| `concurrency` | `concurrency` | `limit` or `reset` |
+| `unstack`, `publish` | `stack` | `task` / `target` |
+| `prs`, `restack`, `sentinel_ack` | `stack` | none (the one stack) |
+
 ## Multi-repo
 
-One host runs several repos (saddle and quark). The decision is **one listener
-per host that addresses repos by name**: `/mcp/<repo>`, or a `repo` argument
-on every tool. Each repo must be trusted and listed in
-`[remote] repos = [...]`. Tokens carry an optional repo allowlist. The spike
-serves the one repo in its working directory. Running one listener per repo
-on separate ports is the stopgap.
+One host runs several repos (saddle and quark). One listener serves them
+all, each at `/mcp/<repo>` (#312):
+
+```toml
+# ~/.config/saddle/config.toml
+[remote]
+enabled = true
+repos = ["/src/saddle", "~/src/quark"]   # absolute paths; ~/ expands
+```
+
+- A repo's name is its directory name. Names must be unique and fit a URL
+  path (letters, digits, `.`, `_`, `-`); `Config.Check` refuses the config
+  otherwise. The first repo is also served at bare `/mcp`, so a client
+  added before `repos` keeps working. Without `repos`, the listener serves
+  the repo it runs in, at `/mcp` and `/mcp/<its name>`.
+- Whichever process serves (saddle up in any repo, the engine, or a
+  foreground `saddle remote serve`) opens every listed repo, reusing its
+  own. A repo that can't be opened, or opens as another one (for example
+  under `SADDLE_ROOT`), is skipped and reported, not served.
+- **Trust.** Every repo must be trusted (`saddle trust`, #215). Trust is
+  checked on every request: an untrusted repo's route answers 403, is
+  audited, and the other repos keep serving. Revoking trust takes effect
+  on the next request.
+- **Tokens.** A token's repo allowlist (`--repo`) is checked per route.
+- **Audit.** Each entry carries its repo and is mirrored into that repo's
+  event log.
+- **Confirmations** are bound to the repo they were held on.
+- `saddle remote stdio` stays one repo per forced command (`--repo`); with
+  `repos` set it refuses one the list doesn't name.
 
 ## Failure modes
 
@@ -368,14 +439,18 @@ then shuts down gracefully (5s) and frees the lock.
 What exists now:
 
 - `internal/remote`: the token store with repo allowlists (`token.go`),
+  the remote-safe action tools (`actions.go`), versioned state and the
+  in-process orchestrator calls (`state.go`),
   scope table (`scope.go`), rotating audit log (`audit.go`), `[remote]`
-  config with the loopback, TLS and `allow_public` check (`config.go`),
+  config with the loopback, TLS, `allow_public` and `repos` checks
+  (`config.go`),
   snapshot, limits, stacks graph and needs-you reader (`source.go`), prompt
   parsing and item ids (`prompt.go`), secret scrubbing and the peek fence
   (`scrub.go`), the `wait_needs_you` long poll (`wait.go`), the push
-  webhook (`push.go`), the HTTP and MCP handler (`server.go`), the admin
-  confirmation round trip (`confirm.go`), and the lifecycle, lock, managed
-  runner and stdio transport (`service.go`).
+  webhook (`push.go`), the HTTP and MCP handler with `/mcp/<repo>` routing
+  (`server.go`), the confirmation round trip (`confirm.go`), and the
+  lifecycle, lock, managed runner, repo opening and stdio transport
+  (`service.go`).
 - `saddle remote serve`: off unless `[remote] enabled = true` is in the user
   config. It refuses untrusted repos, and any non-loopback address unless
   `allow_public` and TLS are both set. It takes the serve lock and prints
@@ -383,9 +458,12 @@ What exists now:
 - `saddle remote stdio`: the ssh forced-command transport.
 - `saddle remote token create [--repo …]|list|revoke`.
 - `saddle remote audit`.
-- Tools served: `status`, `needs_you`, `wait_needs_you` and `peek`, all
-  read. Every other tool is denied, even to a token scoped for it, until
-  the remote-safe action semantics above exist.
+- Tools served: `status`, `needs_you`, `wait_needs_you` and `peek` (read),
+  and to an admin token, each through `confirm`: `answer`, `send_keys`,
+  `message`, `queue_move`, `queue_hold`, `queue_release`, `automerge`,
+  `concurrency`, `unstack`, `requeue`, `publish`, `land`, `prs`,
+  `restack` and `sentinel_ack`. `spawn`, `kill`, `autopilot`, `brief` and
+  `ticket` are not served remotely.
 
 Try it:
 
@@ -399,7 +477,7 @@ saddle remote token create phone            # prints the secret once
 saddle remote serve                         # in the repo
 # on another machine:
 ssh -N -L 7431:127.0.0.1:7431 box &
-claude mcp add --transport http saddle-box http://127.0.0.1:7431/mcp \
+claude mcp add --transport http saddle-box http://127.0.0.1:7431/mcp/saddle \
   --header "Authorization: Bearer saddle_rc_…"
 
 # or, with no listener: ~/.ssh/authorized_keys on the host
@@ -445,23 +523,32 @@ is covered by `TestParsePromptOptions`, `TestParsePromptTakesTheLastList`,
 `TestPushSendsInterruptNoticesOnly`, `TestPushNtfy`,
 `TestPushFailureDoesNotLoseLaterNotices`, `TestPushTaskID`,
 `TestPushConfig`, `TestRunPushIsOffByDefault`, `TestUnconfiguredPushSendsNothing`
-and `TestPushLockIsExclusive`.
+and `TestPushLockIsExclusive`. #312 is covered by
+`TestReposAreRoutedByName`, `TestRepoAllowlistPerRoute`,
+`TestUntrustedRepoIsRefused`, `TestConfirmationIsBoundToRepo`,
+`TestConfigRepos`, `TestListedRepoCheck` and
+`TestServedReposOpensEachListedRepo`. #313 is covered by
+`TestStatusHasVersions`, `TestActionsNeedAdminAndConfirm`,
+`TestActTokenCannotRunActionsWithoutAdmin`, `TestStaleVersionIsRefused`,
+`TestStateMovedBeforeConfirm`, `TestIfVersionIsRequired`,
+`TestIdempotentVerbs`, `TestTwoControllersRace`,
+`TestActionsNeedExplicitTargets`, `TestAnswerIsBoundToItem`,
+`TestAnswerRefusesNotices`, `TestSendKeysIsSafeSend`,
+`TestMessageNamesTheRemoteCaller`, `TestReadOnlySourceServesNoActions` and
+`TestAppSourceActsThroughTheOrchestratorTools`.
 
 ## Follow-up tickets
 
-1. ~~**Server and transport hardening.**~~ Done in #308, except the
-   one-line `startWatchers` call (see Lifecycle).
+1. ~~**Server and transport hardening.**~~ Done in #308; the
+   `startWatchers` call landed in #362 (see Lifecycle).
 2. ~~**Auth, scopes and audit, finished.**~~ Done in #309.
-3. ~~**Snapshot and needs-you queue.**~~ Done in #310. The `answer
-   {item, option}` tool belongs to 6.
-4. ~~**Push.**~~ Done in #311, except the same `startWatchers` line.
-5. **Multi-repo addressing.** Serve `/mcp/<repo>` from one listener, with a
-   trusted-repo list. **Model scope: Opus.** Routing and trust interplay.
-6. **Remote-safe action semantics.** Add explicit targets, `if_version`
-   optimistic checks and idempotent verbs for every `act` and `land` tool,
-   then serve them remotely. That includes `answer {item, option}`, which
-   presses the option only while the prompt's id still matches. **Model scope: Opus.** This is the #209 race
-   class.
+3. ~~**Snapshot and needs-you queue.**~~ Done in #310; `answer {item,
+   option}` came with 6.
+4. ~~**Push.**~~ Done in #311.
+5. ~~**Multi-repo addressing.**~~ Done in #312.
+6. ~~**Remote-safe action semantics.**~~ Done in #313. Every change
+   remotely needs admin and a confirm; letting `act` tokens skip either is
+   a later call.
 7. ~~**TUI indicator of connected controllers.**~~ Done in #314.
 8. ~~**Doctor check.**~~ Done in #315.
 9. **Panic pause.** `saddle remote pause|resume` and the `pause` tool.
