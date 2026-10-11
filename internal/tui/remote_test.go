@@ -94,7 +94,7 @@ func TestReadRemoteCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	st.Event("t0", "remote", "phone allowed status from 127.0.0.1:1 ")
 	st.Event("t1", "tool", "Bash")
 
