@@ -44,9 +44,9 @@ type PeekOut struct {
 }
 
 type KeysIn struct {
-	Task string   `json:"task" jsonschema:"task id"`
-	Text string   `json:"text,omitempty" jsonschema:"text to type followed by Enter, e.g. an answer to the agent's question"`
-	Keys []string `json:"keys,omitempty" jsonschema:"tmux key names to press instead, e.g. [\"1\"] to choose option 1 of a prompt, [\"Escape\"], [\"Down\",\"Enter\"]"`
+	Task string  `json:"task" jsonschema:"task id"`
+	Text string  `json:"text,omitempty" jsonschema:"text to type followed by Enter, e.g. an answer to the agent's question"`
+	Keys KeyList `json:"keys,omitempty"` // schema in keysSchema: a string or a list
 }
 
 type TicketIn struct {
@@ -77,19 +77,20 @@ type MessageIn struct {
 }
 
 type TaskView struct {
-	ID       string   `json:"id"`
-	Title    string   `json:"title"`
-	Status   string   `json:"status"`
-	Reason   string   `json:"reason,omitempty"` // why a spawn failed
-	Model    string   `json:"model,omitempty"`
-	Parent   string   `json:"parent,omitempty"`
-	Branch   string   `json:"branch,omitempty"`
-	Claims   []string `json:"claims,omitempty"`
-	Train    string   `json:"train,omitempty"`
-	Notices  int      `json:"pending_notices,omitempty"`
-	PR       string   `json:"pr,omitempty"`
-	Window   string   `json:"window,omitempty"`
-	Worktree string   `json:"worktree,omitempty"`
+	ID       string    `json:"id"`
+	Title    string    `json:"title"`
+	Status   string    `json:"status"`
+	Reason   string    `json:"reason,omitempty"` // why a spawn failed
+	Model    string    `json:"model,omitempty"`
+	Parent   string    `json:"parent,omitempty"`
+	Branch   string    `json:"branch,omitempty"`
+	Claims   []string  `json:"claims,omitempty"`
+	Train    string    `json:"train,omitempty"`
+	Notices  int       `json:"pending_notices,omitempty"`
+	PR       string    `json:"pr,omitempty"`
+	Window   string    `json:"window,omitempty"`
+	Worktree string    `json:"worktree,omitempty"`
+	created  time.Time // for the status tool's since filter
 }
 
 type StatusOut struct {
@@ -107,6 +108,9 @@ type StatusOut struct {
 	// Adapters says which coding CLIs a worker can run on here (#182).
 	Adapters []agent.Status `json:"adapters" jsonschema:"each adapter (claude, codex, gemini, grok) and whether it can run here: CLI on PATH and logged in; reason when not"`
 	Tasks    []TaskView     `json:"tasks"`
+	// Hidden counts tasks the compact status tool left out, by status (#340).
+	Hidden map[string]int `json:"hidden,omitempty" jsonschema:"tasks left out of the compact view, by status; ask with detail, state or ids to see them"`
+	Hint   string         `json:"hint,omitempty"`
 }
 
 // OrchContext is the orchestrator's context use against its compact threshold.
@@ -240,6 +244,7 @@ type OK struct {
 }
 
 type LandOut struct {
+	Message string           `json:"message,omitempty"`
 	Results []app.LandResult `json:"results"`
 }
 
@@ -336,6 +341,7 @@ func Tasks(a *app.App) ([]TaskView, error) {
 		out = append(out, TaskView{Reason: reason,
 			ID: t.ID, Title: t.Title, Status: t.Status, Model: t.Model, Parent: t.Parent, Branch: t.Branch,
 			Claims: cl[t.ID], Train: tr[t.ID], Notices: pending[t.ID], PR: t.PR, Window: t.Window, Worktree: t.Worktree,
+			created: t.CreatedAt,
 		})
 	}
 	return out, nil
@@ -401,9 +407,13 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, OK{Message: "released"}, a.Store.Release(task, in.Paths...)
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "List every saddle task with status, claims and merge-train state, plus warnings, heavy_runs (the machine's heavy-run queue: holders and waiters per class) while it is busy, stack_at_risk when the stack sentinel has flagged the PR stack, and orchestrator_context: how full your context is against the compact_at threshold."},
-		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, StatusOut, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "List saddle tasks with status and merge-train state, plus warnings, heavy_runs (the machine's heavy-run queue: holders and waiters per class) while it is busy, stack_at_risk when the stack sentinel has flagged the PR stack, and orchestrator_context: how full your context is against the compact_at threshold. Compact by default: essentials per task, killed and merged tasks counted in hidden. Filter with state, ids or since; detail=true is the full dump with claims, branches and worktrees, and can be large."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in StatusIn) (*mcp.CallToolResult, StatusOut, error) {
 			out, err := Status(a)
+			if err != nil {
+				return nil, out, err
+			}
+			out, err = statusView(out, in, time.Now())
 			return nil, out, err
 		})
 
@@ -453,7 +463,13 @@ func New(a *app.App, task string) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{Name: "land", Description: "Run the merge train: land queued branches one at a time on the integration branch (rebase, test, fast-forward). Conflicts go back to their agents."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, LandOut, error) {
 			rs, err := a.Land()
-			return nil, LandOut{Results: rs}, err
+			if err != nil {
+				return nil, LandOut{}, err
+			}
+			if rs == nil {
+				rs = []app.LandResult{}
+			}
+			return nil, LandOut{Message: landMessage(len(rs)), Results: rs}, nil
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "prs", Description: "Push landed branches and open or update a stack of GitHub PRs, in landing order."},
@@ -650,7 +666,7 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, PeekOut{Screen: out}, err
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "send_keys", Description: "Type into a task's terminal: answer its question (text) or pick a prompt option (keys). Claude Code menus: a numbered menu takes the digit alone (keys [\"1\"]); an unnumbered menu needs arrows then Enter (keys [\"Down\",\"Enter\"]). Only answer when it is clearly safe or the user told you what to answer. Peek first, and peek again afterwards to confirm the prompt is gone."},
+	mcp.AddTool(s, &mcp.Tool{Name: "send_keys", InputSchema: keysSchema, Description: "Type into a task's terminal: answer its question (text) or pick a prompt option (keys). Claude Code menus: a numbered menu takes the digit alone (keys \"1\" or [\"1\"]); an unnumbered menu needs arrows then Enter (keys [\"Down\",\"Enter\"]). Only answer when it is clearly safe or the user told you what to answer. Peek first, and peek again afterwards to confirm the prompt is gone."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in KeysIn) (*mcp.CallToolResult, OK, error) {
 			if in.Text == "" && len(in.Keys) == 0 {
 				return nil, OK{}, errors.New("give text or keys")
