@@ -9,8 +9,26 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// queueJSON is `saddle queue --json`: the waiting entries, next first, and
+// who holds the engine lock ("engine", "up", or "" when nothing runs), so a
+// reader like the Claude Code mod (#166) can tell whether saddle is live.
+type queueJSON struct {
+	Engine  string           `json:"engine"`
+	Entries []queueEntryJSON `json:"entries"`
+}
+
+type queueEntryJSON struct {
+	Position int    `json:"position"` // 1 lands next
+	Task     string `json:"task"`
+	State    string `json:"state"`
+	Note     string `json:"note,omitempty"`
+	Seq      int64  `json:"seq"`
+	Attempts int    `json:"attempts,omitempty"`
+}
+
 // queueCmd shows and steers the merge train's waiting entries (#25).
 func queueCmd() *cobra.Command {
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "queue",
 		Short: "Show, reorder and hold the merge train's queue",
@@ -22,6 +40,13 @@ hold it back without losing its place, and release it.`,
 				return err
 			}
 			out := cmd.OutOrStdout()
+			if asJSON {
+				js := queueJSON{Engine: a.LockOwner(), Entries: []queueEntryJSON{}}
+				for i, e := range q {
+					js.Entries = append(js.Entries, queueEntryJSON{Position: i + 1, Task: e.Task, State: e.State, Note: e.Note, Seq: e.Seq, Attempts: e.Attempts})
+				}
+				return writeJSON(out, js)
+			}
 			if len(q) == 0 {
 				fmt.Fprintln(out, "the queue is empty")
 				return nil
@@ -36,6 +61,7 @@ hold it back without losing its place, and release it.`,
 			return nil
 		}),
 	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	cmd.AddCommand(&cobra.Command{
 		Use:   "move <task> <position>",
 		Short: "Move a waiting entry to a position in the queue (1 lands next)",
