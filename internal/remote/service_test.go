@@ -48,8 +48,8 @@ func TestStdioServesScopedTools(t *testing.T) {
 		names = append(names, tl.Name)
 	}
 	slices.Sort(names)
-	if !slices.Equal(names, []string{"needs_you", "status"}) {
-		t.Fatalf("stdio read sees %v", names)
+	if want := []string{"needs_you", "peek", "status", "wait_needs_you"}; !slices.Equal(names, want) {
+		t.Fatalf("stdio read sees %v, want %v", names, want)
 	}
 	if res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "status"}); callErr(res, err) {
 		t.Fatalf("status: %v %+v", err, res)
