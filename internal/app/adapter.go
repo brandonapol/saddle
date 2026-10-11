@@ -120,7 +120,8 @@ func (a *App) injectNotices(t store.Task, ad agent.Adapter, force bool) error {
 	}
 	// Let go if the text never goes in or the pane never confirms it; the
 	// notices stay pending for the next notice or the idle wake.
-	time.AfterFunc(tmux.RetryFor+tmux.ConfirmFor, release)
+	tm := tmux.TimingOf(a.Tmux)
+	time.AfterFunc(tm.RetryFor+tm.ConfirmFor, release)
 	tmux.Deliver(a.Tmux, t.Window, ad.Inject(store.FormatNotices(ns)), tmux.Delivery{
 		Force: force,
 		Sent: func() {

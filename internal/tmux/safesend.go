@@ -4,7 +4,8 @@ import (
 	"time"
 )
 
-// Retry policy for SendWhenIdle. Variables so tests can shorten them.
+// Default retry policy for SendWhenIdle. A driver that implements Paced
+// sets its own instead.
 var (
 	RetryEvery = 3 * time.Second
 	RetryFor   = 2 * time.Minute
@@ -15,6 +16,26 @@ var (
 	ConfirmEvery = 250 * time.Millisecond
 	ConfirmFor   = 5 * time.Second
 )
+
+// Timing is how Deliver retries over a draft and watches for the submit.
+type Timing struct {
+	RetryEvery, RetryFor     time.Duration
+	ConfirmEvery, ConfirmFor time.Duration
+}
+
+// Paced drivers set their own Timing. Tests use it to speed delivery up
+// without writing the package defaults, which parallel tests read (#384).
+type Paced interface {
+	Timing() Timing
+}
+
+// TimingOf returns d's own timing, or the package defaults.
+func TimingOf(d Driver) Timing {
+	if p, ok := d.(Paced); ok {
+		return p.Timing()
+	}
+	return Timing{RetryEvery: RetryEvery, RetryFor: RetryFor, ConfirmEvery: ConfirmEvery, ConfirmFor: ConfirmFor}
+}
 
 // StyledCapturer captures a pane with its SGR escapes, which tell Claude
 // Code's grey suggestion from typed text. Drivers without it fall back to a
@@ -52,7 +73,8 @@ func Deliver(d Driver, id, text string, o Delivery) {
 	if trySend(d, id, text, o) {
 		return
 	}
-	every, total := RetryEvery, RetryFor
+	tm := TimingOf(d)
+	every, total := tm.RetryEvery, tm.RetryFor
 	go func() {
 		deadline := time.Now().Add(total)
 		for time.Now().Before(deadline) {
@@ -99,13 +121,19 @@ func trySend(d Driver, id, text string, o Delivery) bool {
 	return true
 }
 
-// confirm calls sent once the pane differs from before, or never.
+// confirm calls sent once the pane differs from before, or never. It looks
+// at least once, even if it first wakes past the deadline on a loaded
+// machine.
 func confirm(d Driver, id, before string, sent func()) {
-	deadline := time.Now().Add(ConfirmFor)
-	for time.Now().Before(deadline) {
-		time.Sleep(ConfirmEvery)
+	tm := TimingOf(d)
+	deadline := time.Now().Add(tm.ConfirmFor)
+	for {
+		time.Sleep(tm.ConfirmEvery)
 		if now, err := d.Capture(id, 15); err == nil && now != before {
 			sent()
+			return
+		}
+		if !time.Now().Before(deadline) {
 			return
 		}
 	}

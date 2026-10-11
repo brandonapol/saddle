@@ -69,7 +69,7 @@ func (s styledFake) CaptureStyled(id string, n int) (string, error) { return s.C
 func TestWakeIdleAfterWakeAfter(t *testing.T) {
 	t.Parallel()
 	a, ft := setup(t)
-	fastRetry(t)
+	fastRetry(ft)
 	c := idleWorker(t, a, ft, "done\n❯ run saddle restack now")
 	must(t, a.Notify(c.ID, store.NoticeAction, "tests failed on the train"))
 	if n := countWakes(ft.sentTo(c.Window)); n != 0 {
@@ -106,7 +106,7 @@ func TestWakeIdleAfterWakeAfter(t *testing.T) {
 func TestWakeIdleLeavesPromptsAndBusyAgentsAlone(t *testing.T) {
 	t.Parallel()
 	a, ft := setup(t)
-	fastRetry(t)
+	fastRetry(ft)
 	later := time.Now().Add(a.Cfg.Notices.WakeAfter + time.Minute)
 
 	prompt := idleWorker(t, a, ft, "Do you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel")
@@ -129,9 +129,15 @@ func TestWakeIdleLeavesPromptsAndBusyAgentsAlone(t *testing.T) {
 	}
 }
 
-func fastRetry(t *testing.T) {
-	e, f, ce, cf := tmux.RetryEvery, tmux.RetryFor, tmux.ConfirmEvery, tmux.ConfirmFor
-	tmux.RetryEvery, tmux.RetryFor = 5*time.Millisecond, 30*time.Millisecond
-	tmux.ConfirmEvery, tmux.ConfirmFor = 5*time.Millisecond, 200*time.Millisecond
-	t.Cleanup(func() { tmux.RetryEvery, tmux.RetryFor, tmux.ConfirmEvery, tmux.ConfirmFor = e, f, ce, cf })
+// fastRetry speeds up ft's deliveries. It sets them on the fake, never on
+// the tmux package defaults: parallel tests' delivery goroutines read those,
+// and writing them was a data race that failed whichever tests ran
+// alongside (#384).
+func fastRetry(ft *fakeTmux) {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	ft.timing = &tmux.Timing{
+		RetryEvery: 5 * time.Millisecond, RetryFor: 30 * time.Millisecond,
+		ConfirmEvery: 5 * time.Millisecond, ConfirmFor: 200 * time.Millisecond,
+	}
 }
