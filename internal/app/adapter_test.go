@@ -69,7 +69,7 @@ func TestNotifyTypesNoticesIntoHooklessAgent(t *testing.T) {
 func TestHooklessNoticeStaysPendingUntilPaneChanges(t *testing.T) {
 	t.Parallel()
 	a, ft := setup(t)
-	fastRetry(t)
+	fastRetry(ft)
 	ft.frozen = true
 	c, err := a.Spawn(SpawnReq{Title: "codex work", Adapter: "codex"})
 	must(t, err)

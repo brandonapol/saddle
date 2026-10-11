@@ -17,6 +17,7 @@ import (
 	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/runq"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/tmux"
 )
 
 // TestMain lets the test binary stand in for saddle, so Init installs the ref
@@ -89,6 +90,18 @@ type fakeTmux struct {
 	names   map[string]string
 	screens map[string]string // what Capture returns per window
 	n       int
+	timing  *tmux.Timing // delivery pace; nil uses the tmux defaults
+}
+
+// Timing paces this fake's deliveries, so a parallel test speeds them up
+// without writing the tmux package defaults other tests read (#384).
+func (f *fakeTmux) Timing() tmux.Timing {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.timing != nil {
+		return *f.timing
+	}
+	return tmux.TimingOf(nil)
 }
 
 func (f *fakeTmux) HasSession() bool { return f.session }
