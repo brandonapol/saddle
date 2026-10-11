@@ -230,9 +230,17 @@ tool served remotely:
   as the orchestrator's (no typing into a pane with a draft). An answer is
   bound to a needs-you item id, so a prompt that has already changed is not
   answered.
-- **Visibility.** The TUI header shows connected controllers (token names
-  seen in the last few minutes). Remote actions appear in the event log
-  with the token name.
+- **Visibility.** The TUI header shows connected controllers: `⇄ phone,
+  laptop`, the token names seen in the last 15 minutes. Remote events
+  (`kind = remote`) appear in the chat as `⇄ remote: …` event lines with
+  the token name, except allowed read calls, which a polling controller
+  makes all the time and which only refresh the header. Events from before
+  the TUI started seed the header but aren't replayed. `saddle doctor`'s
+  `remote control` check reports what is exposed: on or off, the listen
+  address (loopback or public, plain HTTP or TLS), and each live token with
+  its scopes, repos and expiry. It fails on a config that serving would
+  refuse, and warns when the remote dir or its files are readable by
+  others or a token lives longer than 7 days.
 
 ## Multi-repo
 
@@ -381,13 +389,8 @@ by `TestTokenRepoAllowlist`, `TestTokenForOtherRepoIsRefused`,
    optimistic checks and idempotent verbs for every `act` and `land` tool,
    then serve them remotely. **Model scope: Opus.** This is the #209 race
    class.
-7. **TUI indicator of connected controllers.** Show token names seen recently
-   in the header, and remote events in the log view. **Model scope: Sonnet.**
-   A small UI read of existing events.
-8. **Doctor check.** Report what is exposed: enabled or not, the listen
-   address, live tokens and their scopes, and warn on loose file modes or
-   long TTLs. **Model scope: Sonnet.** A mechanical check over existing
-   functions.
+7. ~~**TUI indicator of connected controllers.**~~ Done in #314.
+8. ~~**Doctor check.**~~ Done in #315.
 9. **Panic pause.** `saddle remote pause|resume` and the `pause` tool.
    **Model scope: Opus.** It touches automerge, autopilot and the action
    path.
