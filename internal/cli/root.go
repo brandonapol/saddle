@@ -42,12 +42,7 @@ func Root() *cobra.Command {
 	}
 	root.AddCommand(
 		restackCmd(),
-		&cobra.Command{
-			Use:   "version",
-			Short: "Print the saddle version",
-			Run:   func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), Version) },
-		},
-		initCmd(), upCmd(), downCmd(), spawnCmd(), withTmux(statusCmd()), briefCmd(), claimCmd(), releaseCmd(), doneCmd(),
+		versionCmd(), upgradeCmd(), migrateCmd(), changelogCmd(), initCmd(), upCmd(), downCmd(), spawnCmd(), withTmux(statusCmd()), briefCmd(), claimCmd(), releaseCmd(), doneCmd(),
 		landCmd(), syncCmd(), prsCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(), repairCmd(), concurrencyCmd(), pluginCmd(), grokBridgeCmd(), publishCmd(), noticesCmd(), trustCmd(), untrustCmd(), resumeCmd(), rescueCmd(), heavyRunCmd(), runqCmd(), autopilotCmd(), remote.Command(open),
 	)
 	return root
@@ -180,6 +175,7 @@ keep the CLI they were spawned with.
 				return err
 			}
 			defer release()
+			defer recordUp(a.Root)() // lets other commands spot a stale saddle up (#326)
 			a.CleanStaleLeases(cmd.ErrOrStderr()) // heavy-run leases a crash left behind (#238)
 			if warn := a.LocalBaseBehind(); warn != "" {
 				fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+warn)
