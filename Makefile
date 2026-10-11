@@ -140,9 +140,10 @@ test: ## Run unit and integration tests (TEST_TIMEOUT per package, default 20m)
 .PHONY: test/e2e
 test/e2e: ## Run the end-to-end journeys (RUN=Journey to pick some; needs tmux)
 	# Builds saddle, a fake gh and a fake agent, then drives the real binary in
-	# hermetic temp repos with a private tmux server. See internal/e2e.
+	# hermetic temp repos with a private tmux server. See internal/e2e;
+	# test/e2e holds the remote-control journeys over a real listener.
 	# E2E_RACE=1 also race-builds saddle itself (slow: minutes, not seconds).
-	E2E_GO_TAGS='$(GO_TAGS)' $(GO) test -tags '$(GO_TAGS) e2e' -race -count=1 -timeout $(E2E_GO_TIMEOUT) $(if $(RUN),-run '$(RUN)') ./internal/e2e/...
+	E2E_GO_TAGS='$(GO_TAGS)' $(GO) test -tags '$(GO_TAGS) e2e' -race -count=1 -timeout $(E2E_GO_TIMEOUT) $(if $(RUN),-run '$(RUN)') ./internal/e2e/... ./test/e2e/...
 
 .PHONY: test/scripts
 test/scripts: ## Test the shell scripts (upgrade, release, install)
