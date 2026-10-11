@@ -1,6 +1,6 @@
-// The saddle mod's hooks module (#165). It keeps the shared snapshot fresh
-// and draws it in the saddle pane (#167); the band and commands build on it
-// too. A timer runs
+// The saddle mod's hooks module (#165). It keeps the shared snapshot fresh,
+// draws it in the saddle pane (#167) and draws the needs-you band above the
+// prompt (#168); the commands build on it too. A timer runs
 // `saddle queue --json` (cheap: it reads the store and says whether the
 // engine runs), then while saddle runs `saddle status --json`, and `saddle
 // stack --json` less often since that one asks GitHub. The snapshot is
@@ -15,6 +15,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { SaddlePaneTab, SaddleSnapshot } from '../types'
+import { ACTION_LABELS, actionArgv, askPrompt, needLine, needsYou } from './needsyou'
+import type { Need, NeedAction } from './needsyou'
 import { PINNED_ROWS, TABS, headerOf, scrolled, tabLines } from './pane'
 import type { Tone } from './pane'
 import {
@@ -37,6 +39,10 @@ const snapshot = atom(snapshotRef, null)
 // The pane's view: which tab, and the first body row shown.
 const paneRef = { plugin: 'saddle', key: 'pane' } as const
 const pane = atom(paneRef, { tab: 'agents', offset: 0 })
+
+// The needs-you band's view: the screen Peek fetched, shown under the items.
+const bandRef = { plugin: 'saddle', key: 'band' } as const
+const band = atom(bandRef, { peek: null })
 
 /** The pane's id: `$.ui.open`, its `ui.render` requestId and `ui.scroll`. */
 const PANE = 'saddle'
@@ -129,6 +135,33 @@ async function refresh($: EngineInterface, cwd: string) {
   }
 }
 
+// press runs a band button: Peek fetches the task's screen into the band
+// (or closes it when it already shows), Ask Claude hands the item to the
+// orchestrator as a prompt, and the rest run their saddle command and toast
+// its first line. The next refresh redraws the band with the outcome.
+async function press($: EngineInterface, cwd: string, n: Need, action: NeedAction) {
+  if (action === 'ask') {
+    $.ui.toast(`Asked Claude about ${n.task}`)
+    await $.prompt.submit({ text: askPrompt(n) })
+    return
+  }
+  const argv = actionArgv(n, action)
+  if (!argv) {
+    return
+  }
+  if (action === 'peek' && (await read($, band)).peek?.task === n.task) {
+    await update($, band, () => ({ peek: null }))
+    return
+  }
+  const r = await saddle($, cwd, argv, action === 'land' ? 600000 : 10000)
+  if (action === 'peek') {
+    const screen = 'text' in r ? r.text.replace(/\s+$/, '') : r.error
+    await update($, band, () => ({ peek: { task: n.task, screen } }))
+    return
+  }
+  $.ui.toast('text' in r ? (r.text.trim().split('\n')[0] ?? `saddle ${argv[0]}: done`) : r.error)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -209,6 +242,58 @@ export const register: Register = on => {
             {l.text}
           </Text>
         ))}
+      </Box>
+    )
+  })
+
+  // The needs-you band: one line per task waiting on someone, with its
+  // buttons, and the screen Peek fetched under them. It passes, drawing
+  // nothing, while nothing is pending or a survey holds the band.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const snap = await read($, snapshot)
+    const needs = needsYou(snap)
+    if (e.props.hasSurvey || needs.length === 0) {
+      return next(e)
+    }
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const { peek } = await read($, band)
+    const shown = peek && needs.some(n => n.task === peek.task) ? peek : null
+    const cwd = await $.session.cwd()
+
+    return (
+      <Box key="needsyou" flexDirection="column">
+        {needs.map(n => (
+          <Box key={`row-${n.task}`} flexDirection="row" gap={1}>
+            <Box key={`need-${n.task}`}>
+              <Text color="warning" wrap="truncate-end">
+                {needLine(n)}
+              </Text>
+            </Box>
+            {n.actions.map(a => (
+              <Button
+                key={`${n.task}-${a}`}
+                label={ACTION_LABELS[a]}
+                dimColor={a !== 'ask'}
+                onPress={() => press($, cwd, n, a)}
+              />
+            ))}
+          </Box>
+        ))}
+        {shown ? (
+          <Box key="peek" flexDirection="column">
+            <Box flexDirection="row" gap={1}>
+              <Box key="peek-title">
+                <Text bold>{`${shown.task}'s screen`}</Text>
+              </Box>
+              <Button key="peek-close" label="Close" role="dismiss" onPress={() => update($, band, () => ({ peek: null }))} />
+            </Box>
+            {shown.screen.split('\n').map(l => (
+              <Text dimColor wrap="truncate-end">
+                {l}
+              </Text>
+            ))}
+          </Box>
+        ) : null}
       </Box>
     )
   })
