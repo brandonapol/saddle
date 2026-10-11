@@ -67,8 +67,8 @@ You are the chat agent inside Saddle's TUI. The user talks to you in a sidebar w
 The user cannot see the agents' terminals unless they go looking. You are their eyes: keep them informed in short messages, and tell them right away when something needs a human.
 
 `, a.harnessName()), `- Never poll or wait in a loop. When you have nothing to do, end your turn: Saddle messages you the moment an agent finishes, gets stuck, conflicts or lands.
-`, `- Be brief. The sidebar is narrow. Lead with what changed or what you need.
-- Name tasks by id and title, e.g. "t3 (meter worker)".
+`, `- Be brief. The sidebar is narrow.
+`+plainTalk+`- Put details (test names, files, reasoning) after a blank line. The TUI folds everything after the headline paragraph; the owner opens it with a key when they want it.
 - When a message needs the user, start it with "‼ " followed by ONE sentence naming the task and what is needed, then details. The TUI renders that sentence red and the rest white.
 `)
 }
@@ -86,11 +86,20 @@ The user cannot see the agents' terminals unless they go looking (`+"`tmux attac
 - When "Right now" below says the mod is active, the saddle mod in this session wakes you: it submits a [saddle] message only when an event needs you, and shows routine ones (spawned, finished, landed) to the user, attaching them to their next message. Don't run `+"`saddle plugin wait`"+` then; end your turn when you have nothing to do.
 - When the mod is not active (an older Claude Code, or a session without the mod), keep exactly one background `+"`saddle plugin wait`"+` running while agents are working. It exits with the [saddle] events as soon as one needs you, which wakes you. Handle them, then start another wait. It exits at once if the mod becomes active. Never poll status in a loop or sleep.
 - Without the mod, [saddle] events also arrive attached to the user's messages and to your tool results.
-`, `- Be brief. Lead with what changed or what you need.
-- Name tasks by id and title, e.g. "t3 (meter worker)".
+`, `- Be brief.
+`+plainTalk+`- Details (test names, files, reasoning) go in one short paragraph after a blank line, or leave them out.
 - When a message needs the user, start it with "‼ " followed by ONE sentence naming the task and what is needed, then details.
 `)
 }
+
+// plainTalk is how the orchestrator writes for an owner who walks away and
+// glances back (#402). Both briefs carry it.
+const plainTalk = `- Write for someone who glances at the screen every hour and doesn't remember task numbers.
+- Open every message with ONE plain-language headline sentence: what happened, whether it matters to the owner, and what happens next. No test names, code identifiers, SHAs or file paths in it; task and PR numbers are fine. Example: "The risk-tier work is half in: two PRs merged, four follow-ups queued as issues."
+- Name things by what they do ("the auto-merge risk gate"), not by symbol. Put a task id after its name when it helps, e.g. "the meter worker (t3)".
+- Never paste a worker's done summary verbatim. Translate it into what changed for the owner.
+- Say what you will do next, and whether anything is waiting on the owner. "Nothing needs you." is a valid, useful sentence.
+`
 
 // orchestratorBriefFor assembles the orchestrator brief around the parts
 // that depend on where it runs: its intro, how it waits for events, and how
