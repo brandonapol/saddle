@@ -124,19 +124,36 @@ func TestCandidatesSkipTheRootItself(t *testing.T) {
 	}
 }
 
-func TestLoadConfig(t *testing.T) {
-	repo := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("HOME", "/home/u")
-	if c := LoadConfig(repo); c.Root() != DefaultRoot() || c.Age() != DefaultMaxAge || c.LowFree() != DefaultLowFreePct {
+func TestConfigDefaults(t *testing.T) {
+	if c := (Config{}); c.Root() != DefaultRoot() || c.Age() != DefaultMaxAge || c.LowFree() != DefaultLowFreePct {
 		t.Fatalf("defaults: %+v root %s", c, c.Root())
 	}
-	must(t, os.MkdirAll(filepath.Join(repo, ".saddle"), 0o755))
-	must(t, os.WriteFile(filepath.Join(repo, ".saddle", "config.toml"),
-		[]byte("[tmp]\ndir = \"~/scratch\"\nmax_age = \"30m\"\nlow_free_pct = -1\n"), 0o644))
-	c := LoadConfig(repo)
-	if c.Root() != "/home/u/scratch" || c.Age() != 30*time.Minute || c.LowFree() != 0 {
+	c := Config{Dir: "/x", MaxAge: 30 * time.Minute, LowFreePct: -1}
+	if c.Root() != "/x" || c.Age() != 30*time.Minute || c.LowFree() != 0 {
 		t.Fatalf("configured: %+v", c)
+	}
+}
+
+// A capped root counts as a filesystem of its own: free space is what its
+// files leave, unless the real filesystem under it has less.
+func TestCapped(t *testing.T) {
+	root := t.TempDir()
+	mk(t, filepath.Join(root, "a"), 600, 0)
+	real := func(p string) (Space, error) { return Space{Path: p, Free: 900, Total: 1000}, nil }
+	s, err := Capped(real, 1000)(root)
+	if err != nil || s.Free != 400 || s.Total != 1000 || s.Path != root {
+		t.Fatalf("capped: %+v %v", s, err)
+	}
+	mk(t, filepath.Join(root, "b"), 600, 0)
+	if s, _ = Capped(real, 1000)(root); s.Free != 0 {
+		t.Fatalf("over the cap: %+v", s)
+	}
+	tight := func(p string) (Space, error) { return Space{Path: p, Free: 10, Total: 1000}, nil }
+	if s, _ = Capped(tight, 1<<20)(root); s.Free != 10 {
+		t.Fatalf("a fuller real filesystem wins: %+v", s)
+	}
+	if s, _ = Capped(real, 0)(root); s.Free != 900 {
+		t.Fatalf("no cap: %+v", s)
 	}
 }
 

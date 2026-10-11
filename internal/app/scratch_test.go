@@ -125,6 +125,39 @@ func TestSpawnHeldWhileScratchStaysLow(t *testing.T) {
 	}
 }
 
+// [tmp] comes through the config package (#383): max_bytes caps the root
+// like a small tmpfs, so filling it holds spawns, and a relative dir
+// resolves against the repo the way config.Load resolves it.
+// Serial: it swaps the package's filesystem check.
+func TestScratchConfigComesFromConfigPackage(t *testing.T) {
+	a, _ := setup(t)
+	dir := withScratchDir(t, a)
+	cfg := filepath.Join(a.Root, ".saddle", "config.toml")
+	b, err := os.ReadFile(cfg)
+	must(t, err)
+	must(t, os.WriteFile(cfg, append(b, []byte("max_bytes = \"1K\"\nmax_age = \"7m\"\n")...), 0o644))
+	old := scratchSpace
+	scratchSpace = func(p string) (scratch.Space, error) { return scratch.Space{Path: p, Free: 1 << 40, Total: 1 << 41}, nil }
+	t.Cleanup(func() { scratchSpace = old; setScratchHeld(dir, false) })
+
+	if c := a.ScratchConfig(); c.Dir != dir || c.MaxBytes != 1024 || c.Age() != 7*time.Minute {
+		t.Fatalf("scratch config: %+v", c)
+	}
+	fill(t, filepath.Join(dir, "go-build-running"), 1000, 0)
+	if _, err := a.Spawn(SpawnReq{Title: "held"}); !errors.Is(err, ErrScratchLow) {
+		t.Fatalf("spawn with the capped root full: %v", err)
+	}
+	must(t, os.RemoveAll(filepath.Join(dir, "go-build-running")))
+	if _, err := a.Spawn(SpawnReq{Title: "room again"}); err != nil {
+		t.Fatalf("spawn once there is room: %v", err)
+	}
+
+	must(t, os.WriteFile(cfg, []byte("[tmp]\ndir = \"../rel-scratch\"\n"), 0o644))
+	if want := filepath.Join(filepath.Dir(a.Root), "rel-scratch"); a.ScratchRoot() != want {
+		t.Fatalf("relative dir: root %s, want %s", a.ScratchRoot(), want)
+	}
+}
+
 func TestSweepScratchRecordsWhatItRemoved(t *testing.T) {
 	t.Parallel()
 	a, _ := setup(t)
