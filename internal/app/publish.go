@@ -351,53 +351,10 @@ func (a *App) publishText(t store.Task, isTask bool, base, head string) (string,
 		ns = append(ns, n)
 	}
 	sort.Ints(ns)
-	for _, n := range ns {
-		desc += fmt.Sprintf("\n\nCloses #%d", n)
-	}
-	desc = strings.TrimSpace(desc)
-
-	body := fillTemplate(a.prTemplate(base), desc)
-	body += "\n\n---\nPublished by `saddle publish`, on its own and outside saddle's PR stack.\n"
-	return title, body, nil
-}
-
-// prTemplate is the repo's pull request template at rev, or "".
-func (a *App) prTemplate(rev string) string {
-	for _, p := range []string{
-		".github/pull_request_template.md", ".github/PULL_REQUEST_TEMPLATE.md",
-		"docs/pull_request_template.md", "pull_request_template.md", "PULL_REQUEST_TEMPLATE.md",
-	} {
-		if s, err := gitx.Run(a.Root, "show", rev+":"+p); err == nil && s != "" {
-			return s
-		}
-	}
-	return ""
-}
-
-var commentRe = regexp.MustCompile(`(?s)^\s*<!--.*?-->`)
-
-// fillTemplate puts desc under the template's first heading, in place of the
-// comment that prompts for it; without a heading it goes above the template.
-func fillTemplate(tmpl, desc string) string {
-	if strings.TrimSpace(tmpl) == "" {
-		return desc
-	}
-	lines := strings.SplitAfter(tmpl, "\n")
-	for i, l := range lines {
-		if !strings.HasPrefix(l, "#") {
-			continue
-		}
-		head := strings.Join(lines[:i+1], "")
-		rest := strings.Join(lines[i+1:], "")
-		if loc := commentRe.FindStringIndex(rest); loc != nil {
-			rest = rest[loc[1]:]
-		}
-		if !strings.HasSuffix(head, "\n") {
-			head += "\n"
-		}
-		return strings.TrimSpace(head + desc + "\n" + rest)
-	}
-	return strings.TrimSpace(desc + "\n\n" + tmpl)
+	p := prText{Title: title, Desc: strings.TrimSpace(desc), Issues: ns,
+		Note: "Published by `saddle publish`, on its own and outside saddle's PR stack."}
+	p.Commits, p.Files = a.prRange(base, head)
+	return title, fillPRTemplate(a.prTemplate(base), p), nil
 }
 
 func (a *App) publishedPath() string { return a.stateDir("published.json") }

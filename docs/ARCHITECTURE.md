@@ -212,6 +212,15 @@ close PRs and delete branches, and it handles those without anyone editing
   It refuses work that needs unmerged tasks below it, and prints the URL when
   the PR exists. `prs` leaves that task's PR alone; the layers above it wait
   until it merges.
+- **PR bodies follow the repo's template (#361).** Both `prs` and `publish`
+  lay the description into `.github/pull_request_template.md` (or a variant)
+  strictly (`internal/app/prtemplate.go`): every heading kept in order,
+  `Closes #N`-style placeholders filled or dropped, prompt comments removed,
+  the Changes section listed from commit subjects, and type, surface and
+  automated-test boxes ticked from the commits and changed paths. Boxes saddle
+  can't vouch for, like manual testing, stay unticked. A trailing AI
+  attribution footer on the description stays last. With no template, `prs`
+  sends the task summary as before.
 
 ## Agents
 
