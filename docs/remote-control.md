@@ -1,8 +1,8 @@
 # Remote control (#251)
 
 Status: design plus a read-only spike (`internal/remote`, `saddle remote`),
-with server and transport hardening (#308) and auth, scopes and audit
-(#309) done. "What exists now" below lists what is built. The remaining
+with server and transport hardening (#308), auth, scopes and audit
+(#309), the snapshot and needs-you queue (#310) and push (#311) done. "What exists now" below lists what is built. The remaining
 follow-up tickets at the end build the rest.
 
 ## Goal
@@ -42,7 +42,7 @@ Attackers considered:
 | Token guessing | brute force | ✓ 256-bit random secrets. ✓ constant-time compare, run over every token. ✓ failed logins are rate limited per client address (10/min by default, then 429). |
 | A runaway or prompt-injected remote Claude | many calls, destructive calls | ✓ per-token rate limit (120/min). ✓ scope allowlist: unknown tools are denied. ✓ admin tools need `admin` *and* a confirmation round trip (`confirm` with a one-time code bound to the token, 2 min). ○ panic pause. |
 | Repudiation ("who held my stack?") | none | ✓ every failed login and every tool call, allowed or denied, goes to the audit log (JSONL) with the token name and client address, and is mirrored into the repo's event log (`kind = remote`). ✓ a call is refused if its audit line can't be written. ✓ the log rotates (10 MiB, 5 kept by default) and `saddle remote audit` reads it. |
-| Prompt injection *through* saddle output | a task title or peeked screen carrying instructions to the remote Claude | ○ item text is clipped (500 runes) today. ○ peek output is scrubbed of known secret patterns and fenced as data. This risk can't be removed, only reduced, which is one more reason the default token is read-only. |
+| Prompt injection *through* saddle output | a task title or peeked screen carrying instructions to the remote Claude | ✓ item text is clipped (500 runes), prompt options to 200, and scrubbed. ✓ peek output has escapes stripped, known secret patterns redacted, lines capped (100) and clipped, and sits between two fence lines carrying a random nonce, so the screen can't fake the closing one. ✓ the server's instructions and tool descriptions say this text is untrusted data. This risk can't be removed, only reduced, which is one more reason the default token is read-only. |
 
 Out of scope: a compromised host account (it owns everything anyway), and
 the safety of the remote Claude Code's own machine.
@@ -130,9 +130,10 @@ fails when an MCP tool is added without a scope.
 | Tool | Scope | Notes |
 |---|---|---|
 | `status` | read | remote returns a compact snapshot (no worktree paths or window ids) |
-| `needs_you` | read | remote-only; prompts with their text, plus t0's action notices |
+| `needs_you` | read | remote-only; prompts with their text, question and options, plus t0's action notices, each with an id |
+| `wait_needs_you` | read | remote-only; long-polls `needs_you` with a cursor |
 | `brief` | read | |
-| `peek` | read | follow-up: scrub secrets, cap lines |
+| `peek` | read | scrubbed, capped at 100 lines, fenced as untrusted data |
 | `ticket` | read | reads GitHub through the host's gh |
 | `message` | act | |
 | `send_keys` | act | safe-send rules: never into a pane the owner is typing in |
@@ -189,29 +190,85 @@ against the table, so a hidden tool can't be called by name.
 - **`status`**: counts (running, needs-you, queued, landed), live tasks with
   needs-you first, train state, PR, stack at risk, CI-red holds, auto-merge
   state, orchestrator context use, warnings. Landed and killed tasks show up
-  only as a count. Follow-up: usage and plan limits, and stacks as a short
-  graph.
+  only as a count. `limits` is plan-limit usage per window (5h and weekly:
+  percent of cap, state, tokens, $, time to reset) and whether launches are
+  paused. `stacks` is a short graph, one line each:
+
+  ```
+  stack: main ← t1 #11 (ci red) ← t3 #13 (at risk)
+  queue: t4, t5 (held)
+  stack api: t6 ← t7
+  ```
+
+  The PR stack bottom up from the base, the merge train queue in landing
+  order, then named stacks.
 - **`needs_you`**: one item per agent waiting at a prompt, with the latest
   `Notification` hook text, plus t0's undelivered **action** notices (the
-  interrupt class from #222). Reading consumes nothing. Follow-up: give each
-  item an id and the answer options (parsed with `DetectPrompt`) so `act` can
-  answer `{item, option}` instead of raw keys.
-- **`peek`** (follow-up): on demand, truncated, secrets scrubbed, wrapped as
-  untrusted data.
+  interrupt class from #222). Reading consumes nothing. Each item has an
+  `id`. A prompt item also carries `prompt` (`ask` or `trust`, from
+  `DetectPrompt`), its `question` and numbered `options`, parsed from the
+  agent's screen: the last run numbered 1, 2, 3… on it, so a list the agent
+  printed earlier isn't taken for the options. A prompt's id hashes the
+  prompt as shown (its dialog box, or the lines around the question), so it
+  is stable while the prompt stands and changes when it does, even when
+  only the command it asks about changed. A notice's id is `n-<notice id>`.
+  The result has a `cursor` for `wait_needs_you`. Answering `{item,
+  option}` is an `act` tool and arrives with the remote-safe action
+  semantics (follow-up 6); the id is what binds an answer to the prompt the
+  owner saw.
+- **`peek`** `{task, lines}`: the last lines of an agent's terminal (default
+  40, at most 100, each clipped to 400 runes). Terminal escapes and control
+  characters are stripped, known secret shapes are replaced with
+  `[REDACTED]` (`saddle_rc_` tokens, GitHub, GitLab, Anthropic, OpenAI,
+  AWS, Slack and Google keys, JWTs, private key blocks, bearer and basic
+  credentials, URL passwords, and the value of any `*TOKEN*`, `*SECRET*`,
+  `*PASSWORD*`, `*API_KEY*`… assignment). The output opens with
+  `<<<UNTRUSTED TERMINAL OUTPUT <nonce> …>>>` and closes with
+  `<<<END UNTRUSTED TERMINAL OUTPUT <nonce>>>`; the nonce is random per
+  call and returned as `fence`. The result reports `redacted` and
+  `truncated`. Scrubbing is a seatbelt: a secret in a shape it doesn't
+  know gets through, which is why peek needs a token and is audited.
 
 ## Push
 
 MCP server notifications reach a connected client, but Claude Code doesn't
 turn them into a prompt for the user. So push has two parts:
 
-1. **For a remote Claude session:** a `wait_needs_you` tool that long-polls,
-   blocking until a new item appears or a timeout passes. The session runs it
-   in the background the way the plugin runs `saddle plugin wait`. No polling
-   loop burns tokens.
+1. **For a remote Claude session:** `wait_needs_you {cursor,
+   timeout_seconds}` long-polls, blocking until an item the cursor hasn't
+   seen appears or the timeout passes (default 120s, at most 600s). It
+   returns `new` (just the unseen items), `items` (everything waiting), a
+   fresh `cursor`, and `timed_out`. Without a cursor it waits for items
+   newer than the call. The cursor is the set of item ids, so an item that
+   leaves the queue and comes back counts as new. The server re-reads the
+   queue every 2s and stops when the client goes away. The session runs it
+   in the background the way the plugin runs `saddle plugin wait`. No
+   polling loop burns tokens. Each call is one audited tool call.
 2. **For the owner's phone:** an optional `[remote.push]` webhook (ntfy topic
-   or a generic URL) fired by the engine for **interrupt-class notices only**.
-   Digest-class notices stay in the digest (#222). The payload carries the
-   task id and a one-line summary, never peek output.
+   or a generic URL) for **interrupt-class notices only**. Digest-class and
+   silent notices stay in the digest and the log (#222). The pusher follows
+   the event log, where the notice policy records each orchestrator notice
+   with its class (`notice_interrupt`), from the moment it starts, so
+   history is never replayed. The payload carries the repo, the task id
+   (the first `tN` in the notice, else `t0`) and a one-line summary (the
+   notice's first line, scrubbed, at most 200 runes), never peek output:
+
+   ```toml
+   # ~/.config/saddle/config.toml (the user config only, never a repo's)
+   [remote.push]
+   ntfy = "https://ntfy.sh/your-long-random-topic"  # body = summary, Title = "saddle REPO: TASK"
+   # or: url = "https://example.com/hook"           # POST JSON {repo, task, class, summary, ts}
+   # token = "…"                                    # optional, sent as Authorization: Bearer
+   ```
+
+   Push works with the listener off; it doesn't need `[remote] enabled`.
+   The target must be https (plain http only to loopback) and redirects
+   aren't followed. A failed send is logged to the event log (`kind =
+   remote`) once per reason and not retried: the notice still waits in the
+   orchestrator's queue and in `needs_you`. `RunManaged` runs the pusher, so
+   it starts wherever the listener would (see Lifecycle). A flock per repo
+   (`push-<hash>.lock` in the remote dir) keeps saddle up and the plugin
+   engine from both sending.
 
 ## Concurrency and consistency
 
@@ -293,9 +350,11 @@ then shuts down gracefully (5s) and frees the lock.
   event log (`kind = remote`). So a foreground serve can come and go, and
   `saddle up` takes over when it stops. Problems never stop `saddle up`.
 - **Wiring:** `internal/cli/root.go`'s `startWatchers` needs one line,
-  `wg.Go(func() { remote.RunManaged(ctx, a, nil) })`. #308 couldn't
-  touch that file (another task held it), so it is the one remaining step
-  for "serve under the engine and saddle up".
+  `wg.Go(func() { remote.RunManaged(ctx, a, nil) })`. #308, #310 and #311
+  couldn't touch that file (another task held it), so it is the one
+  remaining step for "serve and push under the engine and saddle up".
+  `RunManaged` runs both the listener and `[remote.push]`, so that one line
+  wires both.
 
 ## The spike, hardened
 
@@ -304,9 +363,12 @@ What exists now:
 - `internal/remote`: the token store with repo allowlists (`token.go`),
   scope table (`scope.go`), rotating audit log (`audit.go`), `[remote]`
   config with the loopback, TLS and `allow_public` check (`config.go`),
-  snapshot and needs-you reader (`source.go`), the HTTP and MCP handler
-  (`server.go`), the admin confirmation round trip (`confirm.go`), and the
-  lifecycle, lock, managed runner and stdio transport (`service.go`).
+  snapshot, limits, stacks graph and needs-you reader (`source.go`), prompt
+  parsing and item ids (`prompt.go`), secret scrubbing and the peek fence
+  (`scrub.go`), the `wait_needs_you` long poll (`wait.go`), the push
+  webhook (`push.go`), the HTTP and MCP handler (`server.go`), the admin
+  confirmation round trip (`confirm.go`), and the lifecycle, lock, managed
+  runner and stdio transport (`service.go`).
 - `saddle remote serve`: off unless `[remote] enabled = true` is in the user
   config. It refuses untrusted repos, and any non-loopback address unless
   `allow_public` and TLS are both set. It takes the serve lock and prints
@@ -314,9 +376,9 @@ What exists now:
 - `saddle remote stdio`: the ssh forced-command transport.
 - `saddle remote token create [--repo …]|list|revoke`.
 - `saddle remote audit`.
-- Tools served: `status` and `needs_you`. Every other tool is denied, even
-  to a token scoped for it, until the remote-safe action semantics above
-  exist.
+- Tools served: `status`, `needs_you`, `wait_needs_you` and `peek`, all
+  read. Every other tool is denied, even to a token scoped for it, until
+  the remote-safe action semantics above exist.
 
 Try it:
 
@@ -362,24 +424,35 @@ Tests: `internal/remote/*_test.go`. The acceptance test is
 by `TestTokenRepoAllowlist`, `TestTokenForOtherRepoIsRefused`,
 `TestAdminToolNeedsConfirmation`, `TestConfirmationIsBoundToToken`,
 `TestConfirmationExpires`, `TestConfirmNeedsAdmin`, `TestAuditRotates`,
-`TestAuditFollowsRotationByAnotherProcess` and `TestAuditCommand`.
+`TestAuditFollowsRotationByAnotherProcess` and `TestAuditCommand`. #310
+is covered by `TestParsePromptOptions`, `TestParsePromptTakesTheLastList`,
+`TestParsePromptTrust`, `TestParsePromptNone`,
+`TestParsePromptScrubsAndClips`, `TestNeedsYouItemIDs`,
+`TestNeedsYouHasCursor`, `TestStackGraph`, `TestLimitsLine`,
+`TestScrubRedactsSecrets`, `TestScrubAssignmentsKeepTheirNames`,
+`TestScrubPrivateKeyBlock`, `TestScrubLeavesOrdinaryText`,
+`TestPeekOutputIsCappedScrubbedAndFenced` and
+`TestPeekIsScrubbedAndFenced`. #311 is covered by
+`TestWaitNeedsYouWakesOnNewItem`, `TestWaitNeedsYouTimesOut`,
+`TestWaitTimeoutIsBounded`, `TestWaitNeedsYouStopsWithTheClient`,
+`TestPushSendsInterruptNoticesOnly`, `TestPushNtfy`,
+`TestPushFailureDoesNotLoseLaterNotices`, `TestPushTaskID`,
+`TestPushConfig`, `TestRunPushIsOffByDefault` and `TestPushLockIsExclusive`.
 
 ## Follow-up tickets
 
 1. ~~**Server and transport hardening.**~~ Done in #308, except the
    one-line `startWatchers` call (see Lifecycle).
 2. ~~**Auth, scopes and audit, finished.**~~ Done in #309.
-3. **Snapshot and needs-you queue.** Add item ids, parsed answer options,
-   usage and limits, a stacks graph, and `peek` with secret scrubbing.
-   **Model scope: Opus.** Prompt parsing and scrubbing need judgment.
-4. **Push.** Add the `wait_needs_you` long-poll and a `[remote.push]` ntfy or
-   webhook for interrupt-class notices only. **Model scope: Opus.** Ties
-   into the #222 notice policy.
+3. ~~**Snapshot and needs-you queue.**~~ Done in #310. The `answer
+   {item, option}` tool belongs to 6.
+4. ~~**Push.**~~ Done in #311, except the same `startWatchers` line.
 5. **Multi-repo addressing.** Serve `/mcp/<repo>` from one listener, with a
    trusted-repo list. **Model scope: Opus.** Routing and trust interplay.
 6. **Remote-safe action semantics.** Add explicit targets, `if_version`
    optimistic checks and idempotent verbs for every `act` and `land` tool,
-   then serve them remotely. **Model scope: Opus.** This is the #209 race
+   then serve them remotely. That includes `answer {item, option}`, which
+   presses the option only while the prompt's id still matches. **Model scope: Opus.** This is the #209 race
    class.
 7. **TUI indicator of connected controllers.** Show token names seen recently
    in the header, and remote events in the log view. **Model scope: Sonnet.**
