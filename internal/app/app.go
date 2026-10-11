@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -255,7 +256,7 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 			return t, err
 		}
 		if c := claims.Conflicts(all, "", r.Claims); len(c) > 0 {
-			return t, conflictErr(c)
+			return t, a.conflictErr(c)
 		}
 	}
 	if len(r.Claims) > 0 && !r.Force && !r.Confirm {
@@ -346,12 +347,22 @@ func (a *App) checkNewWork(want []string) error {
 		if hit == "" {
 			return nil
 		}
-		lines = append(lines, fmt.Sprintf("%s covers %s (changed by %s)", c, hit, changed[hit]))
+		lines = append(lines, fmt.Sprintf("%s covers %s (changed by %s)", c, hit, a.ownerState(changed[hit])))
 	}
 	return fmt.Errorf("%w: every claim covers work landed or queued tasks already did: %s. "+
-		"A task with no new work of its own is usually a stack repair: message the owning task, or call restack if the base moved or the stack is flagged at risk; never fix it with git. "+
-		"Ask the user before spawning it anyway with confirm",
+		"A task with no new work of its own is usually a stack repair. The owning task's agent is usually gone once its work landed or queued, so a message to it reaches no one (#340). "+
+		"Call restack if the base moved or the stack is flagged at risk; for a repair restack can't do, call spawn again with confirm=true once the user agreed. Never fix it with git",
 		ErrNeedsConfirm, strings.Join(lines, "; "))
+}
+
+// ownerState is "t3 (landed)": a task id with its status, so a refusal says
+// whether the owner can still answer.
+func (a *App) ownerState(id string) string {
+	t, err := a.Store.Task(id)
+	if err != nil {
+		return id
+	}
+	return id + " (" + t.Status + ")"
 }
 
 // trainFiles maps each file a landed or queued task changed to that task.
@@ -381,6 +392,26 @@ func (a *App) trainFiles() map[string]string {
 		}
 	}
 	return out
+}
+
+// conflictErr is conflictErr with each owner's status and what to do when
+// its agent is gone (#340).
+func (a *App) conflictErr(c map[string]string) error {
+	var lines, owners []string
+	for want, owner := range c {
+		id, glob, _ := strings.Cut(owner, " ")
+		lines = append(lines, fmt.Sprintf("%s overlaps %s, claim %s", want, a.ownerState(id), strings.Trim(glob, "()")))
+		if !slices.Contains(owners, id) {
+			owners = append(owners, id)
+		}
+	}
+	sort.Strings(lines)
+	sort.Strings(owners)
+	return fmt.Errorf("claim conflict: %s. "+
+		"An owner that is still working can be messaged, or waited for until it lands. "+
+		"When its agent is gone (stopped, orphaned or stuck), a message reaches no one: kill %s to release its claims and spawn again, "+
+		"or spawn with claims no live task holds",
+		strings.Join(lines, "; "), strings.Join(owners, ", kill "))
 }
 
 func conflictErr(c map[string]string) error {
