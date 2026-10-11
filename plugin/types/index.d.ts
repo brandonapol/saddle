@@ -1,7 +1,8 @@
 // The saddle mod's state contract (#166): one snapshot of saddle's state,
 // refreshed on a timer by hooks/register.tsx, that the pane, the needs-you
 // band and the commands read with `read($, snapshot)`; and the pane's own
-// view (#167): its tab and where its rows are scrolled.
+// view (#167): its tab and where its rows are scrolled; and the needs-you
+// band's (#168): the screen it peeked, if any.
 
 /** One task as `saddle status --json` lists it. */
 export type SaddleTask = {
@@ -22,11 +23,26 @@ export type SaddleTask = {
   worktree?: string
 }
 
+/** A PR whose CI is red, as `saddle status --json` lists it under ci_red. */
+export type SaddleCIRed = {
+  task: string
+  pr: string
+  head?: string
+  /** The checks that failed. */
+  checks?: string[]
+  /** The tasks stacked on it, held until it is green. */
+  held?: string[]
+  /** The task repairing it, if one is. */
+  repair?: string
+  attempts?: number
+}
+
 /** `saddle status --json`, the fields the mod reads; the rest pass through. */
 export type SaddleStatus = {
   integration: string
   warnings?: string[]
   tasks: SaddleTask[]
+  ci_red?: SaddleCIRed[]
   [field: string]: unknown
 }
 
@@ -108,8 +124,13 @@ export type SaddlePane = {
   offset: number
 }
 
+/** The needs-you band's view: the task whose screen it shows, if any. */
+export type SaddleBand = {
+  peek: { task: string; screen: string } | null
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    saddle: { snapshot: SaddleSnapshot | null; pane: SaddlePane }
+    saddle: { snapshot: SaddleSnapshot | null; pane: SaddlePane; band: SaddleBand }
   }
 }

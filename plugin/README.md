@@ -19,12 +19,16 @@ settings hooks under `hooks`. A session on an older Claude Code ignores
   GitHub. The result is written to `$.state` as `saddle.snapshot`, and only
   when something a drawing shows has changed. That write redraws every hook
   that read the snapshot.
-  It also registers `/saddle-pane` and draws the saddle pane (below).
+  It also registers `/saddle-pane`, draws the saddle pane and draws the
+  needs-you band (both below).
 - `hooks/snapshot.ts`: the pure parts: parsing each command's JSON, change
   detection and the version check.
 - `hooks/pane.ts`: the pane's rows for each tab, built from the snapshot.
-- `types/index.d.ts`: the state contract (`SaddleSnapshot`, and the pane's
-  view `SaddlePane`: its tab and scroll offset). Later hooks
+- `hooks/needsyou.ts`: the needs-you band's items, built from the snapshot,
+  and the saddle command each of its buttons runs.
+- `types/index.d.ts`: the state contract (`SaddleSnapshot`, the pane's
+  view `SaddlePane`: its tab and scroll offset, and the band's `SaddleBand`:
+  the screen Peek fetched). Later hooks
   (the pane, the needs-you band, the commands) read it with
   `read($, atom({ plugin: 'saddle', key: 'snapshot' } as const, null))`.
 
@@ -51,6 +55,34 @@ switch tabs. Any refresh that failed shows as a `!` line at the top.
 `saddle status --json` doesn't report an agent's live activity yet. Until it
 does, the activity line falls back to the failure reason, the train state or
 the count of pending notices.
+
+### The needs-you band
+
+Above the prompt, a band lists every task that waits on a person or the
+orchestrator, one line each: `‼ t54 (title): what it needs`. It hides when
+nothing is pending, and while a survey holds the band. Like the pane, it draws
+only from the snapshot. A task shows when:
+
+- it waits on a prompt (`needs_you`);
+- it stopped without calling done (`idle`);
+- it conflicted, or its tests failed in the train;
+- its PR's CI is red (`ci_red` in `saddle status --json`, or failing checks in
+  its stack);
+- the stack sentinel flagged its PR at risk;
+- it is held in the merge train.
+
+Each line has buttons, shown where they apply:
+
+- **Peek** (a live task with a window): runs `saddle peek <task> -n 15` and
+  shows its screen under the band. Press it again, or Close, to hide it.
+- **Ask Claude**: submits a `[saddle]` prompt naming the task and what it
+  needs, so the orchestrator handles it.
+- **Land**: `saddle land`, for a task in the train.
+- **Hold** / **Release**: `saddle queue hold|release <task>` for a train
+  entry, else `saddle automerge hold|release <task>` for its PR stack.
+
+Land, Hold and Release toast the command's first line of output, or what
+failed. The next refresh redraws the band.
 
 ## Dev loop
 
