@@ -1,0 +1,52 @@
+# Release builds for saddle. The release workflow (.github/workflows/
+# release.yml) runs this on an owner-pushed vX.Y.Z tag, and as a --snapshot
+# dry run on every pull request. Locally: make release/snapshot.
+# docs/RELEASING.md explains the whole process.
+version: 2
+project_name: saddle
+
+builds:
+  - id: saddle
+    main: ./cmd/saddle
+    binary: saddle
+    env:
+      - CGO_ENABLED=0 # modernc.org/sqlite is pure Go, so every target cross-compiles
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    # The Makefile's GO_TAGS: only the tree-sitter grammars saddle uses.
+    tags: [grammar_subset, grammar_subset_go, grammar_subset_python]
+    ldflags:
+      - -s -w
+      - -X github.com/brandonapol/saddle/internal/cli.Version=v{{ .Version }}
+      - -X github.com/brandonapol/saddle/internal/cli.Commit={{ .FullCommit }}
+      - -X github.com/brandonapol/saddle/internal/cli.Date={{ .CommitDate }}
+    # The commit time, not the build time, so a rebuild is byte-identical.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: saddle
+    formats: [tar.gz]
+    # saddle upgrade (release.ArchiveName) and scripts/install.sh expect
+    # saddle_<version without v>_<os>_<arch>.tar.gz with saddle at the root.
+    name_template: "saddle_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [README.md, CHANGELOG.md]
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot+{{ .ShortCommit }}"
+
+# The notes come from CHANGELOG.md (saddle changelog --extract), passed with
+# --release-notes, so goreleaser's own commit-log changelog is off.
+changelog:
+  disable: true
+
+release:
+  github:
+    owner: brandonapol
+    name: saddle
+  prerelease: auto
+  mode: replace

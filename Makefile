@@ -62,8 +62,14 @@ endef
 # The version is the git description of HEAD: a tag when one points at it,
 # otherwise the commit, with -dirty for uncommitted changes. A dev build never
 # claims a released version. Override with VERSION=X.Y.Z.
+# The commit and its date are stamped too (saddle version --long), the same
+# three values .goreleaser.yaml stamps into release builds. The commit date,
+# not the build time, keeps rebuilds of one commit identical.
 VERSION    := $(or $(VERSION),$(shell git describe --tags --always --dirty 2>/dev/null),dev)
-GO_LDFLAGS := -ldflags "-X github.com/brandonapol/saddle/internal/cli.Version=$(VERSION)"
+COMMIT     := $(shell git rev-parse HEAD 2>/dev/null)
+BUILD_DATE := $(shell git log -1 --format=%cI 2>/dev/null)
+CLI_PKG    := github.com/brandonapol/saddle/internal/cli
+GO_LDFLAGS := -ldflags "-X $(CLI_PKG).Version=$(VERSION) -X $(CLI_PKG).Commit=$(COMMIT) -X $(CLI_PKG).Date=$(BUILD_DATE)"
 
 GOLANGCI_LINT_VERSION ?= v2.14.0
 
@@ -139,8 +145,10 @@ test/e2e: ## Run the end-to-end journeys (RUN=Journey to pick some; needs tmux)
 	E2E_GO_TAGS='$(GO_TAGS)' $(GO) test -tags '$(GO_TAGS) e2e' -race -count=1 -timeout $(E2E_GO_TIMEOUT) $(if $(RUN),-run '$(RUN)') ./internal/e2e/...
 
 .PHONY: test/scripts
-test/scripts: ## Test the shell scripts (scripts/upgrade.sh)
+test/scripts: ## Test the shell scripts (upgrade, release, install)
 	bash scripts/upgrade_test.sh
+	bash scripts/release_test.sh
+	bash scripts/install_test.sh
 
 .PHONY: test/race
 test/race: ## Run tests with the race detector
@@ -206,6 +214,27 @@ tidy: ## Tidy go.mod and go.sum
 .PHONY: fix
 fix: tidy format ## Tidy modules and format code
 	golangci-lint run --build-tags "$(GO_TAGS)" --fix ./... || true
+
+##@ Releasing
+
+.PHONY: changelog
+changelog: ## Add VERSION's section to CHANGELOG.md from the PRs merged since the last tag
+	# VERSION's origin is "file" when the Makefile computed it, not you.
+	if [ "$(origin VERSION)" = file ]; then echo "usage: make changelog VERSION=X.Y.Z"; exit 1; fi
+	$(GO) run $(GO_TAGFLAG) $(ENTRYPOINT) changelog --version v$(VERSION:v%=%) --write
+
+.PHONY: release
+release: ## Owner only: check main, run make check, tag vVERSION and push it (make release VERSION=X.Y.Z)
+	if [ "$(origin VERSION)" = file ]; then echo "usage: make release VERSION=X.Y.Z"; exit 1; fi
+	./scripts/release.sh "$(VERSION)"
+
+.PHONY: release/snapshot
+release/snapshot: ## Build every release archive locally without publishing (needs goreleaser)
+	if ! command -v goreleaser >/dev/null 2>&1; then
+	    echo "goreleaser is not installed: https://goreleaser.com/install/"
+	    exit 1
+	fi
+	goreleaser release --snapshot --clean --skip=publish
 
 ##@ Helpers
 

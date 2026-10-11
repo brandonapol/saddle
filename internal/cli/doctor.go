@@ -64,7 +64,7 @@ any check fails; warnings alone exit zero.`,
 			} else {
 				rs = doctor.Run(env)
 			}
-			rs = append(rs, shimCheck(filepath.Join(root, ".saddle", "shims"), os.Getenv))
+			rs = append(rs, shimCheck(filepath.Join(root, ".saddle", "shims"), os.Getenv), versionCheck(root, buildInfo()))
 			return reportDoctor(cmd.OutOrStdout(), rs, asJSON)
 		},
 	}
