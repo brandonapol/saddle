@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -117,4 +118,24 @@ func TestPluginEventsCommandRegistered(t *testing.T) {
 	if err != nil || cmd.Name() != "events" {
 		t.Fatalf("saddle plugin events: %v", err)
 	}
+}
+
+// The mod asks for events only when status counts some for t0, so status
+// must keep reporting the orchestrator's pending notices.
+func TestStatusCountsOrchestratorEventsForTheMod(t *testing.T) {
+	a := pluginRepo(t)
+	_ = a.Store.Notify(app.OrchestratorID, store.NoticeAction, "t1 needs you")
+	st, err := mcpserver.Status(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range st.Tasks {
+		if task.ID == app.OrchestratorID {
+			if task.Notices != 1 {
+				t.Fatalf("t0 pending_notices %d, want 1", task.Notices)
+			}
+			return
+		}
+	}
+	t.Fatal("status lists no t0")
 }
