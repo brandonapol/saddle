@@ -1,6 +1,6 @@
 // The saddle mod's hooks module (#165). It keeps the shared snapshot fresh,
 // draws it in the saddle pane (#167) and draws the needs-you band above the
-// prompt (#168); the commands build on it too. A timer runs
+// prompt (#168); the instant /saddle commands (#169) read it too. A timer runs
 // `saddle queue --json` (cheap: it reads the store and says whether the
 // engine runs), then while saddle runs `saddle status --json`, and `saddle
 // stack --json` less often since that one asks GitHub. The snapshot is
@@ -15,6 +15,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { SaddlePaneTab, SaddleSnapshot } from '../types'
+import { ARGUMENT_HINT, parseSaddle, replyOf } from './commands'
 import { ACTION_LABELS, actionArgv, askPrompt, needLine, needsYou } from './needsyou'
 import type { Need, NeedAction } from './needsyou'
 import { PINNED_ROWS, TABS, headerOf, scrolled, tabLines } from './pane'
@@ -47,6 +48,8 @@ const band = atom(bandRef, { peek: null })
 /** The pane's id: `$.ui.open`, its `ui.render` requestId and `ui.scroll`. */
 const PANE = 'saddle'
 const COMMAND = 'saddle-pane'
+/** The instant commands: `/saddle status`, `/saddle land` and the rest. */
+const SADDLE = 'saddle'
 /** Rows a wheel tick moves the body, as the /diff pane moves its hunks. */
 const WHEEL_ROWS = 3
 
@@ -179,6 +182,12 @@ export const register: Register = on => {
       return started
     }
     await $.command.register({ name: COMMAND, description: "Show or hide saddle's agents, claims, merge train and stacks" })
+    await $.command.register({
+      name: SADDLE,
+      description: 'Run a saddle command now, without a Claude turn: status, land, hold, release, restack, automerge',
+      argumentHint: ARGUMENT_HINT,
+      immediate: true,
+    })
     // A refresh that throws is retried by the next tick; the engine logs it.
     const tick = () => void refresh($, e.cwd).catch(() => undefined)
     $.clock.every(POLL_MS, tick)
@@ -198,6 +207,17 @@ export const register: Register = on => {
       ? await $.ui.open({ id: PANE, title: 'saddle' })
       : await $.ui.open({ id: PANE, title: 'saddle', focus: true, closeOnEscape: true })
     return { text: opened.isPlaced ? 'Saddle pane shown' : `Saddle pane waits: ${opened.reason}` }
+  })
+
+  // /saddle <command> runs at once, even mid-turn: one saddle command, its
+  // short reply printed as the command's output. It reads the snapshot only
+  // to tell a queued task's hold from a PR stack's.
+  on('command.run', { command: SADDLE }, async ($, e) => {
+    const p = parseSaddle(e.args, await read($, snapshot))
+    if ('usage' in p) {
+      return { text: p.usage }
+    }
+    return { text: replyOf(p.argv, await saddle($, await $.session.cwd(), p.argv, p.timeoutMs)) }
   })
 
   // The header and tabs stay put; the body is the plugin's own window over

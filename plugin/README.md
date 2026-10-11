@@ -19,13 +19,15 @@ settings hooks under `hooks`. A session on an older Claude Code ignores
   GitHub. The result is written to `$.state` as `saddle.snapshot`, and only
   when something a drawing shows has changed. That write redraws every hook
   that read the snapshot.
-  It also registers `/saddle-pane`, draws the saddle pane and draws the
-  needs-you band (both below).
+  It also registers `/saddle-pane` and `/saddle`, draws the saddle pane and
+  draws the needs-you band (all below).
 - `hooks/snapshot.ts`: the pure parts: parsing each command's JSON, change
   detection and the version check.
 - `hooks/pane.ts`: the pane's rows for each tab, built from the snapshot.
 - `hooks/needsyou.ts`: the needs-you band's items, built from the snapshot,
   and the saddle command each of its buttons runs.
+- `hooks/commands.ts`: parsing `/saddle`'s arguments into the saddle command
+  it runs, and its reply.
 - `types/index.d.ts`: the state contract (`SaddleSnapshot`, the pane's
   view `SaddlePane`: its tab and scroll offset, and the band's `SaddleBand`:
   the screen Peek fetched). Later hooks
@@ -83,6 +85,31 @@ Each line has buttons, shown where they apply:
 
 Land, Hold and Release toast the command's first line of output, or what
 failed. The next refresh redraws the band.
+
+### Instant /saddle commands
+
+`/saddle <command>` runs one saddle command and prints a short reply. It
+doesn't start a Claude turn, and it runs at once even while Claude is
+working, instead of waiting for the turn to end.
+
+| Command | Runs |
+| --- | --- |
+| `/saddle status` | `saddle status` |
+| `/saddle land` | `saddle land` |
+| `/saddle hold <task> [reason]` | `saddle queue hold <task> <reason>` for a queued task, else `saddle automerge hold <task>` for its PR stack |
+| `/saddle release <task>` | `saddle queue release <task>`, or `saddle automerge release <task>` as for hold |
+| `/saddle restack` | `saddle restack` |
+| `/saddle automerge on\|off\|status` | `saddle automerge on\|off\|status` (bare `automerge` is `status`) |
+
+Hold and release pick the queue or the stack from the snapshot, as the
+needs-you band's buttons do. A reply longer than 30 lines is cut short.
+`/saddle`, `/saddle help` or a bad command prints the usage and runs nothing.
+A failed command prints its exit code and the first line of its stderr.
+
+These are separate from the plugin's markdown commands, which Claude runs
+as a turn: `/saddle:status` (Claude sets saddle up if needed and summarizes
+status) and `/saddle:orchestrate`. Note the space in `/saddle status`
+versus the colon in `/saddle:status`.
 
 ## Dev loop
 
