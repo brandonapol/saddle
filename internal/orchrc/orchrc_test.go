@@ -35,8 +35,13 @@ func (f *recTmux) NewWindow(_, _, cmd string) (string, error) {
 	f.windows[id], f.cmds[id] = true, cmd
 	return id, nil
 }
-func (f *recTmux) KillWindow(id string) error { f.mu.Lock(); delete(f.windows, id); f.mu.Unlock(); return nil }
-func (f *recTmux) Alive(id string) bool       { f.mu.Lock(); defer f.mu.Unlock(); return f.windows[id] }
+func (f *recTmux) KillWindow(id string) error {
+	f.mu.Lock()
+	delete(f.windows, id)
+	f.mu.Unlock()
+	return nil
+}
+func (f *recTmux) Alive(id string) bool { f.mu.Lock(); defer f.mu.Unlock(); return f.windows[id] }
 func (f *recTmux) SendText(id, text string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
