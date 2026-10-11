@@ -137,7 +137,9 @@ func TestScratchConfigComesFromConfigPackage(t *testing.T) {
 	must(t, err)
 	must(t, os.WriteFile(cfg, append(b, []byte("max_bytes = \"1K\"\nmax_age = \"7m\"\n")...), 0o644))
 	old := scratchSpace
-	scratchSpace = func(p string) (scratch.Space, error) { return scratch.Space{Path: p, Free: 1 << 40, Total: 1 << 41}, nil }
+	scratchSpace = func(p string) (scratch.Space, error) {
+		return scratch.Space{Path: p, Free: 1 << 40, Total: 1 << 41}, nil
+	}
 	t.Cleanup(func() { scratchSpace = old; setScratchHeld(dir, false) })
 
 	if c := a.ScratchConfig(); c.Dir != dir || c.MaxBytes != 1024 || c.Age() != 7*time.Minute {
