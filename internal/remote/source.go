@@ -38,6 +38,7 @@ type Snapshot struct {
 	Limits      *PlanLimits            `json:"limits,omitempty" jsonschema:"plan-limit usage in the 5h and weekly windows"`
 	Stacks      []string               `json:"stacks,omitempty" jsonschema:"the PR stack bottom up from the base, the merge train queue in landing order, and named stacks, one line each"`
 	Versions    map[string]string      `json:"versions,omitempty" jsonschema:"a version per mutable object (queue, automerge, concurrency, stack); pass it as if_version to an action on that object"`
+	Paused      *PauseState            `json:"paused,omitempty" jsonschema:"remote control is panic-paused: actions are refused until the owner runs saddle remote resume on the host"`
 }
 
 // PlanLimits is plan-limit usage, compact.
