@@ -138,6 +138,9 @@ func (a *App) doneReady(task string) (store.Task, error) {
 	if err != nil {
 		return t, err
 	}
+	if err := a.reloadGateConfig(); err != nil {
+		return t, err
+	}
 	if t.Role != store.RoleWorker {
 		return t, errors.New("only worker tasks can be done")
 	}
