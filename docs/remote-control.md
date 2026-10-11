@@ -261,7 +261,11 @@ turn them into a prompt for the user. So push has two parts:
    # token = "…"                                    # optional, sent as Authorization: Bearer
    ```
 
-   Push works with the listener off; it doesn't need `[remote] enabled`.
+   Push is independent of the listener. `[remote] enabled` neither turns
+   it on nor off: push is off unless `[remote.push]` names an `ntfy` or
+   `url` target, and on whenever it does, with the listener on or off.
+   An empty or missing `[remote.push]` sends nothing
+   (`TestUnconfiguredPushSendsNothing`).
    The target must be https (plain http only to loopback) and redirects
    aren't followed. A failed send is logged to the event log (`kind =
    remote`) once per reason and not retried: the notice still waits in the
@@ -437,7 +441,8 @@ is covered by `TestParsePromptOptions`, `TestParsePromptTakesTheLastList`,
 `TestWaitTimeoutIsBounded`, `TestWaitNeedsYouStopsWithTheClient`,
 `TestPushSendsInterruptNoticesOnly`, `TestPushNtfy`,
 `TestPushFailureDoesNotLoseLaterNotices`, `TestPushTaskID`,
-`TestPushConfig`, `TestRunPushIsOffByDefault` and `TestPushLockIsExclusive`.
+`TestPushConfig`, `TestRunPushIsOffByDefault`, `TestUnconfiguredPushSendsNothing`
+and `TestPushLockIsExclusive`.
 
 ## Follow-up tickets
 
