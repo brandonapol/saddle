@@ -44,6 +44,8 @@ var ToolScopes = map[string]Scope{
 	"peek":      ScopeRead,
 	"ticket":    ScopeRead,
 	"needs_you": ScopeRead,
+	// wait_needs_you long-polls the needs-you queue (remote-only)
+	"wait_needs_you": ScopeRead,
 	// act
 	"message":       ScopeAct,
 	"send_keys":     ScopeAct,
@@ -74,7 +76,7 @@ var ToolScopes = map[string]Scope{
 }
 
 // RemoteOnlyTools exist only on the remote server, not in mcpserver.
-var RemoteOnlyTools = []string{"needs_you", ConfirmTool}
+var RemoteOnlyTools = []string{"needs_you", "wait_needs_you", ConfirmTool}
 
 // Allows reports whether a token holding granted may call tool.
 func Allows(granted []Scope, tool string) bool {
