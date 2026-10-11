@@ -82,7 +82,7 @@ restacked. Any failed merge stops the watcher; 'on' resumes it.`,
 			fmt.Fprintf(cmd.OutOrStdout(), "%s's stack is released\n", t.ID)
 			return nil
 		}),
-	})
+	}, automergeApproveCmd())
 	return cmd
 }
 

@@ -4,8 +4,9 @@
 // stacked task's PR, builds the stacks as a graph from the PRs' bases, and
 // merges the bottom PR of the first stack that is ready (checks green,
 // GitHub mergeable and CLEAN, not a draft, not labeled needs-human, not under
-// a stack-at-risk flag, based on base), then runs restack so the next PR
-// retargets to base and its CI runs again. Only one PR merges per tick.
+// a stack-at-risk flag, based on base, no PR in it above max_tier unless
+// approved; see policy.go), then runs restack so the next PR retargets to
+// base and its CI runs again. Only one PR merges per tick.
 //
 // A tick that finds the train lock held (a land's test gate, a restack, the
 // stack sentinel) merges nothing, says so in the saved status and retries
@@ -133,7 +134,13 @@ type Node struct {
 	Labels     []string `json:"labels,omitempty"`
 	AtRisk     string   `json:"at_risk,omitempty"` // why it must not merge: red CI on or below it, or the stack-at-risk flag
 	Error      string   `json:"error,omitempty"`   // GitHub couldn't be asked
-	head       string
+	// Tier and TierReasons are its risk tier under a max_tier policy (#332);
+	// Approved says it is approved past the gate at its head.
+	Tier        string   `json:"tier,omitempty"`
+	TierReasons []string `json:"tier_reasons,omitempty"`
+	Approved    bool     `json:"approved,omitempty"`
+	head        string
+	risk        *Result
 }
 
 // Stack is one PR stack, bottom first.
@@ -150,7 +157,10 @@ type Stack struct {
 	Collapse string `json:"collapse,omitempty"`
 	// Blocked says why a ready Next wasn't merged, or when it will be.
 	Blocked string `json:"blocked,omitempty"`
-	wait    bool   // Why is something to wait out, not a refusal
+	// Gated is the PR above max_tier that holds the stack until approved.
+	Gated     string `json:"gated,omitempty"`
+	gatedHead string
+	wait      bool // Why is something to wait out, not a refusal
 }
 
 // Status is the watcher's state and what it would do.
@@ -181,7 +191,11 @@ type State struct {
 	// Idle and IdleAt are the last idle event and when it was logged.
 	Idle   string    `json:"idle,omitempty"`
 	IdleAt time.Time `json:"idle_at,omitzero"`
-	Last   Status    `json:"last"` // the last check, for readers without GitHub
+	// Approved is the PRs approved past max_tier, at their heads; Approve
+	// owns it. TierNoticed is the head each gated PR was noticed at.
+	Approved    Approvals         `json:"approved,omitempty"`
+	TierNoticed map[string]string `json:"tier_noticed,omitempty"`
+	Last        Status            `json:"last"` // the last check, for readers without GitHub
 }
 
 // Load reads the state file; a missing one is the zero state.
@@ -260,6 +274,8 @@ type Watcher struct {
 	Collapse func(stack string) (merged string, err error)
 	Event    func(task, kind, data string)
 	Notify   func(action bool, text string) // to the orchestrator
+	// Tiers is the max_tier gate; nil gates nothing.
+	Tiers *TierPolicy
 	// Interval is how often Run checks.
 	Interval time.Duration
 	// BusyRetry is how soon Run checks again after a tick found the train busy.
@@ -470,6 +486,7 @@ func (w *Watcher) status(s State, nodes []Node) Status {
 	st.Enabled, st.Source = w.enabled(s)
 	if nodes != nil {
 		st.Stacks = w.graph(nodes, s.Holds)
+		w.gate(st.Stacks, s.Approved)
 	}
 	return st
 }
@@ -495,6 +512,7 @@ func (w *Watcher) read() ([]Node, error) {
 		} else {
 			n.Base, n.Draft, n.Checks, n.Mergeable, n.MergeState, n.Labels, n.head =
 				pr.Base, pr.Draft, pr.Checks, pr.Mergeable, pr.MergeState, pr.Labels, pr.HeadSHA
+			w.assess(&n)
 		}
 		if w.AtRisk != nil {
 			n.AtRisk = w.AtRisk(e.Task)
@@ -676,6 +694,7 @@ func (w *Watcher) Check() (Status, error) {
 
 	if st.Enabled && s.Stopped == "" {
 		w.logDecisions(&s, st.Stacks)
+		w.noticeTiers(&s, st.Stacks)
 		if i := slices.IndexFunc(st.Stacks, func(x Stack) bool { return x.Ready }); i >= 0 {
 			release() // restack takes the train lock itself
 			w.merge(&s, &st, st.Stacks[i])
@@ -693,7 +712,7 @@ func (w *Watcher) Check() (Status, error) {
 // now, with Last's toggle and holds taken from it.
 func (w *Watcher) record(s State, st *Status, stopped bool) (Status, error) {
 	_, err := update(w.Path, func(cur *State) error {
-		cur.Behind, cur.Logged = s.Behind, s.Logged
+		cur.Behind, cur.Logged, cur.TierNoticed = s.Behind, s.Logged, s.TierNoticed
 		if stopped {
 			cur.Stopped = s.Stopped
 		}
