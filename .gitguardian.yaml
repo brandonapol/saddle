@@ -1,0 +1,8 @@
+version: 2
+secret:
+  ignored_matches:
+    # Fake JWT test fixture for remote.Scrub, committed whole in e21d593
+    # (internal/remote/scrub_test.go) and since split at runtime. History
+    # can't be rewritten, so the occurrence is ignored by its SHA-256.
+    - name: remote scrub_test JWT fixture
+      match: 7c5b0229189828de2e99ca33b64d64b3430252dcfbf4b55a344f5cfdb1d1f1b1
