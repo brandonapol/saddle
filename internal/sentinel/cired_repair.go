@@ -2,6 +2,7 @@ package sentinel
 
 import (
 	"context"
+	"strings"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/ciwatch"
@@ -10,11 +11,20 @@ import (
 // onRed gets the failing checks' log tails for a layer that newly went red
 // and hands them to its repair; it returns what was done, for the notice.
 func (c *CIRed) onRed(ctx context.Context, l app.CIRedLayer) string {
-	note, err := c.App.CIRedRepair(l.Task, ciFailures(c.logs(ctx, l.PR)))
+	fails := ciFailures(c.logs(ctx, l.PR))
+	// A repair's own red PR, or a red history check, isn't a fix-task case (#405).
+	pre, handled, err := c.App.HistoryRepair(l.Task, fails)
+	if err != nil {
+		c.App.Store.Event(l.Task, EventCIRedError, "history repair: "+err.Error())
+	}
+	if handled {
+		return pre
+	}
+	note, err := c.App.CIRedRepair(l.Task, fails)
 	if err != nil {
 		c.App.Store.Event(l.Task, EventCIRedError, "repair: "+err.Error())
 	}
-	return note
+	return strings.TrimSpace(pre + " " + note)
 }
 
 // logs fetches the failing checks of pr with their log tails: a fresh

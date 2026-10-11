@@ -118,6 +118,12 @@ func (a *App) ciFailed(f ciwatch.Failed) error {
 		}
 		return a.Notify(OrchestratorID, store.NoticeAction, about+"\n"+fix.ID+" is already fixing it.")
 	}
+	if orig, ok := a.ciRepairOf(owner); ok {
+		a.Store.Event(owner.ID, eventRepairRefused, orig)
+		return a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
+			"%s\n%s is itself a CI repair for %s, so saddle won't spawn a repair of a repair (#405). Fold the fix into %s's repair yourself, or decide what to do with it.",
+			about, owner.ID, orig, orig))
+	}
 	if sib, thing, ok := a.dependencyExplains(owner.ID, f.Step+"\n"+f.LogTail); ok {
 		a.Store.Event(owner.ID, EventCIExplained, fmt.Sprintf("%s: %s adds %s", f.Check.Label(), sib, thing))
 		return a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(

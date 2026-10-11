@@ -278,6 +278,14 @@ type CI struct {
 	// Flaky are known flaky checks, as "workflow / job" labels or bare job
 	// names. A failure of one is rerun once before it counts as red (#234).
 	Flaky []string `toml:"flaky"`
+	// HistoryChecks adds checks that read every commit of a PR, not its
+	// tree, to the known ones (GitGuardian, gitleaks, TruffleHog, DCO,
+	// commit-message linters), as substrings of "workflow / job" labels.
+	// A red one rewrites the layer instead of spawning a fix (#405).
+	HistoryChecks []string `toml:"history_checks"`
+	// NoSecretGate turns off the land gate's scan of each commit for
+	// secret-shaped literals (#405).
+	NoSecretGate bool `toml:"no_secret_gate"`
 }
 
 // Sweeper configures `saddle sweep`, which merges open saddle PRs that are

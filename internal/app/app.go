@@ -201,6 +201,9 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if strings.TrimSpace(r.Title) == "" {
 		return t, errors.New("spawn: title is required")
 	}
+	if err := repairOfRepairErr(r.Title); err != nil {
+		return t, err
+	}
 	// Availability is checked for a chosen adapter, or a session default
 	// other than claude; the plain claude default spawns as it always has.
 	checkAvail := r.Adapter != "" || a.Cfg.Harness != config.HarnessClaude
