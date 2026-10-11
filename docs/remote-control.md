@@ -3,7 +3,8 @@
 Status: design plus a read-only spike (`internal/remote`, `saddle remote`),
 with server and transport hardening (#308), auth, scopes and audit
 (#309), the snapshot and needs-you queue (#310), push (#311), multi-repo
-addressing (#312) and remote-safe actions (#313) done. "What exists now"
+addressing (#312), remote-safe actions (#313), the TUI indicator (#314)
+and the doctor check (#315) done. "What exists now"
 below lists what is built. The remaining follow-up tickets at the end build
 the rest.
 
