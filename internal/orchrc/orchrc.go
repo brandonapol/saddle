@@ -80,6 +80,8 @@ type Session struct {
 	Name    string
 	Resumed bool // the window's claude resumes an earlier conversation
 	Reused  bool // the window was already running; nothing was started
+	Push    bool // [remote.push] is on, so the brief leaves interrupts to it
+	Launch  agent.Launch
 	// Attach is a script that shows the window in a terminal (the TUI's
 	// pane) without moving other clients of the tmux session.
 	Attach string
@@ -125,10 +127,10 @@ func Start(a *app.App, prompt string, push bool) (Session, error) {
 	if err != nil {
 		return Session{}, err
 	}
-	s := Session{Name: Name(a.Root)}
+	s := Session{Name: Name(a.Root), Push: push}
 	if st.Window != "" && a.Tmux.Alive(st.Window) && st.SessionID != "" {
 		// Still the orchestrator's: refresh its task (no window recorded).
-		if _, _, err := a.Orchestrator(); err != nil {
+		if s.Launch, _, err = a.Orchestrator(); err != nil {
 			return Session{}, err
 		}
 		s.State, s.Reused, s.Resumed = st, true, true
@@ -159,7 +161,7 @@ func Start(a *app.App, prompt string, push bool) (Session, error) {
 		return Session{}, err
 	}
 	a.Store.Event(app.OrchestratorID, "remote_control", fmt.Sprintf("session %s in window %s (resume %t)", st.SessionID, st.Window, l.Resume != ""))
-	s.State, s.Resumed = st, l.Resume != ""
+	s.State, s.Resumed, s.Launch = st, l.Resume != "", l
 	s.Attach, err = writeAttach(a, st.Window)
 	return s, err
 }
