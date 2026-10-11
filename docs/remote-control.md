@@ -361,12 +361,7 @@ then shuts down gracefully (5s) and frees the lock.
   busy, and retries every 30s. It reports each new reason once to the repo's
   event log (`kind = remote`). So a foreground serve can come and go, and
   `saddle up` takes over when it stops. Problems never stop `saddle up`.
-- **Wiring:** `internal/cli/root.go`'s `startWatchers` needs one line,
-  `wg.Go(func() { remote.RunManaged(ctx, a, nil) })`. #308, #310 and #311
-  couldn't touch that file (another task held it), so it is the one
-  remaining step for "serve and push under the engine and saddle up".
-  `RunManaged` runs both the listener and `[remote.push]`, so that one line
-  wires both.
+- **Wiring:** `startWatchers` in `internal/cli/root.go` runs `remote.RunManaged` beside the other watchers, so `saddle up` starts the managed server when `[remote] enabled` is set and stops it with `saddle up`. `RunManaged` runs both the listener and `[remote.push]`, so that one call wires both.
 
 ## The spike, hardened
 
