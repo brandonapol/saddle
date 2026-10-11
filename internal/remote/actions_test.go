@@ -4,12 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/store"
 )
 
 // fakeActor is a Source and an Actor whose state lives in memory. Call
@@ -471,5 +477,45 @@ func TestReadOnlySourceServesNoActions(t *testing.T) {
 	}
 	if res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "land"}); !callErr(res, err) {
 		t.Fatal("land ran on a read-only source")
+	}
+}
+
+// TestAppSourceActsThroughTheOrchestratorTools: against a real repo
+// state, State reads the queue and its version, and Call runs the
+// orchestrator's own tool, so the version moves with the change.
+func TestAppSourceActsThroughTheOrchestratorTools(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".saddle"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st := pushStore(t)
+	for _, id := range []string{"t4", "t5"} {
+		if err := st.CreateTask(store.Task{ID: id, Title: id, Role: store.RoleWorker, Status: store.Idle}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Enqueue(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src := AppSource{A: &app.App{Root: root, Cfg: config.Default(), Store: st}}
+	before, err := src.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []QueueEntry{{Task: "t4"}, {Task: "t5"}}; !slices.Equal(before.Queue, want) {
+		t.Fatalf("queue = %+v, want %+v", before.Queue, want)
+	}
+	if _, err := src.Call(context.Background(), "queue_hold", map[string]any{"task": "t5", "reason": "remote test"}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := src.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.Queue[1].Held || after.Versions()[ObjQueue] == before.Versions()[ObjQueue] {
+		t.Fatalf("after queue_hold: %+v, versions %v -> %v", after.Queue, before.Versions(), after.Versions())
+	}
+	if _, err := src.Call(context.Background(), "queue_hold", map[string]any{"task": "t9"}); err == nil {
+		t.Fatal("an orchestrator tool's error didn't come back")
 	}
 }

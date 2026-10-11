@@ -23,14 +23,16 @@ import (
 func Command(open func() (*app.App, error)) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remote",
-		Short: "Let other Claude Code sessions see this saddle (opt-in, read-only for now)",
-		Long: `Serves a read-only MCP server (status, needs_you) on a loopback address for
-Claude Code sessions that aren't the orchestrator: another terminal, or another
-machine through ssh -L. Off unless ~/.config/saddle/config.toml has
+		Short: "Let other Claude Code sessions see and steer this saddle (opt-in)",
+		Long: `Serves an MCP server (status, needs_you, peek, and with an admin token the
+actions, each confirmed) on a loopback address for Claude Code sessions that
+aren't the orchestrator: another terminal, or another machine through ssh -L.
+Off unless ~/.config/saddle/config.toml has
 
   [remote]
   enabled = true
   listen = "127.0.0.1:7431"   # loopback only
+  # repos = ["/src/saddle", "/src/quark"]   # serve several, at /mcp/<name>
 
 Every caller needs a token from 'saddle remote token create'. Tokens and the
 audit log live in ~/.config/saddle/remote (0600), never in the repo.
@@ -73,20 +75,24 @@ waits and takes over when it stops.`,
 				return err
 			}
 			defer a.Close()
-			h, audit, dir, err := appServer(a, cfg)
+			errOut := cmd.ErrOrStderr()
+			hs, err := appServer(a, cfg, func(f string, args ...any) { fmt.Fprintf(errOut, f+"\n", args...) })
 			if err != nil {
 				return err
 			}
-			defer func() { _ = audit.Close() }()
+			defer hs.close()
+			defer func() { _ = hs.audit.Close() }()
 			out := cmd.OutOrStdout()
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			s := &Service{Cfg: cfg, Handler: h, Dir: dir, Holder: fmt.Sprintf("saddle remote serve (pid %d) for %s", os.Getpid(), a.Root),
+			s := &Service{Cfg: cfg, Handler: hs.h, Dir: hs.dir, Holder: fmt.Sprintf("saddle remote serve (pid %d) for %s", os.Getpid(), a.Root),
 				OnServe: func(addr net.Addr) {
-					u := serveURL(cfg, addr)
-					fmt.Fprintf(out, "saddle remote: serving %s read-only at %s\n", a.Root, u)
-					fmt.Fprintf(out, "add it to a Claude Code session with:\n  claude mcp add --transport http saddle-remote %s --header \"Authorization: Bearer $SADDLE_REMOTE_TOKEN\"\n", u)
-					fmt.Fprintf(out, "audit log: %s (saddle remote audit)\n", dir)
+					for _, r := range hs.repos {
+						u := repoURL(cfg, addr, r.Name)
+						fmt.Fprintf(out, "saddle remote: serving %s at %s\n", r.Root, u)
+						fmt.Fprintf(out, "  claude mcp add --transport http saddle-%s %s --header \"Authorization: Bearer $SADDLE_REMOTE_TOKEN\"\n", r.Name, u)
+					}
+					fmt.Fprintf(out, "audit log: %s (saddle remote audit)\n", hs.dir)
 				}}
 			return s.Run(ctx)
 		},
@@ -136,6 +142,9 @@ Still off unless [remote] enabled = true. Calls are audited as ssh:NAME.`,
 				return errors.New("this repo isn't trusted: run saddle trust before exposing it")
 			}
 			cfg, _ := LoadConfig(UserConfigPath())
+			if err := cfg.CheckListed(a.Root); err != nil {
+				return err
+			}
 			dir, err := Dir()
 			if err != nil {
 				return err

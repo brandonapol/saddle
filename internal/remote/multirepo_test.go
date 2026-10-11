@@ -3,14 +3,18 @@ package remote
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/brandonapol/saddle/internal/app"
 )
 
 // repoSource is a read-only Source that says which repo it is.
@@ -237,5 +241,46 @@ func TestListedRepoCheck(t *testing.T) {
 	}
 	if err := (Config{}).CheckListed("/src/quark"); err != nil {
 		t.Fatalf("with no list every trusted repo is served: %v", err)
+	}
+}
+
+// TestServedReposOpensEachListedRepo: the host's own repo is reused, the
+// others are opened, and one that can't be opened, or that opens as
+// another repo (SADDLE_ROOT), is skipped and reported, not served.
+func TestServedReposOpensEachListedRepo(t *testing.T) {
+	host := &app.App{Root: "/src/saddle"}
+	var logs []string
+	open := func(root string) (*app.App, error) {
+		switch root {
+		case "/src/quark":
+			return &app.App{Root: root}, nil
+		case "/src/elsewhere":
+			return &app.App{Root: "/src/saddle", Store: pushStore(t)}, nil
+		}
+		return nil, errors.New("not a git repo")
+	}
+	repos, apps := servedRepos(host, []string{"/src/saddle", "/src/quark", "/src/gone", "/src/elsewhere"}, open,
+		func(f string, args ...any) { logs = append(logs, fmt.Sprintf(f, args...)) })
+	var names []string
+	for _, r := range repos {
+		names = append(names, r.Name+"="+r.Root)
+	}
+	if want := []string{"saddle=/src/saddle", "quark=/src/quark"}; !slices.Equal(names, want) {
+		t.Fatalf("served %v, want %v", names, want)
+	}
+	if repos[0].Src.(AppSource).A != host {
+		t.Fatal("the host's repo was opened again")
+	}
+	if len(apps) != 1 || apps[0].Root != "/src/quark" {
+		t.Fatalf("opened %v", apps)
+	}
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "/src/gone") || !strings.Contains(joined, "/src/elsewhere") {
+		t.Fatalf("skips not reported: %s", joined)
+	}
+
+	repos, apps = servedRepos(host, nil, open, func(string, ...any) {})
+	if len(repos) != 1 || repos[0].Name != "saddle" || len(apps) != 0 {
+		t.Fatalf("with no list: %+v %v", repos, apps)
 	}
 }
