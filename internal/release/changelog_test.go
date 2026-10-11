@@ -1,6 +1,7 @@
 package release
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -108,5 +109,20 @@ func TestInsertAndExtractSection(t *testing.T) {
 	}
 	if out, err := Insert("", sec); err != nil || !strings.HasPrefix(out, Header) {
 		t.Fatalf("Insert into empty = %q, %v", out, err)
+	}
+}
+
+// The checked-in CHANGELOG.md is one saddle changelog --write can extend,
+// and carries no attribution lines.
+func TestRepoChangelog(t *testing.T) {
+	b, err := os.ReadFile("../../CHANGELOG.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(b), Header) {
+		t.Fatalf("CHANGELOG.md does not start with release.Header")
+	}
+	if StripAttribution(string(b)) != strings.TrimSpace(string(b)) {
+		t.Fatal("CHANGELOG.md has AI attribution lines")
 	}
 }

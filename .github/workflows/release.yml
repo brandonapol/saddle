@@ -1,0 +1,93 @@
+# Releases (docs/RELEASING.md). An owner-pushed vX.Y.Z tag runs make check,
+# then goreleaser builds linux and darwin binaries for amd64 and arm64,
+# writes checksums.txt and publishes the GitHub Release with the tag's
+# CHANGELOG.md section as notes. Agents never push tags.
+#
+# Every pull request and push to main runs the same build as a --snapshot
+# dry run that publishes nothing, so a broken release config shows up in
+# review, not on release day.
+name: release
+on:
+  push:
+    branches: [main]
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GO_TAGS: grammar_subset grammar_subset_go grammar_subset_python
+
+jobs:
+  snapshot:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --snapshot --clean --skip=publish
+      - name: Verify the archives, checksums and stamped version
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -c checksums.txt
+          for p in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
+            ls saddle_*_"$p".tar.gz
+          done
+          mkdir -p check && tar -xzf saddle_*_linux_amd64.tar.gz -C check saddle
+          ./check/saddle version --long
+          commit="$(./check/saddle version --json | sed -n 's/.*"commit": *"\([^"]*\)".*/\1/p')"
+          test "$commit" = "$(git rev-parse HEAD)"
+
+  check:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: The tag must be on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: sudo apt-get update && sudo apt-get install -y tmux
+      - run: make setup/golangci-lint
+      - run: make check
+
+  publish:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Release notes from CHANGELOG.md
+        run: go run -tags "$GO_TAGS" ./cmd/saddle changelog --extract "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean --release-notes ${{ runner.temp }}/notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
