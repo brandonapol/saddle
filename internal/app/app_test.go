@@ -49,6 +49,8 @@ func runTests(m *testing.M) int {
 	defer func() { _ = os.RemoveAll(tmp) }()
 	for k, v := range map[string]string{
 		"XDG_CONFIG_HOME": filepath.Join(tmp, "config"),
+		// The default scratch root, and so spawned tasks' TMPDIRs (#327).
+		"XDG_CACHE_HOME": filepath.Join(tmp, "cache"),
 		// Tests act as nobody in particular unless they say otherwise; the
 		// ref guard Init installs reads these.
 		"SADDLE_ROOT":  "",
@@ -89,6 +91,7 @@ type fakeTmux struct {
 	sent    map[string][]string
 	names   map[string]string
 	screens map[string]string // what Capture returns per window
+	cmds    map[string]string // the command each window was opened with
 	n       int
 	timing  *tmux.Timing // delivery pace; nil uses the tmux defaults
 }
@@ -109,11 +112,15 @@ func (f *fakeTmux) NewSession(name, dir, cmd string) (string, error) {
 	f.session = true
 	return f.NewWindow(name, dir, cmd)
 }
-func (f *fakeTmux) NewWindow(name, _, _ string) (string, error) {
+func (f *fakeTmux) NewWindow(name, _, cmd string) (string, error) {
 	f.n++
 	id := fmt.Sprintf("@%d", f.n)
 	f.windows[id] = true
 	f.names[id] = name
+	if f.cmds == nil {
+		f.cmds = map[string]string{}
+	}
+	f.cmds[id] = cmd
 	return id, nil
 }
 func (f *fakeTmux) WindowName(id string) (string, error) { return f.names[id], nil }

@@ -527,6 +527,7 @@ func (a *App) landOne(id string, run *landRun) LandResult {
 		res.Note += " (landed, but state not saved: " + err.Error() + ")"
 	}
 	a.pruneCheckpoint(id) // the work is on integration now (#50)
+	a.removeTaskTmp(id)
 
 	if err := a.broadcastLanding(t, old, head, run); err != nil {
 		res.Note += " (broadcast incomplete: " + err.Error() + ")"

@@ -30,6 +30,8 @@ You are one of several %s agents working on this repo in parallel. Saddle coordi
 	if len(a.Cfg.Serial) > 0 {
 		fmt.Fprintf(&b, "- Serial files (owned by the merge train, do not edit): %s\n", strings.Join(a.Cfg.Serial, ", "))
 	}
+	// #327: env vars can't redirect a hardcoded path.
+	b.WriteString("- Scratch: put temp files, clones, builds and downloads under `$TMPDIR`, your own dir on disk that saddle removes when the task ends. Never use a hardcoded `/tmp/<name>`.\n")
 	fmt.Fprintf(&b, `
 ## Rules
 1. Stay in your worktree. A hook denies any write to a file another task has claimed, and the denial names the owner. Work around it (code against an interface, stub it in tests) instead of fighting it. Use the saddle `+"`claim`"+` tool to reserve paths before a large change.
