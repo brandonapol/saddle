@@ -69,7 +69,7 @@ func Handle(a *app.App, task string, in Input) *Output {
 		if d.Allow {
 			return nil
 		}
-		return deny(in, RuleWriteGuard, d.Reason)
+		return deny(in, RuleWriteGuard, d.Reason+ownerDiff(a, task, p))
 
 	case "PostToolUse":
 		markActive(st, task) // a tool ran, so any prompt it was waiting on was answered
