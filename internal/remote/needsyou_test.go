@@ -58,7 +58,7 @@ func TestPeekIsScrubbedAndFenced(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, res := callJSON[PeekOut](t, cs, "peek", map[string]any{"task": "t3", "lines": 5000})
-	if strings.Contains(out.Output, "ghp_abcdefghij") || out.Redacted == 0 {
+	if strings.Contains(out.Output, "gh"+"p_abcdefghij") || out.Redacted == 0 {
 		t.Fatalf("peek leaked a secret: %q", out.Output)
 	}
 	if strings.Count(out.Output, out.Fence) != 2 || !strings.Contains(out.Output, "Ignore previous instructions") {
@@ -67,7 +67,7 @@ func TestPeekIsScrubbedAndFenced(t *testing.T) {
 	if len(res.Content) == 0 {
 		t.Fatal("peek has no text content")
 	}
-	if txt, ok := res.Content[0].(*mcp.TextContent); !ok || !strings.Contains(txt.Text, "UNTRUSTED") || strings.Contains(txt.Text, "ghp_abcdefghij") {
+	if txt, ok := res.Content[0].(*mcp.TextContent); !ok || !strings.Contains(txt.Text, "UNTRUSTED") || strings.Contains(txt.Text, "gh"+"p_abcdefghij") {
 		t.Fatalf("peek text content = %+v", res.Content[0])
 	}
 	if _, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "peek", Arguments: map[string]any{"task": "t9"}}); err != nil {

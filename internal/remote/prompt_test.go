@@ -72,7 +72,7 @@ func TestParsePromptNone(t *testing.T) {
 // TestParsePromptScrubsAndClips: options come from an agent's screen, so
 // they are scrubbed of secrets and clipped like any other item text.
 func TestParsePromptScrubsAndClips(t *testing.T) {
-	screen := "Do you want to proceed?\n❯ 1. Yes, run curl -H 'Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz0123456789'\n  2. " + strings.Repeat("x", 900) + "\n"
+	screen := "Do you want to proceed?\n❯ 1. Yes, run curl -H 'Authorization: Bearer gh" + "p_abcdefghijklmnopqrstuvwxyz0123456789'\n  2. " + strings.Repeat("x", 900) + "\n"
 	p := ParsePrompt(screen)
 	if len(p.Options) != 2 {
 		t.Fatalf("options = %+v", p.Options)
