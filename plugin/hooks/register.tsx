@@ -1,6 +1,7 @@
 // The saddle mod's hooks module (#165). It keeps the shared snapshot fresh,
 // draws it in the saddle pane (#167) and draws the needs-you band above the
-// prompt (#168); the instant /saddle commands (#169) read it too. A timer runs
+// prompt (#168); the instant /saddle commands (#169) read it too, and it
+// wakes the orchestrator when an event needs a decision (#170). A timer runs
 // `saddle queue --json` (cheap: it reads the store and says whether the
 // engine runs), then while saddle runs `saddle status --json`, and `saddle
 // stack --json` less often since that one asks GitHub. The snapshot is
@@ -32,6 +33,7 @@ import {
   sameSnapshot,
   versionAtLeast,
 } from './snapshot'
+import { HEARTBEAT, backlogContext, hasEvents, parseEvents, planWake } from './wake'
 
 // The shared snapshot. Another hook in this module reads it with
 // `read($, snapshot)`, which subscribes its drawing to every change.
@@ -139,6 +141,41 @@ async function refresh($: EngineInterface, cwd: string) {
   }
 }
 
+// Waking the orchestrator (#170). Each tick writes the heartbeat that keeps
+// the settings hook and `saddle plugin wait` off, then, when status counts
+// events for t0, takes them and acts on planWake's plan. The routine backlog
+// is the module's: a reload drops at most what the toasts already showed.
+let backlog: string[] = []
+let isWaking = false
+
+async function wake($: EngineInterface, cwd: string) {
+  if (isWaking) {
+    return
+  }
+  isWaking = true
+  try {
+    await $.fs.write(`${cwd}/${HEARTBEAT}`, `${await $.clock.now()}\n`)
+    if (!hasEvents(await read($, snapshot))) {
+      return
+    }
+    const r = await saddle($, cwd, ['plugin', 'events', '--json'], 10000)
+    const got = 'text' in r ? parseEvents(r.text) : r
+    if ('error' in got) {
+      return
+    }
+    const plan = planWake(got.value, backlog)
+    backlog = plan.backlog
+    for (const t of plan.toasts) {
+      $.ui.toast(t)
+    }
+    if (plan.prompt !== null) {
+      await $.prompt.submit({ text: plan.prompt })
+    }
+  } finally {
+    isWaking = false
+  }
+}
+
 // press runs a band button: Peek fetches the task's screen into the band
 // (or closes it when it already shows), Ask Claude hands the item to the
 // orchestrator as a prompt, and the rest run their saddle command and toast
@@ -193,11 +230,26 @@ export const register: Register = (on, options) => {
       immediate: true,
     })
     // A refresh that throws is retried by the next tick; the engine logs it.
-    const tick = () => void refresh($, e.cwd).catch(() => undefined)
+    const tick = () =>
+      void refresh($, e.cwd)
+        .then(() => wake($, e.cwd))
+        .catch(() => undefined)
     $.clock.every(POLL_MS, tick)
     tick()
 
     return started
+  })
+
+  // The routine events the mod held back ride on the next message from the
+  // person, as the settings hook attached pending events to it. The mod's
+  // own wake prompt carries them itself.
+  on('prompt.submit', async ($, e, next) => {
+    const context = e.origin?.kind === 'plugin' ? null : backlogContext(backlog)
+    if (context === null) {
+      return next(e)
+    }
+    backlog = []
+    return next({ ...e, context: [...(e.context ?? []), context] })
   })
 
   // /saddle-pane toggles the pane. Without the fullscreen layout it opens
