@@ -13,15 +13,17 @@ import (
 	"github.com/brandonapol/saddle/internal/store"
 )
 
-// EventDependsOn is the events-table kind recording a task's explicit after
-// edges, comma-separated, when it is spawned.
+// EventDependsOn is the events-table kind recording a task's after edges:
+// the explicit ones, comma-separated, when it is spawned, and each one saddle
+// learns later, with how it learned it (see addAfter).
 const EventDependsOn = "depends_on"
 
 // A task spawned with after builds on those tasks' unmerged work (#193):
 // a CI job that runs a make target another task adds, say. Their files need
 // not overlap, so clustering would otherwise publish them as unrelated PRs on
 // base and the dependent one fails CI until the other merges. The edges live
-// in .saddle/deps/<task>, one id per line, written once at spawn.
+// in .saddle/deps/<task>, one id per line: written at spawn, and added to
+// when saddle learns of one later (see prbase.go).
 
 func (a *App) depsPath(id string) string { return a.stateDir("deps", id) }
 
@@ -59,7 +61,28 @@ func (a *App) setAfter(id string, after []string) error {
 	return nil
 }
 
-// TaskAfter returns the tasks id was spawned to run after, or nil.
+// addAfter adds dep to id's after edges once it is known after spawn: the
+// task's text names dep's work, or someone retargeted its PR onto dep's
+// branch (#358, #359). why says how saddle learned it. It reports whether
+// the edge is new.
+func (a *App) addAfter(id, dep, why string) (bool, error) {
+	after := a.TaskAfter(id)
+	if dep == id || slices.Contains(after, dep) {
+		return false, nil
+	}
+	if err := os.MkdirAll(a.stateDir("deps"), 0o755); err != nil {
+		return false, err
+	}
+	after = append(after, dep)
+	if err := os.WriteFile(a.depsPath(id), []byte(strings.Join(after, "\n")+"\n"), 0o644); err != nil {
+		return false, err
+	}
+	a.Store.Event(id, EventDependsOn, dep+" ("+why+")")
+	return true, nil
+}
+
+// TaskAfter returns the tasks id runs after: those it was spawned after and
+// those addAfter recorded since, or nil.
 func (a *App) TaskAfter(id string) []string {
 	b, err := os.ReadFile(a.depsPath(id))
 	if err != nil {

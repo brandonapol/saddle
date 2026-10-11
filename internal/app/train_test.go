@@ -39,6 +39,7 @@ func originWithGh(t *testing.T, a *App) (string, func() []string) {
 	must(t, os.MkdirAll(bin, 0o755))
 	log := filepath.Join(bin, "gh.log")
 	// pr view answers from a per-PR file (see setPR), else as an open PR;
+// issue view answers from a per-issue file (see setIssue);
 	// pr edit --base fails on a closed or merged PR, as GitHub does.
 	script := `#!/bin/sh
 echo "$*" >> "` + log + `"
@@ -49,6 +50,8 @@ case "$1 $2" in
 	echo "https://github.com/o/r/pull/$n" ;;
 "pr view")
 	if [ -f "$f" ]; then cat "$f"; else echo '{"state":"OPEN","mergeable":"MERGEABLE","baseRefName":""}'; fi ;;
+"issue view")
+	if [ -f "` + bin + `/issue-$3" ]; then cat "` + bin + `/issue-$3"; else echo "GraphQL: Could not resolve to an issue" >&2; exit 1; fi ;;
 "pr edit")
 	if [ "$4" = "--base" ] && [ -f "$f" ] && grep -q '"CLOSED"\|"MERGED"' "$f"; then
 		echo "GraphQL: Cannot change the base branch of a closed pull request. (updatePullRequest)" >&2
@@ -122,6 +125,17 @@ func setPR(t *testing.T, url, state, baseRef string) {
 		t.Fatal("setPR: no fake gh; call originWithGh first")
 	}
 	must(t, os.WriteFile(filepath.Join(dir, "view-"+filepath.Base(url)), []byte(b), 0o644))
+}
+
+// setIssue makes the fake gh report issue n with title and body.
+func setIssue(t *testing.T, n int, title, body string) {
+	t.Helper()
+	dir := fakeGHDir(t)
+	if dir == "" {
+		t.Fatal("setIssue: no fake gh; call originWithGh first")
+	}
+	b := fmt.Sprintf(`{"title":%q,"body":%q}`, title, body)
+	must(t, os.WriteFile(filepath.Join(dir, fmt.Sprintf("issue-%d", n)), []byte(b), 0o644))
 }
 
 // remoteRev is the commit a branch points at in the bare origin, or "".

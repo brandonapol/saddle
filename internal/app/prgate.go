@@ -602,25 +602,34 @@ func (a *App) gatePublish(dir, task, target, head string) error {
 		target, short(head), r.check.Name, r.check.Cmd, gateTailLines, tail(r.out, gateTailLines))
 }
 
-// gateRestack runs the cheap checks (prepublish.cmd) on each layer restack
-// re-cut, records the lowest red one and tells the orchestrator. Layers restack
-// left as they were keep what the gate knew of them.
-func (a *App) gateRestack(plan []restacked) []GateRed {
+// gateRestack runs the cheap checks (prepublish.cmd) on the PR head of each
+// layer restack re-cut or moved: the head its PR will show, on its PR's own
+// base, as prs checks it, not the integration tip, which also holds layers
+// from other stacks (#358). It records the lowest red layer of each stack,
+// tells the orchestrator, and returns the layers republish must leave alone,
+// each mapped to the red layer it is held for. Layers restack left as they
+// were keep what the gate knew of them.
+func (a *App) gateRestack(rs restackPlan) ([]GateRed, map[int]string) {
 	checks := a.GateChecks(true)
 	if len(checks) == 0 {
-		return nil
+		return nil, nil
 	}
 	var jobs []gateJob
-	for i, r := range plan {
-		if !r.gone() && r.NewTo != r.To {
-			jobs = append(jobs, gateJob{i: i, task: r.ID, head: r.NewTo})
+	for _, i := range rs.order {
+		r, head := rs.live[i], rs.layout[i].Head
+		published := ""
+		if r.PR != "" {
+			published, _ = gitx.RevParse(a.Root, "refs/remotes/origin/"+r.Branch)
+		}
+		if r.NewTo != r.To || (r.PR != "" && head != published) {
+			jobs = append(jobs, gateJob{i: i, task: r.ID, head: head})
 		}
 	}
-	// Integration is linear, so every tip above a red one holds its change
-	// too: only the lowest red layer is flagged, and prs holds the rest.
+	// A PR head holds everything below it in its stack, so only the lowest
+	// red layer is flagged, and the layers above it are held for it.
 	redBelow := func(i int, red map[int]gateResult) bool {
 		for r := range red {
-			if r < i {
+			if above(rs.layout, i, r) {
 				return true
 			}
 		}
@@ -629,9 +638,10 @@ func (a *App) gateRestack(plan []restacked) []GateRed {
 	red, err := a.runGate(jobs, checks, redBelow)
 	if err != nil {
 		a.Store.Event("", "prepublish_error", "restack: "+err.Error())
-		return nil
+		return nil, nil
 	}
 	var reds []GateRed
+	held := map[int]string{}
 	checked := map[string]bool{}
 	for _, j := range jobs {
 		r, ok := red[j.i]
@@ -640,20 +650,29 @@ func (a *App) gateRestack(plan []restacked) []GateRed {
 			continue // proved nothing about the layer (#274)
 		}
 		checked[j.task] = true
-		if ok && !redBelow(j.i, red) {
-			reds = append(reds, GateRed{Task: j.task, Head: j.head, Check: r.check, Tail: tail(r.out, gateTailLines), TimedOut: r.timedOut})
+		if !ok || redBelow(j.i, red) {
+			continue
 		}
+		g := GateRed{Task: j.task, Head: j.head, Check: r.check, Tail: tail(r.out, gateTailLines), TimedOut: r.timedOut}
+		held[j.i] = j.task
+		for k := range rs.live {
+			if k != j.i && above(rs.layout, k, j.i) {
+				held[k] = j.task
+				g.Held = append(g.Held, rs.live[k].ID)
+			}
+		}
+		reds = append(reds, g)
 	}
 	if err := a.recordGate(reds, checked, GateSourceRestack); err != nil {
 		a.Store.Event("", "prepublish_error", "restack: "+err.Error())
 	}
 	for _, g := range reds {
 		_ = a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
-			"Restack re-cut %s, and its new tip %s fails its %s check (`%s`): reordering changed what that layer holds. "+
-				"prs won't publish it or the layers above it until it passes. Fix its own commits or reorder the stack so what it needs comes first.\n%s",
+			"Restack re-cut %s, and its new PR head %s fails its %s check (`%s`): reordering changed what that layer holds. "+
+				"Restack didn't push it, and prs won't publish it or the layers above it until it passes. Fix its own commits or reorder the stack so what it needs comes first.\n%s",
 			g.Task, short(g.Head), g.Check.Name, g.Check.Cmd, tail(g.Tail, 5)))
 	}
-	return reds
+	return reds, held
 }
 
 // gateSeed records that cmds just passed on head's tree, as the train's

@@ -255,9 +255,14 @@ func TestGateRestackFlagsRecutLayer(t *testing.T) {
 		{landedTask: landedTask{Task: t3, To: "old3"}, NewFrom: git(t, a.Root, "rev-parse", a.Cfg.Integration+"~2"), NewTo: git(t, a.Root, "rev-parse", a.Cfg.Integration+"~1")},
 		{landedTask: landedTask{Task: t4, To: git(t, a.Root, "rev-parse", a.Cfg.Integration)}, NewFrom: "x", NewTo: git(t, a.Root, "rev-parse", a.Cfg.Integration)},
 	}
-	reds := a.gateRestack(plan)
+	rs, err := a.restackLayout(plan)
+	must(t, err)
+	reds, held := a.gateRestack(rs)
 	if len(reds) != 1 || reds[0].Task != "t3" {
 		t.Fatalf("restack gate = %+v, want t3 red", reds)
+	}
+	if len(held) != 2 || held[0] != "t3" || held[1] != "t3" {
+		t.Fatalf("restack held = %v, want t3 and t4 above it held for t3", held)
 	}
 	s, err := a.Gate()
 	must(t, err)
