@@ -3,7 +3,6 @@ package tui
 import (
 	"strings"
 
-	"github.com/charmbracelet/x/ansi"
 	"time"
 
 	"testing"
@@ -84,7 +83,7 @@ func TestHeaderRepoPill(t *testing.T) {
 		m.app.Root = "/work/" + c.repo
 		m.tasks = []mcpserver.TaskView{{ID: "t5", Status: store.NeedsYou}}
 		top := strings.Split(m.viewHeader(), "\n")[0]
-		if got := ansi.Strip(top); got != c.want {
+		if got := top; got != c.want {
 			t.Errorf("width %d header top %q, want %q", c.width, got, c.want)
 		}
 		if w := lipgloss.Width(top); w > c.width {
