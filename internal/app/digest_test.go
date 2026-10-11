@@ -45,13 +45,16 @@ func TestDigestCoalescesWindow(t *testing.T) {
 	}
 	sent, err := a.FlushDigest(now.Add(16 * time.Minute))
 	must(t, err)
-	for _, want := range []string{"since ", "3 PRs merged (#12 #13 #14)", "2 tasks landed (t1 t2)", "CI green on 1"} {
+	for _, want := range []string{"Since ", "3 PRs merged (#12 #13 #14)", "2 tasks landed (t1 t2)", "CI green on 1"} {
 		if !strings.Contains(sent, want) {
 			t.Fatalf("digest %q lacks %q", sent, want)
 		}
 	}
 	if strings.Contains(sent, "\n") {
 		t.Fatalf("digest is not one line: %q", sent)
+	}
+	if strings.Contains(sent, "notices --all") {
+		t.Fatalf("digest repeats the notices hint (#402): %q", sent)
 	}
 	ns := pendingOrch(t, a)
 	if len(ns) != 1 || ns[0].Kind != store.NoticeInfo || ns[0].Text != sent {
@@ -132,5 +135,49 @@ func TestDigestPreview(t *testing.T) {
 	must(t, err)
 	if !strings.Contains(line, "3 PRs merged") {
 		t.Fatalf("preview = %q", line)
+	}
+}
+
+// #402: consecutive digest lines merge into one rolling line that counts
+// everything since the first.
+func TestMergeDigestsRolls(t *testing.T) {
+	t.Parallel()
+	lines := []string{
+		"Since 09:23: 3 PRs merged (#12 #13 #14), restacked 3 times.",
+		"Since 09:40: 1 PR merged (#15), 1 task landed (t4), restacked once, stack checks clean.",
+		"Since 10:02: 3 PRs merged (#16 #17 #18), restacked 3 times, stack checks clean (2x), CI green on 1.",
+	}
+	got := lines[0]
+	for _, l := range lines[1:] {
+		var ok bool
+		if got, ok = MergeDigests(got, l); !ok {
+			t.Fatalf("MergeDigests refused %q", l)
+		}
+	}
+	want := "Since 09:23: 7 PRs merged (#12 #13 #14 #15 #16 #17 #18), 1 task landed (t4), restacked 7 times, CI green on 1, stack checks clean (3x)."
+	if got != want {
+		t.Fatalf("merged =\n%s\nwant\n%s", got, want)
+	}
+	if _, ok := MergeDigests(got, "t3 landed on main"); ok {
+		t.Fatal("merged a non-digest line")
+	}
+	if IsDigest("Since we spoke: nothing.") {
+		t.Fatal("prose taken for a digest")
+	}
+}
+
+// #402: every line summarizeDigest writes parses back.
+func TestDigestLineRoundTrips(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	a.Cfg.Notices.DigestEvery = time.Minute
+	feedDigest(t, a)
+	sent, err := a.FlushDigest(time.Now().Add(time.Hour))
+	must(t, err)
+	if !IsDigest(sent) {
+		t.Fatalf("digest %q doesn't parse back", sent)
+	}
+	if again, ok := MergeDigests(sent, sent); !ok || !strings.Contains(again, "6 PRs merged") {
+		t.Fatalf("self-merge = %q, %v", again, ok)
 	}
 }
