@@ -145,7 +145,10 @@ type Sentinel struct {
 	Interval time.Duration
 	// BusyRetry is the wait after a cycle skipped because the train was busy.
 	BusyRetry time.Duration
-	lastErr   string
+	// Blockers files a GitHub issue for each blocker escalated since the
+	// last cycle (#407). Nil files none.
+	Blockers *app.BlockerFiler
+	lastErr  string
 	// posted is the sentinel comment last seen or written on each PR, so a
 	// quiet tick costs no GitHub calls.
 	posted map[string]Comment
@@ -160,7 +163,7 @@ func init() {
 
 // New returns a sentinel for a's stack that talks to GitHub through gh.
 func New(a *app.App) *Sentinel {
-	return &Sentinel{App: a, GH: &GH{Dir: a.Root}, Interval: DefaultInterval, BusyRetry: DefaultBusyRetry}
+	return &Sentinel{App: a, GH: &GH{Dir: a.Root}, Interval: DefaultInterval, BusyRetry: DefaultBusyRetry, Blockers: a.NewBlockerFiler()}
 }
 
 // Report is the outcome of one check.
@@ -207,6 +210,11 @@ func (s *Sentinel) Run(ctx context.Context) error {
 		// orchestrator once (#223).
 		if _, err := s.App.CheckStuck(time.Now().UTC()); err != nil {
 			s.App.Store.Event("", EventError, "stuck-stack alarm: "+err.Error())
+		}
+		if s.Blockers != nil {
+			if _, err := s.Blockers.FileBlockers(ctx); err != nil {
+				s.App.Store.Event("", EventError, "blocker issues: "+err.Error())
+			}
 		}
 		t.Reset(wait)
 		select {

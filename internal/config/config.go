@@ -73,6 +73,15 @@ type Config struct {
 	Notices Notices `toml:"notices"`
 	// Tmp is saddle's scratch root and its sweeper (internal/scratch).
 	Tmp Tmp `toml:"tmp"`
+	// Issues tunes the GitHub issues saddle files for blockers (#407).
+	Issues Issues `toml:"issues"`
+}
+
+// Issues is [issues]: saddle files or comments on a GitHub issue for every
+// blocker it escalates (docs/blocker-issues.md).
+type Issues struct {
+	// AutoFile files blocker issues. On by default; false opts out.
+	AutoFile bool `toml:"auto_file"`
 }
 
 // Tmp is [tmp]: where saddle keeps its scratch and when it sweeps it
@@ -477,6 +486,7 @@ func Default() Config {
 		Integration:  "saddle/integration",
 		Concurrency:  5,
 		CloseOnLand:  true,
+		Issues:       Issues{AutoFile: true},
 		Harness:      HarnessClaude,
 		AdapterOrder: []string{HarnessClaude, HarnessGrok, HarnessCodex},
 		Claude: Claude{
