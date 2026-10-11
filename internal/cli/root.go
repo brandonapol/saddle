@@ -27,7 +27,6 @@ import (
 	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/remote"
 	"github.com/brandonapol/saddle/internal/sentinel"
-	"github.com/brandonapol/saddle/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -126,6 +125,7 @@ Without a terminal, pass --trust (or set SADDLE_TRUST=1).`,
 
 func upCmd() *cobra.Command {
 	var skipDoctor, trusted bool
+	var wantsRC func(*app.App) bool
 	cmd := &cobra.Command{
 		Use:   "up [claude|grok|codex] [epic-file|-]",
 		Short: "Open the Saddle TUI: chat with the orchestrator, watch your agents",
@@ -143,7 +143,8 @@ keep the CLI they were spawned with.
   saddle up              harness from config (default claude)
   saddle up grok         Grok CLI for this run
   saddle up codex epic.md
-  saddle up ./grok       a file named grok, read as an epic`,
+  saddle up ./grok       a file named grok, read as an epic
+  saddle up --rc         orchestrator under Claude Code Remote Control`,
 		Args: cobra.MaximumNArgs(2),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			harness, _, err := parseUpArgs(args)
@@ -171,7 +172,8 @@ keep the CLI they were spawned with.
 			if err := a.CheckMergeSettings(cmd.ErrOrStderr()); err != nil {
 				return err
 			}
-			release, err := a.AcquireLock(app.LockUp)
+			rc := wantsRC(a)
+			release, err := a.AcquireLock(upLock(rc))
 			if err != nil {
 				return err
 			}
@@ -194,7 +196,7 @@ keep the CLI they were spawned with.
 			signal.Notify(term, syscall.SIGTERM) // Bubble Tea quits on it too
 			defer signal.Stop(term)
 			stop := startWatchers(cmd.Context(), a)
-			err = tui.Run(a, first)
+			err = runUpTUI(cmd.Context(), cmd.OutOrStdout(), a, first, rc)
 			stop()
 			if paused, perr := pauseOnTerm(term, a); perr != nil || paused != nil {
 				writePaused(cmd.OutOrStdout(), paused)
@@ -209,6 +211,7 @@ keep the CLI they were spawned with.
 	}
 	cmd.Flags().BoolVar(&skipDoctor, "skip-doctor", false, "start without running the doctor checks")
 	cmd.Flags().BoolVar(&trusted, "trust", false, "trust this repo without asking (remembered; see saddle trust)")
+	wantsRC = addRCFlag(cmd)
 	return cmd
 }
 
