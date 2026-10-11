@@ -90,8 +90,7 @@ func InstallRepoHooks(root string) ([]string, error) {
 		if err := os.MkdirAll(filepath.Dir(h.Path), 0o755); err != nil {
 			return done, err
 		}
-		_ = os.Remove(h.Path)
-		if err := os.WriteFile(h.Path, []byte(repoHookScript(h.Shipped)), 0o755); err != nil {
+		if err := writeHook(h.Path, repoHookScript(h.Shipped)); err != nil {
 			return done, err
 		}
 		done = append(done, h.Name)

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -93,6 +94,16 @@ func TestMain(m *testing.M) {
 			}
 			if l.Type == "control_request" && l.Request.Subtype == "interrupt" {
 				_ = enc.Encode(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": l.RequestID}})
+				// With ORCH_FAKE_RELEASE set, the turn ends only once that
+				// file exists, so the test can see the interrupt in flight.
+				if gate := os.Getenv("ORCH_FAKE_RELEASE"); gate != "" {
+					for {
+						if _, err := os.Stat(gate); err == nil {
+							break
+						}
+						time.Sleep(5 * time.Millisecond)
+					}
+				}
 				_ = enc.Encode(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "result": ""})
 			}
 			continue
@@ -189,7 +200,12 @@ func next(t *testing.T, p *Proc) Event {
 // An interrupt stops the turn mid tool call with a control request, keeps the
 // process and session, and reports the turn as interrupted, not as an error.
 func TestInterruptStopsTurnInToolCall(t *testing.T) {
-	p, err := Start(fake(t, "turn"))
+	// The fake used to answer at once, so its result could clear
+	// Interrupting() before the check below ran; it now waits for release.
+	release := filepath.Join(t.TempDir(), "release")
+	cmd := fake(t, "turn")
+	cmd.Env = append(cmd.Env, "ORCH_FAKE_RELEASE="+release)
+	p, err := Start(cmd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,6 +224,9 @@ func TestInterruptStopsTurnInToolCall(t *testing.T) {
 	}
 	if !p.Interrupting() {
 		t.Fatal("Interrupting() is false right after Interrupt")
+	}
+	if err := os.WriteFile(release, nil, 0o644); err != nil {
+		t.Fatal(err)
 	}
 	if e := next(t, p); e.Kind != Interrupted {
 		t.Fatalf("event = %+v, want Interrupted", e)
