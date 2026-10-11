@@ -145,6 +145,14 @@ against your default branch.
 Quitting the TUI leaves agents running. `saddle up` reconnects and
 `saddle down` stops them.
 
+**From your phone.** `saddle up --rc` runs the orchestrator as an
+interactive Claude Code session with Remote Control on, shown in the TUI's
+bottom pane. Open "saddle: <repo>" in the Claude mobile app or
+claude.ai/code to steer it, get a push when it needs you, and answer a
+decision card with `1`, `2` or `3`. Without the TUI, run
+`claude --remote-control` in the repo and then `/saddle:orchestrate`. See
+[remote-control.md](remote-control.md#steering-from-the-claude-app-409).
+
 ## Holds and auto-merge
 
 **Holds.** Saddle stops work that would go wrong, and always tells you how
