@@ -94,9 +94,11 @@ type TaskView struct {
 }
 
 type StatusOut struct {
-	Integration string     `json:"integration"`
-	Warnings    []string   `json:"warnings,omitempty"`
-	StackAtRisk *StackRisk `json:"stack_at_risk,omitempty"`
+	// Headline is the one-sentence state of the fleet and its colour (#403).
+	Headline    app.StateHeadline `json:"headline"`
+	Integration string            `json:"integration"`
+	Warnings    []string          `json:"warnings,omitempty"`
+	StackAtRisk *StackRisk        `json:"stack_at_risk,omitempty"`
 	// CIRed lists the PRs whose CI is red and the layers each holds back.
 	CIRed []app.CIRedHold `json:"ci_red,omitempty"`
 	// OrchestratorContext is how full the orchestrator's context is; absent
@@ -111,6 +113,34 @@ type StatusOut struct {
 	// Hidden counts tasks the compact status tool left out, by status (#340).
 	Hidden map[string]int `json:"hidden,omitempty" jsonschema:"tasks left out of the compact view, by status; ask with detail, state or ids to see them"`
 	Hint   string         `json:"hint,omitempty"`
+}
+
+// CatchUpIn picks where a catch-up starts.
+type CatchUpIn struct {
+	Since string `json:"since,omitempty" jsonschema:"a duration back from now (2h, 30m) or an RFC 3339 time; empty: the owner's last look"`
+}
+
+// CatchUpOut is the catch-up.
+type CatchUpOut struct {
+	Since   time.Time `json:"since"`
+	Bullets []string  `json:"bullets"`
+}
+
+// CatchUpSince parses since: a duration back from now, an RFC 3339 time, or
+// "" for the owner's last look.
+func CatchUpSince(a *app.App, since string, now time.Time) (time.Time, error) {
+	since = strings.TrimSpace(since)
+	if since == "" {
+		return a.CatchUpSince(now), nil
+	}
+	if d, err := time.ParseDuration(since); err == nil {
+		return now.Add(-d), nil
+	}
+	t, err := time.Parse(time.RFC3339, since)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("since %q: want a duration like 2h or an RFC 3339 time", since)
+	}
+	return t, nil
 }
 
 // OrchContext is the orchestrator's context use against its compact threshold.
@@ -273,6 +303,11 @@ type PRsOut struct {
 // Status builds the shared status view used by the MCP tool and the CLI.
 func Status(a *app.App) (StatusOut, error) {
 	out := StatusOut{Integration: a.Cfg.Integration, Warnings: a.Warnings()}
+	h, err := a.Headline(time.Now())
+	if err != nil {
+		return out, err
+	}
+	out.Headline = h
 	f, flagged, err := a.Flag()
 	if err != nil {
 		return out, err
@@ -415,6 +450,17 @@ func New(a *app.App, task string) *mcp.Server {
 			}
 			out, err = statusView(out, in, time.Now())
 			return nil, out, err
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "catchup", Description: "Catch me up: what happened since the owner last looked (their last keystroke in the TUI) or since a time you give, in at most 5 plain bullets: what waits on the owner first, then what is stuck, what got done, what started, and the state now. Built from the event log by saddle, not a model."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in CatchUpIn) (*mcp.CallToolResult, CatchUpOut, error) {
+			now := time.Now()
+			since, err := CatchUpSince(a, in.Since, now)
+			if err != nil {
+				return nil, CatchUpOut{}, err
+			}
+			bs, err := a.CatchUp(since, now)
+			return nil, CatchUpOut{Since: since, Bullets: bs}, err
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "brief", Description: "Your task's live brief: goal, branch, your claims, other tasks' claims you must not touch, serial files, your sub-tasks and when you are done."},

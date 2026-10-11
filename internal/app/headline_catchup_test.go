@@ -10,7 +10,10 @@ import (
 
 func TestCatchUpOrdersNeedsYouFirstAndCapsAtFive(t *testing.T) {
 	ts := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
-	ev := func(task, kind, data string) store.Event { ts = ts.Add(time.Minute); return store.Event{TS: ts, Task: task, Kind: kind, Data: data} }
+	ev := func(task, kind, data string) store.Event {
+		ts = ts.Add(time.Minute)
+		return store.Event{TS: ts, Task: task, Kind: kind, Data: data}
+	}
 	es := []store.Event{
 		ev("t10", "spawn", ""),
 		ev("t11", "spawn", ""),

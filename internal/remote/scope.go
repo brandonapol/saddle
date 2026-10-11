@@ -41,6 +41,7 @@ var ToolScopes = map[string]Scope{
 	// read
 	"status":    ScopeRead,
 	"brief":     ScopeRead,
+	"catchup":   ScopeRead,
 	"peek":      ScopeRead,
 	"ticket":    ScopeRead,
 	"needs_you": ScopeRead,
