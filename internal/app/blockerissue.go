@@ -42,6 +42,11 @@ const (
 // task (saddle blockers handfix). Its text goes into the task's blocker issue.
 const EventHandFix = "hand_fix"
 
+// eventStallRouted is written when the stall budget routes around a stuck
+// layer. Its comment goes on the blocker issue already filed for the task,
+// never a new one.
+const eventStallRouted = "stall_routed"
+
 // Events the blocker filer writes.
 const (
 	eventBlockerFiled = "blocker_filed" // data: signature #number
@@ -332,6 +337,33 @@ func (f *BlockerFiler) HandFix(sig, task, fix string) error {
 		who, f.now().Format("2006-01-02"), fix))
 }
 
+// StallRouted comments the route-around recorded in data ("<pr url>
+// held=<tasks> after=<duration>") on the issue filed for sig.
+func (f *BlockerFiler) StallRouted(sig, task, data string) error {
+	all, err := f.GH.Issues("all")
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(all, func(is BlockerIssue) bool { return is.Signature() == sig })
+	if i < 0 {
+		return fmt.Errorf("no blocker issue with signature %s", sig)
+	}
+	url, rest, _ := strings.Cut(data, " ")
+	msg := fmt.Sprintf("Routed around %s", task)
+	for _, kv := range strings.Fields(rest) {
+		if v, ok := strings.CutPrefix(kv, "after="); ok && v != "" {
+			msg += " after " + v
+		}
+	}
+	msg += "; now a standalone PR " + url
+	for _, kv := range strings.Fields(rest) {
+		if v, ok := strings.CutPrefix(kv, "held="); ok && v != "" {
+			msg += ". Held until it merges: " + v
+		}
+	}
+	return f.GH.Comment(all[i].Number, msg+".")
+}
+
 // Body markers hold the signature and count as HTML comments, invisible on
 // GitHub but parseable from the body alone.
 const (
@@ -566,6 +598,16 @@ func (f *BlockerFiler) FileBlockers(ctx context.Context) ([]BlockerResult, error
 			// One recorded before the blocker is in its body already.
 			if sig := s.Last[e.Task]; sig != "" {
 				if err := f.HandFix(sig, e.Task, e.Data); err != nil {
+					ferr = err
+					break
+				}
+			}
+			s.After = e.ID
+			continue
+		}
+		if e.Kind == eventStallRouted {
+			if sig := s.Last[e.Task]; sig != "" {
+				if err := f.StallRouted(sig, e.Task, e.Data); err != nil {
 					ferr = err
 					break
 				}
