@@ -316,16 +316,34 @@ func (s *Store) Claim(task string, decide ClaimFunc) ([]string, error) {
 }
 
 func (s *Store) Release(task string, globs ...string) error {
+	_, err := s.ReleaseN(task, globs...)
+	return err
+}
+
+// ReleaseN drops task's claims on globs, or all of them when none are given,
+// and reports how many it removed.
+func (s *Store) ReleaseN(task string, globs ...string) (int, error) {
 	if len(globs) == 0 {
-		_, err := s.db.Exec(`DELETE FROM claims WHERE task = ?`, task)
-		return err
-	}
-	for _, g := range globs {
-		if _, err := s.db.Exec(`DELETE FROM claims WHERE task = ? AND glob = ?`, task, g); err != nil {
-			return err
+		r, err := s.db.Exec(`DELETE FROM claims WHERE task = ?`, task)
+		if err != nil {
+			return 0, err
 		}
+		n, err := r.RowsAffected()
+		return int(n), err
 	}
-	return nil
+	total := 0
+	for _, g := range globs {
+		r, err := s.db.Exec(`DELETE FROM claims WHERE task = ? AND glob = ?`, task, g)
+		if err != nil {
+			return total, err
+		}
+		n, err := r.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += int(n)
+	}
+	return total, nil
 }
 
 // ReplaceClaim swaps one glob for another (used when the rename map moves a claim).

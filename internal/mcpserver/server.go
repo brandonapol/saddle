@@ -63,6 +63,11 @@ type PathsIn struct {
 	Paths []string `json:"paths" jsonschema:"repo-relative paths or globs"`
 }
 
+type ReleaseIn struct {
+	Paths []string `json:"paths,omitempty" jsonschema:"claimed globs to give up, exactly as claimed; empty releases all of them"`
+	Task  string   `json:"task,omitempty" jsonschema:"orchestrator only: the task whose claims to release; defaults to your own"`
+}
+
 type DoneIn struct {
 	Summary string `json:"summary" jsonschema:"2-4 sentences: what changed and why; used as the PR description"`
 }
@@ -434,12 +439,33 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, r, err
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "release", Description: "Give up claims you no longer need so other tasks can use those paths."},
-		func(_ context.Context, _ *mcp.CallToolRequest, in PathsIn) (*mcp.CallToolResult, OK, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "release", Description: "Give up claims you no longer need so other tasks can use those paths. The orchestrator may pass task to release another task's claims. Errors when nothing matched."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in ReleaseIn) (*mcp.CallToolResult, OK, error) {
 			if err := self(); err != nil {
 				return nil, OK{}, err
 			}
-			return nil, OK{Message: "released"}, a.Store.Release(task, in.Paths...)
+			owner := task
+			if in.Task != "" && in.Task != task {
+				if task != app.OrchestratorID {
+					return nil, OK{}, fmt.Errorf("only the orchestrator can release another task's claims; ask it to free %s's", in.Task)
+				}
+				owner = in.Task
+			}
+			n, err := a.Store.ReleaseN(owner, in.Paths...)
+			if err != nil {
+				return nil, OK{}, err
+			}
+			if n == 0 {
+				hint := ""
+				if owner == app.OrchestratorID {
+					hint = "; pass task to release another task's claim"
+				}
+				if len(in.Paths) == 0 {
+					return nil, OK{}, fmt.Errorf("released nothing: %s holds no claims%s", owner, hint)
+				}
+				return nil, OK{}, fmt.Errorf("released nothing: %s holds no claim on %s (globs must match as claimed)%s", owner, strings.Join(in.Paths, ", "), hint)
+			}
+			return nil, OK{Message: fmt.Sprintf("released %d claim(s) of %s", n, owner)}, nil
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "List saddle tasks with status and merge-train state, plus warnings, heavy_runs (the machine's heavy-run queue: holders and waiters per class) while it is busy, stack_at_risk when the stack sentinel has flagged the PR stack, and orchestrator_context: how full your context is against the compact_at threshold. Compact by default: essentials per task, killed and merged tasks counted in hidden. Filter with state, ids or since; detail=true is the full dump with claims, branches and worktrees, and can be large."},
