@@ -1,12 +1,12 @@
 // The instant /saddle commands (#169): `/saddle status`, `land`, `hold
-// <task>`, `release <task>`, `restack` and `automerge on|off|status`. Each
+// <task>`, `release <task>`, `restack`, `catchup [since]` and `automerge on|off|status`. Each
 // runs one saddle command and shows a short reply, with no Claude turn, even
 // while one is in flight. register.tsx registers /saddle and runs what
 // parseSaddle returns; nothing here runs saddle.
 import type { SaddleSnapshot } from '../types'
 
 /** The hint drawn after /saddle in the typeahead. */
-export const ARGUMENT_HINT = 'status | land | hold <task> | release <task> | restack | automerge on|off|status'
+export const ARGUMENT_HINT = 'status | land | hold <task> | release <task> | restack | catchup [since] | automerge on|off|status'
 
 export const USAGE = [
   'Usage: /saddle <command>',
@@ -15,6 +15,7 @@ export const USAGE = [
   '  hold <task> [reason]     keep a task from landing or auto-merging',
   '  release <task>           let a held task land or auto-merge again',
   '  restack                  rebuild landed stacks',
+  '  catchup [since]          what happened since you last looked, or since 2h / a time',
   '  automerge on|off|status  turn auto-merge of ready PR stacks on or off, or show it',
 ].join('\n')
 
@@ -59,6 +60,13 @@ export function parseSaddle(args: string, s: SaddleSnapshot | null): Parsed {
       return noArgs(name, rest, ['land'], LAND_MS)
     case 'restack':
       return noArgs(name, rest, ['restack'], RESTACK_MS)
+    case 'catchup': {
+      const [since, ...more] = rest
+      if (more.length) {
+        return { usage: `/saddle catchup takes one optional time\n${USAGE}` }
+      }
+      return { argv: since ? ['catchup', '--since', since] : ['catchup'], timeoutMs: SHORT_MS }
+    }
     case 'automerge': {
       const [sub = 'status', ...more] = rest
       if (!['on', 'off', 'status'].includes(sub) || more.length) {
