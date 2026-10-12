@@ -3,12 +3,20 @@ package hook
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
 )
+
+// The hook's 200ms diff budget keeps a denial fast in a live session, failing
+// open past it. Tests run beside other agents' gates at load average 50+,
+// where git alone can take longer, so they lift it and check the diff, not
+// the clock (#425). TestDenyFailsOpenWhenDiffIsLate keeps the bound covered.
+func init() { diffTimeout = time.Minute }
 
 // denyReason runs a PreToolUse Edit of rel in task's worktree and returns the
 // deny reason, failing the test if the write was allowed.
@@ -126,6 +134,60 @@ func TestDenyWithoutOwnerAddsNoDiff(t *testing.T) {
 	a.Cfg.Serial = []string{"a.go"}
 	t2, _ := a.Spawn(app.SpawnReq{Title: "two"})
 	if r := denyReason(t, a, t2.ID, t2.Worktree, "a.go"); strings.Contains(r, "has not changed") || strings.Contains(r, "```") {
+		t.Fatalf("reason = %s", r)
+	}
+}
+
+// slowGit puts a git first on PATH that sleeps before running the real one,
+// as git does on a machine at load average 50+ beside other agents' gates.
+func slowGit(t *testing.T, delay string) {
+	t.Helper()
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	shim := fmt.Sprintf("#!/bin/sh\nsleep %s\nexec %q \"$@\"\n", delay, real)
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// #425: a loaded gate made git slower than the hook's diff budget, so the
+// TestDeny* tests lost the owner's diff and failed on load alone.
+func TestDenyQuotesOwnersDiffWhenGitIsSlow(t *testing.T) {
+	a := setup(t)
+	t1, err := a.Spawn(app.SpawnReq{Title: "one", Claims: []string{"b.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t2, _ := a.Spawn(app.SpawnReq{Title: "two"})
+	if err := os.WriteFile(filepath.Join(t1.Worktree, "b.go"), []byte("package a\n\nvar Brand = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	slowGit(t, "0.3")
+	if r := denyReason(t, a, t2.ID, t2.Worktree, "b.go"); !strings.Contains(r, "+var Brand = 1") {
+		t.Fatalf("reason lacks the new file:\n%s", r)
+	}
+}
+
+// Past diffTimeout the denial still goes out, without the diff.
+func TestDenyFailsOpenWhenDiffIsLate(t *testing.T) {
+	a := setup(t)
+	t1, err := a.Spawn(app.SpawnReq{Title: "one", Claims: []string{"b.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t2, _ := a.Spawn(app.SpawnReq{Title: "two"})
+	if err := os.WriteFile(filepath.Join(t1.Worktree, "b.go"), []byte("package a\n\nvar Brand = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	slowGit(t, "0.3")
+	defer func(d time.Duration) { diffTimeout = d }(diffTimeout)
+	diffTimeout = 100 * time.Millisecond
+	r := denyReason(t, a, t2.ID, t2.Worktree, "b.go")
+	if !strings.Contains(r, "b.go is claimed by "+t1.ID) || strings.Contains(r, "```") {
 		t.Fatalf("reason = %s", r)
 	}
 }
