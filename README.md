@@ -19,6 +19,58 @@ orchestrator explaining a stale base and asking before it acts.*
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Roadmap: GitHub epics, milestone **M0: dogfood**
 
+## How Saddle works
+
+Every task goes through the same steps:
+
+```
+spawn ──> work ──> done ──> land ──> prs ──> merge
+  │        │        │        │        │        │
+  │        │        │        │        │        └ you (or auto-merge) merge on GitHub
+  │        │        │        │        └ push landed work, open stacked PRs
+  │        │        │        └ merge train: rebase, test, fast-forward integration
+  │        │        └ agent's branch is committed and queued
+  │        └ agent edits only its claimed paths, in its own worktree
+  └ new branch saddle/<task>, worktree, tmux window
+```
+
+The words you'll see most:
+
+- **task**: one agent's unit of work, with an id (`t3`), a branch, a
+  worktree, a tmux window and **claims**, the path globs only it may write.
+  The **orchestrator** (`t0`) plans and spawns tasks; **workers** write the
+  code.
+- **done**: the agent says it's finished. Its worktree must be clean and
+  committed. Its branch joins the **merge train**'s queue. Nothing lands
+  yet.
+- **land** (`saddle land`) runs the merge train. It takes the queued
+  branches one at a time, rebases each onto the local integration branch
+  (`saddle/integration`), runs your test command and lint gate, and
+  fast-forwards the integration branch to it. A conflict or red test goes
+  back to the agent that wrote the branch, and the train moves on. Land
+  never pushes, never opens PRs and never touches `main`. Run it after
+  agents call done; the orchestrator does this for you.
+- **prs** (`saddle prs`) pushes what has landed and opens or updates
+  **stacked PRs**: each PR (a **layer**) targets the one below it, and
+  unrelated work gets its own stack on `main`. It never merges.
+- **restack** rebuilds the landed stack on top of `origin/main` once `main`
+  has moved (you merged the bottom PR, or someone pushed). It replays each
+  task's own commits in landing order, skipping ones `main` already has.
+  Only if all of them apply does it move the branches, push them and
+  retarget the PRs. A conflict moves nothing and goes back to the task that
+  owns the commit. Restack never resolves conflicts itself and never lands
+  queued work. The orchestrator runs it when the **stack sentinel** flags
+  the stack **at risk**; by hand it's `saddle stack rebase <task>`.
+- **publish** (`saddle publish <task>`) is the escape hatch when the stack
+  is blocked but one task's work stands alone: it opens that task's PR
+  directly against `main`.
+- **ci-red**, **needs_you**, **escalated**: CI failed on a stacked PR (the
+  layers above it wait), an agent needs an answer, and a branch failed to
+  land twice and now waits for you.
+
+Every term, command and state is defined in the
+[glossary](docs/GLOSSARY.md).
+
 ## Quickstart
 
 ```sh
