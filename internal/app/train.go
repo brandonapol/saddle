@@ -480,6 +480,9 @@ func (a *App) landOne(id string, run *landRun) LandResult {
 		regenerated = " (regenerated " + strings.Join(taken, ", ") + ")"
 		a.Store.Event(id, "train_regen", strings.Join(taken, "\n"))
 	}
+	if msg := a.secretGate(t.Worktree); msg != "" {
+		return fail(store.TestFailed, "a commit adds a secret-shaped literal", msg)
+	}
 	if cmd := a.Cfg.Test.Cmd; cmd != NoTestCmd {
 		g := a.RunGateEnv(context.Background(), id, ShellGate(t.Worktree, cmd, a.GateTimeout()))
 		if errors.Is(g.Err, ErrGateInterrupted) {
