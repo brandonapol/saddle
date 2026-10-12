@@ -73,6 +73,12 @@ export const fleet: SaddleSnapshot = {
   changedAt: 1000,
 }
 
+// loaded is the options every session test runs with (#425). The kit's
+// default 5s per test is wall-clock: a gate beside other agents' `make check`
+// at load average 50+ blew it on a cold session start. A session's own time
+// comes from mock.clock, so this bound only has to catch a hang.
+export const loaded = { timeoutMs: 60_000 }
+
 // memoryState stands the host's $.state up beneath the plugin, in memory,
 // honoring ifVersion as the host does, so `update` and redraws work.
 export function memoryState(on: On, initial: Record<string, unknown> = {}) {

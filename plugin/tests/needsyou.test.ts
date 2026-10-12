@@ -9,7 +9,7 @@ import type { Engine } from 'claude-code/testing'
 import type { SaddleSnapshot } from '../types'
 import { actionArgv, askPrompt, needLine, needsYou } from '../hooks/needsyou'
 import { idle } from '../hooks/snapshot'
-import { fleet, memoryState } from './fixtures'
+import { fleet, loaded, memoryState } from './fixtures'
 
 // crowd is a fleet with one task for each thing that needs a person, and a
 // few that don't.
@@ -218,7 +218,7 @@ async function mountBand($: Engine, on: On, surface: 'terminal' | 'desktop', sna
 
 describe('band', () => {
   for (const surface of ['terminal', 'desktop'] as const) {
-    test(`lists what needs you, with its buttons (${surface})`, async ($, on) => {
+    test(`lists what needs you, with its buttons (${surface})`, loaded, async ($, on) => {
       const { ui } = await mountBand($, on, surface, crowd)
       expect((await ui.find({ key: 'need-t10' }))?.text).toBe('‼ t10 (Answer me): waiting on a prompt')
       expect(await ui.find({ key: 't10-peek' })).toBeDefined()
@@ -230,7 +230,7 @@ describe('band', () => {
       await ui.unmount()
     })
 
-    test(`hides when nothing is pending (${surface})`, async ($, on) => {
+    test(`hides when nothing is pending (${surface})`, loaded, async ($, on) => {
       const { ui } = await mountBand($, on, surface, calm)
       expect(await ui.find({ key: 'needsyou' })).toBeUndefined()
       await ui.unmount()
@@ -243,14 +243,14 @@ describe('band', () => {
     ['while a survey holds the band', crowd, true],
   ]
   for (const [when, snap, hasSurvey] of quiet) {
-    test(`hides ${when}`, async ($, on) => {
+    test(`hides ${when}`, loaded, async ($, on) => {
       const { ui } = await mountBand($, on, 'terminal', snap, { hasSurvey })
       expect(await ui.find({ key: 'needsyou' })).toBeUndefined()
       await ui.unmount()
     })
   }
 
-  test('Peek shows the screen under the band, and closes it', async ($, on) => {
+  test('Peek shows the screen under the band, and closes it', loaded, async ($, on) => {
     const band = await mountBand($, on, 'terminal', crowd)
     await band.press('t10-peek')
     expect(band.ran.map(r => r.argv)).toEqual([['saddle', 'peek', 't10', '-n', '15']])
@@ -261,7 +261,7 @@ describe('band', () => {
     await band.ui.unmount()
   })
 
-  test('Ask Claude submits a [saddle] prompt and runs nothing', async ($, on) => {
+  test('Ask Claude submits a [saddle] prompt and runs nothing', loaded, async ($, on) => {
     const band = await mountBand($, on, 'terminal', crowd)
     await band.press('t11-ask')
     expect(band.prompts).toHaveLength(1)
@@ -271,7 +271,7 @@ describe('band', () => {
     await band.ui.unmount()
   })
 
-  test('Land, Hold and Release run their saddle commands and say how it went', async ($, on) => {
+  test('Land, Hold and Release run their saddle commands and say how it went', loaded, async ($, on) => {
     const band = await mountBand($, on, 'terminal', crowd)
     await band.press('t12-land')
     await band.press('t12-hold')
@@ -290,7 +290,7 @@ describe('band', () => {
     await band.ui.unmount()
   })
 
-  test('says what failed when a command does', async ($, on) => {
+  test('says what failed when a command does', loaded, async ($, on) => {
     memoryState(on, { 'saddle/snapshot': crowd })
     beneath(on)
     const toasts: string[] = []

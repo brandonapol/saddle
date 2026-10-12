@@ -9,7 +9,7 @@ import type { Engine } from 'claude-code/testing'
 import type { SaddleSnapshot } from '../types'
 import { REPLY_LINES, USAGE, parseSaddle, replyOf } from '../hooks/commands'
 import { idle } from '../hooks/snapshot'
-import { memoryState } from './fixtures'
+import { loaded, memoryState } from './fixtures'
 
 // train has t1 queued, t2 held in the queue, and t3 in a PR stack only.
 const train: SaddleSnapshot = {
@@ -146,14 +146,14 @@ function run(args: string) {
 }
 
 describe('/saddle', () => {
-  test('is registered to run at once, without waiting for the turn', async ($, on) => {
+  test('is registered to run at once, without waiting for the turn', loaded, async ($, on) => {
     const { registered } = await started($, on, () => ({ exitCode: 0, stdout: '', stderr: '' }))
     const saddle = registered.find(c => c.name === 'saddle')
     expect(saddle?.immediate).toBe(true)
     expect(saddle?.argumentHint).toBeDefined()
   })
 
-  test('runs each command through the saddle CLI and shows its reply', async ($, on) => {
+  test('runs each command through the saddle CLI and shows its reply', loaded, async ($, on) => {
     const { ran } = await started($, on, argv => ({ exitCode: 0, stdout: `${argv.slice(1).join(' ')}: ok\n`, stderr: '' }))
     const replies: (string | undefined)[] = []
     for (const args of ['status', 'land', 'hold t1', 'release t3', 'restack', 'automerge off']) {
@@ -172,13 +172,13 @@ describe('/saddle', () => {
     expect(replies[5]).toBe('automerge off: ok')
   })
 
-  test('shows usage and runs nothing for a bad command', async ($, on) => {
+  test('shows usage and runs nothing for a bad command', loaded, async ($, on) => {
     const { ran } = await started($, on, () => ({ exitCode: 0, stdout: '', stderr: '' }))
     expect((await $.command.run(run('hold'))).text).toMatch(/^\/saddle hold needs a task/)
     expect(ran).toEqual([])
   })
 
-  test('says what failed', async ($, on) => {
+  test('says what failed', loaded, async ($, on) => {
     await started($, on, () => ({ exitCode: 1, stdout: '', stderr: 'error: t1 is not queued\n' }))
     expect((await $.command.run(run('release t1'))).text).toBe('saddle queue: exit 1: error: t1 is not queued')
   })
