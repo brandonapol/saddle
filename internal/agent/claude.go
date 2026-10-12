@@ -50,6 +50,12 @@ type Launch struct {
 	Effort        string // claude --effort
 	Advisor       string // claude --advisor model
 	SubagentModel string // SubagentModelEnv
+
+	// Remote Control (#409). SessionID names a new session (claude
+	// --session-id) when Resume is empty, so saddle knows its id up front.
+	// RemoteControl exposes the interactive session under that name.
+	SessionID     string
+	RemoteControl string
 }
 
 // claudeExtras are the advisor-mode arguments, in launch order.
@@ -236,6 +242,11 @@ func (l Launch) writeClaude() (string, error) {
 	}
 	if l.Resume != "" {
 		args = append(args, "--resume", shellQuote(l.Resume))
+	} else if l.SessionID != "" {
+		args = append(args, "--session-id", shellQuote(l.SessionID))
+	}
+	if l.RemoteControl != "" {
+		args = append(args, "--remote-control", shellQuote(l.RemoteControl))
 	}
 	if l.Prompt != "" {
 		args = append(args, `"$(cat "$run/prompt.md")"`)

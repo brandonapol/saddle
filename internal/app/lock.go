@@ -8,11 +8,20 @@ import (
 )
 
 // Holders of the repo's engine lock. Only one process at a time drives the
-// orchestrator: the TUI (saddle up) or the Claude Code plugin's engine.
+// orchestrator: the TUI (saddle up), saddle up --rc, whose orchestrator is
+// an interactive Claude Code session under Remote Control (#409), or the
+// Claude Code plugin's engine.
 const (
 	LockUp     = "up"
+	LockUpRC   = "up-rc"
 	LockEngine = "engine"
 )
+
+// SessionWakes reports whether owner leaves the orchestrator's notices to
+// an interactive Claude Code session, which takes them through the plugin
+// paths (the mod, saddle plugin wait, the hooks), rather than to the TUI's
+// headless process.
+func SessionWakes(owner string) bool { return owner == LockEngine || owner == LockUpRC }
 
 func (a *App) lockPath() string { return a.stateDir("tui.lock") }
 
@@ -56,7 +65,7 @@ func lockHeldError(owner string) error {
 	return errors.New("saddle up is already running for this repo in another terminal")
 }
 
-// LockOwner reports who holds the engine lock: LockUp, LockEngine, or "" when
+// LockOwner reports who holds the engine lock: LockUp, LockUpRC, LockEngine, or "" when
 // nobody does. A lock held by an older saddle that wrote no owner reads as LockUp.
 func (a *App) LockOwner() string {
 	f, err := os.OpenFile(a.lockPath(), os.O_RDONLY, 0)
@@ -70,7 +79,7 @@ func (a *App) LockOwner() string {
 	}
 	b, _ := os.ReadFile(a.lockPath())
 	switch owner := strings.TrimSpace(string(b)); owner {
-	case LockEngine:
+	case LockEngine, LockUpRC:
 		return owner
 	default:
 		return LockUp

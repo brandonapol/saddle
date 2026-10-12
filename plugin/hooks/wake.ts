@@ -46,16 +46,29 @@ export function wakes(e: SaddleEvent): boolean {
 }
 
 /**
- * Whether the orchestrator has events waiting: the plugin engine runs (under
- * `saddle up` they are the TUI's) and status counts notices for t0. The
- * snapshot refresh already reads status, so this costs no extra command.
+ * Engine-lock holders that leave the orchestrator's events to a session:
+ * the plugin engine, and `saddle up --rc`, whose orchestrator is this
+ * session under Remote Control (#409). Under plain `saddle up` they are
+ * the TUI's.
+ */
+export const SESSION_ENGINES = ['engine', 'up-rc']
+
+/**
+ * Whether the orchestrator has events waiting: a SESSION_ENGINES holder runs
+ * and status counts notices for t0. The snapshot refresh already reads
+ * status, so this costs no extra command.
  */
 export function hasEvents(s: SaddleSnapshot | null): boolean {
-  if (!s?.isLive || s.engine !== 'engine') {
+  if (!s?.isLive || !SESSION_ENGINES.includes(s.engine)) {
     return false
   }
   const t0 = s.status?.tasks.find(t => t.id === ORCHESTRATOR)
   return (t0?.pending_notices ?? 0) > 0
+}
+
+/** Whether a session with this SADDLE_TASK may host the mod: the user's own, or saddle up --rc's orchestrator. */
+export function ownsSession(task: string | null | undefined): boolean {
+  return !task || task === ORCHESTRATOR
 }
 
 /** How an event reads to Claude, as the settings hook delivered it. */

@@ -44,8 +44,11 @@ func pluginCmd() *cobra.Command {
 // plugin stays out of the way: the session is one of saddle's own agents
 // (they have SADDLE_TASK), or the repo hasn't run saddle init. The plugin is
 // enabled in every project, so it must never create .saddle/ by itself.
-func openPlugin(dir string) (*app.App, string) {
-	if os.Getenv("SADDLE_TASK") != "" {
+func openPlugin(dir string) (*app.App, string) { return openRepo(dir, false) }
+
+// openRepo is openPlugin; orch also admits the orchestrator task's session.
+func openRepo(dir string, orch bool) (*app.App, string) {
+	if t := os.Getenv("SADDLE_TASK"); t != "" && (!orch || t != app.OrchestratorID) {
 		return nil, "This session is one of saddle's own agents; the orchestrator tools are off here."
 	}
 	root := os.Getenv("SADDLE_ROOT")
@@ -61,6 +64,11 @@ func openPlugin(dir string) (*app.App, string) {
 	}
 	return a, ""
 }
+
+// openSession is openPlugin for the commands that wake the orchestrating
+// session (plugin events, plugin wait). They also run in the orchestrator
+// saddle up --rc starts, which is task t0 (#409).
+func openSession(dir string) (*app.App, string) { return openRepo(dir, true) }
 
 // saddleRoot finds the nearest directory at or above dir that saddle init
 // has set up, or "". It only stats files: the plugin's hook runs on every
@@ -281,7 +289,7 @@ func pluginBriefCmd() *cobra.Command {
 			if !onboard(cmd.OutOrStdout(), wd(), systemDoctor) {
 				return nil
 			}
-			a, why := openPlugin(wd())
+			a, why := openSession(wd())
 			if a == nil {
 				fmt.Fprintln(cmd.OutOrStdout(), why)
 				return nil
@@ -301,6 +309,8 @@ func writeBrief(w io.Writer, a *app.App) error {
 	switch a.LockOwner() {
 	case app.LockEngine:
 		fmt.Fprintln(w, "- Engine: running.")
+	case app.LockUpRC:
+		fmt.Fprintln(w, "- Engine: saddle up --rc is running it; its orchestrator is the Remote Control session it started.")
 	case app.LockUp:
 		fmt.Fprintln(w, "- ‼ saddle up is running in another terminal, and its TUI orchestrator gets the agents' events. Quit it before orchestrating from here (agents keep running), or use the TUI.")
 	default:
@@ -390,7 +400,7 @@ func pluginWaitCmd() *cobra.Command {
 wakes the session, as soon as an agent needs attention, conflicts, fails or
 CI breaks. Routine events (spawned, landed) are printed along with it.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			a, why := openPlugin(wd())
+			a, why := openSession(wd())
 			if a == nil {
 				return errors.New(why)
 			}
@@ -414,7 +424,7 @@ CI breaks. Routine events (spawned, landed) are printed along with it.`,
 // says so and exits cleanly, so the session can start another wait.
 func waitNotices(ctx context.Context, a *app.App, poll time.Duration, w io.Writer) error {
 	var warn string
-	if a.LockOwner() != app.LockEngine {
+	if !app.SessionWakes(a.LockOwner()) {
 		warn = "warning: saddle plugin engine is not running, so agents stuck on a prompt won't be reported. Start it in the background.\n\n"
 	}
 	t := time.NewTicker(poll)

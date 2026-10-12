@@ -69,6 +69,8 @@ the owner's claude.ai account. Its limits:
 Saddle should **document it as the zero-build path for the owner alone**. It
 is not the general answer.
 
+How to run it is in [Steering from the Claude app](#steering-from-the-claude-app-409) below.
+
 **(b) MCP over the network.** A `saddle remote serve` process speaks MCP
 streamable HTTP. Any Claude Code instance adds it with
 `claude mcp add --transport http … --header "Authorization: Bearer …"`. It
@@ -105,6 +107,92 @@ or (c) underneath, plus a second copy of the repo. It adds nothing.
   client address. When `[remote] repos` is set, stdio serves only a repo
   it lists.
 - **Also documented: (a)** for the owner who only wants their phone.
+
+## Steering from the Claude app (#409)
+
+Surface (a), made to work. Remote Control attaches only to *interactive*
+Claude Code sessions, and plain `saddle up` runs its orchestrator headless
+(`claude -p --input-format stream-json`), which the Claude app can't see.
+There are two ways to get an orchestrator the app can open.
+
+### With the TUI: `saddle up --rc`
+
+```sh
+saddle up --rc
+```
+
+or, to make it the default, in `.saddle/config.toml`:
+
+```toml
+[orchestrator]
+remote_control = true
+```
+
+- The orchestrator runs as an interactive Claude Code session in its own
+  window of the repo's tmux session, started with
+  `--remote-control "saddle: <repo>"`. It has the headless orchestrator's
+  settings, hooks, MCP config, model and permissions; its brief is the
+  plugin's plus a Remote Control section (`internal/orchrc`).
+- The TUI is unchanged except for the chat: the bottom pane shows the
+  orchestrator's window (alt+` toggles it, ctrl+r restarts it). Open
+  "saddle: <repo>" in the Claude mobile app or claude.ai/code to steer it.
+- **Wake-ups.** saddle up --rc holds the engine lock as `up-rc`, so the
+  orchestrator's notices go to the plugin's wake paths, exactly as for the
+  plugin engine: the saddle mod (Claude Code 2.1.287+ with the plugin
+  installed) submits a `[saddle]` prompt for interrupt-class notices; without
+  it the session keeps one background `saddle plugin wait` running, which
+  exits, and so wakes it, when one arrives. Its hooks attach pending notices
+  to its prompts and tool calls. Saddle never types into the window: the
+  orchestrator task records no window, so nothing can send keys to it.
+  Digest and silent notices never wake it (#222).
+- **Push.** On an interrupt notice or a decision card the session calls
+  Claude Code's PushNotification tool with the headline. When `[remote.push]`
+  (ntfy or a webhook) is configured, saddle pushes interrupt notices through
+  it instead, and the session only pushes cards it wrote itself, so nothing
+  buzzes twice.
+- **Phone-friendly.** Decision cards are plain markdown with numbered
+  options; a bare `1`, `2` or `3` from the phone picks one. "status?" gets
+  the `saddle catchup` headline.
+- **Durability.** The session id is chosen before the first launch
+  (`--session-id`) and kept in `.saddle/orchrc.json`. While its window lives,
+  `saddle up --rc` reattaches to it; after a restart it runs
+  `claude --resume <id> --remote-control …`, so the Claude app keeps the
+  same conversation. Delete `.saddle/orchrc.json` to start a fresh one.
+- **Stay awake.** Remote Control needs the machine awake. While autopilot is
+  on, saddle up holds a sleep inhibitor (`systemd-inhibit` on Linux,
+  `caffeinate` on macOS) and releases it when autopilot stops. `saddle
+  doctor` warns when neither is available.
+
+### Without the TUI: the plugin
+
+With the saddle plugin installed, the orchestrator can be your own session:
+
+```sh
+cd your-repo
+claude --remote-control "saddle: your-repo"
+```
+
+then `/saddle:orchestrate`. It works as-is: the plugin engine runs the
+watchers, the mod wakes the session, and `/saddle-pane` is the local view
+(#167). Open the session in the Claude app as above.
+
+### Safety
+
+Remote Control gives whoever holds your claude.ai account full orchestrator
+power: there are no scopes. Say "pause everything" (or "stop everything",
+"panic") and the orchestrator runs `saddle remote pause` at once: autopilot
+and auto-merge stop and remote actions are refused until
+`saddle remote resume`. Give teammates the scoped remote MCP server (surface
+(b) above), not Remote Control.
+
+### Manual check
+
+1. `saddle up --rc` in a repo with autopilot or a running task.
+2. Open "saddle: <repo>" in the Claude mobile app.
+3. Make a worker need a decision (for example, give it a task that hits a
+   permission prompt); the phone gets a push with the card's headline.
+4. Reply `1` from the phone and watch the orchestrator carry out option 1
+   in the TUI's pane.
 
 ## Token and scope model
 

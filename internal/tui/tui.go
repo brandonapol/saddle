@@ -26,6 +26,7 @@ import (
 	"github.com/brandonapol/saddle/internal/autopilot"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/orch"
+	"github.com/brandonapol/saddle/internal/orchrc"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/termpane"
 	"github.com/brandonapol/saddle/internal/triage"
@@ -191,6 +192,8 @@ type model struct {
 	term      *termpane.Term // the shell in the bottom pane; nil until opened or after it exits
 	termOpen  bool           // the pane is shown
 	termShell string         // overrides $SHELL, for tests
+
+	orc *orchrc.Session // the Remote Control orchestrator (saddle up --rc); nil runs the headless one
 }
 
 // quitWindow is how long a first ctrl+c keeps quitting armed.
@@ -250,19 +253,27 @@ type (
 
 // Run starts the orchestrator and the TUI. first, if set, is sent as the
 // user's opening message.
-func Run(a *app.App, first string) error {
-	l, resume, err := a.Orchestrator()
-	if err != nil {
-		return err
-	}
-	m := &model{app: a, launch: l, prev: map[string]string{}, screens: map[string]*screenState{}, follow: true, keys: newKeyMap(), prefix: tmuxPrefix(), scrub: mouseScrub{wait: escWait, pending: ttyPending()}}
+func Run(a *app.App, first string) error { return runTUI(a, first, nil) }
+
+// runTUI is Run, or RunRC when rc is set.
+func runTUI(a *app.App, first string, rc *orchrc.Session) error {
+	m := &model{app: a, prev: map[string]string{}, screens: map[string]*screenState{}, follow: true, keys: newKeyMap(), prefix: tmuxPrefix(), scrub: mouseScrub{wait: escWait, pending: ttyPending()}}
 	if !a.Cfg.Triage.Disabled {
 		m.jev = triage.FromEnv()
 	}
-	if err := m.startProc(resume); err != nil {
-		return err
+	if rc != nil {
+		m.useRC(*rc)
+	} else {
+		l, resume, err := a.Orchestrator()
+		if err != nil {
+			return err
+		}
+		m.launch = l
+		if err := m.startProc(resume); err != nil {
+			return err
+		}
+		defer m.stopProc()
 	}
-	defer m.stopProc()
 
 	// saddle up holds the repo's TUI lock, so this is the one process that
 	// meters usage, narrates and wakes agents sitting on old notices.
@@ -285,7 +296,9 @@ func Run(a *app.App, first string) error {
 	for _, c := range visibleHistory(hist) {
 		m.chat = appendChat(m.chat, chatLine{role: c.Role, text: c.Text})
 	}
-	if len(m.chat) == 0 {
+	if rc != nil {
+		m.chat = append(m.chat, chatLine{role: store.ChatEvent, text: rcIntro(*rc)})
+	} else if len(m.chat) == 0 {
 		m.chat = append(m.chat, chatLine{role: store.ChatEvent, text: "Tell me what to work on, e.g. \"work #46 and #47 in parallel\", or paste an epic. I'll plan it, run the agents out of sight, and tell you when one needs you."})
 	}
 
@@ -304,7 +317,7 @@ func Run(a *app.App, first string) error {
 	if first != "" {
 		m.sendUser(first)
 	}
-	_, err = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
 
@@ -606,6 +619,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
+		cmds = append(cmds, m.rcShow())
 
 	case tickMsg:
 		cmds = append(cmds, m.refresh(), tick(), m.heavyTick())
@@ -880,6 +894,9 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		return m.refresh(), true
 	case key.Matches(k, keys.Restart):
+		if m.orc != nil {
+			return m.rcRestart(), true
+		}
 		if err := m.startProc(m.sessionToResume()); err != nil {
 			m.addChat(store.ChatEvent, "Restart failed: "+err.Error())
 			return nil, true
@@ -1011,6 +1028,10 @@ func (m *model) sendUser(text string) {
 func (m *model) sendNow(text string) {
 	m.eventTurn = false
 	m.addChat(store.ChatUser, text)
+	if m.orc != nil {
+		m.addChat(store.ChatEvent, rcTypeHere)
+		return
+	}
 	if m.proc == nil {
 		m.addChat(store.ChatEvent, "The orchestrator isn't running. Press ctrl+r to restart it.")
 		return
@@ -1319,6 +1340,10 @@ func (m *model) watchScreens(ts []mcpserver.TaskView, screens map[string]string)
 
 // deliver sends queued events and saddle notices to the orchestrator once it is idle.
 func (m *model) deliver() {
+	if m.orc != nil {
+		m.rcDeliver()
+		return
+	}
 	if m.proc == nil || m.proc.Busy() {
 		return
 	}

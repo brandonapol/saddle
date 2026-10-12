@@ -68,7 +68,7 @@ func healthy(t *testing.T) *fakeEnv {
 			"claude --version": {out: "2.1.284 (Claude Code)"},
 		},
 		paths: map[string]bool{
-			"gh": true, "tmux": true, "claude": true, "go": true,
+			"gh": true, "tmux": true, "claude": true, "go": true, "systemd-inhibit": true, "caffeinate": true,
 			filepath.Join(root, ".saddle"):                true,
 			filepath.Join(root, ".saddle", "config.toml"): true,
 			"/usr/bin/saddle":                             true,
@@ -144,7 +144,7 @@ func TestHealthyRepoAllOK(t *testing.T) {
 		t.Fatal("Failed on a healthy repo")
 	}
 	want := []string{CheckConfig, CheckRemote, CheckDefaultBranch, CheckGH, CheckMergeSettings, CheckProtection, CheckGhStack,
-		CheckTestCmd, CheckTmux, CheckClaude, CheckHooks, CheckPush, CheckOrchAllow, CheckGate, CheckIgnored, CheckStateDB, CheckLeftovers}
+		CheckTestCmd, CheckTmux, CheckClaude, CheckHooks, CheckPush, CheckOrchAllow, CheckGate, CheckIgnored, CheckStateDB, CheckLeftovers, CheckInhibit}
 	if len(rs) != len(want) {
 		t.Fatalf("got %d checks, want %d", len(rs), len(want))
 	}
