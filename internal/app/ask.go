@@ -41,8 +41,7 @@ func (a *App) AskOwner(task, path, question string) (string, error) {
 	if owner == "" {
 		return "", fmt.Errorf("nobody claims %s; claim it yourself if you need it", path)
 	}
-	msg := fmt.Sprintf("Question from %s about %s (%s): %s\nAnswer with the saddle message tool to %s.", task, path, glob, question, task)
-	if err := a.Notify(owner, store.NoticeAction, msg); err != nil {
+	if err := a.OpenDecision(askOwnerCard(task, a.taskLabel(task), owner, path, glob, question)); err != nil {
 		return "", err
 	}
 	a.Store.Event(task, "ask", owner+" "+path)

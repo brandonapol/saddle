@@ -120,10 +120,7 @@ func (a *App) CIRedRepair(task string, fails []CIRedFailure) (string, error) {
 		l.Escalated = true
 		a.Store.Event(task, eventCIRedEscalated, fmt.Sprintf("%d repairs", n))
 		note, err := save(fmt.Sprintf("%d repairs ran and it is still red, so none more is spawned.", n))
-		return note, errors.Join(err, a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
-			"CI on %s's PR %s is still red after %d repair attempts (%s at %s). Saddle won't spawn another. "+
-				"Decide what to do: fix it on %s's layer, `saddle unstack %s` to drop it, or `saddle sentinel ack` to stop it holding the layers above (%s).",
-			task, l.PR, n, strings.Join(l.Checks, ", "), short(l.Head), task, task, strings.Join(l.Held, ", "))))
+		return note, errors.Join(err, a.OpenDecision(ciRepairCapCard(a.taskLabel(task), *l, n)))
 	}
 
 	fixer, fixCommit := "", ""

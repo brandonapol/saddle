@@ -607,7 +607,7 @@ func TestSentinelRunRaisesStuckStackAlarm(t *testing.T) {
 		ns, err := a.Store.PeekNotices(app.OrchestratorID, false)
 		must(t, err)
 		for _, n := range ns {
-			if strings.HasPrefix(n.Text, "Stuck stack:") && strings.Contains(n.Text, "layer t1") {
+			if strings.HasPrefix(n.Text, "‼ Stuck stack:") && strings.Contains(n.Text, "layer t1") {
 				return
 			}
 		}

@@ -270,7 +270,7 @@ func TestJourneyCIRedEscalatesAfterRepairAttempts(t *testing.T) {
 	}
 	ns, err := a.Store.TakeNotices("t0", true)
 	must(t, err)
-	if len(ns) != 1 || !strings.Contains(ns[0].Text, "after 2 repair attempts") {
+	if len(ns) != 1 || !strings.Contains(ns[0].Text, "after 2 repair attempts") || !strings.Contains(ns[0].Text, "If you ignore it:") {
 		t.Fatalf("orchestrator action notices = %+v, want one escalation", ns)
 	}
 	if len(rep.Red) != 1 || !rep.Red[0].Escalated {

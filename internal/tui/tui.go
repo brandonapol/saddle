@@ -914,7 +914,9 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 				m.sendSlash(c)
 				return nil, true
 			}
-			m.sendUser(text)
+			if !m.answerDecision(text) {
+				m.sendUser(text)
+			}
 			return nil, true
 		}
 		return nil, false
@@ -1229,6 +1231,7 @@ func (m *model) applyTriage(msg triagedMsg) {
 			return
 		}
 	case d.Route == triage.Human:
+		m.openRiskyCard(att)
 		att.text += " Saddle's triage (" + tag + ") flagged this for the user: tell them now, plainly, with your suggestion."
 		m.escalate(att, true)
 		return
