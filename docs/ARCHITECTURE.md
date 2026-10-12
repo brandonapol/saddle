@@ -324,7 +324,10 @@ Saddle keeps its temp files under one root, `[tmp] dir`, which defaults to
 `~/.cache/saddle/tmp`. It is read through `internal/config` like any other
 section. `saddle up`, `mcp`, `spawn` and `land` point `TMPDIR` and `GOTMPDIR`
 there, so gates (in per-run `<root>/<repo hash>/gate-*` dirs), the train and
-agents inherit it. `internal/scratch` sweeps entries under the root, plus
+agents inherit it. Each agent also gets its own `<root>/<repo hash>/task-<id>`
+dir as `TMPDIR`, `GOTMPDIR` and `CLAUDE_CODE_TMPDIR`. Kill and land remove it;
+done keeps it, and the sweep never removes it while the task is live.
+`internal/scratch` sweeps entries under the root, plus
 saddle-prefixed entries in the OS temp dir, that are older than `max_age` and
 held by no live process. It runs on `up`, every 10 minutes while `up` runs,
 and after done or kill. Before each spawn and on each sweep tick,
