@@ -15,7 +15,7 @@ import (
 )
 
 func doctorCmd() *cobra.Command {
-	var asJSON, fix, trusted bool
+	var asJSON, fix, trusted, predict bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check the repo, gh, tools and hooks saddle needs, with a fix for each problem",
@@ -28,7 +28,13 @@ that makes no model call).
 Each check is ok, warn or fail, and the output groups what isn't ok: what
 saddle fixed, what --fix can fix locally (it runs saddle init, keeping
 config.toml), what you need to do, and what is optional. Exits non-zero when
-any check fails; warnings alone exit zero.`,
+any check fails; warnings alone exit zero.
+
+--predict runs cheap probes for what is likely to stop an unattended run
+instead (branch protection vs auto-merge, gh token scopes, disk, load,
+Claude Code drift, required history scanners), weighted by this repo's
+escalations, and prints at most 7 ranked risks, each with a fix. saddle up
+runs it too and shows what it finds as one card. See docs/FAILURE-MODES.md.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Doctor must work before saddle init, so it doesn't open the app
 			// (which would create .saddle/).
@@ -41,6 +47,9 @@ any check fails; warnings alone exit zero.`,
 				if root, err = gitx.Root(wd); err != nil {
 					return fmt.Errorf("not in a git repo: %w", err)
 				}
+			}
+			if predict {
+				return runPredict(cmd.OutOrStdout(), root, asJSON)
 			}
 			env := doctor.WithSkillsProbe(root)
 			var rs []doctor.Result
@@ -70,6 +79,7 @@ any check fails; warnings alone exit zero.`,
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	cmd.Flags().BoolVar(&fix, "fix", false, "apply every local fix saddle can make safely (runs saddle init; keeps config.toml)")
+	cmd.Flags().BoolVar(&predict, "predict", false, "predict what is likely to stop an unattended run, ranked, each with a fix")
 	cmd.Flags().BoolVar(&trusted, "trust", false, "with --fix, trust this repo without asking (remembered; see saddle trust)")
 	return cmd
 }
