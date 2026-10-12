@@ -53,6 +53,7 @@ var (
 	sText    = lipgloss.NewStyle().Foreground(cText)
 	sBright  = lipgloss.NewStyle().Foreground(cBright).Bold(true)
 	sKey     = lipgloss.NewStyle().Foreground(cAccent)
+	sRepo    = lipgloss.NewStyle().Foreground(lipgloss.Color("#0E1013")).Background(cSonnet).Bold(true).Padding(0, 1)
 	sLogo    = lipgloss.NewStyle().Foreground(lipgloss.Color("#0E1013")).Background(cAccent).Bold(true).Padding(0, 1)
 	sSection = lipgloss.NewStyle().Foreground(cDim)
 )

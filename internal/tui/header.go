@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 // viewHeader is two lines at any width: the logo and the state headline
 // (#403) on top, then the counters line.
 func (m *model) viewHeader() string {
-	return renderHeadline(m.headline(time.Now()), m.width) + "\n" + m.viewCounters()
+	return renderHeadline(m.headline(time.Now()), m.repoName(), m.width) + "\n" + m.viewCounters()
 }
 
 // viewCounters is the header's second line: the current view always, the
@@ -170,4 +171,12 @@ func (m *model) orchModel() string {
 		return m.model
 	}
 	return m.harness() + " default"
+}
+
+// repoName is the working repo's directory name, shown next to the logo.
+func (m *model) repoName() string {
+	if m.app == nil || m.app.Root == "" {
+		return ""
+	}
+	return filepath.Base(m.app.Root)
 }

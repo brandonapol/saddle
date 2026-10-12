@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	"time"
 
 	"testing"
@@ -45,12 +47,12 @@ func TestHeaderHeadlineGolden(t *testing.T) {
 func TestRenderHeadlineClipsToWidth(t *testing.T) {
 	h := app.StateHeadline{Class: app.HeadlineWorking, Color: app.ColorGreen, Text: "Working: 3 agents running, 2 PRs merging. Nothing needs you."}
 	for _, w := range []int{8, 20, 40, 80} {
-		got := renderHeadline(h, w)
+		got := renderHeadline(h, "", w)
 		if lipgloss.Width(got) > w {
 			t.Errorf("width %d: %q is %d wide", w, got, lipgloss.Width(got))
 		}
 	}
-	if got := renderHeadline(h, 200); got != " SADDLE   ● "+h.Text {
+	if got := renderHeadline(h, "", 200); got != " SADDLE   ● "+h.Text {
 		t.Errorf("wide headline = %q", got)
 	}
 }
@@ -60,5 +62,32 @@ func TestHeadlineFromModelWithoutStore(t *testing.T) {
 	m.tasks = []mcpserver.TaskView{{ID: "t1", Status: store.Running}}
 	if h := m.headline(time.Now()); h.Class != app.HeadlineWorking || h.Color != app.ColorGreen {
 		t.Fatalf("headline = %+v", h)
+	}
+}
+
+// The repo name sits in its own pill next to SADDLE (#414): whole when it
+// fits, clipped with an ellipsis when it does not, never past the width.
+func TestHeaderRepoPill(t *testing.T) {
+	for _, c := range []struct {
+		width int
+		repo  string
+		want  string
+	}{
+		{80, "saddle", " SADDLE   saddle   ▲ Needs you: t5 is waiting at a prompt."},
+		{200, "saddle", " SADDLE   saddle   ▲ Needs you: t5 is waiting at a prompt."},
+		{80, strings.Repeat("longrepo", 10), " SADDLE   longrepolongrepolongrep…   ▲ Needs you: t5 is waiting at a prompt."},
+		{20, strings.Repeat("longrepo", 10), " SADDLE   lon… "},
+		{12, "saddle", " SADDLE "},
+	} {
+		m := newViewModel(c.width, 30)
+		m.app.Root = "/work/" + c.repo
+		m.tasks = []mcpserver.TaskView{{ID: "t5", Status: store.NeedsYou}}
+		top := strings.Split(m.viewHeader(), "\n")[0]
+		if got := top; got != c.want {
+			t.Errorf("width %d header top %q, want %q", c.width, got, c.want)
+		}
+		if w := lipgloss.Width(top); w > c.width {
+			t.Errorf("width %d: top line is %d wide", c.width, w)
+		}
 	}
 }

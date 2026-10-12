@@ -96,8 +96,11 @@ func headlineGlyph(class string) string {
 
 // renderHeadline is the header's top line at width: the logo, then the
 // headline, clipped with an ellipsis when it does not fit.
-func renderHeadline(h app.StateHeadline, width int) string {
+func renderHeadline(h app.StateHeadline, repo string, width int) string {
 	logo := sLogo.Render("SADDLE")
+	if pill := repoPill(repo, width-lipgloss.Width(logo)-1, width/3); pill != "" {
+		logo += " " + pill
+	}
 	room := width - lipgloss.Width(logo) - 2
 	if room < 4 {
 		return lipgloss.NewStyle().MaxWidth(width).Render(logo)
@@ -111,4 +114,19 @@ func renderHeadline(h app.StateHeadline, width int) string {
 		style = style.Bold(true)
 	}
 	return logo + "  " + style.Render(text)
+}
+
+// repoPill is the repo's name in a box of its own, a different colour from
+// the logo's, clipped with an ellipsis to at most limit cells and to what
+// room leaves. It is empty when the name is empty or not even a clipped
+// pill fits.
+func repoPill(repo string, room, limit int) string {
+	limit = min(limit, room)
+	if repo == "" || limit < 5 {
+		return ""
+	}
+	if r := []rune(repo); len(r) > limit-2 {
+		repo = string(r[:limit-3]) + "…"
+	}
+	return sRepo.Render(repo)
 }
