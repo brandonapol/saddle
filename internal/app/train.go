@@ -499,8 +499,11 @@ func (a *App) landOne(id string, run *landRun) LandResult {
 				"Your branch rebased cleanly onto %s, but `%s` failed on the result:\n%s\nFix it, commit, and call the saddle done tool again.", a.Cfg.Integration, cmd, tail(out, 40)))
 		}
 	}
-	if msg, err := a.trainLint(id, t.Worktree); err != nil {
+	if msg, env, err := a.trainLint(id, t.Worktree); err != nil {
 		res.State, res.Note = store.TrainError, "the lint gate was interrupted; stays queued"
+		return res
+	} else if env != nil {
+		res.State, res.Note = store.TrainError, "the lint gate failed on the environment ("+env.Signature+"), not the branch; stays queued"
 		return res
 	} else if msg != "" {
 		return fail(store.TestFailed, "lint failed", msg)
