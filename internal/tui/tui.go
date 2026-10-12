@@ -700,8 +700,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.conc != nil {
 			m.conc = msg.conc
 		}
-		// A state read before the TUI's own last change would undo it.
-		if msg.am != nil && msg.amGen == m.amGen {
+		// A state read before the TUI's own last change would undo it, and
+		// one read while an action runs would show its result while keys
+		// are still refused as busy (#429).
+		if msg.am != nil && msg.amGen == m.amGen && m.amBusy == "" {
 			m.am = msg.am
 		}
 		if msg.ap != nil && msg.apGen == m.apGen {
