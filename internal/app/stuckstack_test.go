@@ -34,6 +34,8 @@ func TestCheckStuckAlarmsOncePerStackAndReason(t *testing.T) {
 	landTask(t, a, "t3", "three", map[string]string{"three.txt": "three\n"})
 	_, _ = a.Store.TakeNotices(OrchestratorID, false)
 	now := time.Now().UTC()
+	// Long enough that no card's default runs here (#406).
+	write(t, a.Root, ".saddle/config.toml", "[stall]\nbudget = \"24h\"\n")
 
 	// Red for 10 minutes: not yet.
 	must(t, a.SetCIRed(CIRedState{Red: []CIRedLayer{{Task: "t2", PR: "https://github.com/o/r/pull/2", Head: "abc", Checks: []string{"CI / test"}, Since: now.Add(-10 * time.Minute)}}}))

@@ -271,6 +271,9 @@ func (a *App) OpenDecisions() ([]DecisionCard, error) {
 // whose ID is already open is not saved or sent again: one card per
 // blocker, never a re-ping.
 func (a *App) OpenDecision(c DecisionCard) error {
+	if b, ok := a.stallBudget(c.Kind); ok {
+		c.Timeout = b // [stall] budget (#406)
+	}
 	if err := c.Validate(); err != nil {
 		return err
 	}
