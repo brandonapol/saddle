@@ -538,7 +538,7 @@ func landCmd() *cobra.Command {
 			if err := a.CheckMergeSettings(cmd.ErrOrStderr()); err != nil {
 				return err
 			}
-			rs, err := a.Land()
+			rs, err := a.LandRecorded()
 			for _, r := range rs {
 				fmt.Fprintf(cmd.OutOrStdout(), "%-6s %-12s %s\n", r.Task, r.State, r.Note)
 			}

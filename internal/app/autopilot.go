@@ -144,7 +144,7 @@ func (e *autopilotEnv) Land() (int, error) {
 	if !queued {
 		return 0, nil
 	}
-	rs, err := e.a.Land()
+	rs, err := e.a.LandRecorded()
 	if err != nil {
 		return 0, err
 	}

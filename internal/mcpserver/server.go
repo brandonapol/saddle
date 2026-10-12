@@ -534,12 +534,9 @@ func New(a *app.App, task string) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{Name: "land", Description: "Run the merge train: land queued branches one at a time on the integration branch (rebase, test, fast-forward). Conflicts go back to their agents."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, LandOut, error) {
-			rs, err := a.Land()
+			rs, err := a.LandRecorded()
 			if err != nil {
 				return nil, LandOut{}, err
-			}
-			if rs == nil {
-				rs = []app.LandResult{}
 			}
 			return nil, LandOut{Message: landMessage(len(rs)), Results: rs}, nil
 		})
