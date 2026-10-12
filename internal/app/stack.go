@@ -165,7 +165,7 @@ func (a *App) restack() (RestackResult, error) {
 	// just fast-forwards it.
 	if mb != integ {
 		if last, ok := a.lastOn(all, integ); ok {
-			if err := a.checkIntegration(last, integ, res.Base, mb, inBase); err != nil {
+			if err := a.checkIntegration(last, integ, res.Base, mb, inBase, a.ownedPatchIDs(all)); err != nil {
 				return res, err
 			}
 		}
@@ -296,8 +296,9 @@ func (a *App) leaving(all []landedTask, integ string, inBase map[string]bool) []
 // it must contain the last landed commit, and anything after that must
 // already be in base, by SHA (base's own commits, as when integration sits on
 // an older base after squash merges), by patch-id or by tree (e.g. a merge of
-// base into integration).
-func (a *App) checkIntegration(last landedTask, integ, base, mb string, inBase map[string]bool) error {
+// base into integration). A commit whose patch-id matches a landed task's
+// range is that task's, and is adopted rather than refused (#392).
+func (a *App) checkIntegration(last landedTask, integ, base, mb string, inBase map[string]bool, owned map[string]string) error {
 	if _, err := gitx.Run(a.Root, "merge-base", "--is-ancestor", last.To, integ); err != nil {
 		return fmt.Errorf("%s doesn't contain %s's landed commit %s, so restack can't tell what is on it; nothing was moved",
 			a.Cfg.Integration, last.ID, short(last.To))
@@ -313,14 +314,20 @@ func (a *App) checkIntegration(last landedTask, integ, base, mb string, inBase m
 		}
 	}
 	n := 0
+	adopted := map[string][]string{}
 	lines := strings.Split(extra, "\n")
 	for i := 0; i+1 < len(lines); i += 2 {
 		c := strings.TrimPrefix(lines[i], "commit ")
 		if trees[lines[i+1]] {
 			continue
 		}
-		if ids, _ := patchIDs(a.Root, c+"^!"); len(ids) == 0 || inBase[ids[0]] {
+		ids, _ := patchIDs(a.Root, c+"^!")
+		if len(ids) == 0 || inBase[ids[0]] {
 			continue // empty, or base has its change
+		}
+		if task, ok := owned[ids[0]]; ok {
+			adopted[task] = append(adopted[task], c)
+			continue
 		}
 		n++
 	}
@@ -328,6 +335,7 @@ func (a *App) checkIntegration(last landedTask, integ, base, mb string, inBase m
 		return fmt.Errorf("%s has %s after %s's landed commit that no landed task owns and base doesn't have; restack would drop them, so nothing was moved",
 			a.Cfg.Integration, plural(n, "commit"), last.ID)
 	}
+	a.adopt(adopted)
 	return nil
 }
 
