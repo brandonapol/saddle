@@ -20,7 +20,7 @@ import { registerClaimGuard } from './claimguard'
 import { ARGUMENT_HINT, parseSaddle, replyOf } from './commands'
 import { ACTION_LABELS, actionArgv, askPrompt, needLine, needsYou } from './needsyou'
 import type { Need, NeedAction } from './needsyou'
-import { PINNED_ROWS, TABS, headerOf, scrolled, tabLines } from './pane'
+import { PINNED_ROWS, TABS, headerOf, headerTone, scrolled, tabLines } from './pane'
 import type { Tone } from './pane'
 import {
   MIN_VERSION,
@@ -298,7 +298,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         <Box key="header">
-          <Text bold wrap="truncate-end">
+          <Text bold wrap="truncate-end" {...toneProps(headerTone(snap))}>
             {headerOf(snap)}
           </Text>
         </Box>

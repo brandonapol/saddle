@@ -27,13 +27,20 @@ function tasksOf(s: SaddleSnapshot): SaddleTask[] {
   return s.status?.tasks ?? []
 }
 
-/** The pane's one-line summary above the tabs. */
+/**
+ * The pane's one line above the tabs: saddle's state headline (#403), or,
+ * from a saddle too old to send one, a summary of counts.
+ */
 export function headerOf(s: SaddleSnapshot | null): string {
   if (!s) {
     return 'saddle · reading…'
   }
   if (!s.isLive) {
     return 'saddle · not running'
+  }
+  const headline = s.status?.headline
+  if (headline?.text) {
+    return `saddle · ${headline.text}`
   }
   const tasks = tasksOf(s)
   const parts = ['saddle', s.engine, `${tasks.filter(t => !STOPPED.has(t.status)).length} active`]
@@ -43,6 +50,25 @@ export function headerOf(s: SaddleSnapshot | null): string {
   }
   parts.push(`${s.queue.length} in train`)
   return parts.join(' · ')
+}
+
+/** How the header is drawn: the headline's colour as a tone. */
+export function headerTone(s: SaddleSnapshot | null): Tone | undefined {
+  if (!s?.isLive) {
+    return 'dim'
+  }
+  switch (s.status?.headline?.color) {
+    case 'red':
+      return 'bad'
+    case 'yellow':
+      return 'warn'
+    case 'green':
+      return 'good'
+    case 'grey':
+      return 'dim'
+    default:
+      return undefined
+  }
 }
 
 // notLive is what every tab shows before saddle has been read, or while it

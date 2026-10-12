@@ -38,8 +38,17 @@ export type SaddleCIRed = {
   attempts?: number
 }
 
+/** The state headline (#403): one sentence and a colour, computed by saddle. */
+export type SaddleHeadline = {
+  class: 'needs_you' | 'blocked' | 'degraded' | 'working' | 'idle'
+  color: 'red' | 'yellow' | 'green' | 'grey'
+  text: string
+}
+
 /** `saddle status --json`, the fields the mod reads; the rest pass through. */
 export type SaddleStatus = {
+  /** Absent from saddle older than #403. */
+  headline?: SaddleHeadline
   integration: string
   warnings?: string[]
   tasks: SaddleTask[]

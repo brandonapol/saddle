@@ -105,13 +105,13 @@ func TestViewsFitTheScreen(t *testing.T) {
 	}
 }
 
-// The header is one line at any width, and on a wide screen names the views,
+// The header is two lines at any width (the headline, then counters), and on a wide screen names the views,
 // the base and integration branches, the counts and the train.
 func TestHeaderShowsViewsBranchesCountsTrain(t *testing.T) {
 	for _, w := range []int{30, 40, 120} {
 		m := newViewModel(w, 30)
 		h := m.viewHeader()
-		if lipgloss.Height(h) != 1 || lipgloss.Width(h) > w {
+		if lipgloss.Height(h) != 2 || lipgloss.Width(h) > w {
 			t.Errorf("width %d: header %q is %dx%d", w, h, lipgloss.Width(h), lipgloss.Height(h))
 		}
 		if !strings.Contains(h, "SADDLE") || !strings.Contains(h, "control") {

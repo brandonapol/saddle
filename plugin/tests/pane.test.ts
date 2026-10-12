@@ -7,7 +7,7 @@ import type { On, RenderPropsOf } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 import type { SaddleSnapshot } from '../types'
-import { agentLines, claimLines, headerOf, scrolled, stackLines, tabLines, trainLines } from '../hooks/pane'
+import { agentLines, claimLines, headerOf, headerTone, scrolled, stackLines, tabLines, trainLines } from '../hooks/pane'
 import { idle } from '../hooks/snapshot'
 import { fleet, memoryState } from './fixtures'
 
@@ -18,6 +18,18 @@ describe('header', () => {
     expect(headerOf(null)).toBe('saddle · reading…')
     expect(headerOf(idle())).toBe('saddle · not running')
     expect(headerOf(fleet)).toBe('saddle · engine · 3 active · 1 needs you · 2 in train')
+  })
+  test('leads with saddle\'s headline in its colour when status has one', () => {
+    const red: SaddleSnapshot = {
+      ...fleet,
+      status: { ...fleet.status!, headline: { class: 'needs_you', color: 'red', text: 'Needs you: t3 asks: allow git push?' } },
+    }
+    expect(headerOf(red)).toBe('saddle · Needs you: t3 asks: allow git push?')
+    expect(headerTone(red)).toBe('bad')
+    const green: SaddleSnapshot = { ...fleet, status: { ...fleet.status!, headline: { class: 'working', color: 'green', text: 'Working.' } } }
+    expect(headerTone(green)).toBe('good')
+    expect(headerTone(fleet)).toBeUndefined()
+    expect(headerTone(idle())).toBe('dim')
   })
 })
 

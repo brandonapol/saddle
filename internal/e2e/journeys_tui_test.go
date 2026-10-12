@@ -22,12 +22,22 @@ func (u *TUI) row(s string) string {
 	return ""
 }
 
-// waitHeader waits until the header row contains s. The header shows the
+// header is the TUI's two header rows: the state headline, then the
+// counters (#403).
+func (u *TUI) header() string {
+	ls := u.Lines()
+	if len(ls) < 2 {
+		return strings.Join(ls, "\n")
+	}
+	return ls[0] + "\n" + ls[1]
+}
+
+// waitHeader waits until the header rows contain s. The header shows the
 // state the TUI last read, unlike a flash, which shows an action began.
 func (u *TUI) waitHeader(s string) {
 	u.w.T.Helper()
 	Eventually(u.w.T, "the header to show "+s, func() error {
-		if h := u.Lines()[0]; !strings.Contains(h, s) {
+		if h := u.header(); !strings.Contains(h, s) {
 			return errorf("header: %q", h)
 		}
 		return nil
@@ -67,10 +77,10 @@ func TestJourneyTUIViewRouter(t *testing.T) {
 		}
 		// The current view is named in the header, as a tab when they fit.
 		if width >= 74 {
-			if h := u.Lines()[0]; !strings.Contains(h, "1 control") || !strings.Contains(h, "3 merge") {
+			if h := u.header(); !strings.Contains(h, "1 control") || !strings.Contains(h, "3 merge") {
 				t.Fatalf("header at %d columns lacks the tabs: %q", width, h)
 			}
-		} else if h := u.Lines()[0]; !strings.Contains(h, "control") {
+		} else if h := u.header(); !strings.Contains(h, "control") {
 			t.Fatalf("header at %d columns doesn't name the view: %q", width, h)
 		}
 	}
@@ -301,7 +311,7 @@ func TestJourneyTUIMergedTaskNotShownAsConflict(t *testing.T) {
 	}
 	u := w.StartTUI(120, 45)
 	u.WaitScreen("3 landed")
-	if h := u.Lines()[0]; strings.Contains(h, "conflict") {
+	if h := u.header(); strings.Contains(h, "conflict") {
 		t.Errorf("header counts the merged t1 as a conflict: %q", h)
 	}
 	u.Keys("M-3")

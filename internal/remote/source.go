@@ -27,6 +27,7 @@ type Source interface {
 // Snapshot is a compact view of a running saddle, small enough for a phone:
 // no worktree paths, no window ids, live tasks only.
 type Snapshot struct {
+	Headline    app.StateHeadline      `json:"headline" jsonschema:"one sentence and a colour: whether anything needs the owner (#403)"`
 	Integration string                 `json:"integration"`
 	Counts      Counts                 `json:"counts"`
 	AutoMerge   string                 `json:"automerge,omitempty" jsonschema:"on, off or stopped"`
@@ -178,7 +179,7 @@ func clip(s string) string { return scrubText(s, maxText) }
 
 // Compact turns the full status into a Snapshot.
 func Compact(st mcpserver.StatusOut, queued int, automerge string) Snapshot {
-	s := Snapshot{Integration: st.Integration, AutoMerge: automerge, StackAtRisk: st.StackAtRisk,
+	s := Snapshot{Headline: st.Headline, Integration: st.Integration, AutoMerge: automerge, StackAtRisk: st.StackAtRisk,
 		CIRed: st.CIRed, Warnings: st.Warnings, Context: st.OrchestratorContext, Tasks: []TaskLine{}}
 	s.Counts.Queued = queued
 	for _, t := range st.Tasks {
