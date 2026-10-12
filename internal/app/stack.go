@@ -39,6 +39,9 @@ type RestackResult struct {
 	// GateRed are re-cut layers whose new tip fails [train] prepublish.cmd
 	// (#223): prs holds them and the layers above them until they pass.
 	GateRed []string `json:"gate_red,omitempty"`
+	// Queued are layers left unpushed because GitHub refused the push with
+	// GH006, as for a PR in the merge queue, and the layers above them (#431).
+	Queued []string `json:"queued,omitempty"`
 }
 
 // restacked is a landed task's place in the rebuilt stack: NewFrom..NewTo.
@@ -695,7 +698,7 @@ func (a *App) republishLayout(rs restackPlan, held map[int]string, info map[stri
 	var groups []int
 	var bases []string
 	var linked []store.Task
-	waiting := map[int]bool{}
+	waiting, queued := map[int]bool{}, map[int]bool{}
 	for _, i := range rs.order {
 		r := rs.live[i]
 		if r.PR == "" {
@@ -706,6 +709,10 @@ func (a *App) republishLayout(rs restackPlan, held map[int]string, info map[stri
 			continue
 		}
 		if b := rs.layout[i].Below; b >= 0 && waiting[b] {
+			if queued[b] {
+				queued[i] = true
+				res.Queued = append(res.Queued, r.ID)
+			}
 			waiting[i] = true
 			continue
 		}
@@ -719,7 +726,12 @@ func (a *App) republishLayout(rs restackPlan, held map[int]string, info map[stri
 		head := rs.layout[i].Head
 		published, _ := gitx.RevParse(a.Root, "refs/remotes/origin/"+r.Branch)
 		if r.NewTo != r.To || head != published {
-			if err := a.pushLanded(r.Branch, head); err != nil {
+			if err := a.pushLanded(r.Branch, head); queuedRefusal(err) {
+				a.deferQueued(r, err)
+				res.Queued = append(res.Queued, r.ID)
+				waiting[i], queued[i] = true, true
+				continue
+			} else if err != nil {
 				return err
 			}
 			a.Store.Event(r.ID, "restack_push", r.Branch+" "+short(head))
