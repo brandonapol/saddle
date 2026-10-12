@@ -124,6 +124,7 @@ type model struct {
 	chat       []chatLine
 	streaming  strings.Builder
 	follow     bool
+	details    bool // show the details folded under each headline (#402)
 	vp         viewport.Model
 	input      textarea.Model
 	drafting   atomic.Bool  // input holds text; read by the compact watcher off the UI goroutine
@@ -281,7 +282,7 @@ func Run(a *app.App, first string) error {
 
 	hist, _ := a.Store.Chat(300)
 	for _, c := range visibleHistory(hist) {
-		m.chat = append(m.chat, chatLine{role: c.Role, text: c.Text})
+		m.chat = appendChat(m.chat, chatLine{role: c.Role, text: c.Text})
 	}
 	if len(m.chat) == 0 {
 		m.chat = append(m.chat, chatLine{role: store.ChatEvent, text: "Tell me what to work on, e.g. \"work #46 and #47 in parallel\", or paste an epic. I'll plan it, run the agents out of sight, and tell you when one needs you."})
@@ -841,6 +842,9 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		return m.toggleTerm(), true
 	case key.Matches(k, keys.Ask):
 		return m.aimAtNarrator(), true
+	case key.Matches(k, keys.Details):
+		m.toggleDetails()
+		return nil, true
 	case key.Matches(k, keys.AskScreen) && m.asking():
 		return m.toggleAskScreen(), true
 	case key.Matches(k, keys.Focus):
@@ -904,6 +908,9 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 			}
 			m.input.Reset()
 			if c, ok := parseSlash(text); ok {
+				if cmd, ok := m.localSlash(c); ok {
+					return cmd, true
+				}
 				m.sendSlash(c)
 				return nil, true
 			}
@@ -1024,7 +1031,7 @@ func (m *model) interrupt() bool {
 }
 
 func (m *model) addChat(role, text string) {
-	m.chat = append(m.chat, chatLine{role: role, text: text})
+	m.chat = appendChat(m.chat, chatLine{role: role, text: text})
 	_ = m.app.Store.AddChat(role, text)
 }
 
@@ -1407,7 +1414,7 @@ func (m *model) renderChat() {
 	for i := range m.chat {
 		c := &m.chat[i]
 		if c.out == "" || c.outW != w {
-			c.out, c.outW = renderLine(*c, w, wrap), w
+			c.out, c.outW = renderFolded(*c, w, wrap, m.details), w
 		}
 		b.WriteString(c.out)
 		b.WriteString("\n")

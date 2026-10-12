@@ -173,3 +173,35 @@ func TestOrchestratorBriefAdvisorOn(t *testing.T) {
 		}
 	}
 }
+
+// #402: both orchestrator briefs end with the same plain-language talking
+// rules: headline first, no identifiers in it, translate done summaries, say
+// what's next and whether anything waits on the owner. The TUI folds details;
+// the plugin keeps them to a short paragraph.
+func TestOrchestratorBriefTalkingGolden(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	rules := `- Write for someone who glances at the screen every hour and doesn't remember task numbers.
+- Open every message with ONE plain-language headline sentence: what happened, whether it matters to the owner, and what happens next. No test names, code identifiers, SHAs or file paths in it; task and PR numbers are fine. Example: "The risk-tier work is half in: two PRs merged, four follow-ups queued as issues."
+- Name things by what they do ("the auto-merge risk gate"), not by symbol. Put a task id after its name when it helps, e.g. "the meter worker (t3)".
+- Never paste a worker's done summary verbatim. Translate it into what changed for the owner.
+- Say what you will do next, and whether anything is waiting on the owner. "Nothing needs you." is a valid, useful sentence.
+`
+	want := map[string]string{
+		"tui": "## Talking\n- Be brief. The sidebar is narrow.\n" + rules +
+			"- Put details (test names, files, reasoning) after a blank line. The TUI folds everything after the headline paragraph; the owner opens it with a key when they want it.\n" +
+			"- When a message needs the user, start it with \"‼ \" followed by ONE sentence naming the task and what is needed, then details. The TUI renders that sentence red and the rest white.\n",
+		"plugin": "## Talking\n- Be brief.\n" + rules +
+			"- Details (test names, files, reasoning) go in one short paragraph after a blank line, or leave them out.\n" +
+			"- When a message needs the user, start it with \"‼ \" followed by ONE sentence naming the task and what is needed, then details.\n",
+	}
+	for name, brief := range map[string]string{"tui": a.orchestratorBrief(), "plugin": a.PluginBrief()} {
+		i := strings.Index(brief, "## Talking\n")
+		if i < 0 {
+			t.Fatalf("%s brief has no Talking section", name)
+		}
+		if got := brief[i:]; got != want[name] {
+			t.Errorf("%s Talking section =\n%s\nwant\n%s", name, got, want[name])
+		}
+	}
+}
