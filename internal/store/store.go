@@ -514,7 +514,11 @@ func (s *Store) SetTrain(task, state, note string, failed bool) error {
 	if failed {
 		inc = 1
 	}
-	_, err := s.db.Exec(`UPDATE train SET state = ?, note = ?, attempts = attempts + ? WHERE task = ?`, state, note, inc, task)
+	// An entry that lands from the queue moves behind every other entry, so
+	// train order stays landing order when a held entry lands late (#413).
+	_, err := s.db.Exec(`UPDATE train SET state = ?, note = ?, attempts = attempts + ?,
+		seq = CASE WHEN ? = ? AND state IN (?, ?) THEN (SELECT MAX(seq) + 1 FROM train) ELSE seq END
+		WHERE task = ?`, state, note, inc, state, TrainOK, Queued, OnHold, task)
 	return err
 }
 
