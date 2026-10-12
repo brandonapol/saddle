@@ -176,10 +176,18 @@ func (a *App) noteDependencies(stack []landedTask, info map[string]PRInfo) error
 // setPRBase points t's PR at base and remembers that saddle set it. live is
 // the base GitHub reported before ("" when unknown). A change from a base
 // saddle didn't set is someone's retarget being undone: the orchestrator
-// hears which, and why.
+// hears which, and why. A base that is already right isn't edited, and one
+// GitHub refuses because the PR is linked into a gh stack is left to the
+// relink that follows (#341).
 func (a *App) setPRBase(t store.Task, live, base, source string) error {
-	if _, err := gh(a.Root, "pr", "edit", t.PR, "--base", base); err != nil {
-		return err
+	if live != base {
+		if _, err := gh(a.Root, "pr", "edit", t.PR, "--base", base); err != nil {
+			if !linkedBaseErr(err) {
+				return err
+			}
+			a.Store.Event(t.ID, EventPRBaseLinked, fmt.Sprintf("%s: %s → %s refused, the PR is part of a stack (%s)", t.PR, live, base, source))
+			return nil
+		}
 	}
 	return a.notePRBase(t, live, base, source)
 }

@@ -153,7 +153,8 @@ func TestRestackKeepsManualRetarget(t *testing.T) {
 	if _, err := a.Restack(); err != nil {
 		t.Fatal(err)
 	}
-	if got := baseEdits(ghLog()[before:])[t2.PR]; got != t1.Branch {
+	// It already targets t1's branch, so it isn't edited at all (#341).
+	if got, ok := baseEdits(ghLog()[before:])[t2.PR]; ok && got != t1.Branch {
 		t.Fatalf("restack set t2's base to %q, want the hand-set %s", got, t1.Branch)
 	}
 	if !slices.Contains(a.TaskAfter("t2"), "t1") || !eventWith(t, a, "t2", EventDependsOn, "manual retarget") {
@@ -169,7 +170,7 @@ func TestRestackKeepsManualRetarget(t *testing.T) {
 	if _, err := a.PRs(); err != nil {
 		t.Fatal(err)
 	}
-	if got := baseEdits(ghLog()[before:])[t2.PR]; got != t1.Branch {
+	if got, ok := baseEdits(ghLog()[before:])[t2.PR]; ok && got != t1.Branch {
 		t.Fatalf("prs set t2's base to %q, want %s", got, t1.Branch)
 	}
 }
