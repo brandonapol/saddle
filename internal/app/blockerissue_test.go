@@ -292,3 +292,37 @@ func TestOpenBlockersByCount(t *testing.T) {
 		t.Errorf("order = %v", got)
 	}
 }
+
+// A stall_routed event comments on the issue already filed for the task's
+// signature and never opens another.
+func TestFileBlockersCommentsStallRouted(t *testing.T) {
+	t.Parallel()
+	f, g := blockerFiler(t)
+	a := f.App
+	ctx := context.Background()
+	_, err := f.FileBlockers(ctx)
+	must(t, err)
+	a.Store.Event("t1", eventStackStuck, "t1,t2|"+StuckCIRed)
+	res, err := f.FileBlockers(ctx)
+	must(t, err)
+	if len(res) != 1 || !res[0].Created {
+		t.Fatalf("stuck stack not filed: %+v", res)
+	}
+	a.Store.Event("t1", eventStallRouted, "https://github.com/o/r/pull/9 held=t2 after=30m")
+	res, err = f.FileBlockers(ctx)
+	must(t, err)
+	if len(res) != 0 || len(g.issues) != 1 {
+		t.Fatalf("stall_routed opened an issue: %+v, issues %d", res, len(g.issues))
+	}
+	cs := g.comments[g.issues[0].Number]
+	if len(cs) != 1 || !strings.Contains(cs[0], "Routed around t1 after 30m; now a standalone PR https://github.com/o/r/pull/9") || !strings.Contains(cs[0], "t2") {
+		t.Errorf("route-around comment: %q", cs)
+	}
+	// Without a filed blocker for the task there is nothing to comment on.
+	a.Store.Event("t9", eventStallRouted, "https://github.com/o/r/pull/10 held= after=1h")
+	_, err = f.FileBlockers(ctx)
+	must(t, err)
+	if len(g.issues) != 1 || len(g.comments[g.issues[0].Number]) != 1 {
+		t.Errorf("unrelated route-around touched issues: %+v", g.comments)
+	}
+}

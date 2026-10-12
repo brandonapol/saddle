@@ -71,4 +71,4 @@ work moves again, the card closes by itself.
 The stuck-stack alarm's `stack_stuck` event is what the blocker filer
 (#407) turns into a deduplicated GitHub issue. A blocker that gets routed
 around therefore already has its issue. The route-around itself is recorded
-as a `stall_routed` event. Commenting it onto that issue is a follow-up.
+as a `stall_routed` event. The blocker filer comments it onto that issue (never a new one).

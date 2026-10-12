@@ -316,7 +316,7 @@ func (a *App) RouteAroundStuck(red string, after time.Duration) error {
 		s.Red = slices.DeleteFunc(s.Red, func(l CIRedLayer) bool { return l.Task == red })
 		_ = a.SetCIRed(s)
 	}
-	a.Store.Event(red, "stall_routed", url+" held="+strings.Join(dependent, ","))
+	a.Store.Event(red, "stall_routed", url+" held="+strings.Join(dependent, ",")+" after="+fmtDuration(after))
 	if _, err := a.Restack(); err != nil {
 		return err
 	}
