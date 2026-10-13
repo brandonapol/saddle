@@ -91,7 +91,7 @@ func (id OrchIdentity) compactBrief() string {
 	switch {
 	case id.Compact == "":
 		return when + fmt.Sprintf("%s has no compact command: write a short state summary (%s) and ask the owner to start a fresh session.\n", id.CLI(), keep)
-	case id.Adapter == usage.Codex:
+	case id.Compact == "/compact": // codex and grok take no instruction
 		return when + fmt.Sprintf("Write a short state summary first (%s), then run /compact; it takes no instruction. When you are idle and the owner isn't typing, saddle may send the command for you.\n", keep)
 	}
 	return when + fmt.Sprintf("Run /compact and keep a short state summary: %s. When you are idle and the owner isn't typing, saddle may send the command for you.\n", keep)

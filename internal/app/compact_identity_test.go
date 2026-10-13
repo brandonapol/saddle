@@ -18,14 +18,14 @@ func TestOrchestratorKnowsItsAdapter(t *testing.T) {
 		model   string
 		// the TUI's headless orchestrator
 		adapter, cli string
-		compact      string // "" means the brief must not say /compact
+		compact      string // how the brief says to compact
 		// the user's own session under the plugin
 		plugin, pluginCLI string
 		pluginHooks       bool
 	}{
 		{config.HarnessClaude, "claude-opus-5-5", usage.Claude, "Claude Code", "Run /compact", usage.Claude, "Claude Code", true},
 		{config.HarnessCodex, "claude-sonnet-5-5", usage.Claude, "Claude Code", "Run /compact", usage.Codex, "Codex", false},
-		{config.HarnessGrok, "grok-4-fast", usage.Grok, "the Grok CLI", "", usage.Grok, "the Grok CLI", true},
+		{config.HarnessGrok, "grok-4-fast", usage.Grok, "the Grok CLI", "then run /compact; it takes no instruction", usage.Grok, "the Grok CLI", true},
 	} {
 		t.Run(c.harness, func(t *testing.T) {
 			t.Parallel()
@@ -55,16 +55,8 @@ func TestOrchestratorKnowsItsAdapter(t *testing.T) {
 			if c.harness != c.adapter && !strings.Contains(brief, "Workers spawned without adapter= run on Codex") {
 				t.Error("tui brief does not say workers run on codex")
 			}
-			if c.compact != "" && !strings.Contains(brief, c.compact) {
+			if !strings.Contains(brief, c.compact) {
 				t.Errorf("tui brief lacks %q", c.compact)
-			}
-			if c.compact == "" {
-				if strings.Contains(brief, "/compact") {
-					t.Error("grok brief tells the orchestrator to run /compact")
-				}
-				if !strings.Contains(brief, "has no compact command") {
-					t.Error("grok brief does not say how to shed context")
-				}
 			}
 			if c.adapter != usage.Claude && strings.Contains(brief, "Claude's auto-mode classifier") {
 				t.Error("non-Claude brief blames Claude's classifier for denied pushes")
@@ -95,5 +87,14 @@ func TestOrchestratorIdentityDefaultModel(t *testing.T) {
 	}
 	if !strings.Contains(a.orchestratorBrief(), "model claude's default)") {
 		t.Error("brief does not name the default model")
+	}
+}
+
+// A harness with no compact command is told to summarize instead.
+func TestCompactBriefWithoutCommand(t *testing.T) {
+	t.Parallel()
+	b := OrchIdentity{Adapter: "gemini"}.compactBrief()
+	if strings.Contains(b, "/compact") || !strings.Contains(b, "has no compact command") {
+		t.Fatalf("brief = %q, want a summary and fresh session, not /compact", b)
 	}
 }

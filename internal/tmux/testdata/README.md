@@ -18,7 +18,7 @@ with only the working directory renamed:
 
 - `codex_placeholder.ansi`: a fresh session, the faint "Ask Codex to do
   anything" placeholder after `›`.
-- `codex_draft.ansi`: "fix the flaky test" typed, in bold-less default text.
+- `codex_draft.ansi`: "fix the flaky test" typed.
 - `codex_idle.ansi`: after a turn; the user's earlier message is also drawn
   behind a `›` higher up.
 - `codex_working.ansi`: mid-turn, "• Working (6s • esc to interrupt)".
