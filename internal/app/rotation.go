@@ -186,7 +186,7 @@ func (a *App) MarkExhausted(adapter string, until time.Time, resets string) erro
 			text += fmt.Sprintf("Tasks already on %s stay parked and %s after the reset.", adapter, resumeHow(adapter))
 		}
 		if ad, err := agent.ByName(next); err == nil && !ad.Hooks() {
-			text += fmt.Sprintf(" %s has no hooks: claims of tasks it runs are advisory.", next)
+			text += fmt.Sprintf(" %s has no hooks: claims of tasks it runs are checked only when they commit and call done.", next)
 		}
 	}
 	return a.tellOwner(text)
@@ -394,7 +394,7 @@ func (a *App) rotatedTask(t store.Task, from string, ad agent.Adapter, claims []
 		return nil
 	}
 	return a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
-		"%s %q runs on %s because %s is out of quota. %s has no hooks, so its claims (%s) are advisory: nothing stops it writing other tasks' files. Kill it and respawn on a hooked adapter if that matters.",
+		"%s %q runs on %s because %s is out of quota. %s has no hooks, so saddle checks its claims (%s) only when it commits and calls done, not on each write. Kill it and respawn on a hooked adapter if that matters.",
 		t.ID, t.Title, ad.Name(), from, ad.Name(), strings.Join(claims, ", ")))
 }
 

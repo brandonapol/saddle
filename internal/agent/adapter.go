@@ -24,7 +24,7 @@ type Adapter interface {
 	Usage() UsageSource
 	// Hooks reports whether the agent runs `saddle hook`: writes are checked
 	// against claims and notices arrive with tool calls. Without hooks claims
-	// are advisory and notices are typed in whole.
+	// are checked at commit and done (#489) and notices are typed in whole.
 	Hooks() bool
 }
 

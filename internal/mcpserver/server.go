@@ -25,7 +25,7 @@ type SpawnIn struct {
 	Claims []string `json:"claims,omitempty" jsonschema:"repo-relative path globs this task owns, e.g. internal/meter/**; must not overlap other live tasks"`
 	Model  string   `json:"model,omitempty" jsonschema:"model for the adapter, e.g. claude's opus, sonnet or haiku; defaults to config for claude and to the CLI's default otherwise. Models in status' excluded_models (codex's astra by default) are refused"`
 	// Adapter picks the agent CLI; see agent.ByName.
-	Adapter string `json:"adapter,omitempty" jsonschema:"agent to run: claude, codex, gemini or grok, any one listed as available in the brief or status. Omitted means the session default (saddle up <agent>, else harness in config). Claude and grok run saddle hooks; codex and gemini claims are advisory. An unavailable adapter fails with the reason, never a substitute"`
+	Adapter string `json:"adapter,omitempty" jsonschema:"agent to run: claude, codex, gemini or grok, any one listed as available in the brief or status. Omitted means the session default (saddle up <agent>, else harness in config). Claude and grok run saddle hooks; codex and gemini claims are checked when they commit and call done. An unavailable adapter fails with the reason, never a substitute"`
 	// Kind steers the adapter pick; see app.SpawnReq.Kind.
 	Kind  string `json:"kind,omitempty" jsonschema:"task kind, e.g. docs, mechanical, design, review; without adapter it picks an adapter whose [adapters.<name>] kinds list it, else [adapters] policy picks (status shows adapter_policy and each adapter's pick rank)"`
 	ID    string `json:"id,omitempty" jsonschema:"optional task id; defaults to the next tN"`

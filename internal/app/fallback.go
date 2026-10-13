@@ -170,7 +170,7 @@ func (a *App) MarkModelExhausted(adapter, model string, until time.Time, resets 
 			text += fmt.Sprintf("Tasks already on %s stay parked and %s after the reset.", key, resumeHow(adapter))
 		}
 		if ad, err := agent.ByName(p.Adapter); err == nil && !ad.Hooks() {
-			text += fmt.Sprintf(" %s has no hooks: claims of tasks it runs are advisory.", p.Adapter)
+			text += fmt.Sprintf(" %s has no hooks: claims of tasks it runs are checked only when they commit and call done.", p.Adapter)
 		}
 	}
 	return a.tellOwner(text)
