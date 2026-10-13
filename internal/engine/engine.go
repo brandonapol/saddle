@@ -122,8 +122,11 @@ func (e *Engine) watchScreens(ts []mcpserver.TaskView, screens map[string]string
 		st := e.screens[id]
 		if st == nil || st.text != s {
 			e.screens[id] = &screen{text: s, since: e.now()}
+			e.a.ObserveHooklessScreen(id, status[id], 0, s)
 			continue
 		}
+		// Codex and gemini have no Stop hook: their screen says when they stop (#480).
+		e.a.ObserveHooklessScreen(id, status[id], e.now().Sub(st.since), s)
 		if st.acted || e.now().Sub(st.since) < settle {
 			continue
 		}

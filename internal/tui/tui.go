@@ -1310,8 +1310,11 @@ func (m *model) watchScreens(ts []mcpserver.TaskView, screens map[string]string)
 		st := m.screens[id]
 		if st == nil || st.text != s {
 			m.screens[id] = &screenState{text: s, since: time.Now()}
+			m.app.ObserveHooklessScreen(id, status[id], 0, s)
 			continue
 		}
+		// Codex and gemini have no Stop hook: their screen says when they stop (#480).
+		m.app.ObserveHooklessScreen(id, status[id], time.Since(st.since), s)
 		if st.acted && banner && !m.app.LimitAutoResumes(id) && !m.app.ResumedPast(id, b) {
 			// Codex and grok wait for input after their reset (#480). Typing
 			// checks the submit, so it runs off the UI loop; the task's

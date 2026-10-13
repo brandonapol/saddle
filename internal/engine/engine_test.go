@@ -406,13 +406,63 @@ func TestEngineResumesCodexAfterItsReset(t *testing.T) {
 		clock = clock.Add(5 * time.Second)
 		must(t, e.Tick())
 	}
-	if st, _ := a.Store.Task(w.ID); st.Status != store.Running {
-		t.Fatalf("re-parked on the old banner: %q", st.Status)
+	if st, _ := a.Store.Task(w.ID); st.Status == app.StatusPaused {
+		t.Fatal("re-parked on the old banner")
 	}
 	if _, out := a.ExhaustedAdapters(clock)[usage.Codex]; out {
 		t.Fatal("the old banner marked codex out of quota again")
 	}
 	if len(ft.texts[w.Window]) != 1 {
 		t.Fatalf("typed again: %q", ft.texts[w.Window])
+	}
+}
+
+// #480: only the Stop hook marked a worker idle, so a codex worker (no
+// hooks) that stopped without calling done stayed "running" and nobody was
+// told. Its screen sitting still with no working indicator marks it idle;
+// working again marks it running. Hooked workers are left to their hooks.
+func TestEngineMarksHooklessWorkerIdleFromItsScreen(t *testing.T) {
+	a, ft := setup(t)
+	a.AdapterStatus = allAdapters
+	cx, err := a.Spawn(app.SpawnReq{Title: "codex work", Adapter: usage.Codex})
+	must(t, err)
+	cl, err := a.Spawn(app.SpawnReq{Title: "claude work"})
+	must(t, err)
+	clock := time.Now()
+	e := New(a)
+	e.now = func() time.Time { return clock }
+	ft.screens[cx.Window] = "• Working (3s • esc to interrupt)"
+	ft.screens[cl.Window] = "⏺ Done.\n> "
+	must(t, e.Tick())
+	orchNotices(t, a)
+
+	clock = clock.Add(time.Minute) // still working: the timer froze, say
+	must(t, e.Tick())
+	if st, _ := a.Store.Task(cx.ID); st.Status != store.Running {
+		t.Fatalf("working codex marked %q", st.Status)
+	}
+	ft.screens[cx.Window] = "• I finished the change.\n\n› Ask Codex to do anything"
+	must(t, e.Tick())
+	clock = clock.Add(5 * time.Second)
+	must(t, e.Tick())
+	if st, _ := a.Store.Task(cx.ID); st.Status != store.Running {
+		t.Fatalf("codex marked %q after only 5s", st.Status)
+	}
+	clock = clock.Add(app.HooklessIdleAfter)
+	must(t, e.Tick())
+	if st, _ := a.Store.Task(cx.ID); st.Status != store.Idle {
+		t.Fatalf("codex sitting at its composer is %q, want idle", st.Status)
+	}
+	if got := orchNotices(t, a); !strings.Contains(got, cx.ID+" (codex work) stopped without calling done") {
+		t.Fatalf("notices %q", got)
+	}
+	if st, _ := a.Store.Task(cl.ID); st.Status != store.Running {
+		t.Fatalf("hooked claude worker marked %q from its screen", st.Status)
+	}
+
+	ft.screens[cx.Window] = "• Working (1s • esc to interrupt)"
+	must(t, e.Tick())
+	if st, _ := a.Store.Task(cx.ID); st.Status != store.Running {
+		t.Fatalf("codex working again is %q", st.Status)
 	}
 }

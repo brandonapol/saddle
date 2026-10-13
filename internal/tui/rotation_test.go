@@ -142,3 +142,37 @@ func TestWatchScreensResumesCodexAfterReset(t *testing.T) {
 		t.Fatalf("typed %q after the reset, want the continue line once", got)
 	}
 }
+
+// #480: under saddle up a codex worker sitting still at its composer is
+// marked idle (it has no Stop hook), and working again marks it running.
+func TestWatchScreensMarksCodexIdle(t *testing.T) {
+	m := newViewModel(120, 40)
+	m.app.Root = t.TempDir()
+	st, err := store.Open(filepath.Join(m.app.Root, ".saddle", "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	m.app.Store = st
+	m.app.Tmux = &typingTmux{}
+	if err := st.CreateTask(store.Task{ID: "t1", Title: "view router", Role: store.RoleWorker, Status: store.Running, Window: "@1"}); err != nil {
+		t.Fatal(err)
+	}
+	run := filepath.Join(m.app.Root, ".saddle", "run", "t1")
+	if err := os.MkdirAll(run, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(run, "adapter"), []byte("codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	screen := "• Done.\n\n› Ask Codex to do anything"
+	m.screens = map[string]*screenState{"t1": {text: screen, since: time.Now().Add(-time.Minute)}}
+	m.watchScreens([]mcpserver.TaskView{{ID: "t1", Status: store.Running, Window: "@1"}}, map[string]string{"t1": screen})
+	if s, _ := st.Task("t1"); s.Status != store.Idle {
+		t.Fatalf("codex at rest is %q, want idle", s.Status)
+	}
+	m.watchScreens([]mcpserver.TaskView{{ID: "t1", Status: store.Idle, Window: "@1"}}, map[string]string{"t1": "• Working (2s • esc to interrupt)"})
+	if s, _ := st.Task("t1"); s.Status != store.Running {
+		t.Fatalf("codex working is %q, want running", s.Status)
+	}
+}
