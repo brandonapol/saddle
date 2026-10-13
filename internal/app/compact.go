@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/agent"
-	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/tmux"
 	"github.com/brandonapol/saddle/internal/usage"
@@ -143,12 +142,13 @@ func (r *ContextReader) Read(path string) (ContextUse, error) {
 	return NewContextUse(r.last.Model, r.Configured, r.last.Tokens), nil
 }
 
-// orchestratorAgent is the usage agent kind the orchestrator runs as.
+// orchestratorAgent is the usage agent kind the orchestrator runs as: the
+// adapter a failover moved it to (#481), else its default.
 func (a *App) orchestratorAgent() string {
-	if a.Cfg.Harness == config.HarnessGrok {
-		return usage.Grok
+	if o := a.orchOverride(); o != "" {
+		return o
 	}
-	return usage.Claude
+	return a.orchDefault()
 }
 
 // orchestratorTranscript is where the orchestrator's transcript should be, or

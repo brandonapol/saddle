@@ -209,16 +209,7 @@ func (a *App) AdapterLimitHit(task string, b usage.LimitBanner) error {
 	if err != nil {
 		return err
 	}
-	now := time.Now()
-	until, ok := parseReset(b.Resets, now)
-	if !ok {
-		until = now.Add(ExhaustFor)
-	}
-	resets := b.Resets
-	if resetInRe.MatchString(resets) {
-		resets = "" // "in 2 hours" is stale once read: show the clock time (#480)
-	}
-	return a.MarkExhausted(a.taskAdapter(t).Name(), until, resets)
+	return a.markOut(a.taskAdapter(t).Name(), b)
 }
 
 // AdapterLimitCleared restores task's adapter: its usage-limit banner cleared.

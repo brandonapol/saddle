@@ -1083,6 +1083,13 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 		m.retry = "" // the API answered, or the turn ended
 	}
 	switch e.Kind {
+	case orch.Retry, orch.Error, orch.Exit:
+		// Out of quota: move to another adapter rather than wait (#481).
+		if m.failOver(e.Text) {
+			return nil
+		}
+	}
+	switch e.Kind {
 	case orch.Retry:
 		m.retry = e.Text
 	case orch.Compacted:
@@ -1192,6 +1199,46 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 		m.addChat(store.ChatEvent, msg+" Press ctrl+r to restart it.")
 	}
 	return nil
+}
+
+// failOver moves the orchestrator to another adapter when text, from a
+// retry, a failed turn or an exit, says its own is out of quota (#481). The
+// new session opens with a state summary instead of the old conversation.
+// It reports whether the orchestrator moved.
+func (m *model) failOver(text string) bool {
+	if m.orc != nil || m.app == nil {
+		return false
+	}
+	b, out := app.OrchestratorOutOfQuota(text)
+	if !out {
+		return false
+	}
+	from := m.harness()
+	var recent []string
+	for _, c := range m.chat {
+		if c.role == store.ChatUser || c.role == store.ChatAssistant {
+			recent = append(recent, c.role+": "+c.text)
+		}
+	}
+	l, msg, err := m.app.FailOverOrchestrator(b, recent)
+	if err != nil {
+		m.addChat(store.ChatEvent, "The orchestrator is out of quota on "+from+" and can't move: "+err.Error()+". Workers keep running; press ctrl+r after the reset.")
+		m.app.Store.Event(app.OrchestratorID, "tui_error", err.Error())
+		return false
+	}
+	m.streaming.Reset()
+	m.turnText = false
+	m.launch, m.model = l, ""
+	if err := m.startProc(""); err != nil {
+		m.addChat(store.ChatEvent, "The orchestrator ran out of quota on "+from+" and the "+m.harness()+" session didn't start ("+err.Error()+"). Press ctrl+r to retry.")
+		return true
+	}
+	m.addChat(store.ChatEvent, fmt.Sprintf("The orchestrator ran out of quota on %s. Saddle moved it to %s and gave it a state summary; the old conversation stays here.", from, m.harness()))
+	m.eventTurn = true
+	if err := m.proc.Send(msg); err != nil {
+		m.pending = append(m.pending, msg)
+	}
+	return true
 }
 
 // noticeTransitions turns worker status changes into events for the
