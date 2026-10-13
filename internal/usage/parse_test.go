@@ -3,6 +3,7 @@ package usage
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -103,5 +104,26 @@ func TestCollectorTracksCodex(t *testing.T) {
 	}
 	if total != (Tokens{Input: 800, CacheRead: 2900, Output: 130}) {
 		t.Errorf("total = %+v", total)
+	}
+}
+
+// #482: a rollout that switches models mid-session is split by the model of
+// each turn_context, not labeled with the first one.
+func TestCollectorSplitsCodexByTurnModel(t *testing.T) {
+	c := NewCollector()
+	if !c.Track(Session{ID: "codex:t6", Task: "t6", Agent: Codex, Path: filepath.Join("testdata", "codex-models.jsonl"), Model: "gpt-5-codex"}) {
+		t.Fatal("codex not tracked")
+	}
+	bs, err := c.Poll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, b := range bs {
+		got[b.Model] += b.Tokens.Total()
+	}
+	want := map[string]int64{"gpt-6-luna": 1100, "gpt-6-terra": 2200, "gpt-6-sol": 3300, "gpt-6-astra": 4400}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("tokens by model = %v, want %v", got, want)
 	}
 }

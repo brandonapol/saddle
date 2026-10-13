@@ -50,7 +50,15 @@ func (c *Collector) Track(s Session) bool {
 	if p == nil || (s.Snapshot && snap == nil) {
 		return false
 	}
+	if s.Agent == Codex {
+		p = NewCodexParser()
+	}
 	if t, ok := c.sessions[s.ID]; ok {
+		// A Codex parser carries the current turn's model: keep it with
+		// the cursor.
+		if t.Agent == Codex && s.Agent == Codex && t.Path == s.Path {
+			p = t.parse
+		}
 		t.Session, t.parse, t.snapshot = s, p, snap
 		return true
 	}

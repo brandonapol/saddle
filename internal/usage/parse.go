@@ -85,8 +85,9 @@ type codexLine struct {
 	Timestamp string `json:"timestamp"`
 	Type      string `json:"type"`
 	Payload   *struct {
-		Type string `json:"type"`
-		Info *struct {
+		Type  string `json:"type"`
+		Model string `json:"model"`
+		Info  *struct {
 			Total *codexUsage `json:"total_token_usage"`
 			Last  *codexUsage `json:"last_token_usage"`
 		} `json:"info"`
@@ -110,17 +111,44 @@ const CodexModel = "codex"
 // includes the cached ones. Codex can repeat the event, so Record.ID is the
 // running total, which only a repeat shares.
 func ParseCodex(line []byte) (Record, bool, error) {
+	rec, ok, _, err := parseCodex(line)
+	return rec, ok, err
+}
+
+// NewCodexParser returns a ParseCodex that remembers the model of the last
+// turn_context line and labels the token counts after it with that model,
+// so a session that switches models (/model) is split by model (#482).
+// Records before any turn_context keep CodexModel.
+func NewCodexParser() Parser {
+	model := ""
+	return func(line []byte) (Record, bool, error) {
+		rec, ok, turn, err := parseCodex(line)
+		if turn != "" {
+			model = turn
+		}
+		if ok && model != "" {
+			rec.Model = model
+		}
+		return rec, ok, err
+	}
+}
+
+// parseCodex is ParseCodex that also returns a turn_context line's model.
+func parseCodex(line []byte) (rec Record, ok bool, turnModel string, err error) {
 	var l codexLine
 	if err := json.Unmarshal(line, &l); err != nil {
-		return Record{}, false, err
+		return Record{}, false, "", err
+	}
+	if l.Type == "turn_context" && l.Payload != nil {
+		return Record{}, false, l.Payload.Model, nil
 	}
 	if l.Type != "event_msg" || l.Payload == nil || l.Payload.Type != "token_count" ||
 		l.Payload.Info == nil || l.Payload.Info.Last == nil {
-		return Record{}, false, nil
+		return Record{}, false, "", nil
 	}
 	ts, err := parseTime(l.Timestamp)
 	if err != nil {
-		return Record{}, false, err
+		return Record{}, false, "", err
 	}
 	u := l.Payload.Info.Last
 	id := ""
@@ -130,7 +158,7 @@ func ParseCodex(line []byte) (Record, bool, error) {
 	return Record{
 		ID: id, Time: ts, Model: CodexModel,
 		Tokens: Tokens{Input: u.Input - u.CachedInput, CacheRead: u.CachedInput, Output: u.Output},
-	}, true, nil
+	}, true, "", nil
 }
 
 // CodexRolloutModel reads the first turn context from a rollout. Token-count
