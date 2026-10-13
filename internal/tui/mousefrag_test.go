@@ -309,6 +309,20 @@ func (r *ttyReader) pending() bool {
 	return !r.start.IsZero() && len(r.chunks) > 0 && time.Since(r.start) >= r.at[0]
 }
 
+// slowHandoff stands in for Bubble Tea's reader starved of CPU between
+// reading bytes and handing their keys over: each Read returns delay late,
+// after the inputWatch below it has seen the read end.
+type slowHandoff struct {
+	r     io.Reader
+	delay time.Duration
+}
+
+func (s slowHandoff) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	time.Sleep(s.delay)
+	return n, err
+}
+
 // scrubbed runs keys through a mouseScrub the way the TUI does and keeps
 // what comes out. It quits once r is read and nothing is held.
 type scrubbed struct {
@@ -366,16 +380,44 @@ func TestSplitAltUnderLoad(t *testing.T) {
 	spin(stop)
 	for i := range 50 {
 		r := &ttyReader{chunks: []string{"\x1b", "`"}, at: []time.Duration{0, time.Millisecond}}
-		m := &scrubbed{s: mouseScrub{wait: escWait, pending: r.pending}, r: r}
-		p := tea.NewProgram(m, tea.WithInput(r), tea.WithOutput(io.Discard), tea.WithoutSignals())
-		timer := time.AfterFunc(10*time.Second, p.Quit)
-		_, err := p.Run()
-		timer.Stop()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := strings.Join(m.keys, " "); got != "alt+`" {
+		if got := runScrubbed(t, r, 0); got != "alt+`" {
 			t.Fatalf("run %d: keys = %q, want alt+`", i, got)
 		}
 	}
+}
+
+// #459: ESC and ` read apart, by a reader that then takes longer than
+// escWait to hand ` over, still make alt+`. Once read, ` is no longer unread
+// in the terminal, so only the reader's state shows it is on its way.
+func TestSplitAltWhileReaderHoldsKey(t *testing.T) {
+	r := &ttyReader{chunks: []string{"\x1b", "`"}, at: []time.Duration{0, time.Millisecond}}
+	if got := runScrubbed(t, r, 4*escWait); got != "alt+`" {
+		t.Fatalf("keys = %q, want alt+`", got)
+	}
+}
+
+// A lone esc is still sent once the input goes idle: a reader waiting in
+// Read holds no keys.
+func TestLoneEscFlushesWithInputWatch(t *testing.T) {
+	r := &ttyReader{chunks: []string{"\x1b"}, at: []time.Duration{0}}
+	if got := runScrubbed(t, r, 0); got != "esc" {
+		t.Fatalf("keys = %q, want esc", got)
+	}
+}
+
+// runScrubbed feeds what Bubble Tea parses from r through a mouseScrub, the
+// way the TUI does, and returns the keys that came out. Each read's keys are
+// handed over handoff late.
+func runScrubbed(t *testing.T, r *ttyReader, handoff time.Duration) string {
+	t.Helper()
+	w := &inputWatch{r: r}
+	m := &scrubbed{s: mouseScrub{wait: escWait, pending: r.pending, input: w}, r: r}
+	p := tea.NewProgram(m, tea.WithInput(slowHandoff{w, handoff}), tea.WithOutput(io.Discard), tea.WithoutSignals())
+	timer := time.AfterFunc(10*time.Second, p.Quit)
+	_, err := p.Run()
+	timer.Stop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(m.keys, " ")
 }
