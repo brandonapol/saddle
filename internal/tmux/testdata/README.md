@@ -24,6 +24,9 @@ with only the working directory renamed:
 - `codex_working.ansi`: mid-turn, "• Working (6s • esc to interrupt)".
 - `codex_approval.ansi`: "Would you like to run the following command?" with
   the `› 1. Yes, proceed (y)` menu.
+- `grok_approval.ansi`: `--permission-mode default`; radio options drawn as
+  `┃  1 (●) Yes, …` and no composer in the last 15 lines (#496). A copy of
+  `internal/app/testdata/grok_approval.ansi`.
 - `grok_empty.ansi`: the splash screen and an empty `│ ❯ │` composer box.
 - `grok_draft.ansi`: "fix the flaky test" typed.
 - `grok_idle.ansi`: after a turn.
