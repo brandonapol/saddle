@@ -743,7 +743,9 @@ func overlaps(wt, base string, files []string) bool {
 // prgate.go): a red one and those above it stay unpublished. A task stacks
 // on the earlier tasks it depends on, declared or not, and a PR base someone
 // set by hand on another stacked branch is kept as such a dependency; a base
-// saddle changes is logged, never silent (see prbase.go).
+// saddle changes is logged, never silent (see prbase.go). A layer whose push
+// GitHub refuses with GH006, as for a PR in the merge queue, and the layers
+// above it are left for the next prs (see prsqueue.go).
 func (a *App) PRs() ([]string, error) {
 	res, err := a.publish()
 	return res.urls, err
@@ -853,7 +855,10 @@ func (a *App) publishMode(pushOnly bool) (published, error) {
 			continue // its work isn't whole until dep's PR merges
 		}
 		a.releaseDependencyHold(t.ID)
-		if err := a.pushLanded(t.Branch, layout[i].Head); err != nil {
+		if err := a.pushLanded(t.Branch, layout[i].Head); queuedRefusal(err) {
+			a.deferQueuedPR(t, err)
+			continue // in the merge queue; layers above wait for it (#433)
+		} else if err != nil {
 			return res, err
 		}
 		if pushOnly {
