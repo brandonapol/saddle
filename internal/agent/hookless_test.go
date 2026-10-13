@@ -211,3 +211,29 @@ func TestGeminiApprovalMode(t *testing.T) {
 		}
 	}
 }
+
+// #480: codex workers launched with no approval flags stopped on codex's
+// trust screen and asked approval for every command, unattended. The
+// permission mode maps to codex's flags as it does for gemini; [adapters.codex]
+// args that set approval or sandbox themselves win.
+func TestCodexApprovalFlags(t *testing.T) {
+	for mode, want := range map[string]string{
+		"": "--dangerously-bypass-approvals-and-sandbox", "auto": "--dangerously-bypass-approvals-and-sandbox",
+		"bypassPermissions": "--dangerously-bypass-approvals-and-sandbox", "acceptEdits": "--full-auto",
+		"plan": "", "default": "",
+	} {
+		if got := strings.Join(codexApproval(mode, nil), " "); got != want {
+			t.Errorf("codexApproval(%q) = %q, want %q", mode, got, want)
+		}
+	}
+	for _, args := range [][]string{{"--sandbox", "workspace-write"}, {"-a", "never"}, {"--full-auto"}, {"--ask-for-approval=never"}, {"-s", "read-only"}} {
+		if got := codexApproval("auto", args); got != nil {
+			t.Errorf("codexApproval with args %q = %q, want none", args, got)
+		}
+	}
+	l := Launch{Bin: "/bin/saddle", Task: "t5", Dir: "/repo/wt", Mode: "auto", RunDir: t.TempDir()}
+	_, script, _ := launchScript(t, Codex{}, l)
+	if !strings.Contains(script, "'--dangerously-bypass-approvals-and-sandbox'") {
+		t.Errorf("launch.sh lacks the approval flag:\n%s", script)
+	}
+}
