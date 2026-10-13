@@ -1,12 +1,14 @@
 package remote
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/tmux"
 )
 
 const bashPrompt = `● Bash(go test ./...)
@@ -138,5 +140,24 @@ func TestNeedsYouItemIDs(t *testing.T) {
 	// Same question and options, different command: a different prompt.
 	if c := read(); c[0].ID == a[0].ID {
 		t.Fatalf("a prompt for another command kept id %q", a[0].ID)
+	}
+}
+
+// Grok's approval screen (#488) draws radio options, "1 (●) Yes…", which
+// pressing the number picks like the others' menus.
+func TestParsePromptGrokApproval(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "app", "testdata", "grok_approval.ansi"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := ParsePrompt(tmux.StripANSI(string(b)))
+	want := []string{"Yes, and don't ask again for anything (always-approve mode)", "Yes, proceed", "No, reject (type to add feedback)", "Never allow: echo"}
+	if p.Kind != app.PromptAsk || len(p.Options) != len(want) {
+		t.Fatalf("prompt = %+v, want an ask with %d options", p, len(want))
+	}
+	for i, o := range p.Options {
+		if o.N != i+1 || o.Label != want[i] {
+			t.Errorf("option %d = %+v, want %d %q", i, o, i+1, want[i])
+		}
 	}
 }

@@ -38,8 +38,9 @@ const (
 )
 
 var (
-	// optionRe is a numbered option line, maybe behind the selection cursor.
-	optionRe = regexp.MustCompile(`^(?:[❯>›▶]\s*)?(\d{1,2})\.\s+(\S.*)$`)
+	// optionRe is a numbered option line, maybe behind the selection cursor,
+	// or grok's radio option "1 (●) Yes" (#488).
+	optionRe = regexp.MustCompile(`^(?:[❯>›▶]\s*)?(\d{1,2})(?:\.| \([●○]\))\s+(\S.*)$`)
 	// boxChars frame Claude Code's dialogs.
 	boxChars = " \t│┃|╭╮╰╯─━┌┐└┘"
 )
