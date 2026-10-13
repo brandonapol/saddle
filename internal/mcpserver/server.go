@@ -26,7 +26,9 @@ type SpawnIn struct {
 	Model  string   `json:"model,omitempty" jsonschema:"model for the adapter, e.g. claude's opus, sonnet or haiku; defaults to config for claude and to the CLI's default otherwise"`
 	// Adapter picks the agent CLI; see agent.ByName.
 	Adapter string `json:"adapter,omitempty" jsonschema:"agent to run: claude, codex, gemini or grok, any one listed as available in the brief or status. Omitted means the session default (saddle up <agent>, else harness in config). Claude and grok run saddle hooks; codex and gemini claims are advisory. An unavailable adapter fails with the reason, never a substitute"`
-	ID      string `json:"id,omitempty" jsonschema:"optional task id; defaults to the next tN"`
+	// Kind steers the adapter pick; see app.SpawnReq.Kind.
+	Kind string `json:"kind,omitempty" jsonschema:"task kind, e.g. docs, mechanical, design, review; without adapter it picks an adapter whose [adapters.<name>] kinds list it, else [adapters] policy picks (status shows adapter_policy and each adapter's pick rank)"`
+	ID   string `json:"id,omitempty" jsonschema:"optional task id; defaults to the next tN"`
 	Issue   int    `json:"issue,omitempty" jsonschema:"GitHub issue number this task implements; its PR will close it"`
 	// After becomes explicit stack edges; see app.SpawnReq.After.
 	After []string `json:"after,omitempty" jsonschema:"ids of unmerged tasks this one builds on, e.g. [\"t61\"] when it uses a make target or API t61 adds; its PR stacks on theirs even when their files don't overlap"`
@@ -117,7 +119,9 @@ type StatusOut struct {
 	// it is idle.
 	HeavyRuns *app.HeavyRuns `json:"heavy_runs,omitempty" jsonschema:"the machine's heavy-run queue per class: slots, holders (task, repo, cmd, age, overdue past max_run) and waiters (position, task, wait, eta); absent while idle"`
 	// Adapters says which coding CLIs a worker can run on here (#182).
-	Adapters []agent.Status `json:"adapters" jsonschema:"each adapter (claude, codex, gemini, grok) and whether it can run here: CLI on PATH and logged in; reason when not"`
+	Adapters []agent.Status `json:"adapters" jsonschema:"each adapter (claude, codex, gemini, grok) and whether it can run here: CLI on PATH and logged in; reason when not. pick_rank orders them for the next spawn without adapter= (1 first, absent when it can't be picked) and pick says why"`
+	// AdapterPolicy is [adapters] policy and failover in words (#481).
+	AdapterPolicy string `json:"adapter_policy,omitempty" jsonschema:"how spawns without adapter= pick (order, cost or quota) and what a worker does when its adapter runs out mid-task (handoff to the next adapter, or park until the reset)"`
 	Tasks    []TaskView     `json:"tasks"`
 	// Hidden counts tasks the compact status tool left out, by status (#340).
 	Hidden map[string]int `json:"hidden,omitempty" jsonschema:"tasks left out of the compact view, by status; ask with detail, state or ids to see them"`
@@ -341,6 +345,7 @@ func Status(a *app.App) (StatusOut, error) {
 		out.HeavyRuns = &v
 	}
 	out.Adapters = a.Adapters()
+	out.AdapterPolicy = a.AdapterPolicy()
 	out.Tasks, err = Tasks(a)
 	return out, err
 }
@@ -431,7 +436,7 @@ func New(a *app.App, task string) *mcp.Server {
 			if err := self(); err != nil {
 				return nil, SpawnOut{}, err
 			}
-			t, err := a.Spawn(app.SpawnReq{ID: in.ID, Title: in.Title, Prompt: in.Prompt, Claims: in.Claims, Model: in.Model, Adapter: in.Adapter, Parent: task, Issue: in.Issue, After: in.After, Confirm: in.Confirm})
+			t, err := a.Spawn(app.SpawnReq{ID: in.ID, Title: in.Title, Prompt: in.Prompt, Claims: in.Claims, Model: in.Model, Adapter: in.Adapter, Kind: in.Kind, Parent: task, Issue: in.Issue, After: in.After, Confirm: in.Confirm})
 			if err != nil {
 				return nil, SpawnOut{}, err
 			}

@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -245,25 +244,15 @@ func (a *App) RotationBanner(now time.Time) string {
 	return line
 }
 
-// nextAdapter is from itself when it is not out of quota, else the next adapter after
-// it in [adapters] order that has quota and can run here.
+// nextAdapter is from itself when it is not out of quota, else the best
+// adapter with quota that can run here, as [adapters] policy ranks them
+// starting from from (#481).
 func (a *App) nextAdapter(from string, ex map[string]Exhaustion) (string, error) {
 	if _, out := ex[from]; !out {
 		return from, nil
 	}
-	usable := agent.Usable(a.adapterStatus())
-	ok := func(n string) bool {
-		_, out := ex[n]
-		return !out && slices.Contains(usable, n)
-	}
-	order := a.Cfg.AdapterOrder
-	start := slices.Index(order, from) + 1 // 0 when from is not listed
-	for i := range order {
-		if n := order[(start+i)%len(order)]; ok(n) {
-			return n, nil
-		}
-	}
-	return "", ErrAllExhausted
+	c, err := a.bestAdapter(pickReq{def: from}, ex, time.Now())
+	return c.Name, err
 }
 
 func sortedExhaustion(m map[string]Exhaustion) []Exhaustion {
@@ -288,30 +277,32 @@ func firstReset(m map[string]Exhaustion) Exhaustion {
 }
 
 // spawnAdapter picks the adapter for a spawn: the requested one, else the
-// session default, rotated past adapters out of quota. rotated names the
-// adapter it replaced.
-func (a *App) spawnAdapter(requested string, force bool) (name, rotated string, err error) {
-	ex := a.ExhaustedAdapters(time.Now())
+// best one by [adapters] policy for the task's kind and claims, rotated past
+// adapters out of quota (#481). rotated names the session default it
+// replaced because that one is out of quota; why says what picked it.
+func (a *App) spawnAdapter(requested, kind string, claims, force bool) (name, rotated, why string, err error) {
+	now := time.Now()
+	ex := a.ExhaustedAdapters(now)
 	if requested != "" {
 		if e, out := ex[requested]; out && !force {
 			hint := "no other adapter has quota"
 			if next, err := a.nextAdapter(requested, ex); err == nil {
 				hint = "spawn without adapter (or adapter=" + next + ") to use " + next
 			}
-			return "", "", fmt.Errorf("adapter %s is out of quota until %s: %s, or pass force to launch it anyway", requested, e.when(), hint)
+			return "", "", "", fmt.Errorf("adapter %s is out of quota until %s: %s, or pass force to launch it anyway", requested, e.when(), hint)
 		}
-		return requested, "", nil
+		return requested, "", "requested", nil
 	}
 	def := a.Cfg.Harness
-	next, err := a.nextAdapter(def, ex)
+	c, err := a.bestAdapter(pickReq{def: def, kind: strings.ToLower(strings.TrimSpace(kind)), claims: claims}, ex, now)
 	if err != nil {
 		first := firstReset(ex)
-		return "", "", fmt.Errorf("%w; the first reset is %s at %s. Running agents stay parked", ErrAllExhausted, first.Adapter, first.when())
+		return "", "", "", fmt.Errorf("%w; the first reset is %s at %s. Running agents stay parked", ErrAllExhausted, first.Adapter, first.when())
 	}
-	if next != def {
+	if _, out := ex[def]; out && c.Name != def {
 		rotated = def
 	}
-	return next, rotated, nil
+	return c.Name, rotated, c.Why, nil
 }
 
 // rotatedTask records that t runs on ad because from is out of quota, and

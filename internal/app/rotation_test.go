@@ -254,7 +254,7 @@ func TestOrchestratorBriefListsProviders(t *testing.T) {
 	t.Parallel()
 	a, _ := setup(t)
 	b := a.orchestratorBrief()
-	for _, want := range []string{"Anthropic", "SpaceXAI", "OpenAI", "claude", "grok", "codex", "pick per task", "out of quota", "[adapters] order"} {
+	for _, want := range []string{"Anthropic", "SpaceXAI", "OpenAI", "claude", "grok", "codex", "pick per task", "out of quota", "[adapters] policy", "kind=", "handed off"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("brief lacks %q", want)
 		}

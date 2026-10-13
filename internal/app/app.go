@@ -151,6 +151,9 @@ type SpawnReq struct {
 	After []string
 	// Adapter is the agent to launch: claude (the default), codex or grok.
 	Adapter string
+	// Kind is the task's kind (docs, mechanical, design…). Without Adapter
+	// it picks an adapter whose [adapters.<name>] kinds list it (#481).
+	Kind string
 	Force   bool // ignore claim conflicts, the concurrency cap and paused launches
 	// Confirm goes ahead when every claim covers work landed or queued tasks
 	// already changed. Without it such a spawn returns ErrNeedsConfirm.
@@ -214,7 +217,7 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	}
 	// No adapter means the session default (#150), rotated past adapters out
 	// of quota (#321).
-	picked, rotated, err := a.spawnAdapter(r.Adapter, r.Force)
+	picked, rotated, why, err := a.spawnAdapter(r.Adapter, r.Kind, len(r.Claims) > 0, r.Force)
 	if err != nil {
 		return t, err
 	}
@@ -321,7 +324,7 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 		return t, a.spawnFailed(t, true, hadBranch, fmt.Errorf("launch: %w", err))
 	}
 	t.Window = win
-	a.Store.Event(id, "spawn", fmt.Sprintf("parent=%s adapter=%s model=%s claims=%s%s", r.Parent, ad.Name(), model, strings.Join(r.Claims, ","), hint))
+	a.Store.Event(id, "spawn", fmt.Sprintf("parent=%s adapter=%s (%s) model=%s claims=%s%s", r.Parent, ad.Name(), why, model, strings.Join(r.Claims, ","), hint))
 	if rotated != "" {
 		if err := a.rotatedTask(t, rotated, ad, r.Claims); err != nil {
 			return t, err
