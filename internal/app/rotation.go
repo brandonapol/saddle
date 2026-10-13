@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/agent"
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/usage"
 )
@@ -144,8 +145,12 @@ func (a *App) MarkExhausted(adapter string, until time.Time, resets string) erro
 		text = fmt.Sprintf("All adapters are out of quota (%s ran out last). New spawns are refused until the first reset: %s at %s. "+
 			"Running tasks stay parked and continue after their reset; nothing is killed.", adapter, first.Adapter, first.when())
 	} else {
-		text = fmt.Sprintf("Adapter %s is out of quota until %s. New spawns that would use %s go to %s instead until then. "+
-			"Tasks already on %s stay parked and %s after the reset.", adapter, e.when(), adapter, next, adapter, resumeHow(adapter))
+		text = fmt.Sprintf("Adapter %s is out of quota until %s. New spawns that would use %s go to %s instead until then. ", adapter, e.when(), adapter, next)
+		if p := a.Cfg.AdapterPolicy; p.Failover == config.FailoverHandoff && (p.HandoffWait <= 0 || until.Sub(now) > p.HandoffWait) {
+			text += fmt.Sprintf("Tasks already on %s are handed to the next adapter with quota (a hooked one when they claim paths) to finish in their worktrees.", adapter)
+		} else {
+			text += fmt.Sprintf("Tasks already on %s stay parked and %s after the reset.", adapter, resumeHow(adapter))
+		}
 		if ad, err := agent.ByName(next); err == nil && !ad.Hooks() {
 			text += fmt.Sprintf(" %s has no hooks: claims of tasks it runs are advisory.", next)
 		}

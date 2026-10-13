@@ -213,9 +213,16 @@ func (e *Engine) park(ts []mcpserver.TaskView, id, status string, b usage.LimitB
 		return
 	}
 	e.parked[id] = true
-	// Its adapter is out of quota: new spawns rotate past it (#321).
-	if err := e.a.AdapterLimitHit(id, b); err != nil {
+	// Its adapter is out of quota: new spawns rotate past it (#321), and the
+	// task itself moves to another adapter when the policy says so (#481).
+	to, err := e.a.LimitHit(id, b)
+	if err != nil {
 		e.a.Store.Event(id, "engine_error", err.Error())
+	}
+	if to != "" {
+		delete(e.parked, id) // handed off: a new agent in a new window, and HandOff told the orchestrator
+		delete(e.screens, id)
+		return
 	}
 	resets := "after the limit resets"
 	if b.Resets != "" {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/usage"
@@ -104,6 +105,7 @@ func TestWatchScreensResumesCodexAfterReset(t *testing.T) {
 	m.app.Store = st
 	tm := &typingTmux{}
 	m.app.Tmux = tm
+	m.app.Cfg.AdapterPolicy.Failover = config.FailoverPark // codex waits for its reset here
 	m.app.AdapterStatus = func() []agent.Status {
 		return []agent.Status{{Name: "claude", OK: true}, {Name: "grok", OK: true}, {Name: "codex", OK: true}}
 	}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/usage"
@@ -310,6 +311,7 @@ func TestEngineLeavesDownPausedTaskAlone(t *testing.T) {
 // of quota, so the next spawn rotates to grok; the banner clearing restores it.
 func TestEngineParkRotatesAdapter(t *testing.T) {
 	a, ft := setup(t)
+	a.Cfg.AdapterPolicy.Failover = config.FailoverPark // the running worker waits; handoff has its own test
 	a.AdapterStatus = func() []agent.Status {
 		var out []agent.Status
 		for _, n := range agent.Names() {
@@ -354,6 +356,44 @@ func allAdapters() []agent.Status {
 	return out
 }
 
+// #481: a claude worker that runs out mid-task is handed to grok instead
+// of parking: a new agent in a new window and the same worktree, running,
+// with no "parked" notice, and claude stays out for new spawns.
+func TestEngineHandsOffWorkerOnUsageLimit(t *testing.T) {
+	a, ft := setup(t)
+	a.AdapterStatus = allAdapters
+	a.OwnerNotify = func(string) {}
+	w, err := a.Spawn(app.SpawnReq{Title: "meter", Claims: []string{"meter/**"}})
+	must(t, err)
+	clock := time.Now()
+	e := New(a)
+	e.now = func() time.Time { return clock }
+	ft.screens[w.Window] = "You've hit your session limit · resets in 3 hours\n> "
+	must(t, e.Tick())
+	clock = clock.Add(5 * time.Second)
+	must(t, e.Tick())
+	got, err := a.Store.Task(w.ID)
+	must(t, err)
+	if got.Status != store.Running || got.Window == w.Window || got.Worktree != w.Worktree {
+		t.Fatalf("after the limit: %+v", got)
+	}
+	if ad := a.TaskAdapterName(w.ID); ad != usage.Grok {
+		t.Fatalf("task runs on %s, want grok", ad)
+	}
+	if n := orchNotices(t, a); strings.Contains(n, "parked") {
+		t.Fatalf("a handed-off worker was reported parked: %q", n)
+	}
+	ft.screens[got.Window] = "working on it"
+	clock = clock.Add(10 * time.Second)
+	must(t, e.Tick())
+	if st, _ := a.Store.Task(w.ID); st.Status != store.Running {
+		t.Fatalf("finisher status %q", st.Status)
+	}
+	if _, out := a.ExhaustedAdapters(time.Now())[usage.Claude]; !out {
+		t.Fatal("claude no longer out of quota")
+	}
+}
+
 // codexLimitScreen is codex after its usage-limit error: the turn ended and
 // it waits at its composer. It won't continue on its own.
 const codexLimitScreen = `• Ran make check
@@ -366,6 +406,7 @@ const codexLimitScreen = `• Ran make check
 // Claude Code does. Once its adapter's quota is back, saddle types it on.
 func TestEngineResumesCodexAfterItsReset(t *testing.T) {
 	a, ft := setup(t)
+	a.Cfg.AdapterPolicy.Failover = config.FailoverPark
 	a.AdapterStatus = allAdapters
 	w, err := a.Spawn(app.SpawnReq{Title: "meter", Adapter: usage.Codex})
 	must(t, err)

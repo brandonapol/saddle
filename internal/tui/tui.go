@@ -1337,8 +1337,11 @@ func (m *model) watchScreens(ts []mcpserver.TaskView, screens map[string]string)
 			if m.app.ResumedPast(id, b) {
 				continue
 			}
-			if err := m.app.AdapterLimitHit(id, b); err != nil {
+			// The task moves to another adapter when the policy says so (#481).
+			if to, err := m.app.LimitHit(id, b); err != nil {
 				m.app.Store.Event(id, "tui_error", err.Error())
+			} else if to != "" {
+				delete(m.screens, id)
 			}
 			continue
 		}
