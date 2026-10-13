@@ -202,7 +202,11 @@ func (a *App) AdapterLimitHit(task string, b usage.LimitBanner) error {
 	if !ok {
 		until = now.Add(ExhaustFor)
 	}
-	return a.MarkExhausted(a.taskAdapter(t).Name(), until, b.Resets)
+	resets := b.Resets
+	if resetInRe.MatchString(resets) {
+		resets = "" // "in 2 hours" is stale once read: show the clock time (#480)
+	}
+	return a.MarkExhausted(a.taskAdapter(t).Name(), until, resets)
 }
 
 // AdapterLimitCleared restores task's adapter: its usage-limit banner cleared.
@@ -391,11 +395,27 @@ func modelFamily(model string) string {
 	return ""
 }
 
-var resetClockRe = regexp.MustCompile(`(?i)(?:\b([a-z]{3})[a-z]*\s+(\d{1,2}),?\s+)?\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b(?:\s*\(([^)]+)\))?`)
+var (
+	resetClockRe = regexp.MustCompile(`(?i)(?:\b([a-z]{3})[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(?:\d{4}\s+)?)?\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b(?:\s*\(([^)]+)\))?`)
+	resetInRe    = regexp.MustCompile(`(?i)^\s*in\s+\d`)
+	resetPartRe  = regexp.MustCompile(`(?i)(\d+)\s*(days?|hours?|hrs?|minutes?|mins?|seconds?|secs?)\b`)
+)
+
+// resetUnits are the lengths of resetPartRe's units, by first letter.
+var resetUnits = map[byte]time.Duration{'d': 24 * time.Hour, 'h': time.Hour, 'm': time.Minute, 's': time.Second}
 
 // parseReset reads a banner's reset wording ("3pm (America/New_York)",
-// "12:10pm", "Oct 12, 3pm") as the next such time after now.
+// "12:10pm", "Oct 12, 3pm", codex's "Oct 14th, 2026 3:04 PM" and
+// "in 2 hours 5 minutes") as the next such time after now.
 func parseReset(s string, now time.Time) (time.Time, bool) {
+	if resetInRe.MatchString(s) {
+		var d time.Duration
+		for _, p := range resetPartRe.FindAllStringSubmatch(s, -1) {
+			n, _ := strconv.Atoi(p[1])
+			d += time.Duration(n) * resetUnits[strings.ToLower(p[2])[0]]
+		}
+		return now.Add(d), d > 0
+	}
 	m := resetClockRe.FindStringSubmatch(s)
 	if m == nil {
 		return time.Time{}, false
