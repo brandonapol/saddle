@@ -17,7 +17,51 @@ orchestrator explaining a stale base and asking before it acts.*
 - Design: [TUI canvas](https://claude.ai/artifact/TKRvnLJoDLBonpdKDU19L4)
 - Quickstart for a new repo: [docs/QUICKSTART.md](docs/QUICKSTART.md)
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- Vocabulary: [docs/GLOSSARY.md](docs/GLOSSARY.md)
 - Roadmap: GitHub epics, milestone **M0: dogfood**
+
+## How Saddle works
+
+```
+spawn ──▶ work ──▶ done ──▶ land ──▶ prs ──▶ merge
+ agent    own      gate     merge    stacked   you (or
+ + tree   branch   passes   train    GitHub    automerge)
+                            onto
+                            saddle/integration
+```
+
+1. **spawn**: a *task* gets its own branch, git worktree and tmux window, and
+   *claims* the paths it will edit so agents don't collide.
+2. **work, then `done`**: the agent commits; `done` runs the repo's gate (for
+   example `make check`) and queues the branch in the *merge train*.
+3. **land**: `saddle land` takes queued branches one at a time: rebase onto the
+   integration branch (`saddle/integration`), run the tests, fast-forward. A
+   conflict goes back to the agent that wrote it. **Land never pushes** and
+   never touches GitHub.
+4. **prs**: `saddle prs` pushes landed branches and opens or updates the *stack*
+   of PRs, each based on the one below, that close your issues.
+5. **merge**: you merge them (or turn on `saddle automerge`).
+
+When the world moves, **restack** rebuilds the landed stack on origin's base
+after base moved, a bottom PR merged, or the *sentinel* flagged the stack
+*at-risk*. It rebases in train order, moves the branches, pushes and retargets
+the PRs; a conflict moves nothing and returns to the task that owns the commit.
+You run it when `saddle status` shows `stack_at_risk` or a bottom PR merged.
+
+Other terms you will meet:
+
+- **publish**: open one task's PR on its own against base, when the stack is
+  blocked but that task stands alone. **unstack** takes a task out of the stack;
+  **requeue** puts a landed task whose work integration lacks back in the train.
+- **sentinel**: the watcher that flags the stack *at-risk* or *ci-red*;
+  `saddle sentinel ack` acknowledges a flag so it stops holding work back.
+- **autopilot**: saddle lands, publishes and tops up from `ready` issues by
+  itself; **infinite mode** keeps going until the plan limit and parks there.
+- **adapter / harness**: the agent CLI (`claude`, `codex`, `gemini`, `grok`)
+  and the one that drives the orchestrator chat.
+
+The full dictionary, with every command and task state, is
+[docs/GLOSSARY.md](docs/GLOSSARY.md).
 
 ## Quickstart
 
