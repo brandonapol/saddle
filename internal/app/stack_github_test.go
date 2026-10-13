@@ -305,7 +305,8 @@ func TestRestackSkipsClosedAndMergedPRs(t *testing.T) {
 }
 
 // Even if GitHub can't be asked first, a closed PR's retarget failure skips
-// that PR instead of failing the restack.
+// that PR instead of failing the restack. (A base saddle already set to the
+// layout's isn't edited blind, #359, so t1's must need changing here.)
 func TestRestackToleratesRetargetOfClosedPR(t *testing.T) {
 	a := trainSetup(t)
 	origin, _ := originWithGh(t, a)
@@ -315,6 +316,7 @@ func TestRestackToleratesRetargetOfClosedPR(t *testing.T) {
 	must(t, err)
 	t1, _ := a.Store.Task("t1")
 	setPR(t, t1.PR, "CLOSED", "main")
+	must(t, a.saveBase("t1", "saddle/gone"))
 	moveMain(t, origin, "news.txt")
 	prev := prView
 	prView = func(string, string) (PRInfo, error) { return PRInfo{}, errFakeGH }
