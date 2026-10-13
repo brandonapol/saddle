@@ -205,3 +205,13 @@ func TestOrchestratorBriefTalkingGolden(t *testing.T) {
 		}
 	}
 }
+
+func TestOrchestratorBriefsPointAtGlossary(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	for name, brief := range map[string]string{"tui": a.orchestratorBrief(), "plugin": a.PluginBrief()} {
+		if !strings.Contains(brief, "docs/GLOSSARY.md") {
+			t.Errorf("%s orchestrator brief does not point at docs/GLOSSARY.md", name)
+		}
+	}
+}
