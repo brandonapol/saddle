@@ -1303,19 +1303,40 @@ func (m *model) watchScreens(ts []mcpserver.TaskView, screens map[string]string)
 		status[t.ID] = t.Status
 	}
 	for id, s := range screens {
+		b, banner := usage.DetectLimitBanner(s)
+		if !banner {
+			m.app.ForgetResumed(id)
+		}
 		st := m.screens[id]
 		if st == nil || st.text != s {
 			m.screens[id] = &screenState{text: s, since: time.Now()}
+			m.app.ObserveHooklessScreen(id, status[id], 0, s)
 			continue
+		}
+		// Codex and gemini have no Stop hook: their screen says when they stop (#480).
+		m.app.ObserveHooklessScreen(id, status[id], time.Since(st.since), s)
+		if st.acted && banner && !m.app.LimitAutoResumes(id) && !m.app.ResumedPast(id, b) {
+			// Codex and grok wait for input after their reset (#480). Typing
+			// checks the submit, so it runs off the UI loop; the task's
+			// events record it.
+			go func(id string, b usage.LimitBanner) {
+				if _, err := m.app.ResumeAfterLimit(id, b, time.Now()); err != nil {
+					m.app.Store.Event(id, "tui_error", err.Error())
+				}
+			}(id, b)
 		}
 		if st.acted || time.Since(st.since) < 4*time.Second {
 			continue
 		}
 		// A usage-limit banner parks the worker on its own; its adapter is
 		// out of quota, so new spawns rotate past it (#321). No keys:
-		// Escape there cancels the automatic restart.
-		if b, on := usage.DetectLimitBanner(s); on {
+		// Escape there cancels Claude Code's automatic restart. A banner
+		// saddle already typed the worker past is scrollback.
+		if banner {
 			st.acted = true
+			if m.app.ResumedPast(id, b) {
+				continue
+			}
 			if err := m.app.AdapterLimitHit(id, b); err != nil {
 				m.app.Store.Event(id, "tui_error", err.Error())
 			}

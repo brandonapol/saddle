@@ -29,6 +29,10 @@ func TestDetectLimitBanner(t *testing.T) {
 		{"codex", "■ You've hit your usage limit. Upgrade to Pro or try again at 4:05 PM.\n› ", "4:05 PM", true},
 		{"openai quota", "stream error: You exceeded your current quota, please check your plan and billing details.\n> ", "", true},
 		{"grok credits", "Error: out of credits for this billing period. Resets 6pm\n> ", "6pm", true},
+		// #480: codex's relative and dated resets, xAI's spend cap.
+		{"codex relative", "■ You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or try again in 2 hours 5 minutes.\n› ", "in 2 hours 5 minutes", true},
+		{"codex dated", "■ You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 14th, 2026 3:04 PM.\n› ", "Oct 14th, 2026 3:04 PM", true},
+		{"xai spend cap", "Error: Your team has either used all available credits or reached its monthly spending limit.\n> ", "", true},
 		{"working", "⏺ Editing engine.go\n  esc to interrupt", "", false},
 		{"prompt", "Do you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel", "", false},
 		// An agent quoting the banner further up its scrollback is not parked.

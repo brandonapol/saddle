@@ -247,7 +247,9 @@ close PRs and delete branches, and it handles those without anyone editing
   `[adapters.grok]` cmd and args apply here too.
 - **Codex / one-shot Grok** (`adapter=codex|grok` under the Claude harness):
   hookless, so claims are advisory and notices are typed in. Usage and status
-  come from their output on a best-effort basis.
+  come from their output on a best-effort basis: a hookless worker's screen
+  marks it idle or running, and saddle types codex and grok on after a
+  usage-limit reset. `docs/adapter-parity.md` lists every feature per adapter.
 
 ### Providers, per-task choice and rotation (#321)
 

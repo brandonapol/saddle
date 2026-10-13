@@ -19,13 +19,17 @@ type wakeState struct {
 	woke      map[string]time.Time
 	injecting map[string]int
 	gen       int
+	// resumed is the reset wording of the limit banner saddle last typed a
+	// worker past (#480), so a banner left in its scrollback isn't read as
+	// a new limit.
+	resumed map[string]string
 }
 
 func (a *App) wakeState() *wakeState {
 	a.wake.mu.Lock()
 	defer a.wake.mu.Unlock()
 	if a.wake.woke == nil {
-		a.wake.woke, a.wake.injecting = map[string]time.Time{}, map[string]int{}
+		a.wake.woke, a.wake.injecting, a.wake.resumed = map[string]time.Time{}, map[string]int{}, map[string]string{}
 	}
 	return &a.wake
 }

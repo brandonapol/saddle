@@ -538,7 +538,7 @@ func (a *App) workerModel() string {
 	case config.HarnessGrok:
 		return a.Cfg.Grok.Model
 	case config.HarnessCodex:
-		return "" // codex's own default
+		return a.Cfg.Adapters[usage.Codex].Model // empty is codex's own default
 	}
 	return a.Cfg.Claude.Model
 }

@@ -25,8 +25,8 @@ type cell struct {
 	ghost bool
 }
 
-// ReadInput classifies the last prompt line ("> text", "❯ text", with or
-// without a surrounding box border) of a captured pane. A capture with SGR
+// ReadInput classifies the last prompt line ("> text", "❯ text", Codex's
+// "› text", with or without a surrounding box border) of a captured pane. A capture with SGR
 // escapes (capture-pane -e) tells a faint or grey suggestion from typed
 // text; a plain capture can only spot the "Try …" placeholder, so any other
 // text counts as a draft.
@@ -35,7 +35,7 @@ func ReadInput(pane string) Input {
 	lines := strings.Split(pane, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		cells := trimCells(decode(lines[i]), "│")
-		if len(cells) == 0 || (cells[0].r != '❯' && cells[0].r != '>') {
+		if len(cells) == 0 || !promptGlyph(cells[0].r) {
 			continue
 		}
 		rest := trimCells(cells[1:], "")
@@ -57,6 +57,10 @@ func ReadInput(pane string) Input {
 	}
 	return InputEmpty
 }
+
+// promptGlyph reports whether r starts an agent's input line: Claude Code's
+// "❯" or ">", or Codex's "›" (#480).
+func promptGlyph(r rune) bool { return r == '❯' || r == '>' || r == '›' }
 
 // HasDraft reports whether the prompt input in a captured pane holds text the
 // user is typing. Suggestions and placeholder hints don't count.

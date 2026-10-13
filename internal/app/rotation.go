@@ -143,10 +143,10 @@ func (a *App) MarkExhausted(adapter string, until time.Time, resets string) erro
 	if nerr != nil {
 		first := firstReset(m)
 		text = fmt.Sprintf("All adapters are out of quota (%s ran out last). New spawns are refused until the first reset: %s at %s. "+
-			"Running tasks stay parked and continue on their own; nothing is killed.", adapter, first.Adapter, first.when())
+			"Running tasks stay parked and continue after their reset; nothing is killed.", adapter, first.Adapter, first.when())
 	} else {
 		text = fmt.Sprintf("Adapter %s is out of quota until %s. New spawns that would use %s go to %s instead until then. "+
-			"Tasks already on %s stay parked and continue on their own after the reset.", adapter, e.when(), adapter, next, adapter)
+			"Tasks already on %s stay parked and %s after the reset.", adapter, e.when(), adapter, next, adapter, resumeHow(adapter))
 		if ad, err := agent.ByName(next); err == nil && !ad.Hooks() {
 			text += fmt.Sprintf(" %s has no hooks: claims of tasks it runs are advisory.", next)
 		}
@@ -189,6 +189,14 @@ func (a *App) ClearExhausted(adapter string) error {
 	return nil
 }
 
+// resumeHow says how a task parked on adapter's limit gets going again.
+func resumeHow(adapter string) string {
+	if agent.AutoResumes(adapter) {
+		return "continue on their own"
+	}
+	return "saddle types them a continue line"
+}
+
 // AdapterLimitHit marks the adapter task runs on exhausted: its screen shows
 // a usage-limit banner. The reset comes from the banner when saddle can read
 // it, otherwise ExhaustFor from now.
@@ -202,7 +210,11 @@ func (a *App) AdapterLimitHit(task string, b usage.LimitBanner) error {
 	if !ok {
 		until = now.Add(ExhaustFor)
 	}
-	return a.MarkExhausted(a.taskAdapter(t).Name(), until, b.Resets)
+	resets := b.Resets
+	if resetInRe.MatchString(resets) {
+		resets = "" // "in 2 hours" is stale once read: show the clock time (#480)
+	}
+	return a.MarkExhausted(a.taskAdapter(t).Name(), until, resets)
 }
 
 // AdapterLimitCleared restores task's adapter: its usage-limit banner cleared.
@@ -372,7 +384,7 @@ func (a *App) modelFor(adapter, requested string) string {
 	case usage.Claude:
 		return a.Cfg.Claude.Model
 	}
-	return ""
+	return a.Cfg.Adapters[adapter].Model
 }
 
 // modelFamily is the adapter a model name belongs to, or "" when unknown.
@@ -391,11 +403,27 @@ func modelFamily(model string) string {
 	return ""
 }
 
-var resetClockRe = regexp.MustCompile(`(?i)(?:\b([a-z]{3})[a-z]*\s+(\d{1,2}),?\s+)?\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b(?:\s*\(([^)]+)\))?`)
+var (
+	resetClockRe = regexp.MustCompile(`(?i)(?:\b([a-z]{3})[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(?:\d{4}\s+)?)?\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b(?:\s*\(([^)]+)\))?`)
+	resetInRe    = regexp.MustCompile(`(?i)^\s*in\s+\d`)
+	resetPartRe  = regexp.MustCompile(`(?i)(\d+)\s*(days?|hours?|hrs?|minutes?|mins?|seconds?|secs?)\b`)
+)
+
+// resetUnits are the lengths of resetPartRe's units, by first letter.
+var resetUnits = map[byte]time.Duration{'d': 24 * time.Hour, 'h': time.Hour, 'm': time.Minute, 's': time.Second}
 
 // parseReset reads a banner's reset wording ("3pm (America/New_York)",
-// "12:10pm", "Oct 12, 3pm") as the next such time after now.
+// "12:10pm", "Oct 12, 3pm", codex's "Oct 14th, 2026 3:04 PM" and
+// "in 2 hours 5 minutes") as the next such time after now.
 func parseReset(s string, now time.Time) (time.Time, bool) {
+	if resetInRe.MatchString(s) {
+		var d time.Duration
+		for _, p := range resetPartRe.FindAllStringSubmatch(s, -1) {
+			n, _ := strconv.Atoi(p[1])
+			d += time.Duration(n) * resetUnits[strings.ToLower(p[2])[0]]
+		}
+		return now.Add(d), d > 0
+	}
 	m := resetClockRe.FindStringSubmatch(s)
 	if m == nil {
 		return time.Time{}, false

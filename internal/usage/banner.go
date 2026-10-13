@@ -19,8 +19,8 @@ type LimitBanner struct {
 const bannerTail = 12
 
 var (
-	limitRe = regexp.MustCompile(`(?i)usage limit reached|you(?:'|’)ve hit your [\w-]+ limit|\b(?:session|weekly|5-hour|opus) limit reached|exceeded your current quota|\bout of credits\b|insufficient credits`)
-	resetRe = regexp.MustCompile(`(?i)\b(?:resets?(?: at)?|try again at)\s+([^·∙\n]+)`)
+	limitRe = regexp.MustCompile(`(?i)usage limit reached|you(?:'|’)ve hit your [\w-]+ limit|\b(?:session|weekly|5-hour|opus) limit reached|exceeded your current quota|\bout of credits\b|insufficient credits|used all available credits|reached its monthly spending limit`)
+	resetRe = regexp.MustCompile(`(?i)\b(?:resets?(?: at)?|try again at|try again (in))\s+([^·∙\n]+)`)
 )
 
 // DetectLimitBanner reports whether a terminal screen shows Claude Code
@@ -41,7 +41,11 @@ func DetectLimitBanner(screen string) (LimitBanner, bool) {
 	// The fullest wording wins: "12:10pm (America/New_York)" over "12:10pm".
 	var b LimitBanner
 	for _, m := range resetRe.FindAllStringSubmatch(text, -1) {
-		if r := strings.TrimRight(strings.TrimSpace(m[1]), ".│ "); len(r) > len(b.Resets) {
+		r := strings.TrimRight(strings.TrimSpace(m[2]), ".│ ")
+		if m[1] != "" {
+			r = "in " + r // codex's relative reset (#480)
+		}
+		if len(r) > len(b.Resets) {
 			b.Resets = r
 		}
 	}

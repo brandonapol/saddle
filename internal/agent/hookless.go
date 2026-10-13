@@ -111,9 +111,32 @@ func (Codex) Launch(l Launch) (string, error) {
 		"-c", shellQuote(`mcp_servers.saddle.args=["mcp"]`),
 		"-c", shellQuote(fmt.Sprintf("mcp_servers.saddle.env={SADDLE_ROOT=%s,SADDLE_TASK=%s}",
 			strconv.Quote(env["SADDLE_ROOT"]), strconv.Quote(env["SADDLE_TASK"]))))
+	argv = append(argv, quoteAll(codexApproval(l.Mode, l.Args))...)
 	argv = append(argv, quoteAll(l.Args)...)
 	argv = append(argv, `"$(cat "$run/prompt.md")"`)
 	return l.writeHookless(usage.Codex, nil, argv)
+}
+
+// codexApproval maps a Claude permission mode to codex's approval flags
+// (#480). Workers run unattended, and codex's workspace-write sandbox can't
+// commit to a worktree whose git dir sits outside it, so anything but
+// acceptEdits, plan or default bypasses both. Args that set approval or the
+// sandbox themselves win.
+func codexApproval(mode string, args []string) []string {
+	for _, a := range args {
+		flag, _, _ := strings.Cut(a, "=")
+		switch flag {
+		case "-a", "--ask-for-approval", "-s", "--sandbox", "--full-auto", "--dangerously-bypass-approvals-and-sandbox", "--yolo":
+			return nil
+		}
+	}
+	switch mode {
+	case "acceptEdits":
+		return []string{"--full-auto"}
+	case "plan", "default":
+		return nil
+	}
+	return []string{"--dangerously-bypass-approvals-and-sandbox"}
 }
 
 func (c Codex) Usage() UsageSource {

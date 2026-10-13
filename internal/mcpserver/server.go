@@ -87,6 +87,7 @@ type TaskView struct {
 	Status   string    `json:"status"`
 	Reason   string    `json:"reason,omitempty"` // why a spawn failed
 	Model    string    `json:"model,omitempty"`
+	Adapter  string    `json:"adapter,omitempty"` // claude, codex, gemini or grok (#480)
 	Parent   string    `json:"parent,omitempty"`
 	Branch   string    `json:"branch,omitempty"`
 	Claims   []string  `json:"claims,omitempty"`
@@ -386,7 +387,7 @@ func Tasks(a *app.App) ([]TaskView, error) {
 			t.Status, reason = app.StatusOrphaned, app.OrphanHint(t.ID)
 		}
 		out = append(out, TaskView{Reason: reason,
-			ID: t.ID, Title: t.Title, Status: t.Status, Model: t.Model, Parent: t.Parent, Branch: t.Branch,
+			ID: t.ID, Title: t.Title, Status: t.Status, Model: t.Model, Adapter: a.AdapterOf(t), Parent: t.Parent, Branch: t.Branch,
 			Claims: cl[t.ID], Train: tr[t.ID], Notices: pending[t.ID], PR: t.PR, Window: t.Window, Worktree: t.Worktree,
 			created: t.CreatedAt,
 		})

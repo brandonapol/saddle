@@ -41,6 +41,11 @@ type UsageSource struct {
 	Transcript func(dir, runDir, session string) string
 }
 
+// AutoResumes reports whether adapter name's CLI continues on its own once a
+// usage limit resets. Claude Code does ("continuing automatically at …");
+// Codex and Grok end the turn with an error and wait for input (#480).
+func AutoResumes(name string) bool { return name == "" || name == usage.Claude }
+
 // WakeLine is typed into an idle agent whose hook will deliver its notices.
 const WakeLine = "[saddle] You have new notices. Read them and act on them."
 

@@ -232,6 +232,11 @@ func TestParseReset(t *testing.T) {
 		{"9am (America/New_York)", time.Date(2026, 10, 10, 9, 0, 0, 0, ny)},
 		{"4:05 PM", time.Date(2026, 10, 9, 16, 5, 0, 0, ny)},
 		{"Oct 12, 3pm (America/New_York)", time.Date(2026, 10, 12, 15, 0, 0, 0, ny)},
+		// #480: codex words its reset relative, or dated with an ordinal and year.
+		{"in 2 hours 5 minutes", now.Add(2*time.Hour + 5*time.Minute)},
+		{"in 1 day 3 hours 4 minutes", now.Add(27*time.Hour + 4*time.Minute)},
+		{"in 45 seconds", now.Add(45 * time.Second)},
+		{"Oct 14th, 2026 3:04 PM", time.Date(2026, 10, 14, 15, 4, 0, 0, ny)},
 	} {
 		got, ok := parseReset(c.in, now)
 		if !ok || !got.Equal(c.want) {
@@ -298,5 +303,47 @@ func TestResumeOntoHooklessAdapterWarnsAboutClaims(t *testing.T) {
 	}
 	if ns := orchNotices(t, a, "advisory"); len(ns) != 1 || !strings.Contains(ns[0], w.ID) {
 		t.Errorf("claims warning = %q", ns)
+	}
+}
+
+// #480: codex words its reset relative ("try again in 2 hours 5 minutes").
+// It used to fall back to an hour, and status read "until in 2 hours".
+func TestCodexRelativeResetSetsOutOfQuotaUntil(t *testing.T) {
+	t.Parallel()
+	a, _, _ := rotationApp(t)
+	w, err := a.Spawn(SpawnReq{Title: "codex work", Adapter: usage.Codex})
+	must(t, err)
+	before := time.Now()
+	must(t, a.AdapterLimitHit(w.ID, usage.LimitBanner{Resets: "in 2 hours 5 minutes"}))
+	e, out := a.ExhaustedAdapters(time.Now())[usage.Codex]
+	if !out {
+		t.Fatal("codex not out of quota")
+	}
+	if want := before.Add(2*time.Hour + 5*time.Minute); e.Until.Before(want) || e.Until.After(want.Add(time.Minute)) {
+		t.Errorf("until %v, want about %v", e.Until, want)
+	}
+	for _, s := range a.Adapters() {
+		if s.Name == usage.Codex && s.OutOfQuotaUntil != e.Until.Local().Format("15:04") {
+			t.Errorf("codex out_of_quota_until = %q", s.OutOfQuotaUntil)
+		}
+	}
+}
+
+// #480: codex and gemini had no configured model, so their spawns ran the
+// CLI's default and status showed none. [adapters.<name>] model sets it.
+func TestAdapterModelFromConfig(t *testing.T) {
+	t.Parallel()
+	a, _, _ := rotationApp(t)
+	a.Cfg.Adapters = config.AdapterMap{usage.Codex: {Model: "gpt-5-codex"}}
+	w, err := a.Spawn(SpawnReq{Title: "codex work", Adapter: usage.Codex})
+	must(t, err)
+	if w.Model != "gpt-5-codex" {
+		t.Errorf("codex spawn model %q, want the configured gpt-5-codex", w.Model)
+	}
+	if got := a.modelFor(usage.Codex, "opus"); got != "gpt-5-codex" {
+		t.Errorf("a claude model on codex gave %q", got)
+	}
+	if got := a.modelFor(usage.Codex, "o3"); got != "o3" {
+		t.Errorf("a requested codex model gave %q", got)
 	}
 }
