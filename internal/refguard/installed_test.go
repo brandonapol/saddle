@@ -19,7 +19,7 @@ func TestInstalledReportsHookState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hooks) != 2 || hooks[0].Present || hooks[1].Present {
+	if len(hooks) != 3 || hooks[0].Present || hooks[1].Present || hooks[2].Present {
 		t.Fatalf("fresh repo: %+v", hooks)
 	}
 

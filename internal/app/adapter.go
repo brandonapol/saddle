@@ -3,13 +3,10 @@ package app
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/brandonapol/saddle/internal/agent"
-	"github.com/brandonapol/saddle/internal/claims"
-	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/tmux"
 	"github.com/brandonapol/saddle/internal/usage"
@@ -159,26 +156,13 @@ func (a *App) injectNotices(t store.Task, ad agent.Adapter, force bool) error {
 }
 
 // advisoryClaims lists files a hookless task changed that another task
-// claims. Nothing stopped those writes, so the orchestrator is told.
+// claims. Done let them through only under AllowClaimedEnv (#489), so the
+// orchestrator is told.
 func (a *App) advisoryClaims(t store.Task) string {
-	out, err := gitx.Run(t.Worktree, "diff", "--name-only", a.Cfg.Integration+"...HEAD")
-	if err != nil || out == "" {
-		return ""
-	}
-	all, err := a.Store.Claims()
-	if err != nil {
-		return ""
-	}
-	var lines []string
-	for _, f := range strings.Split(out, "\n") {
-		if owner, glob := claims.Owner(all, t.ID, f); owner != "" {
-			lines = append(lines, fmt.Sprintf("%s (claimed by %s, %s)", f, owner, glob))
-		}
-	}
+	lines := a.claimedByOthers(t)
 	if len(lines) == 0 {
 		return ""
 	}
-	sort.Strings(lines)
-	return fmt.Sprintf("\nClaims are advisory for %s's %s agent, and it changed files other tasks claim: %s. Check with their owners before landing.",
-		t.ID, a.taskAdapter(t).Name(), strings.Join(lines, "; "))
+	return fmt.Sprintf("\n%s's %s agent runs no saddle hooks, and it finished with files other tasks claim (%s=1): %s. Check with their owners before landing.",
+		t.ID, a.taskAdapter(t).Name(), agent.AllowClaimedEnv, strings.Join(lines, "; "))
 }

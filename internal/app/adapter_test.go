@@ -94,28 +94,6 @@ func waitUntil(cond func() bool) bool {
 	return false
 }
 
-// Claims are advisory for hookless agents: done goes through, and the
-// orchestrator hears about files that belong to another task.
-func TestDoneFlagsHooklessWritesToClaimedFiles(t *testing.T) {
-	t.Parallel()
-	a, _ := setup(t)
-	owner, err := a.Spawn(SpawnReq{Title: "meter", Claims: []string{"billing/meter.go"}})
-	must(t, err)
-	c, err := a.Spawn(SpawnReq{Title: "codex work", Adapter: "codex"})
-	must(t, err)
-	write(t, c.Worktree, "billing/meter.go", "package billing\n\nfunc Meter() int { return 2 }\n")
-	write(t, c.Worktree, "docs/new.md", "new\n")
-	commitAll(t, c.Worktree, "codex edits")
-	_, _ = a.Store.TakeNotices(OrchestratorID, false)
-	must(t, a.Done(c.ID, "did it"))
-	ns, err := a.Store.TakeNotices(OrchestratorID, false)
-	must(t, err)
-	text := store.FormatNotices(ns)
-	if !strings.Contains(text, "billing/meter.go") || !strings.Contains(text, owner.ID) || strings.Contains(text, "docs/new.md") {
-		t.Errorf("orchestrator notices:\n%s", text)
-	}
-}
-
 func TestUsageMeterReadsCodexRollout(t *testing.T) {
 	t.Parallel()
 	a, m := meterApp(t)

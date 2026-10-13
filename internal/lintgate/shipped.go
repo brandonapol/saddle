@@ -13,6 +13,11 @@ import (
 // hooks in every worktree (#223). Detect looks past it to the repo's hook.
 const RepoHookMarker = "# saddle repo hook"
 
+// GuardMarker marks a hook saddle's ref guard wrote (refguard.Install). Its
+// pre-commit checks a hookless task's claims (#489), not the repo's code, so
+// Detect looks past it too.
+const GuardMarker = "# saddle refguard"
+
 // Shipped is a git hook a repo ships for its developers to install.
 type Shipped struct {
 	Name string // the git hook, e.g. pre-commit
@@ -96,4 +101,6 @@ func dirHooks(root, dir, kind string) []Shipped {
 }
 
 // isRepoHook reports whether script is a wrapper saddle wrote.
-func isRepoHook(script string) bool { return strings.Contains(script, RepoHookMarker) }
+func isRepoHook(script string) bool {
+	return strings.Contains(script, RepoHookMarker) || strings.Contains(script, GuardMarker)
+}
