@@ -14,6 +14,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/brandonapol/saddle/internal/claims"
 )
 
 // Task statuses.
@@ -311,6 +313,10 @@ func (s *Store) Claim(task string, decide ClaimFunc) ([]string, error) {
 			return err
 		}
 		for _, g := range granted {
+			// Claiming a path back undoes the task's own carve-out of it.
+			if _, err := tx.Exec(`DELETE FROM claims WHERE task = ? AND glob = ?`, task, claims.Not+g); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(`INSERT OR IGNORE INTO claims(task, glob) VALUES(?, ?)`, task, g); err != nil {
 				return err
 			}
@@ -326,7 +332,9 @@ func (s *Store) Release(task string, globs ...string) error {
 }
 
 // ReleaseN drops task's claims on globs, or all of them when none are given,
-// and reports how many it removed.
+// and reports how many it removed. A glob the task doesn't hold as such but
+// that falls under one of its broader claims (dir/f.go under dir/**) is
+// carved out of it, so the write guard frees it at once (#292).
 func (s *Store) ReleaseN(task string, globs ...string) (int, error) {
 	if len(globs) == 0 {
 		r, err := s.db.Exec(`DELETE FROM claims WHERE task = ?`, task)
@@ -337,18 +345,57 @@ func (s *Store) ReleaseN(task string, globs ...string) (int, error) {
 		return int(n), err
 	}
 	total := 0
-	for _, g := range globs {
-		r, err := s.db.Exec(`DELETE FROM claims WHERE task = ? AND glob = ?`, task, g)
+	err := s.tx(func(tx *sql.Tx) error {
+		var held []string
+		rows, err := tx.Query(`SELECT glob FROM claims WHERE task = ?`, task)
 		if err != nil {
-			return total, err
+			return err
 		}
-		n, err := r.RowsAffected()
-		if err != nil {
-			return total, err
+		for rows.Next() {
+			var g string
+			if err := rows.Scan(&g); err != nil {
+				rows.Close()
+				return err
+			}
+			held = append(held, g)
 		}
-		total += int(n)
+		rows.Close()
+		for _, g := range globs {
+			r, err := tx.Exec(`DELETE FROM claims WHERE task = ? AND glob = ?`, task, g)
+			if err != nil {
+				return err
+			}
+			n, err := r.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if n == 0 && !claims.IsNot(g) && coveredBy(held, claims.Clean(g)) {
+				if r, err = tx.Exec(`INSERT OR IGNORE INTO claims(task, glob) VALUES(?, ?)`, task, claims.Not+claims.Clean(g)); err != nil {
+					return err
+				}
+				if n, err = r.RowsAffected(); err != nil {
+					return err
+				}
+			}
+			total += int(n)
+		}
+		return nil
+	})
+	return total, err
+}
+
+// coveredBy reports whether g lies under one of held's claims and is not
+// already carved out.
+func coveredBy(held []string, g string) bool {
+	if claims.Excluded(held, g) {
+		return false
 	}
-	return total, nil
+	for _, h := range held {
+		if claims.Match(h, g) || claims.Overlap(h, g) {
+			return true
+		}
+	}
+	return false
 }
 
 // ReplaceClaim swaps one glob for another (used when the rename map moves a claim).

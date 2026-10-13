@@ -78,3 +78,22 @@ func TestRemap(t *testing.T) {
 		t.Errorf("Remap file = %q", got)
 	}
 }
+
+func TestCarveOutsReleasePathsUnderAGlob(t *testing.T) {
+	all := map[string][]string{"t1": {"billing/**", "!billing/meter.go"}}
+	if o, _ := Owner(all, "t2", "billing/meter.go"); o != "" {
+		t.Fatalf("carved-out path owned by %q", o)
+	}
+	if o, g := Owner(all, "t2", "billing/invoice.go"); o != "t1" || g != "billing/**" {
+		t.Fatalf("Owner(invoice) = %q %q", o, g)
+	}
+	if c := Conflicts(all, "t2", []string{"billing/meter.go"}); len(c) != 0 {
+		t.Fatalf("carved-out path conflicts: %v", c)
+	}
+	if c := Conflicts(all, "t2", []string{"billing/**"}); len(c) != 1 {
+		t.Fatalf("glob over the rest doesn't conflict: %v", c)
+	}
+	if Match("!billing/meter.go", "billing/meter.go") || Overlap("!billing/meter.go", "billing/**") {
+		t.Fatal("a carve-out covers a path")
+	}
+}

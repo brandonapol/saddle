@@ -1,7 +1,9 @@
 // Package claims matches repo-relative paths against claim globs.
 //
 // A claim is a doublestar glob ("pkg/billing/**") or a plain path. A plain
-// path that names a directory also covers everything under it.
+// path that names a directory also covers everything under it. A claim
+// starting with "!" is a carve-out: the task released that path (or glob)
+// from under one of its broader claims, and it covers nothing.
 package claims
 
 import (
@@ -23,8 +25,18 @@ func Clean(g string) string {
 	return strings.TrimPrefix(g, "./")
 }
 
-// Match reports whether a repo-relative path falls under glob.
+// Not prefixes a carve-out claim.
+const Not = "!"
+
+// IsNot reports whether g is a carve-out.
+func IsNot(g string) bool { return strings.HasPrefix(strings.TrimSpace(g), Not) }
+
+// Match reports whether a repo-relative path falls under glob. A carve-out
+// matches nothing.
 func Match(glob, p string) bool {
+	if IsNot(glob) {
+		return false
+	}
 	glob, p = Clean(glob), Clean(p)
 	if !hasMeta(glob) {
 		return p == glob || strings.HasPrefix(p, glob+"/")
@@ -51,6 +63,9 @@ func underOrEqual(a, b string) bool {
 // "sync*.go" and "briefs_test.go" do not overlap. A plain path also covers
 // everything under it.
 func Overlap(a, b string) bool {
+	if IsNot(a) || IsNot(b) {
+		return false
+	}
 	a, b = Clean(a), Clean(b)
 	if strings.Contains(a, "{") || strings.Contains(b, "{") {
 		// Brace alternatives can span segments; fall back to the literal prefixes.
@@ -117,16 +132,37 @@ func segOverlap(a, b string) bool {
 		(strings.HasSuffix(sa, sb) || strings.HasSuffix(sb, sa))
 }
 
+// Excluded reports whether one of gs carves p out.
+func Excluded(gs []string, p string) bool {
+	for _, g := range gs {
+		if IsNot(g) && Match(strings.TrimPrefix(strings.TrimSpace(g), Not), p) {
+			return true
+		}
+	}
+	return false
+}
+
+// Covering returns the claim among gs that covers p, honoring carve-outs.
+func Covering(gs []string, p string) (string, bool) {
+	if Excluded(gs, p) {
+		return "", false
+	}
+	for _, g := range gs {
+		if Match(g, p) {
+			return g, true
+		}
+	}
+	return "", false
+}
+
 // Owner returns the first task other than self whose claims cover p.
 func Owner(all map[string][]string, self, p string) (task, glob string) {
 	for t, gs := range all {
 		if t == self {
 			continue
 		}
-		for _, g := range gs {
-			if Match(g, p) {
-				return t, g
-			}
+		if g, ok := Covering(gs, p); ok {
+			return t, g
 		}
 	}
 	return "", ""
@@ -137,7 +173,7 @@ func Conflicts(all map[string][]string, self string, want []string) map[string]s
 	out := map[string]string{}
 	for _, w := range want {
 		for t, gs := range all {
-			if t == self {
+			if t == self || (!hasMeta(Clean(w)) && Excluded(gs, w)) {
 				continue
 			}
 			for _, g := range gs {
