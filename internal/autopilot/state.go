@@ -91,6 +91,15 @@ type State struct {
 	StallSince time.Time `json:"stall_since,omitzero"`
 	Nudged     string    `json:"nudged,omitempty"`
 	NudgedAt   time.Time `json:"nudged_at,omitzero"`
+	// IdleKey fingerprints the idle state last nudged, IdleNudges counts
+	// the nudges it got, and Escalated is set once the owner was told it
+	// stopped changing (#463).
+	IdleKey    string `json:"idle_key,omitempty"`
+	IdleNudges int    `json:"idle_nudges,omitempty"`
+	Escalated  bool   `json:"escalated,omitempty"`
+	// RunwayDue asks the orchestrator for a runway plan at its next idle
+	// moment; a run starting sets it.
+	RunwayDue bool `json:"runway_due,omitempty"`
 
 	// Stopped and Summary describe how the last run ended.
 	Stopped string `json:"stopped,omitempty"`

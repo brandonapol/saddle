@@ -238,3 +238,49 @@ func TestAutopilotInfiniteParksAndResumes(t *testing.T) {
 		t.Errorf("%d unpark events", n)
 	}
 }
+
+// #463: the idle nudge's snapshot comes from saddle's records, so the
+// orchestrator sees that t34 already merged and what really waits on the
+// owner, with ages where saddle knows them.
+func TestAutopilotSnapshotFromRecords(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	for _, tk := range []store.Task{
+		{ID: "t34", Title: "release", Role: store.RoleWorker, Status: store.Landed, PR: "https://github.com/o/r/pull/147"},
+		{ID: "t39", Title: "docs", Role: store.RoleWorker, Status: store.Landed, PR: "https://github.com/o/r/pull/150"},
+		{ID: "t40", Title: "tests", Role: store.RoleWorker, Status: store.Running},
+		{ID: "t41", Title: "add the SDK", Role: store.RoleWorker, Status: store.NeedsYou},
+		{ID: "t42", Title: "held", Role: store.RoleWorker, Status: store.Done},
+		{ID: "t2", Title: "stuck", Role: store.RoleWorker, Status: store.NeedsYou},
+	} {
+		must(t, a.Store.CreateTask(tk))
+	}
+	for task, state := range map[string]string{"t34": TrainMerged, "t39": store.TrainOK, "t42": store.OnHold} {
+		must(t, a.Store.Enqueue(task))
+		must(t, a.Store.SetTrain(task, state, "", false))
+	}
+	must(t, a.OpenDecision(testCard("stuck"))) // about t2, so t2 isn't listed twice
+
+	s, err := (&autopilotEnv{a: a}).Snapshot(time.Now())
+	must(t, err)
+	var bs []string
+	for _, b := range s.Blockers {
+		bs = append(bs, b.What)
+		if b.What == "Stuck stack: t2 needs you." && b.Since.IsZero() {
+			t.Error("a decision card's blocker should carry when it opened")
+		}
+	}
+	slices.Sort(bs)
+	want := []string{"Stuck stack: t2 needs you.", "t41 needs you (add the SDK)", "t42 is held in the merge train"}
+	if !slices.Equal(bs, want) {
+		t.Errorf("blockers = %q, want %q", bs, want)
+	}
+	slices.Sort(s.Tasks)
+	if !slices.Equal(s.Tasks, []string{"t2 needs_you", "t40 running", "t41 needs_you"}) {
+		t.Errorf("tasks = %q", s.Tasks)
+	}
+	if !slices.Equal(s.Merged, []string{"t34 (PR #147)"}) || !slices.Equal(s.OpenPRs, []string{"t39 (PR #150)"}) ||
+		!slices.Equal(s.Queue, []string{"t42 on hold"}) {
+		t.Errorf("merged %q, open %q, queue %q", s.Merged, s.OpenPRs, s.Queue)
+	}
+}

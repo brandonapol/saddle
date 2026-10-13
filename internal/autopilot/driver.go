@@ -1,6 +1,7 @@
 package autopilot
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -37,6 +38,8 @@ const (
 	EventPark    = "autopilot_park"   // infinite mode parked tasks at the plan limit
 	EventUnpark  = "autopilot_unpark" // and resumed them after the reset
 	EventNudge   = "autopilot_nudge"
+	EventIdle    = "autopilot_idle"    // the same idle state was nudged enough: quiet until it changes
+	EventRunway  = "autopilot_runway"  // the orchestrator was asked for a runway plan
 	EventStopped = "autopilot_stopped" // the final summary
 	EventError   = "autopilot_error"
 )
@@ -98,6 +101,9 @@ type Env interface {
 	Park() ([]string, error)
 	// Unpark resumes a parked task.
 	Unpark(task string) error
+	// Snapshot is the pipeline as saddle's records have it now: owner
+	// blockers, tasks, PRs and the merge train.
+	Snapshot(now time.Time) (Snapshot, error)
 }
 
 // Driver runs autopilot ticks against Env. Tests call Tick with an injected clock.
@@ -108,8 +114,11 @@ type Driver struct {
 	Interval   time.Duration
 	StallAfter time.Duration
 	NudgeEvery time.Duration
-	Rules      string // the repo's agent rules, put in every prompt
-	DoneWhen   string // e.g. the check command that must pass
+	// IdleRepeats is how many nudges one unchanged idle state gets before
+	// saddle escalates to the owner and goes quiet (DefaultIdleRepeats).
+	IdleRepeats int
+	Rules       string // the repo's agent rules, put in every prompt
+	DoneWhen    string // e.g. the check command that must pass
 }
 
 func (d *Driver) now() time.Time {
@@ -155,7 +164,7 @@ func (d *Driver) Enable(o Options) (State, error) {
 	if err != nil {
 		return old, err
 	}
-	st := State{Gen: old.Gen + 1, On: true, Stop: o.Stop, ReadyLabel: o.ReadyLabel, Infinite: o.Infinite, Started: d.now()}
+	st := State{Gen: old.Gen + 1, On: true, Stop: o.Stop, ReadyLabel: o.ReadyLabel, Infinite: o.Infinite, Started: d.now(), RunwayDue: true}
 	if o.Infinite {
 		st.Stop = Stop{}
 	}
@@ -180,7 +189,7 @@ func (d *Driver) SetInfinite(on bool) (State, error) {
 		return d.Enable(Options{ReadyLabel: st.ReadyLabel, Infinite: true})
 	case on && !st.Infinite:
 		st.Gen++
-		st.Infinite, st.Stop, st.Draining = true, Stop{}, ""
+		st.Infinite, st.Stop, st.Draining, st.RunwayDue = true, Stop{}, "", true
 		d.Env.Event(EventOn, "infinite mode over the running run")
 		return st, st.Save(d.Path)
 	case !on && st.On && st.Infinite:
@@ -486,23 +495,84 @@ func (d *Driver) Tick() (Report, error) {
 			reason, why = "silent", "action notices waiting "+now.Sub(since).Round(time.Second).String()+" for you"
 		}
 	}
+	switch {
+	case reason != "":
+		d.nudgeIdle(&st, &rep, now, reason, why, digest)
+	case st.RunwayDue && !sleeping:
+		d.runway(&st, &rep, now, issues)
+	}
 	if reason == "" {
-		st.Nudged = ""
-	} else if reason != st.Nudged || now.Sub(st.NudgedAt) >= orDefault(d.NudgeEvery, DefaultNudgeEvery) {
-		text := "[saddle autopilot] continue: " + why + ". State: " + digest +
-			". Don't end your turn to wait: check status, land, review or sequence the blocked work, pick other work; never ask the owner whether to continue."
-		sent, err := env.Nudge(text)
-		switch {
-		case err != nil:
-			env.Event(EventError, "nudge: "+err.Error())
-		case sent:
-			st.Nudged, st.NudgedAt, rep.Nudged = reason, now, text
-			env.Event(EventNudge, why)
-		default:
-			rep.Decision += "; nudge waits for an idle orchestrator"
-		}
+		st.Nudged, st.IdleKey, st.IdleNudges, st.Escalated = "", "", 0, false
 	}
 	return rep, d.save(&st, gen, &rep)
+}
+
+// snapshot reads Env.Snapshot; a failure is an event and an empty snapshot.
+func (d *Driver) snapshot(now time.Time) Snapshot {
+	s, err := d.Env.Snapshot(now)
+	if err != nil {
+		d.Env.Event(EventError, "snapshot: "+err.Error())
+	}
+	return s
+}
+
+// nudgeIdle sends the continue nudge for an idle or stalled pipeline, with
+// the snapshot and the lookahead step (#463). The same idle state is
+// nudged IdleRepeats times; then the owner hears once and the nudges stop
+// until something in the state changes.
+func (d *Driver) nudgeIdle(st *State, rep *Report, now time.Time, reason, why, digest string) {
+	snap := d.snapshot(now)
+	if key := idleKey(digest, snap); key != st.IdleKey {
+		st.IdleKey, st.IdleNudges, st.Escalated = key, 0, false
+	}
+	if st.IdleNudges >= cmp.Or(d.IdleRepeats, DefaultIdleRepeats) {
+		rep.Decision += "; idle and unchanged, so no more nudges until something changes"
+		if !st.Escalated {
+			st.Escalated = true
+			msg := fmt.Sprintf("Autopilot is idle: %s. The orchestrator was nudged %d times and nothing changed, so saddle stops nudging until "+
+				"the state changes.", why, st.IdleNudges)
+			if len(snap.Blockers) > 0 {
+				var bs []string
+				for _, b := range snap.Blockers {
+					bs = append(bs, b.What+" ("+age(b.Since, now)+")")
+				}
+				msg += " Waiting on you: " + list(bs) + "."
+			}
+			msg += " Answer a blocker or add ready work and it picks up again; `saddle autopilot off` ends the run."
+			d.Env.Notify(true, msg)
+			d.Env.Event(EventIdle, why)
+		}
+		return
+	}
+	if reason == st.Nudged && now.Sub(st.NudgedAt) < orDefault(d.NudgeEvery, DefaultNudgeEvery) {
+		return
+	}
+	text := IdlePrompt(why, digest, st.Label(), snap, now)
+	sent, err := d.Env.Nudge(text)
+	switch {
+	case err != nil:
+		d.Env.Event(EventError, "nudge: "+err.Error())
+	case sent:
+		st.Nudged, st.NudgedAt, rep.Nudged = reason, now, text
+		st.IdleNudges++
+		d.Env.Event(EventNudge, why)
+	default:
+		rep.Decision += "; nudge waits for an idle orchestrator"
+	}
+}
+
+// runway asks the orchestrator for a runway plan once a run starts (#463),
+// as soon as it is idle.
+func (d *Driver) runway(st *State, rep *Report, now time.Time, issues []Issue) {
+	text := RunwayPrompt(*st, issues, d.snapshot(now), now)
+	sent, err := d.Env.Nudge(text)
+	switch {
+	case err != nil:
+		d.Env.Event(EventError, "runway: "+err.Error())
+	case sent:
+		st.RunwayDue, rep.Nudged = false, text
+		d.Env.Event(EventRunway, "")
+	}
 }
 
 // blocked says why is can't start yet for reasons of its own: an open PR,

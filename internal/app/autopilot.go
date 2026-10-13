@@ -217,6 +217,65 @@ func (e *autopilotEnv) Unpark(task string) error {
 	return err
 }
 
+// Snapshot is the pipeline from saddle's own records (#463): the owner's
+// open decision cards, needs-you tasks and held train entries as blockers,
+// the live workers, the PRs still open and the work already merged, and
+// the merge train. It reads local state only, so a tick stays cheap.
+func (e *autopilotEnv) Snapshot(time.Time) (autopilot.Snapshot, error) {
+	var s autopilot.Snapshot
+	cards, err := e.a.OpenDecisions()
+	if err != nil {
+		return s, err
+	}
+	carded := map[string]bool{}
+	for _, c := range cards {
+		if c.To == OrchestratorID {
+			s.Blockers = append(s.Blockers, autopilot.Blocker{What: c.Headline, Since: c.Opened})
+			carded[c.Task] = true
+		}
+	}
+	ts, err := e.a.Store.Tasks()
+	if err != nil {
+		return s, err
+	}
+	byID := map[string]store.Task{}
+	for _, t := range ts {
+		byID[t.ID] = t
+		if t.Role != store.RoleWorker || !t.Active() || t.Status == store.Done {
+			continue
+		}
+		s.Tasks = append(s.Tasks, t.ID+" "+t.Status)
+		if t.Status == store.NeedsYou && !carded[t.ID] {
+			s.Blockers = append(s.Blockers, autopilot.Blocker{What: t.ID + " needs you (" + oneLine(t.Title) + ")"})
+		}
+	}
+	train, err := e.a.Store.Train()
+	if err != nil {
+		return s, err
+	}
+	for i := len(train) - 1; i >= 0; i-- { // newest first
+		en := train[i]
+		pr := ""
+		if n := prNumber(byID[en.Task].PR); n != "" {
+			pr = " (PR #" + n + ")"
+		}
+		switch en.State {
+		case store.TrainOK:
+			if pr != "" {
+				s.OpenPRs = append(s.OpenPRs, en.Task+pr)
+			}
+		case TrainMerged:
+			s.Merged = append(s.Merged, en.Task+pr)
+		case store.OnHold:
+			s.Queue = append(s.Queue, en.Task+" on hold")
+			s.Blockers = append(s.Blockers, autopilot.Blocker{What: en.Task + " is held in the merge train"})
+		case store.Queued, store.TestFailed, store.TrainError:
+			s.Queue = append(s.Queue, en.Task+" "+en.State)
+		}
+	}
+	return s, nil
+}
+
 // closesRef finds the issues a PR body closes.
 var closesRef = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d+)`)
 
