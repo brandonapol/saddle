@@ -124,20 +124,22 @@ func TestSplitMouseReportAmongWholeOnes(t *testing.T) {
 	}
 }
 
-// Real typing that merely resembles a fragment must still get through.
+// Real typing that merely resembles a fragment must still get through: to
+// chat, and as keys a focused terminal pane would get (#201).
 func TestMouseScrubKeepsRealInput(t *testing.T) {
 	runes := func(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 	cases := []struct {
 		name string
 		keys []tea.KeyMsg
-		want string
+		want string   // chat input
+		pass []string // keys the scrubber lets through
 	}{
-		{"digits and semicolons", []tea.KeyMsg{runes("12;3"), runes("M")}, "12;3M"},
-		{"angle bracket", []tea.KeyMsg{runes("<65;1M")}, "<65;1M"},
-		{"esc then text", []tea.KeyMsg{{Type: tea.KeyEscape}, runes("1;2M")}, "1;2M"},
-		{"alt+[ then text", []tea.KeyMsg{{Type: tea.KeyRunes, Runes: []rune("["), Alt: true}, runes("x")}, "x"},
-		{"report ends, typing resumes", []tea.KeyMsg{{Type: tea.KeyEscape}, runes("[<65;1;2M"), runes("7")}, "7"},
-		{"paste", []tea.KeyMsg{{Type: tea.KeyEscape}, {Type: tea.KeyRunes, Runes: []rune("[<1;2M"), Paste: true}}, "[<1;2M"},
+		{"digits and semicolons", []tea.KeyMsg{runes("12;3"), runes("M")}, "12;3M", []string{"12;3", "M"}},
+		{"angle bracket", []tea.KeyMsg{runes("<65;1M")}, "<65;1M", []string{"<65;1M"}},
+		{"esc then text", []tea.KeyMsg{{Type: tea.KeyEscape}, runes("1;2M")}, "1;2M", []string{"esc", "1;2M"}},
+		{"alt+[ then text", []tea.KeyMsg{altRune('['), runes("x")}, "x", []string{"alt+[", "x"}},
+		{"report ends, typing resumes", []tea.KeyMsg{{Type: tea.KeyEscape}, runes("[<65;1;2M"), runes("7")}, "7", []string{"esc", "7"}},
+		{"paste", []tea.KeyMsg{{Type: tea.KeyEscape}, {Type: tea.KeyRunes, Runes: []rune("[<1;2M"), Paste: true}}, "[<1;2M", []string{"esc", "[[<1;2M]"}},
 	}
 	for _, c := range cases {
 		m := chatModel()
@@ -146,6 +148,17 @@ func TestMouseScrubKeepsRealInput(t *testing.T) {
 		}
 		if got := m.input.Value(); got != c.want {
 			t.Errorf("%s: input = %q, want %q", c.name, got, c.want)
+		}
+		var s mouseScrub
+		var pass []string
+		for _, k := range c.keys {
+			out, _ := s.feed(k)
+			for _, o := range out {
+				pass = append(pass, o.String())
+			}
+		}
+		if strings.Join(pass, " ") != strings.Join(c.pass, " ") {
+			t.Errorf("%s: scrubber let through %q, want %q", c.name, pass, c.pass)
 		}
 	}
 }
