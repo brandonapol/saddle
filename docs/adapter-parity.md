@@ -8,16 +8,17 @@ Gemini is listed where it shares codex's hookless path.
 |---|---|---|---|
 | Saddle hooks (claims enforced, notices with tool calls) | yes | yes (project hooks, #181) | no: claims advisory, notices typed in |
 | Idle / running status | Stop hook | Stop hook | screen watcher (fixed) |
-| Composer read (`tmux.ReadInput`): draft guard, Enter retry | `❯` / `>` | `>` / `❯` assumed, unverified (#488) | `›` (fixed) |
-| Approval and trust prompts (`DetectPrompt`) | yes | bypassPermissions, wording unverified (#488) | approval and trust screens (fixed) |
+| Composer read (`tmux.ReadInput`): draft guard, Enter retry | `❯` / `>` | `│ ❯ │` box, verified (#488) | `›`, placeholder in plain captures (#488) |
+| Approval and trust prompts (`DetectPrompt`) | yes | `1 (●) Yes` approval screen (#488) | approval and trust screens, verified (#488) |
 | Unattended permission mode | `permission_mode` | `[grok] permission_mode` | mapped from `permission_mode` (fixed) |
-| Quota banner (`DetectLimitBanner`) | yes | xAI credit and spend-cap errors (fixed) | absolute, dated and relative resets (fixed) |
+| Quota banner (`DetectLimitBanner`) | yes | weekly, free-tier, credit and spend-cap errors (#488) | usage, spend-cap and workspace-credit errors; absolute, dated and relative resets (#488) |
 | `out_of_quota_until` | banner reset | banner reset, else 1h | banner reset, including "in 2 hours" (fixed) |
 | After the quota reset | continues on its own | saddle types a continue line (fixed) | saddle types a continue line (fixed) |
 | Out of quota mid-task (#481) | handed to the next adapter in its worktree, or parks (`[adapters] failover`) | same | same |
 | Orchestrator out of quota (#481) | TUI moves it to grok with a state summary | TUI moves it to claude | n/a: no headless session |
 | Orchestrator context meter | transcript | usage.json snapshot | n/a: `saddle up codex` runs the orchestrator on Claude Code |
-| Auto-compact | `/compact <keep>` | none: told to summarize (#488) | `/compact` |
+| Working indicator (hookless idle) | n/a: Stop hook | `Ctrl+c:cancel` footer (#488) | `esc to interrupt`, verified (#488) |
+| Auto-compact | `/compact <keep>` | `/compact`, also headless (#488) | `/compact` |
 | Hung gates, orphaned done | adapter-agnostic | same | same; the orphan nudge types notices in whole |
 | Model in spawn and status | `[claude] model` | `[grok] model` | `[adapters.codex] model` (fixed) |
 | Adapter in status | `adapter` on each task (fixed) | same | same |
@@ -74,11 +75,44 @@ Gemini is listed where it shares codex's hookless path.
   Tests: `TestAdapterModelFromConfig`, `TestAdaptersAndSpawnCaps` (config),
   `TestStatusNamesEachTasksAdapter`.
 
+## Verified against captured panes (#488)
+
+Codex 0.154.0 and Grok 1.0.50 were run in tmux and captured in each state
+(`internal/tmux/testdata`, `internal/app/testdata`, `internal/usage/testdata`).
+Quota errors can't be produced on demand, so their wordings come from the
+CLIs' binaries, placed where each CLI prints a turn's error.
+
+- **Codex placeholder in a plain capture.** "Ask Codex to do anything" (or
+  "Ask a follow-up question") is drawn faint, but without SGR escapes
+  `ReadInput` read it as a draft, so `Deliver` waited on an idle codex. Both
+  wordings now read as a ghost. Test: `TestReadInputCodexGrokFixtures`.
+- **Grok approval screen.** Grok draws options as `┃  1 (●) Yes, proceed`
+  with no menu cursor and none of the others' wordings, so `DetectPrompt`
+  saw nothing and remote prompts had no options. Both read it now. Tests:
+  `TestDetectPromptCapturedPanes`, `TestParsePromptGrokApproval`.
+- **Grok working indicator.** A turn in progress shows `Ctrl+c:cancel` in
+  the footer, not "esc to interrupt". Grok workers have a Stop hook, so
+  this only matters if one runs hookless. Test:
+  `TestWorkingIndicatorCapturedPanes`.
+- **Quota wording.** Codex says "You hit your spend cap…" and "You've
+  reached your workspace credit limit"; grok says "You hit your weekly
+  limit." and "You hit your free usage limit." None were detected. Codex's
+  idle "You have 1 usage limit reset available" line was read as the reset
+  time ("available. Run /usage…"), beating the real one; only "resets",
+  "reset at" and "try again" count now. A reset wrapped onto the next line
+  was lost because the tail was joined bottom-up. Test:
+  `TestDetectLimitBannerCapturedPanes`.
+- **Grok compact.** Grok has `/compact` ("takes no arguments"), and it
+  compacts a headless `--prompt-file` turn, which is how the TUI runs a grok
+  orchestrator. `CompactCommand` sends it. Tests:
+  `TestCompactCommandPerHarness`, `TestCompactInjectsHarnessCommand`.
+- **Still open.** On grok's approval screen there is no `❯` composer, so
+  `ReadInput` reads empty. The notice wake checks `DetectPrompt` first;
+  `Deliver` and the orphan nudge don't. Workers run `bypassPermissions`,
+  so the screen is rare.
+
 ## Filed
 
-- #488: verify the codex and grok screen detectors (composer, prompts,
-  quota errors, working indicator) against captured panes, and find out
-  whether the grok CLI has a compact command.
 - #489: enforce claims for hookless adapters (codex, gemini) without the
   agent's cooperation, e.g. a per-worktree pre-commit hook with an escape
   hatch.
