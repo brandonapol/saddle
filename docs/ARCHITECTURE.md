@@ -305,9 +305,13 @@ rejects it. Workers are unaffected.
 
 The narrator (`claude-haiku-4-5`) reads compact event deltas, never raw pane
 text unless you ask a question about a window. It writes one line per salient
-change into a single thread. Usage comes from Claude Code transcript JSONL
-`usage` fields, bucketed per minute by task and model. Plan-limit bars are
-estimates against caps you configure.
+change into a single thread. Usage comes from each adapter's durable local
+record: Claude Code transcript JSONL, Codex rollout JSONL, and Grok session
+`usage.json` ledgers. It is bucketed per minute by task, adapter and model;
+provider-reported cost wins when available, otherwise model pricing supplies
+the estimate. The TUI graph and rows are per provider, including an observed
+quota reset when adapter rotation has marked one exhausted. Plan-limit bars
+remain estimates against caps you configure.
 
 ## Heavy-run queue
 

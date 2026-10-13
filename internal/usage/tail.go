@@ -17,6 +17,9 @@ type Cursor struct {
 	seen      map[string]struct{}
 }
 
+// SnapshotParser reads a whole provider-owned usage snapshot.
+type SnapshotParser func([]byte) ([]Record, error)
+
 // Tail reads the complete lines of path that lie beyond c.Offset, parses them
 // and advances the cursor. A trailing line without a newline is assumed to be
 // still in progress and is left for the next call. If the file is shorter than
@@ -82,5 +85,37 @@ func Tail(path string, c *Cursor, parse Parser) ([]Record, error) {
 		}
 		out = append(out, rec)
 	}
+	return out, nil
+}
+
+// ReadSnapshot parses a file that is atomically rewritten instead of
+// appended. Stable record IDs ensure completed turns are emitted once.
+func ReadSnapshot(path string, c *Cursor, parse SnapshotParser) ([]Record, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	recs, err := parse(data)
+	if err != nil {
+		c.Malformed++
+		return nil, nil
+	}
+	if c.seen == nil {
+		c.seen = map[string]struct{}{}
+	}
+	out := make([]Record, 0, len(recs))
+	for _, rec := range recs {
+		if rec.ID != "" {
+			if _, ok := c.seen[rec.ID]; ok {
+				continue
+			}
+			c.seen[rec.ID] = struct{}{}
+		}
+		out = append(out, rec)
+	}
+	c.Offset = int64(len(data))
 	return out, nil
 }

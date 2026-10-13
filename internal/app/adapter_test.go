@@ -1,6 +1,7 @@
 package app
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,13 +128,40 @@ func TestUsageMeterReadsCodexRollout(t *testing.T) {
 	write(t, m.CodexHome, "sessions/2026/10/02/rollout-1.jsonl", strings.ReplaceAll(string(b), `"/repo/wt"`, `"`+wt+`"`))
 	must(t, m.Sync())
 	must(t, m.Sync())
-	if got := modelTotals(t, a)[usage.CodexModel]; got != (usage.Tokens{Input: 800, CacheRead: 2900, Output: 130}) {
+	if got := modelTotals(t, a)["gpt-5-codex"]; got != (usage.Tokens{Input: 800, CacheRead: 2900, Output: 130}) {
 		t.Errorf("codex usage = %+v", got)
+	}
+	bs, err := a.Store.UsageBuckets(time.Time{})
+	must(t, err)
+	if len(bs) == 0 || bs[0].Adapter != usage.Codex {
+		t.Errorf("codex buckets = %+v", bs)
 	}
 	u, err := a.Usage(time.Now())
 	must(t, err)
 	if len(u.Tasks) != 1 || u.Tasks[0].Key != "t5" {
 		t.Errorf("task totals %+v", u.Tasks)
+	}
+}
+
+func TestUsageMeterReadsGrokSessionUsage(t *testing.T) {
+	t.Parallel()
+	a, m := meterApp(t)
+	wt := filepath.Join(a.Root, ".saddle", "worktrees", "t6-grok")
+	must(t, a.Store.CreateTask(store.Task{ID: "t6", Title: "grok", Role: store.RoleWorker, Worktree: wt,
+		Status: store.Running, SessionID: "01a0fixture"}))
+	write(t, a.stateDir("run", "t6"), "adapter", "grok\n")
+	m.GrokHome = filepath.Join(a.Root, "grok")
+	b, err := os.ReadFile(filepath.Join("..", "usage", "testdata", "grok-usage.json"))
+	must(t, err)
+	write(t, m.GrokHome, "sessions/project/01a0fixture/usage.json", string(b))
+	must(t, m.Sync())
+	bs, err := a.Store.UsageBuckets(time.Time{})
+	must(t, err)
+	if len(bs) != 2 || bs[0].Adapter != usage.Grok || bs[0].Model != "grok-4.7-build" {
+		t.Fatalf("grok buckets = %+v", bs)
+	}
+	if got := bs[0].CostUSD + bs[1].CostUSD; math.Abs(got-0.015) > 1e-12 {
+		t.Errorf("grok cost = %v", got)
 	}
 }
 

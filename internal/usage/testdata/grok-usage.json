@@ -1,0 +1,38 @@
+{
+  "sessionId": "01a0fixture",
+  "updatedAt": "2026-10-02T10:01:00Z",
+  "session": {
+    "inputTokens": 950,
+    "outputTokens": 70,
+    "cachedReadTokens": 400,
+    "costUsdTicks": 150000000,
+    "primaryModelId": "grok-4.7-build",
+    "turnCount": 2
+  },
+  "turns": [
+    {
+      "turnNumber": 1,
+      "endedAt": "2026-10-02T10:00:00Z",
+      "inputTokens": 900,
+      "outputTokens": 60,
+      "cachedReadTokens": 400,
+      "costUsdTicks": 125000000,
+      "primaryModelId": "grok-4.7-build",
+      "modelUsage": {
+        "grok-4.7-build": {"inputTokens": 900, "outputTokens": 60, "cachedReadTokens": 400, "costUsdTicks": 125000000}
+      }
+    },
+    {
+      "turnNumber": 2,
+      "endedAt": "2026-10-02T10:01:00Z",
+      "inputTokens": 50,
+      "outputTokens": 10,
+      "cachedReadTokens": 0,
+      "costUsdTicks": 25000000,
+      "primaryModelId": "grok-4.7-build",
+      "modelUsage": {
+        "grok-4.7-build": {"inputTokens": 50, "outputTokens": 10, "cachedReadTokens": 0, "costUsdTicks": 25000000}
+      }
+    }
+  ]
+}

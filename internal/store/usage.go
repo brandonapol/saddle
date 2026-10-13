@@ -29,16 +29,18 @@ func (s *Store) AddUsage(session string, reset bool, bs []usage.Bucket) error {
 			}
 		}
 		for _, b := range bs {
-			_, err := tx.Exec(`INSERT INTO usage(minute, task, model, session, input, output, cache_read, cache_creation, messages)
-				VALUES(?,?,?,?,?,?,?,?,?)
+			_, err := tx.Exec(`INSERT INTO usage(minute, task, adapter, model, session, input, output, cache_read, cache_creation, messages, cost_usd)
+				VALUES(?,?,?,?,?,?,?,?,?,?,?)
 				ON CONFLICT(minute, task, model, session) DO UPDATE SET
+				  adapter = excluded.adapter,
 				  input = input + excluded.input,
 				  output = output + excluded.output,
 				  cache_read = cache_read + excluded.cache_read,
 				  cache_creation = cache_creation + excluded.cache_creation,
-				  messages = messages + excluded.messages`,
-				b.Minute.UTC().Truncate(time.Minute).Unix(), b.Task, b.Model, session,
-				b.Input, b.Output, b.CacheRead, b.CacheCreation, b.Messages)
+				  messages = messages + excluded.messages,
+				  cost_usd = cost_usd + excluded.cost_usd`,
+				b.Minute.UTC().Truncate(time.Minute).Unix(), b.Task, b.Adapter, b.Model, session,
+				b.Input, b.Output, b.CacheRead, b.CacheCreation, b.Messages, b.CostUSD)
 			if err != nil {
 				return err
 			}
@@ -69,11 +71,11 @@ func (s *Store) UsageSince(since time.Time) (usage.Tokens, error) {
 }
 
 // UsageBuckets returns stored usage from minutes at or after since, summed
-// over sessions into one bucket per minute, task and model, oldest first.
+// over sessions into one bucket per minute, task, adapter and model, oldest first.
 // usage.EstimateBuckets turns them into plan-limit estimates.
 func (s *Store) UsageBuckets(since time.Time) ([]usage.Bucket, error) {
-	rows, err := s.db.Query(`SELECT minute, task, model, SUM(input), SUM(output), SUM(cache_read), SUM(cache_creation), SUM(messages)
-		FROM usage WHERE minute >= ? GROUP BY minute, task, model ORDER BY minute, task, model`, minuteFloor(since))
+	rows, err := s.db.Query(`SELECT minute, task, adapter, model, SUM(input), SUM(output), SUM(cache_read), SUM(cache_creation), SUM(messages), SUM(cost_usd)
+		FROM usage WHERE minute >= ? GROUP BY minute, task, adapter, model ORDER BY minute, task, adapter, model`, minuteFloor(since))
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +84,7 @@ func (s *Store) UsageBuckets(since time.Time) ([]usage.Bucket, error) {
 	for rows.Next() {
 		var b usage.Bucket
 		var minute int64
-		if err := rows.Scan(&minute, &b.Task, &b.Model, &b.Input, &b.Output, &b.CacheRead, &b.CacheCreation, &b.Messages); err != nil {
+		if err := rows.Scan(&minute, &b.Task, &b.Adapter, &b.Model, &b.Input, &b.Output, &b.CacheRead, &b.CacheCreation, &b.Messages, &b.CostUSD); err != nil {
 			return nil, err
 		}
 		b.Minute = time.Unix(minute, 0).UTC()
