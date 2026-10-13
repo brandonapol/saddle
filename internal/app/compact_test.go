@@ -126,8 +126,13 @@ func TestCompactCommandPerHarness(t *testing.T) {
 	if cmd, ok := CompactCommand(usage.Codex); !ok || cmd != "/compact" {
 		t.Fatalf("codex: %q %v, want bare /compact", cmd, ok)
 	}
-	if cmd, ok := CompactCommand(usage.Grok); ok || cmd != "" {
-		t.Fatalf("grok: %q %v, want no command", cmd, ok)
+	// Grok 1.0.50 has /compact; it says "/compact takes no arguments" and
+	// compacts a headless --prompt-file turn too (#488).
+	if cmd, ok := CompactCommand(usage.Grok); !ok || cmd != "/compact" {
+		t.Fatalf("grok: %q %v, want bare /compact", cmd, ok)
+	}
+	if cmd, ok := CompactCommand("gemini"); ok || cmd != "" {
+		t.Fatalf("gemini: %q %v, want no command", cmd, ok)
 	}
 }
 
@@ -277,14 +282,20 @@ func TestCompactInjectsHarnessCommand(t *testing.T) {
 		t.Fatalf("codex sent %q, want /compact", r.tgt.sent)
 	}
 
-	g := newCompactRig(t, usage.Grok)
+	k := newCompactRig(t, usage.Grok)
+	k.step(t, 0.8)
+	if len(k.tgt.sent) != 1 || k.tgt.sent[0] != "/compact" {
+		t.Fatalf("grok sent %q, want /compact", k.tgt.sent)
+	}
+
+	g := newCompactRig(t, "gemini")
 	rep := g.step(t, 0.8)
 	if rep.Injected || len(g.tgt.sent) != 0 {
-		t.Fatalf("grok has no compact command, sent %q", g.tgt.sent)
+		t.Fatalf("gemini has no compact command, sent %q", g.tgt.sent)
 	}
 	ns := g.notices(t)
 	if len(ns) != 1 || !strings.Contains(ns[0].Text, "no compact command") {
-		t.Fatalf("grok notice = %+v, want it to say there is no compact command", ns)
+		t.Fatalf("gemini notice = %+v, want it to say there is no compact command", ns)
 	}
 	if es := g.events(t, EventCompactSkip); len(es) != 1 {
 		t.Fatalf("%d skip events, want 1", len(es))

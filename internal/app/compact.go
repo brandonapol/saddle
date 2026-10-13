@@ -206,8 +206,8 @@ func CompactCommand(agentKind string) (string, bool) {
 	switch agentKind {
 	case usage.Claude:
 		return "/compact Keep a short saddle state summary: " + compactKeep + ".", true
-	case usage.Codex:
-		return "/compact", true // takes no instruction
+	case usage.Codex, usage.Grok:
+		return "/compact", true // takes no instruction; grok's also compacts a headless turn (#488)
 	}
 	return "", false
 }

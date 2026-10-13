@@ -1,0 +1,40 @@
+╭───────────────────────────────────────────────────────────────╮
+│ ✨ Update available! 0.154.0 -> 0.162.1                       │
+│ See https://github.com/openai/codex for installation options. │
+│                                                               │
+│ See full release notes:                                       │
+│ https://github.com/openai/codex/releases/latest               │
+╰───────────────────────────────────────────────────────────────╯
+
+╭────────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.154.0)                             │
+│                                                        │
+│ model:     gpt-nonexistent-9 high   /model to change   │
+│ directory: ~/code/proj │
+╰────────────────────────────────────────────────────────╯
+
+  Tip: Try the Desktop app on Linux: install it from https://learn.chatgpt.com/docs/linux/linux-app and run 'chatgpt'.
+
+• You have 1 usage limit reset available. Run /usage to use one.
+
+
+› say hi
+
+
+⚠ Model metadata for `gpt-nonexistent-9` not found. Defaulting to fallback metadata; this can degrade performance and
+  cause issues.
+
+■ {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-nonexistent-9' model is not
+supported when using Codex with a ChatGPT account."}}
+
+
+› Ask Codex to do anything
+
+  gpt-nonexistent-9 high · ~/code/proj · Say hi
+
+
+
+
+
+
+

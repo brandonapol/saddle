@@ -2,6 +2,7 @@ package usage
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -19,8 +20,8 @@ type LimitBanner struct {
 const bannerTail = 12
 
 var (
-	limitRe = regexp.MustCompile(`(?i)usage limit reached|you(?:'|’)ve hit your [\w-]+ limit|\b(?:session|weekly|5-hour|opus) limit reached|exceeded your current quota|\bout of credits\b|insufficient credits|used all available credits|reached its monthly spending limit`)
-	resetRe = regexp.MustCompile(`(?i)\b(?:resets?(?: at)?|try again at|try again (in))\s+([^·∙\n]+)`)
+	limitRe = regexp.MustCompile(`(?i)usage limit reached|you(?:(?:'|’)ve)? hit your [\w-]+(?: usage)? limit|hit your spend cap|reached your (?:workspace credit|usage) limit|\b(?:session|weekly|5-hour|opus) limit reached|exceeded your current quota|\bout of credits\b|insufficient credits|used all available credits|reached its monthly spending limit`)
+	resetRe = regexp.MustCompile(`(?i)\b(?:resets(?:\s+at)?|reset\s+at|try\s+again\s+at|try\s+again\s+(in))\s+([^·∙\n]+)`)
 )
 
 // DetectLimitBanner reports whether a terminal screen shows Claude Code
@@ -34,6 +35,7 @@ func DetectLimitBanner(screen string) (LimitBanner, bool) {
 			tail = append(tail, ls[i])
 		}
 	}
+	slices.Reverse(tail) // screen order, so a reset wrapped onto the next line reads on
 	text := strings.Join(tail, "\n")
 	if !limitRe.MatchString(text) {
 		return LimitBanner{}, false

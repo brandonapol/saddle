@@ -88,10 +88,10 @@ func (id OrchIdentity) Brief() string {
 func (id OrchIdentity) compactBrief() string {
 	const keep = "running tasks, open PRs, queued follow-ups, owner decisions pending, rules in force"
 	const when = "- Compact your context at natural breakpoints: after a batch lands and its PRs merge, before a long planning step, or when saddle tells you context is above the threshold. "
-	switch {
-	case id.Compact == "":
+	switch id.Compact {
+	case "":
 		return when + fmt.Sprintf("%s has no compact command: write a short state summary (%s) and ask the owner to start a fresh session.\n", id.CLI(), keep)
-	case id.Adapter == usage.Codex:
+	case "/compact": // codex and grok take no instruction
 		return when + fmt.Sprintf("Write a short state summary first (%s), then run /compact; it takes no instruction. When you are idle and the owner isn't typing, saddle may send the command for you.\n", keep)
 	}
 	return when + fmt.Sprintf("Run /compact and keep a short state summary: %s. When you are idle and the owner isn't typing, saddle may send the command for you.\n", keep)

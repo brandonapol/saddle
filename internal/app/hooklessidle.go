@@ -18,8 +18,9 @@ import (
 var HooklessIdleAfter = 20 * time.Second
 
 // workingRe is a CLI's "turn in progress" line: codex's "• Working (3s • esc
-// to interrupt)", gemini's "(esc to cancel, 3s)".
-var workingRe = regexp.MustCompile(`(?i)esc to (interrupt|cancel)`)
+// to interrupt)", gemini's "(esc to cancel, 3s)", grok's "Ctrl+c:cancel"
+// footer hint (#488).
+var workingRe = regexp.MustCompile(`(?i)esc to (interrupt|cancel)|Ctrl\+c:cancel`)
 
 // ObserveHooklessScreen updates a hookless worker's status from its screen:
 // still for HooklessIdleAfter with nothing working marks it idle; working

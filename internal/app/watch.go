@@ -16,13 +16,17 @@ const (
 
 var (
 	trustRe  = regexp.MustCompile(`(?i)trust this folder|Is this a project you created or one you trust`)
-	promptRe = regexp.MustCompile(`(?m)Enter to confirm|Esc to cancel|Do you want to (proceed|make this edit|create|run)|^\s*❯\s*\d+\.\s|` + codexPrompt)
+	promptRe = regexp.MustCompile(`(?m)Enter to confirm|Esc to cancel|Do you want to (proceed|make this edit|create|run)|^\s*❯\s*\d+\.\s|` + codexPrompt + `|` + grokPrompt)
 )
 
 // codexPrompt is Codex's approval and trust screens (#480): a "› 1." menu
 // and their wordings. The trust screen counts as an ask, not PromptTrust:
 // Down, Enter there picks "No, ask me to approve".
 const codexPrompt = `^\s*›\s*\d+\.\s|Press enter to (confirm|continue)|Would you like to (run|make|apply)|trust the contents of this directory|allow Codex to work in this folder`
+
+// grokPrompt is the Grok CLI's approval screen (#488): radio options drawn
+// as "┃  1 (●) Yes, proceed" inside a bar, with no wording the others share.
+const grokPrompt = `^[\s┃]*\d+ \([●○]\)\s`
 
 // DetectPrompt reports whether a terminal screen is showing an interactive prompt.
 func DetectPrompt(screen string) string {
