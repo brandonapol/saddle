@@ -81,15 +81,17 @@ func finished(dir, body string) []fa.Step {
 	return []fa.Step{fa.Write(dir+"/work.txt", body), fa.Commit("work in " + dir), fa.Done("Adds " + dir + "/work.txt.")}
 }
 
-// landTwo spawns two agents on disjoint claims, waits for both to call
+// landTwo spawns two agents in order on disjoint claims, waits for both to call
 // done, lands them and opens their PRs. It returns the PR URLs by task.
 func landTwo(t *testing.T, w *World) map[string]string {
 	t.Helper()
+	queued := func(v mcpserver.TaskView) bool { return v.Status == "done" && v.Train == "queued" }
+	// The train lands in the order tasks call done, so t2 is only spawned
+	// once t1 is queued; spawning both at once can reverse the stack under load.
 	w.Spawn("t1", "Alpha work", []string{"alpha/**"}, finished("alpha", "alpha\n")...)
+	w.WaitTask("t1", "queued in the train", queued)
 	w.Spawn("t2", "Beta work", []string{"beta/**"}, finished("beta", "beta\n")...)
-	for _, id := range []string{"t1", "t2"} {
-		w.WaitTask(id, "queued in the train", func(v mcpserver.TaskView) bool { return v.Status == "done" && v.Train == "queued" })
-	}
+	w.WaitTask("t2", "queued in the train", queued)
 	r := w.MustSaddle("land")
 	for _, id := range []string{"t1", "t2"} {
 		if !strings.Contains(r.Stdout, id) || w.Task(id).Status != "landed" {
