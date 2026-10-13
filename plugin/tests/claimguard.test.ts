@@ -8,7 +8,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { TOOLS, bashTargets, claimed, expandBraces, heldMessage, inWorktree, matchClaim } from '../hooks/claimguard'
 import type { SaddleGuard } from '../types'
-import { memoryState } from './fixtures'
+import { loaded, memoryState } from './fixtures'
 
 const ROOT = '/repo/.saddle/worktrees/t9'
 const CLAIMS = ['plugin/hooks/claimguard*', 'plugin/tests/claimguard*', 'docs/guard.md', 'internal/**/*_test.go']
@@ -149,7 +149,7 @@ function world(on: On, w: World, env: Record<string, string> = { SADDLE_TASK: 't
 }
 
 const fresh = (claims: string[] | null = CLAIMS): World => ({ claims, ran: [], calls: [], prompts: [] })
-const on_ = { options: { claimGuard: true } }
+const on_ = { ...loaded, options: { claimGuard: true } }
 
 const edit = ($: Engine, path: string) =>
   $.tool.call({ tool: 'Edit', file_path: path.startsWith('/') ? path : `${ROOT}/${path}`, old_string: 'a', new_string: 'b' })
@@ -219,7 +219,7 @@ describe('the guard', () => {
     expect(w.ran).toHaveLength(1)
   })
 
-  test('is off unless the claimGuard option is on', async ($, on) => {
+  test('is off unless the claimGuard option is on', loaded, async ($, on) => {
     const w = fresh()
     world(on, w)
     expect((await edit($, 'README.md')).deny).toBeUndefined()

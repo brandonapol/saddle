@@ -6,6 +6,7 @@ import type { On } from 'claude-code'
 
 import type { SaddleSnapshot } from '../types'
 import { idle, parseQueue, parseStack, parseStatus, sameSnapshot, versionAtLeast } from '../hooks/snapshot'
+import { loaded } from './fixtures'
 
 describe('versionAtLeast', () => {
   test('compares releases numerically', () => {
@@ -99,7 +100,7 @@ function world(on: On, w: World) {
 const start = { cwd: '/repo', surface: 'terminal', isInteractive: true } as const
 
 describe('refresh', () => {
-  test('reads saddle at start and writes the snapshot', async ($, on) => {
+  test('reads saddle at start and writes the snapshot', loaded, async ($, on) => {
     const w: World = { engine: 'engine', tasks: ['t1'], calls: [], writes: [] }
     const clock = world(on, w)
     await $.session.start(start)
@@ -113,7 +114,7 @@ describe('refresh', () => {
     expect(w.calls).toEqual(['queue --json', 'status --json', 'stack --json'])
   })
 
-  test('writes only on a change, and reads the stack less often', async ($, on) => {
+  test('writes only on a change, and reads the stack less often', loaded, async ($, on) => {
     const w: World = { engine: 'engine', tasks: ['t1'], calls: [], writes: [] }
     const clock = world(on, w)
     await $.session.start(start)
@@ -135,7 +136,7 @@ describe('refresh', () => {
     expect(w.calls.filter(c => c === 'stack --json').length).toBeGreaterThan(1)
   })
 
-  test('goes idle when the engine stops, without reading status', async ($, on) => {
+  test('goes idle when the engine stops, without reading status', loaded, async ($, on) => {
     const w: World = { engine: 'engine', tasks: ['t1'], calls: [], writes: [] }
     const clock = world(on, w)
     await $.session.start(start)
@@ -149,7 +150,7 @@ describe('refresh', () => {
     expect(w.calls).toEqual(['queue --json'])
   })
 
-  test('does nothing outside a saddle repo', async ($, on) => {
+  test('does nothing outside a saddle repo', loaded, async ($, on) => {
     const w: World = { engine: 'engine', tasks: [], calls: [], writes: [], hasSaddleDir: false }
     const clock = world(on, w)
     await $.session.start(start)
@@ -158,7 +159,7 @@ describe('refresh', () => {
     expect(w.writes).toEqual([])
   })
 
-  test('does nothing where nothing is drawn', async ($, on) => {
+  test('does nothing where nothing is drawn', loaded, async ($, on) => {
     const w: World = { engine: 'engine', tasks: [], calls: [], writes: [] }
     const clock = world(on, w)
     await $.session.start({ cwd: '/repo', surface: null, isInteractive: false })
@@ -167,7 +168,7 @@ describe('refresh', () => {
     expect(w.writes).toEqual([])
   })
 
-  test('does nothing on a Claude Code older than the mods API', async ($, on) => {
+  test('does nothing on a Claude Code older than the mods API', loaded, async ($, on) => {
     const w: World = { engine: 'engine', tasks: [], calls: [], writes: [], version: '2.1.284' }
     const clock = world(on, w)
     await $.session.start(start)

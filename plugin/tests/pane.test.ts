@@ -9,7 +9,7 @@ import type { Engine } from 'claude-code/testing'
 import type { SaddleSnapshot } from '../types'
 import { agentLines, claimLines, headerOf, headerTone, scrolled, stackLines, tabLines, trainLines } from '../hooks/pane'
 import { idle } from '../hooks/snapshot'
-import { fleet, memoryState } from './fixtures'
+import { fleet, loaded, memoryState } from './fixtures'
 
 const texts = (lines: { text: string }[]) => lines.map(l => l.text)
 
@@ -178,7 +178,7 @@ function scroll(by: number) {
 
 describe('pane', () => {
   for (const surface of ['terminal', 'desktop'] as const) {
-    test(`draws the agents tab first and switches tabs (${surface})`, async ($, on) => {
+    test(`draws the agents tab first and switches tabs (${surface})`, loaded, async ($, on) => {
       const ui = await mountPane($, on, surface, fleet)
       expect((await ui.find({ key: 'header' }))?.text).toBe('saddle · engine · 3 active · 1 needs you · 2 in train')
       expect(await ui.find({ type: 'Text', text: /^t2 {2}running/ })).toBeDefined()
@@ -198,7 +198,7 @@ describe('pane', () => {
     })
   }
 
-  test('draws what each refresh writes', async ($, on) => {
+  test('draws what each refresh writes', loaded, async ($, on) => {
     memoryState(on, { 'saddle/snapshot': null })
     let tasks = [{ id: 't1', title: 'one', status: 'running' }]
     const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -234,7 +234,7 @@ describe('pane', () => {
     await ui.unmount()
   })
 
-  test('keeps the header and tabs while its rows scroll', async ($, on) => {
+  test('keeps the header and tabs while its rows scroll', loaded, async ($, on) => {
     // 2 rows of header and tabs, 3 of body.
     const ui = await mountPane($, on, 'terminal', fleet, 5)
     expect(await ui.find({ type: 'Text', text: /^t2 {2}running/ })).toBeDefined()
@@ -278,7 +278,7 @@ function run(presentation: { isFullscreen: boolean; columns: number }) {
 }
 
 describe('/saddle-pane', () => {
-  test('opens the pane, then closes it', async ($, on) => {
+  test('opens the pane, then closes it', loaded, async ($, on) => {
     const p: Panes = { open: [], opened: [] }
     panes(on, p)
     const fullscreen = run({ isFullscreen: true, columns: 200 })
@@ -289,7 +289,7 @@ describe('/saddle-pane', () => {
     expect(p.open).toEqual([])
   })
 
-  test('opens focused and closing on Escape without the fullscreen layout', async ($, on) => {
+  test('opens focused and closing on Escape without the fullscreen layout', loaded, async ($, on) => {
     const p: Panes = { open: [], opened: [] }
     panes(on, p)
     await $.command.run(run({ isFullscreen: false, columns: 100 }))

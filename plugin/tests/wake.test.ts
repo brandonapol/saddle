@@ -9,7 +9,7 @@ import type { SaddleSnapshot } from '../types'
 import { idle } from '../hooks/snapshot'
 import { HEARTBEAT, backlogContext, hasEvents, kept, ownsSession, parseEvents, planWake, wakePrompt, wakes } from '../hooks/wake'
 import type { SaddleEvent } from '../hooks/wake'
-import { memoryState } from './fixtures'
+import { loaded, memoryState } from './fixtures'
 
 const landed: SaddleEvent = { kind: 'info', text: 't3 (meter) landed on saddle/integration.' }
 const finished: SaddleEvent = { kind: 'info', text: 't4 (claims) finished: done.' }
@@ -172,7 +172,7 @@ function fresh(over: Partial<World> = {}): World {
 }
 
 describe('wake', () => {
-  test('writes the heartbeat each tick, and runs no extra command while nothing waits', async ($, on) => {
+  test('writes the heartbeat each tick, and runs no extra command while nothing waits', loaded, async ($, on) => {
     const w = fresh()
     const clock = world(on, w)
     await $.session.start(start)
@@ -184,7 +184,7 @@ describe('wake', () => {
     expect(w.prompts).toEqual([])
   })
 
-  test('an event that needs a decision submits one [saddle] prompt', async ($, on) => {
+  test('an event that needs a decision submits one [saddle] prompt', loaded, async ($, on) => {
     const w = fresh()
     const clock = world(on, w)
     await $.session.start(start)
@@ -200,7 +200,7 @@ describe('wake', () => {
     expect(w.calls.filter(c => c === 'plugin events --json')).toHaveLength(1)
   })
 
-  test('routine events only toast, then ride along on the next wake', async ($, on) => {
+  test('routine events only toast, then ride along on the next wake', loaded, async ($, on) => {
     const w = fresh()
     const clock = world(on, w)
     await $.session.start(start)
@@ -218,7 +218,7 @@ describe('wake', () => {
     ])
   })
 
-  test("routine events ride on the person's next message instead", async ($, on) => {
+  test("routine events ride on the person's next message instead", loaded, async ($, on) => {
     const w = fresh()
     const clock = world(on, w)
     await $.session.start(start)
@@ -234,7 +234,7 @@ describe('wake', () => {
     expect(w.prompts).toEqual(['and now?'])
   })
 
-  test("leaves events alone under saddle up: they are the TUI orchestrator's", async ($, on) => {
+  test("leaves events alone under saddle up: they are the TUI orchestrator's", loaded, async ($, on) => {
     const w = fresh({ engine: 'up', events: [stuck] })
     const clock = world(on, w)
     await $.session.start(start)
@@ -243,7 +243,7 @@ describe('wake', () => {
     expect(w.prompts).toEqual([])
   })
 
-  test('does nothing in a worker session', async ($, on) => {
+  test('does nothing in a worker session', loaded, async ($, on) => {
     const w = fresh({ events: [stuck] })
     const clock = world(on, w, { SADDLE_TASK: 't9' })
     await $.session.start(start)
