@@ -178,3 +178,36 @@ func TestDoneAsyncRefusesATreeThatMovedDuringTheGate(t *testing.T) {
 		t.Fatalf("agent not told to call done again: %q", n)
 	}
 }
+
+// #467: the train rebasing a branch onto a newer landing while its done
+// gate runs is no reason to make the agent call done again: the gate
+// restarts on the rebased tree and queues it.
+func TestDoneAsyncRestartsAfterARebase(t *testing.T) {
+	a := trainSetup(t)
+	cmd, runs, release := slowGate(t)
+	a.Cfg.Train.Lint = config.Lint{Cmd: cmd, Set: true}
+	tk, err := a.Spawn(SpawnReq{Title: "rebased"})
+	must(t, err)
+	write(t, tk.Worktree, "x.go", "ok\n")
+	commitAll(t, tk.Worktree, "work")
+	job, err := a.DoneAsync(tk.ID, "rebased mid-gate")
+	must(t, err)
+	if !waitUntil(func() bool { return runs() == 1 }) {
+		t.Fatal("gate never started")
+	}
+	commitOnIntegration(t, a, "another landing", map[string]string{"other.go": "other\n"})
+	if rb := a.autoRebase(tk); rb.To == "" {
+		t.Fatalf("auto-rebase did not move the branch: %+v", rb)
+	}
+	release()
+	a.WaitDoneJobs()
+	if n := runs(); n != 2 {
+		t.Fatalf("gate ran %d times, want a restart on the rebased tree", n)
+	}
+	if !inTrain(t, a, tk.ID) {
+		t.Fatalf("rebased branch not queued; notices: %s", noticeTexts(t, a, tk.ID))
+	}
+	if n := noticeTexts(t, a, tk.ID); strings.Contains(n, "call the saddle done tool again") || !strings.Contains(n, job.ID) {
+		t.Fatalf("agent notices = %q; want queued with no call to retry", n)
+	}
+}
