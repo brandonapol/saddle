@@ -346,27 +346,50 @@ func (a *App) nudgeOrphan(t store.Task, o *DoneOrphan, now time.Time) error {
 			ns, _ := a.Store.TakeNotices(t.ID, false)
 			line = ad.Inject(store.FormatNotices(ns))
 		}
-		in := tmux.InputEmpty
-		if s, err := a.Tmux.Capture(t.Window, 15); err == nil {
-			in = tmux.ReadInput(s)
-		}
-		if in != tmux.InputEmpty {
-			_ = a.Tmux.SendKeys(t.Window, "C-u") // nobody is typing into a hung session
-		}
-		ok, err := tmux.Submit(a.Tmux, t.Window, line)
+		screen, err := a.Tmux.Capture(t.Window, 30)
 		switch {
-		case err != nil:
-			how = "typing failed: " + err.Error()
-		case !ok:
-			how = "typed, but the input box never emptied"
+		case err == nil && promptShown(screen):
+			how = a.answerPrompt(t, screen)
 		default:
-			how = "typed and submitted"
+			in := tmux.InputEmpty
+			if err == nil {
+				in = tmux.ReadInput(screen)
+			}
+			if in != tmux.InputEmpty {
+				_ = a.Tmux.SendKeys(t.Window, "C-u") // nobody is typing into a hung session
+			}
+			ok, err := tmux.Submit(a.Tmux, t.Window, line)
+			switch {
+			case err != nil:
+				how = "typing failed: " + err.Error()
+			case !ok:
+				how = "typed, but the input box never emptied"
+			default:
+				how = "typed and submitted"
+			}
 		}
 	}
 	// What the nudge itself drew is not the agent moving.
 	o.Screen = a.screenHash(t)
 	a.Store.Event(t.ID, EventOrphanNudge, how)
 	return nil
+}
+
+// answerPrompt handles a prompt found where the nudge would type (#496),
+// as the screen watcher does: a trust prompt for a checkout the user
+// trusted is accepted, anything else marks t needs-you for a human.
+// Nothing is typed. It says what it did.
+func (a *App) answerPrompt(t store.Task, screen string) string {
+	if DetectPrompt(tmux.StripANSI(screen)) == PromptTrust && a.RootTrusted() {
+		if a.Tmux.SendKeys(t.Window, "Down", "Enter") == nil {
+			a.Store.Event(t.ID, "trust_accepted", "")
+			return "on a trust prompt: accepted it"
+		}
+	}
+	if err := a.Store.SetStatus(t.ID, store.NeedsYou); err != nil {
+		return "on a prompt, nothing typed; marking it needs-you failed: " + err.Error()
+	}
+	return "on a prompt: nothing typed, marked needs-you"
 }
 
 // finishOrphan kills t and spawns a finisher on its branch (step 3).

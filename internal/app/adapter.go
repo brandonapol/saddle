@@ -143,7 +143,8 @@ func (a *App) injectNotices(t store.Task, ad agent.Adapter, force bool) error {
 	tm := tmux.TimingOf(a.Tmux)
 	time.AfterFunc(tm.RetryFor+tm.ConfirmFor, release)
 	tmux.Deliver(a.Tmux, t.Window, ad.Inject(store.FormatNotices(ns)), tmux.Delivery{
-		Force: force,
+		Force:   force,
+		Blocked: promptShown,
 		Sent: func() {
 			_ = a.Store.MarkDelivered(ns)
 			release()

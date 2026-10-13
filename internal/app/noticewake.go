@@ -120,7 +120,8 @@ func (a *App) RunNoticeWaker(ctx context.Context) {
 func (a *App) sendWake(t store.Task, force bool) {
 	asks := t.Status == store.NeedsYou
 	tmux.Deliver(a.Tmux, t.Window, agent.Claude{}.Inject(""), tmux.Delivery{
-		Force: force,
+		Force:   force,
+		Blocked: promptShown,
 		Needed: func() bool {
 			if asks && a.onPrompt(t) {
 				return false
