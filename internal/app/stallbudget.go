@@ -52,6 +52,10 @@ type StallConfig struct {
 	Kinds map[string]time.Duration `toml:"kinds"`
 	// IdleAlarm is the no-progress watchdog's threshold.
 	IdleAlarm time.Duration `toml:"idle_alarm"`
+	// DoneOrphan is how long a worker whose done call was cancelled may sit
+	// unqueued with a still screen before the watchdog heals it, and how
+	// long each healing step waits (#467).
+	DoneOrphan time.Duration `toml:"done_orphan"`
 }
 
 // set is the budget config sets for kind, if any.
@@ -94,12 +98,18 @@ func (a *App) StallConfig() StallConfig {
 		if f.Stall.IdleAlarm > 0 {
 			c.IdleAlarm = f.Stall.IdleAlarm
 		}
+		if f.Stall.DoneOrphan > 0 {
+			c.DoneOrphan = f.Stall.DoneOrphan
+		}
 		for k, d := range f.Stall.Kinds {
 			c.Kinds[k] = d
 		}
 	}
 	if c.IdleAlarm <= 0 {
 		c.IdleAlarm = DefaultIdleAlarm
+	}
+	if c.DoneOrphan <= 0 {
+		c.DoneOrphan = DefaultDoneOrphan
 	}
 	return c
 }
@@ -166,6 +176,9 @@ func (a *App) stallBudget(kind string) (time.Duration, bool) {
 func (a *App) StallTick(now time.Time) ([]DecisionCard, error) {
 	done, err := a.ExpireDecisions(now, a.runDefault)
 	errs := []error{err, a.releaseHeld()}
+	if _, err := a.OrphanTick(now); err != nil {
+		errs = append(errs, fmt.Errorf("done-orphan watch: %w", err))
+	}
 	if _, _, err := a.WatchdogTick(now); err != nil {
 		errs = append(errs, fmt.Errorf("watchdog: %w", err))
 	}

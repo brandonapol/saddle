@@ -14,6 +14,7 @@ import (
 	"sync"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
@@ -388,6 +389,10 @@ func statusCmd() *cobra.Command {
 			}
 			if holds, err := a.CIRedHolds(); err == nil {
 				writeCIRed(cmd.OutOrStdout(), holds)
+			}
+			for _, o := range st.DoneOrphaned {
+				fmt.Fprintf(cmd.OutOrStdout(), "done-orphaned: %s called done, was never queued and went quiet; saddle %s it %s ago\n",
+					o.Task, o.Step, time.Since(o.StepAt).Round(time.Minute))
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(w, "ID\tSTATUS\tMODEL\tWIN\tTITLE\tCLAIMS\tTRAIN")
