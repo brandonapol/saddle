@@ -60,7 +60,7 @@ func gateRule(g lintgate.Gate) string {
 }
 
 func (a *App) orchestratorBrief() string {
-	return a.orchestratorBriefFor(fmt.Sprintf(`# Saddle orchestrator
+	return a.orchestratorBriefFor(a.OrchestratorIdentity(), fmt.Sprintf(`# Saddle orchestrator
 
 You are the chat agent inside Saddle's TUI. The user talks to you in a sidebar while you run a team of coding agents (%s by default) working on this repo in parallel. You don't write code. You plan, launch, watch and land.
 
@@ -76,7 +76,7 @@ The user cannot see the agents' terminals unless they go looking. You are their 
 // PluginBrief is the orchestrator brief for the user's own Claude Code
 // session running the saddle plugin, in place of the TUI's headless one.
 func (a *App) PluginBrief() string {
-	return a.orchestratorBriefFor(`# Saddle orchestrator
+	return a.orchestratorBriefFor(a.PluginIdentity(), `# Saddle orchestrator
 
 You are orchestrating Saddle from the user's own `+a.harnessName()+` session. The user talks to you here while you run a team of coding agents (`+a.harnessName()+` by default) working on this repo in parallel, each in its own worktree and hidden tmux window. While orchestrating you don't write code yourself. You plan, launch, watch and land through the saddle MCP tools (spawn, status, peek, send_keys, message, land, prs, restack and the rest).
 
@@ -103,9 +103,9 @@ const plainTalk = `- Write for someone who glances at the screen every hour and 
 
 // orchestratorBriefFor assembles the orchestrator brief around the parts
 // that depend on where it runs: its intro, how it waits for events, and how
-// it talks to the user.
-func (a *App) orchestratorBriefFor(intro, waiting, talking string) string {
-	return intro + fmt.Sprintf(`## Taking work
+// it talks to the user. id is the session it briefs (#479).
+func (a *App) orchestratorBriefFor(id OrchIdentity, intro, waiting, talking string) string {
+	return intro + id.Brief() + fmt.Sprintf(`## Taking work
 - Work arrives as GitHub issues ("do #33 and #46"), an epic, or plain requests. Use the ticket tool to read an issue and its sub-issues before planning.
 - Split the work into tasks that can run at the same time with DISJOINT path claims (globs like "internal/foo/**"). Two tasks that must edit the same file are not parallel: sequence them or merge them.
 - Directory moves, renames and big restructures are BARRIERS. Run one alone, land it, then start the work that depends on it.
@@ -124,10 +124,9 @@ func (a *App) orchestratorBriefFor(intro, waiting, talking string) string {
 - When a coherent set has landed, offer to open stacked PRs (prs). Base: %s.
 - Stack or base problems (base moved, CI failing on a stacked PR, drift) -> find the owning task and `+"`message`"+` it, or call `+"`restack`"+` if the base moved. Restack first; if that fails, see Getting unstuck.
 - CI red on a stacked PR holds the layers above it (ci-red) until it goes green; saddle spawns its repair.
-- If prs is blocked (stack flagged or GitHub refuses a base change) but a task's work stands on its own, run `+"`saddle publish <task>`"+` (or the publish tool). Never `+"`git push`"+` or `+"`gh pr create`"+` by hand; a denied push comes from Claude's auto-mode classifier, and publish is the sanctioned path.
-`, serialList(a.Cfg.Serial), a.workerDefaultName(), a.ConcurrencyLimit(), a.Cfg.Integration, a.Cfg.Base) + waiting + `- Keep your context small. Use status and peek, not reading the agents' code, unless something is stuck.
-- Compact your context at natural breakpoints: after a batch lands and its PRs merge, before a long planning step, or when saddle tells you context is above the threshold. Run /compact (or your harness's equivalent) and keep a short state summary: running tasks, open PRs, queued follow-ups, owner decisions pending, rules in force. When you are idle and the owner isn't typing, saddle may send the command for you.
-` + a.advisorBrief() + `
+- If prs is blocked (stack flagged or GitHub refuses a base change) but a task's work stands on its own, run `+"`saddle publish <task>`"+` (or the publish tool). Never `+"`git push`"+` or `+"`gh pr create`"+` by hand; %s, and publish is the sanctioned path.
+`, serialList(a.Cfg.Serial), a.workerDefaultName(), a.ConcurrencyLimit(), a.Cfg.Integration, a.Cfg.Base, id.pushDenial()) + waiting + `- Keep your context small. Use status and peek, not reading the agents' code, unless something is stuck.
+` + id.compactBrief() + a.advisorBrief() + `
 ## Getting unstuck
 The goal is getting work done, not needing manual intervention. When a tool is stuck you may hand-fix it: edit ` + "`.saddle/state.db`" + ` (back it up first), recreate branches, spawn a repair worker, re-land work as fresh PRs, even using git yourself, unless the owner forbade it. Every hand fix must be followed in the same session by (1) a regression test that reproduces the failure, written failing-first, and (2) a GitHub issue designing a better system, recording the exact fix. Tell the user what you did in a sentence or two.
 - Prefer the escape hatches over editing state.db: ` + "`unstack`" + ` <task|pr> detaches a task or PR from a broken stack (CLI: saddle unstack); ` + "`sentinel_ack`" + ` clears a guard or freeze sentinel that blocks work (saddle sentinel ack); ` + "`requeue`" + ` puts a failed or stuck task back in the landing queue (saddle requeue).

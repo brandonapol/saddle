@@ -77,9 +77,12 @@ func ContextWindow(model string) int64 {
 // ContextUse is how full a session's context is: the prompt of its latest
 // response against its model's window.
 type ContextUse struct {
-	Model  string
-	Prompt int64 // input + cache read + cache creation of the latest response
-	Window int64
+	// Adapter is what the session runs on (usage.Claude…); set by
+	// OrchestratorContext even before a reading.
+	Adapter string
+	Model   string
+	Prompt  int64 // input + cache read + cache creation of the latest response
+	Window  int64
 }
 
 // NewContextUse sizes tok against model's window. configured is the model
@@ -176,7 +179,12 @@ func (a *App) OrchestratorContext() (ContextUse, error) {
 		return ContextUse{}, err
 	}
 	r := &ContextReader{Agent: a.orchestratorAgent(), Configured: a.orchModel()}
-	return r.Read(path)
+	u, err := r.Read(path)
+	u.Adapter = r.Agent
+	if u.Model == "" {
+		u.Model = a.orchModel()
+	}
+	return u, err
 }
 
 // CompactAt is orchestrator.compact_at, the context fraction at which the
