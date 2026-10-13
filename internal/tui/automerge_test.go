@@ -292,3 +292,33 @@ func TestMergeKeysToggleAgainstFreshState(t *testing.T) {
 		t.Errorf("after a failure calls = %q, want %q", f.calls, want)
 	}
 }
+
+// A refresh that reads the state an action saved, landing before the action
+// does, must not show its result while the action still runs: the header
+// would say "auto-merge off" while the next key is refused as "still turning
+// auto-merge off" (#429).
+func TestMergeHeaderWaitsForTheActionToLand(t *testing.T) {
+	m := newViewModel(120, 40)
+	f := &fakeAutomerger{}
+	m.amer = f
+	m.am = twoStacks()
+	m.Update(altKey('3'))
+
+	_, c := m.Update(runeKey('M')) // on → off, still running
+	saved := twoStacks()
+	saved.Enabled = false
+	m.refreshing = false
+	m.Update(refreshMsg{am: saved, amGen: m.amGen}) // read after the save
+	if long, _, _ := m.amHeader(); long != "auto-merge on · 1 held" {
+		t.Errorf("header while M runs: %q", long)
+	}
+	m.Update(c())
+	if long, _, _ := m.amHeader(); long != "auto-merge off" {
+		t.Errorf("header after M lands: %q", long)
+	}
+	runKey(m, runeKey('j')) // t8
+	runKey(m, runeKey('h')) // hold t8
+	if want := []string{"off", "hold t8"}; !slices.Equal(f.calls, want) {
+		t.Errorf("calls = %q, want %q", f.calls, want)
+	}
+}
