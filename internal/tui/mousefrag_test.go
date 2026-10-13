@@ -14,10 +14,21 @@ import (
 )
 
 // chunkReader hands out one chunk per Read, the way a slow terminal can.
-type chunkReader struct{ chunks []string }
+// delay stands in for a reader starved of CPU: each Read waits that long
+// first. drained closes when Read is called with no chunks left.
+type chunkReader struct {
+	chunks  []string
+	delay   time.Duration
+	drained chan struct{}
+}
 
 func (r *chunkReader) Read(p []byte) (int, error) {
+	time.Sleep(r.delay)
 	if len(r.chunks) == 0 {
+		if r.drained != nil {
+			close(r.drained)
+			r.drained = nil
+		}
 		select {} // block until the program quits
 	}
 	n := copy(p, r.chunks[0])
@@ -42,13 +53,40 @@ func (r *recorder) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // parse runs chunks through Bubble Tea's real input parser.
 func parse(t *testing.T, chunks ...string) []tea.Msg {
 	t.Helper()
-	r := &recorder{}
-	p := tea.NewProgram(r, tea.WithInput(&chunkReader{chunks: chunks}), tea.WithOutput(io.Discard))
-	go func() { time.Sleep(time.Duration(len(chunks))*5*time.Millisecond + 100*time.Millisecond); p.Quit() }()
+	return parseFrom(t, &chunkReader{chunks: chunks})
+}
+
+// parseFrom quits once r is drained, not after a fixed time, so a reader
+// slowed by machine load still gets every chunk parsed (#435). Bubble Tea's
+// reader hands each message over an unbuffered channel before it reads
+// again, so by the time Read finds nothing left, the event loop holds every
+// key, and Quit queues behind them.
+func parseFrom(t *testing.T, r *chunkReader) []tea.Msg {
+	t.Helper()
+	r.drained = make(chan struct{})
+	drained := r.drained
+	rec := &recorder{}
+	p := tea.NewProgram(rec, tea.WithInput(r), tea.WithOutput(io.Discard))
+	go func() {
+		select {
+		case <-drained:
+		case <-time.After(10 * time.Second):
+		}
+		p.Quit()
+	}()
 	if _, err := p.Run(); err != nil {
 		t.Fatal(err)
 	}
-	return r.msgs
+	return rec.msgs
+}
+
+// #435: a reader too starved to finish within a fixed deadline still has
+// every chunk parsed.
+func TestParseWaitsForSlowReader(t *testing.T) {
+	msgs := parseFrom(t, &chunkReader{chunks: []string{"\x1b", "`"}, delay: 150 * time.Millisecond})
+	if len(msgs) != 2 {
+		t.Fatalf("parsed %v, want esc and `", msgs)
+	}
 }
 
 func chatModel() *model {
