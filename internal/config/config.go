@@ -62,6 +62,9 @@ type Config struct {
 	// AdapterOrder is [adapters] order: the adapters new spawns rotate
 	// through when one runs out of quota (#321).
 	AdapterOrder []string `toml:"-"`
+	// AdapterPolicy is the rest of [adapters]: how saddle picks an adapter
+	// per task and what happens to a worker whose adapter runs out (#481).
+	AdapterPolicy AdapterPolicy `toml:"-"`
 	// Notify sends owner notifications (adapter rotation) beyond the TUI and
 	// the orchestrator.
 	Notify Notify `toml:"notify"`
@@ -189,7 +192,46 @@ type Adapter struct {
 	// Model is the adapter's default model; empty leaves it to the CLI.
 	// Claude's and grok's come from [claude] and [grok] (#480).
 	Model string `toml:"model"`
+	// Cost is the adapter's relative cost; policy = "cost" prefers the
+	// cheapest. Unset is 1 (#481).
+	Cost float64 `toml:"cost"`
+	// Budget is the tokens the adapter may use in five hours; policy =
+	// "quota" prefers the adapter with the most of it left. Unset is no
+	// known limit (#481).
+	Budget int64 `toml:"budget"`
+	// Kinds are the task kinds (spawn's kind=) this adapter is preferred
+	// for, e.g. ["docs", "mechanical"] (#481).
+	Kinds []string `toml:"kinds"`
 }
+
+// Adapter selection policies (#481).
+const (
+	PickOrder = "order" // the session default, then [adapters] order
+	PickCost  = "cost"  // the cheapest [adapters.<name>] cost
+	PickQuota = "quota" // the most of [adapters.<name>] budget left
+)
+
+// Failover modes for a worker whose adapter runs out of quota (#481).
+const (
+	FailoverHandoff = "handoff" // relaunch it on the next adapter with quota
+	FailoverPark    = "park"    // wait for the reset
+)
+
+// AdapterPolicy is [adapters] policy, failover and handoff_wait (#481).
+type AdapterPolicy struct {
+	// Pick is how a spawn without adapter= chooses: PickOrder, PickCost or
+	// PickQuota. A task kind or claims narrow the choice first.
+	Pick string `toml:"policy"`
+	// Failover is what a running worker does when its adapter runs out:
+	// FailoverHandoff or FailoverPark.
+	Failover string `toml:"failover"`
+	// HandoffWait parks instead of handing off when the reset is at most
+	// this far away.
+	HandoffWait time.Duration `toml:"handoff_wait"`
+}
+
+// adapterKeys are the [adapters] keys that are not adapter tables.
+var adapterKeys = []string{"order", "policy", "failover", "handoff_wait"}
 
 // AdapterMap is the [adapters.<name>] tables. The [adapters] table also
 // holds order, which Load reads into Config.AdapterOrder.
@@ -206,7 +248,7 @@ func (m *AdapterMap) UnmarshalTOML(v any) error {
 		*m = AdapterMap{}
 	}
 	for name, raw := range tbl {
-		if name == "order" {
+		if slices.Contains(adapterKeys, name) {
 			continue
 		}
 		t, ok := raw.(map[string]any)
@@ -228,6 +270,36 @@ func (m *AdapterMap) UnmarshalTOML(v any) error {
 					return fmt.Errorf("adapters.%s.model: want a string", name)
 				}
 				ad.Model = s
+			case "cost":
+				switch n := v.(type) {
+				case int64:
+					ad.Cost = float64(n)
+				case float64:
+					ad.Cost = n
+				default:
+					return fmt.Errorf("adapters.%s.cost: want a number", name)
+				}
+				if ad.Cost < 0 {
+					return fmt.Errorf("adapters.%s.cost: must not be negative", name)
+				}
+			case "budget":
+				n, ok := v.(int64)
+				if !ok || n < 0 {
+					return fmt.Errorf("adapters.%s.budget: want a token count", name)
+				}
+				ad.Budget = n
+			case "kinds":
+				l, ok := v.([]any)
+				if !ok {
+					return fmt.Errorf("adapters.%s.kinds: want an array of strings", name)
+				}
+				for _, k := range l {
+					s, ok := k.(string)
+					if !ok {
+						return fmt.Errorf("adapters.%s.kinds: want an array of strings", name)
+					}
+					ad.Kinds = append(ad.Kinds, strings.ToLower(strings.TrimSpace(s)))
+				}
 			case "args":
 				l, ok := v.([]any)
 				if !ok {
@@ -501,6 +573,7 @@ func Default() Config {
 		Issues:       Issues{AutoFile: true},
 		Harness:      HarnessClaude,
 		AdapterOrder: []string{HarnessClaude, HarnessGrok, HarnessCodex},
+		AdapterPolicy: AdapterPolicy{Pick: PickOrder, Failover: FailoverHandoff, HandoffWait: 15 * time.Minute},
 		Claude: Claude{
 			Cmd:               "claude",
 			Model:             "opus",
@@ -575,16 +648,28 @@ func Load(root string) (Config, error) {
 		if md.IsDefined("train", "lint", "cmd") {
 			cfg.Train.Lint.Set = true
 		}
-		if md.IsDefined("adapters", "order") {
+		if slices.ContainsFunc(adapterKeys, func(k string) bool { return md.IsDefined("adapters", k) }) {
 			var o struct {
 				Adapters struct {
 					Order []string `toml:"order"`
+					AdapterPolicy
 				} `toml:"adapters"`
 			}
 			if _, err := toml.DecodeFile(p, &o); err != nil {
 				return cfg, err
 			}
-			cfg.AdapterOrder = o.Adapters.Order
+			if md.IsDefined("adapters", "order") {
+				cfg.AdapterOrder = o.Adapters.Order
+			}
+			if md.IsDefined("adapters", "policy") {
+				cfg.AdapterPolicy.Pick = o.Adapters.Pick
+			}
+			if md.IsDefined("adapters", "failover") {
+				cfg.AdapterPolicy.Failover = o.Adapters.Failover
+			}
+			if md.IsDefined("adapters", "handoff_wait") {
+				cfg.AdapterPolicy.HandoffWait = o.Adapters.HandoffWait
+			}
 		}
 	}
 	if err := resolveTmp(&cfg.Tmp, root); err != nil {
@@ -610,6 +695,15 @@ func Load(root string) (Config, error) {
 	}
 	if len(cfg.AdapterOrder) == 0 {
 		cfg.AdapterOrder = Default().AdapterOrder
+	}
+	if p := cfg.AdapterPolicy.Pick; !slices.Contains([]string{PickOrder, PickCost, PickQuota}, p) {
+		return cfg, fmt.Errorf("adapters.policy %q: want order, cost or quota", p)
+	}
+	if f := cfg.AdapterPolicy.Failover; f != FailoverHandoff && f != FailoverPark {
+		return cfg, fmt.Errorf("adapters.failover %q: want handoff or park", f)
+	}
+	if cfg.AdapterPolicy.HandoffWait < 0 {
+		return cfg, fmt.Errorf("adapters.handoff_wait %s: must not be negative", cfg.AdapterPolicy.HandoffWait)
 	}
 	if cfg.Claude.Advisor.Lead == "" {
 		cfg.Claude.Advisor.Lead = cfg.Claude.OrchestratorModel
@@ -809,11 +903,24 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # in this order that has quota and can run here (#321).
 # [adapters]
 # order = ["claude", "grok", "codex"]
+# How a spawn without adapter= picks (#481): "order" (the session default,
+# then this order), "cost" (the lowest cost below) or "quota" (the most of
+# its budget below left). A spawn's kind= first narrows to adapters that list
+# it in kinds, and a task with claims prefers adapters that run hooks.
+# policy = "order"
+# A worker whose adapter runs out mid-task is relaunched on the next adapter
+# with quota, in the same worktree ("handoff"), or waits for the reset
+# ("park"). It parks anyway when the reset is at most handoff_wait away.
+# failover = "handoff"
+# handoff_wait = "15m"
 # Agent CLIs other than claude: the command, extra arguments and default model.
 # [adapters.codex]
 # cmd = "codex"
 # args = []   # e.g. sandbox/approval flags; they replace saddle's own
 # model = ""  # e.g. "gpt-5-codex"; empty is codex's default
+# cost = 1        # relative cost, for policy = "cost"
+# budget = 0      # tokens per five hours, for policy = "quota"; 0 is unknown
+# kinds = []      # task kinds it is preferred for, e.g. ["docs", "mechanical"]
 # [adapters.grok]
 # cmd = "grok"
 # args = []
