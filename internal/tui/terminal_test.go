@@ -349,13 +349,36 @@ func (r *rawRecorder) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func parseRaw(t *testing.T, s string) []tea.Msg {
 	t.Helper()
-	r := &rawRecorder{}
-	p := tea.NewProgram(r, tea.WithInput(&chunkReader{chunks: []string{s}}), tea.WithOutput(io.Discard))
-	go func() { time.Sleep(100 * time.Millisecond); p.Quit() }()
+	return parseRawFrom(t, &chunkReader{chunks: []string{s}})
+}
+
+// parseRawFrom quits once r is drained, not after a fixed time (#436; see
+// parseFrom).
+func parseRawFrom(t *testing.T, r *chunkReader) []tea.Msg {
+	t.Helper()
+	r.drained = make(chan struct{})
+	drained := r.drained
+	rec := &rawRecorder{}
+	p := tea.NewProgram(rec, tea.WithInput(r), tea.WithOutput(io.Discard))
+	go func() {
+		select {
+		case <-drained:
+		case <-time.After(10 * time.Second):
+		}
+		p.Quit()
+	}()
 	if _, err := p.Run(); err != nil {
 		t.Fatal(err)
 	}
-	return r.msgs
+	return rec.msgs
+}
+
+// #436: a reader too slow for a fixed deadline still has its chunk parsed.
+func TestParseRawWaitsForSlowReader(t *testing.T) {
+	msgs := parseRawFrom(t, &chunkReader{chunks: []string{"a"}, delay: 150 * time.Millisecond})
+	if len(msgs) != 1 {
+		t.Fatalf("parsed %v, want one key", msgs)
+	}
 }
 
 // alt+[ reaches the shell when the next key shows it is no mouse report
