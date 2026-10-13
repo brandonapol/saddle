@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/brandonapol/saddle/internal/agent"
+	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/usage"
@@ -58,5 +61,84 @@ func TestFooterShowsRotationBanner(t *testing.T) {
 	m.rotation = ""
 	if v := m.View(); strings.Contains(v, "out of quota") {
 		t.Fatal("banner shown with nothing out")
+	}
+}
+
+// typingTmux records what is typed into each window.
+type typingTmux struct {
+	mu    sync.Mutex
+	typed []string
+}
+
+func (f *typingTmux) HasSession() bool                          { return true }
+func (f *typingTmux) NewSession(_, _, _ string) (string, error) { return "", nil }
+func (f *typingTmux) NewWindow(_, _, _ string) (string, error)  { return "", nil }
+func (f *typingTmux) KillWindow(string) error                   { return nil }
+func (f *typingTmux) Alive(string) bool                         { return true }
+func (f *typingTmux) SendKeys(string, ...string) error          { return nil }
+func (f *typingTmux) KillSession() error                        { return nil }
+func (f *typingTmux) Capture(string, int) (string, error)       { return "", nil }
+func (f *typingTmux) SendText(_, s string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.typed = append(f.typed, s)
+	return nil
+}
+
+func (f *typingTmux) all() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.typed...)
+}
+
+// #480: under saddle up, a codex worker on its usage-limit error is typed a
+// continue line once codex has quota again, and only once.
+func TestWatchScreensResumesCodexAfterReset(t *testing.T) {
+	m := newViewModel(120, 40)
+	m.app.Root = t.TempDir()
+	st, err := store.Open(filepath.Join(m.app.Root, ".saddle", "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	m.app.Store = st
+	tm := &typingTmux{}
+	m.app.Tmux = tm
+	m.app.AdapterStatus = func() []agent.Status {
+		return []agent.Status{{Name: "claude", OK: true}, {Name: "grok", OK: true}, {Name: "codex", OK: true}}
+	}
+	m.app.OwnerNotify = func(string) {}
+	if err := st.CreateTask(store.Task{ID: "t1", Title: "view router", Role: store.RoleWorker, Status: store.Running, Window: "@1"}); err != nil {
+		t.Fatal(err)
+	}
+	run := filepath.Join(m.app.Root, ".saddle", "run", "t1")
+	if err := os.MkdirAll(run, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(run, "adapter"), []byte("codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	screen := "■ You've hit your usage limit. Upgrade to Pro or try again at 3pm.\n› "
+	ts := []mcpserver.TaskView{{ID: "t1", Status: store.Running, Window: "@1"}}
+	m.screens = map[string]*screenState{"t1": {text: screen, since: time.Now().Add(-time.Minute)}}
+	m.watchScreens(ts, map[string]string{"t1": screen}) // marks codex out until 3pm
+	m.watchScreens(ts, map[string]string{"t1": screen})
+	time.Sleep(50 * time.Millisecond)
+	if got := tm.all(); len(got) != 0 {
+		t.Fatalf("typed %q while codex is out of quota", got)
+	}
+	if err := m.app.ClearExhausted(usage.Codex); err != nil { // the reset passed
+		t.Fatal(err)
+	}
+	for range 3 {
+		m.watchScreens(ts, map[string]string{"t1": screen})
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for len(tm.all()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := tm.all(); len(got) != 1 || got[0] != app.LimitResumeLine {
+		t.Fatalf("typed %q after the reset, want the continue line once", got)
 	}
 }

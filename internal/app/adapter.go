@@ -87,6 +87,15 @@ func (a *App) taskAdapter(t store.Task) agent.Adapter {
 	return ad
 }
 
+// TaskAdapterName is the adapter task was launched with, "" when it is unknown.
+func (a *App) TaskAdapterName(task string) string {
+	t, err := a.Store.Task(task)
+	if err != nil {
+		return ""
+	}
+	return a.taskAdapter(t).Name()
+}
+
 // injectNotices types every pending notice into a hookless agent's window:
 // it has no hook to collect them and never reports itself idle. Notices are
 // marked delivered only once the pane changed after the submit (#183); until

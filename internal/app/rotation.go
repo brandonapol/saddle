@@ -143,10 +143,10 @@ func (a *App) MarkExhausted(adapter string, until time.Time, resets string) erro
 	if nerr != nil {
 		first := firstReset(m)
 		text = fmt.Sprintf("All adapters are out of quota (%s ran out last). New spawns are refused until the first reset: %s at %s. "+
-			"Running tasks stay parked and continue on their own; nothing is killed.", adapter, first.Adapter, first.when())
+			"Running tasks stay parked and continue after their reset; nothing is killed.", adapter, first.Adapter, first.when())
 	} else {
 		text = fmt.Sprintf("Adapter %s is out of quota until %s. New spawns that would use %s go to %s instead until then. "+
-			"Tasks already on %s stay parked and continue on their own after the reset.", adapter, e.when(), adapter, next, adapter)
+			"Tasks already on %s stay parked and %s after the reset.", adapter, e.when(), adapter, next, adapter, resumeHow(adapter))
 		if ad, err := agent.ByName(next); err == nil && !ad.Hooks() {
 			text += fmt.Sprintf(" %s has no hooks: claims of tasks it runs are advisory.", next)
 		}
@@ -187,6 +187,14 @@ func (a *App) ClearExhausted(adapter string) error {
 	}
 	a.restored(adapter, m)
 	return nil
+}
+
+// resumeHow says how a task parked on adapter's limit gets going again.
+func resumeHow(adapter string) string {
+	if agent.AutoResumes(adapter) {
+		return "continue on their own"
+	}
+	return "saddle types them a continue line"
 }
 
 // AdapterLimitHit marks the adapter task runs on exhausted: its screen shows

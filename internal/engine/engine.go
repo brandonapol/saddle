@@ -100,11 +100,23 @@ func (e *Engine) watchScreens(ts []mcpserver.TaskView, screens map[string]string
 		}
 	}
 	for id, s := range screens {
+		b, banner := usage.DetectLimitBanner(s)
+		if !banner {
+			e.a.ForgetResumed(id)
+		}
 		if e.parked[id] {
-			if b, on := usage.DetectLimitBanner(s); !on {
+			switch {
+			case !banner:
 				e.unpark(id, status[id])
-			} else if status[id] != app.StatusPaused {
+			case status[id] != app.StatusPaused:
 				e.park(ts, id, status[id], b, s)
+			default:
+				// Codex and grok wait for input after their reset (#480).
+				if typed, err := e.a.ResumeAfterLimit(id, b, e.now()); err != nil {
+					e.a.Store.Event(id, "engine_error", err.Error())
+				} else if typed {
+					e.unpark(id, status[id])
+				}
 			}
 		}
 		st := e.screens[id]
@@ -115,9 +127,11 @@ func (e *Engine) watchScreens(ts []mcpserver.TaskView, screens map[string]string
 		if st.acted || e.now().Sub(st.since) < settle {
 			continue
 		}
-		if b, on := usage.DetectLimitBanner(s); on {
+		if banner {
 			st.acted = true
-			e.park(ts, id, status[id], b, s)
+			if !e.a.ResumedPast(id, b) { // not the banner it was typed past
+				e.park(ts, id, status[id], b, s)
+			}
 			continue
 		}
 		if status[id] == app.StatusPaused {
@@ -210,6 +224,12 @@ func (e *Engine) park(ts []mcpserver.TaskView, id, status string, b usage.LimitB
 		if t.ID == id {
 			title = " (" + t.Title + ")"
 		}
+	}
+	if !e.a.LimitAutoResumes(id) {
+		e.escalate(id, fmt.Sprintf("%s%s is parked on its adapter's usage limit (%s) and won't continue on its own: "+
+			"saddle types it a continue line once the reset passes (%s). It shows as paused until then. Nothing needs answering.",
+			id, title, e.a.TaskAdapterName(id), strings.TrimPrefix(resets, "at ")), screen)
+		return
 	}
 	e.escalate(id, fmt.Sprintf("%s%s is parked on a Claude usage limit and continues on its own %s. "+
 		"It shows as paused until then. Nothing needs answering; don't send it keys (Escape cancels the automatic restart).", id, title, resets), screen)

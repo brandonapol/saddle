@@ -21,6 +21,7 @@ type screenTmux struct {
 	n       int
 	screens map[string]string
 	keys    map[string][]string
+	texts   map[string][]string
 }
 
 func (f *screenTmux) HasSession() bool                          { return true }
@@ -29,9 +30,15 @@ func (f *screenTmux) NewWindow(string, string, string) (string, error) {
 	f.n++
 	return fmt.Sprintf("@%d", f.n), nil
 }
-func (f *screenTmux) KillWindow(string) error       { return nil }
-func (f *screenTmux) Alive(string) bool             { return true }
-func (f *screenTmux) SendText(string, string) error { return nil }
+func (f *screenTmux) KillWindow(string) error { return nil }
+func (f *screenTmux) Alive(string) bool       { return true }
+func (f *screenTmux) SendText(w, s string) error {
+	if f.texts == nil {
+		f.texts = map[string][]string{}
+	}
+	f.texts[w] = append(f.texts[w], s)
+	return nil
+}
 func (f *screenTmux) SendKeys(w string, k ...string) error {
 	f.keys[w] = append(f.keys[w], k...)
 	return nil
@@ -336,5 +343,76 @@ func TestEngineParkRotatesAdapter(t *testing.T) {
 	must(t, e.Tick())
 	if len(a.ExhaustedAdapters(time.Now())) != 0 {
 		t.Fatal("claude still out after its banner cleared")
+	}
+}
+
+func allAdapters() []agent.Status {
+	var out []agent.Status
+	for _, n := range agent.Names() {
+		out = append(out, agent.Status{Name: n, OK: true})
+	}
+	return out
+}
+
+// codexLimitScreen is codex after its usage-limit error: the turn ended and
+// it waits at its composer. It won't continue on its own.
+const codexLimitScreen = `• Ran make check
+■ You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or try again in 2 hours 5 minutes.
+
+› Ask Codex to do anything`
+
+// #480: a codex (or grok) worker parked on its usage limit used to stay
+// paused forever: the notice promised it would continue on its own, as
+// Claude Code does. Once its adapter's quota is back, saddle types it on.
+func TestEngineResumesCodexAfterItsReset(t *testing.T) {
+	a, ft := setup(t)
+	a.AdapterStatus = allAdapters
+	w, err := a.Spawn(app.SpawnReq{Title: "meter", Adapter: usage.Codex})
+	must(t, err)
+	clock := time.Now()
+	e := New(a)
+	e.now = func() time.Time { return clock }
+	ft.screens[w.Window] = "• Working (3s • esc to interrupt)"
+	must(t, e.Tick())
+	orchNotices(t, a)
+
+	ft.screens[w.Window] = codexLimitScreen
+	must(t, e.Tick())
+	clock = clock.Add(5 * time.Second)
+	must(t, e.Tick())
+	if st, _ := a.Store.Task(w.ID); st.Status != app.StatusPaused {
+		t.Fatalf("status %q while the banner is up", st.Status)
+	}
+	got := orchNotices(t, a)
+	if strings.Contains(got, "continues on its own") || !strings.Contains(got, "codex") || !strings.Contains(got, "won't continue on its own") {
+		t.Fatalf("notices %q", got)
+	}
+	clock = clock.Add(time.Hour)
+	must(t, e.Tick())
+	if len(ft.texts[w.Window]) != 0 {
+		t.Fatalf("typed before the reset: %q", ft.texts[w.Window])
+	}
+
+	clock = clock.Add(2 * time.Hour)
+	must(t, e.Tick())
+	if txt := ft.texts[w.Window]; len(txt) != 1 || txt[0] != app.LimitResumeLine {
+		t.Fatalf("typed %q after the reset", txt)
+	}
+	if st, _ := a.Store.Task(w.ID); st.Status != store.Running {
+		t.Fatalf("status %q after resuming", st.Status)
+	}
+	// The old banner still sits in its scrollback: not a new limit.
+	for range 3 {
+		clock = clock.Add(5 * time.Second)
+		must(t, e.Tick())
+	}
+	if st, _ := a.Store.Task(w.ID); st.Status != store.Running {
+		t.Fatalf("re-parked on the old banner: %q", st.Status)
+	}
+	if _, out := a.ExhaustedAdapters(clock)[usage.Codex]; out {
+		t.Fatal("the old banner marked codex out of quota again")
+	}
+	if len(ft.texts[w.Window]) != 1 {
+		t.Fatalf("typed again: %q", ft.texts[w.Window])
 	}
 }
