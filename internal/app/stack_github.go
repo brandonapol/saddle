@@ -344,3 +344,13 @@ func (a *App) Requeue(id string) error {
 	a.Store.Event(id, "requeued", landed.rangeNote())
 	return nil
 }
+
+// EventPRBaseLinked is the events-table kind for a base edit GitHub refused
+// because the PR is linked into a gh stack (#341).
+const EventPRBaseLinked = "pr_base_linked"
+
+// linkedBaseErr reports whether err is GitHub refusing a base edit because
+// the PR is linked into a stack. The stack's link sets its bases instead.
+func linkedBaseErr(err error) bool {
+	return strings.Contains(err.Error(), "pull request is part of a stack")
+}
