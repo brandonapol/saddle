@@ -57,6 +57,8 @@ type HeadlineInput struct {
 	AutomergeStopped string // why auto-merge stopped, "" when it runs or is off
 	Merging          int    // PRs auto-merge can merge now
 	Autopilot        bool
+	// Orphans are the workers flagged done-orphaned (#467).
+	Orphans []DoneOrphan
 }
 
 // maxAsk caps the quoted ask in a needs-you headline.
@@ -189,6 +191,18 @@ func degradedHeadline(in HeadlineInput, live []store.Task) (StateHeadline, bool)
 	}
 	if conflicts > 0 {
 		reasons = append(reasons, fmt.Sprintf("%s %s resolving a conflict", countOf(conflicts, "agent"), isAre(conflicts)))
+	}
+	if n := len(in.Orphans); n > 0 {
+		ids := make([]string, n)
+		for i, o := range in.Orphans {
+			ids[i] = o.Task
+		}
+		was, it := "was", "it"
+		if n > 1 {
+			was, it = "were", "them"
+		}
+		reasons = append(reasons, fmt.Sprintf("%s called done but %s never queued (%s); saddle is recovering %s",
+			countOf(n, "agent"), was, joinSome(ids, 3), it))
 	}
 	if len(reasons) == 0 {
 		return StateHeadline{}, false
@@ -384,6 +398,9 @@ func (a *App) headlineInput(now time.Time) (HeadlineInput, error) {
 		return in, err
 	}
 	in.AutomergeStopped, in.Merging = am.Stopped, merging(am)
+	if in.Orphans, err = a.FlaggedOrphans(); err != nil {
+		return in, err
+	}
 	if ap, err := a.AutopilotState(); err == nil {
 		in.Autopilot = ap.On && !ap.Paused
 	}

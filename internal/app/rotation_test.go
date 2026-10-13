@@ -45,7 +45,7 @@ func rotationApp(t *testing.T) (*App, *fakeTmux, *ownerSink) {
 // #321: under saddle up grok every spawn that names no adapter runs grok,
 // whichever path made it, and never inherits a Claude model.
 func TestHarnessGrokSpawnsGrokOnEveryDefaultPath(t *testing.T) {
-	t.Parallel()
+	t.Setenv("SADDLE_HARNESS", "")
 	a, ft := setup(t)
 	a.Cfg.Harness = config.HarnessGrok
 	a.Cfg.Grok = config.Grok{Cmd: "grok", Model: "grok-4.5", PermissionMode: "bypassPermissions"}

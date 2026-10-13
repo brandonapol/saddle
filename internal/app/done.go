@@ -63,6 +63,9 @@ func (a *App) DoneAsync(task, summary string) (DoneJob, error) {
 	if err != nil {
 		return DoneJob{}, err
 	}
+	// The summary, for the watchdog to queue the branch with if the agent
+	// goes quiet before it is queued (#467).
+	a.Store.Event(task, EventDoneCalled, summary)
 	g := a.LintGate()
 	state, tree := hooksState(t.Worktree), cleanTree(t.Worktree)
 	if g.Cmd == "" || state == "" || tree == "" || passedLint(state, tree, g) {
@@ -85,6 +88,10 @@ func (a *App) DoneAsync(task, summary string) (DoneJob, error) {
 	return DoneJob{ID: id, Running: true}, nil
 }
 
+// EventDoneCalled is a done call that got past the quick checks; data: its
+// summary.
+const EventDoneCalled = "done_called"
+
 // WaitDoneJobs waits for the done gates this process started.
 func (a *App) WaitDoneJobs() { a.doneJobs.Wait() }
 
@@ -95,24 +102,61 @@ func (a *App) runDoneJob(t store.Task, id, tree, summary string) {
 		a.Store.Event(t.ID, event, id)
 		_ = a.Notify(t.ID, store.NoticeAction, fmt.Sprintf("done gate %s: %s", id, text))
 	}
-	err := a.lintDone(t)
-	if errors.Is(err, ErrGateInterrupted) {
-		fail("done_gate_interrupted", "saddle stopped the gate before it finished. Your branch is not queued; call the saddle done tool again.")
-		return
-	}
-	if err != nil {
-		fail("done_gate_failed", err.Error())
-		return
-	}
-	if now, _ := gitx.Run(t.Worktree, "rev-parse", "HEAD^{tree}"); now != tree {
-		fail("done_gate_stale", "your branch moved while the gate checked it, so it is not queued. Commit everything, then call the saddle done tool again.")
-		return
+	head, _ := gitx.RevParse(t.Worktree, "HEAD")
+	for restarts := 0; ; restarts++ {
+		err := a.lintDone(t)
+		if errors.Is(err, ErrGateInterrupted) {
+			fail("done_gate_interrupted", "saddle stopped the gate before it finished. Your branch is not queued; call the saddle done tool again.")
+			return
+		}
+		if err != nil {
+			fail("done_gate_failed", err.Error())
+			return
+		}
+		now, _ := gitx.Run(t.Worktree, "rev-parse", "HEAD^{tree}")
+		if now == tree {
+			break
+		}
+		// The train rebasing the branch onto a newer landing changes the
+		// tree, not the work: check the rebased tree instead of asking the
+		// agent to call done again (#467).
+		next, ok := a.rebasedOnly(t, head)
+		if !ok || restarts >= doneGateRestarts {
+			fail("done_gate_stale", "your branch moved while the gate checked it, so it is not queued. Commit everything, then call the saddle done tool again.")
+			return
+		}
+		a.Store.Event(t.ID, "done_gate_restarted", id+" "+short(head)+" → "+short(next))
+		head, tree = next, now
 	}
 	if err := a.finishDone(t, summary); err != nil {
 		fail("done_gate_failed", "the gate passed but queueing failed: "+err.Error()+"\nCall the saddle done tool again.")
 		return
 	}
 	_ = a.Notify(t.ID, store.NoticeInfo, fmt.Sprintf("done gate %s passed; your branch is queued in the merge train. You can stop now.", id))
+}
+
+// doneGateRestarts is how many times one done job checks a branch again
+// after it was rebased mid-gate, before it gives up and asks the agent.
+const doneGateRestarts = 3
+
+// rebasedOnly reports whether t's branch, which was at from when its gate
+// started, has only been rebased since: its worktree is clean and has no
+// commit whose change from wasn't already carrying. It returns the new HEAD.
+func (a *App) rebasedOnly(t store.Task, from string) (string, bool) {
+	if from == "" || cleanTree(t.Worktree) == "" {
+		return "", false
+	}
+	head, err := gitx.RevParse(t.Worktree, "HEAD")
+	if err != nil {
+		return "", false
+	}
+	// Commits on the branch now, beyond integration, whose patch isn't one
+	// of from's: new work the gate never saw.
+	out, err := gitx.Run(t.Worktree, "rev-list", "--count", "--no-merges", "--cherry-pick", "--right-only", from+"..."+head, "^"+a.Cfg.Integration)
+	if err != nil || strings.TrimSpace(out) != "0" {
+		return "", false
+	}
+	return head, true
 }
 
 // takeDoneJob takes task's done-job lock in state without waiting. It

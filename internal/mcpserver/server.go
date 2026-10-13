@@ -106,6 +106,9 @@ type StatusOut struct {
 	StackAtRisk *StackRisk        `json:"stack_at_risk,omitempty"`
 	// CIRed lists the PRs whose CI is red and the layers each holds back.
 	CIRed []app.CIRedHold `json:"ci_red,omitempty"`
+	// DoneOrphaned lists the workers that called done, were never queued and
+	// went quiet, with the recovery step saddle is on (#467).
+	DoneOrphaned []app.DoneOrphan `json:"done_orphaned,omitempty" jsonschema:"workers that called done but were never queued and went quiet; step: regated, nudged (finished ones leave the list)"`
 	// OrchestratorContext is how full the orchestrator's context is; absent
 	// before its transcript has a reading.
 	OrchestratorContext *OrchContext `json:"orchestrator_context,omitempty"`
@@ -321,6 +324,9 @@ func Status(a *app.App) (StatusOut, error) {
 		out.StackAtRisk = &StackRisk{Task: f.Task, Cause: f.Cause, PRs: f.PRs, Acked: f.Acked, Fix: StackFix}
 	}
 	if out.CIRed, err = a.CIRedHolds(); err != nil {
+		return out, err
+	}
+	if out.DoneOrphaned, err = a.FlaggedOrphans(); err != nil {
 		return out, err
 	}
 	if u, err := a.OrchestratorContext(); err == nil && u.Prompt > 0 {

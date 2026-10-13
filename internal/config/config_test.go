@@ -217,6 +217,7 @@ func TestLimitsRejectBadValues(t *testing.T) {
 }
 
 func TestHarnessGrok(t *testing.T) {
+	t.Setenv(HarnessEnv, "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
 	writeConfig(t, root, `

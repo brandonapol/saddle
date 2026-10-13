@@ -114,10 +114,16 @@ func trySend(d Driver, id, text string, o Delivery) bool {
 		_ = d.SendKeys(id, "C-u")
 	}
 	before, _ := d.Capture(id, 15)
-	if d.SendText(id, text) != nil || o.Sent == nil {
+	if d.SendText(id, text) != nil {
 		return true
 	}
-	go confirm(d, id, before, o.Sent)
+	// An Enter that didn't take leaves the text in the box (#467).
+	go func() {
+		EnsureSubmitted(d, id, text)
+		if o.Sent != nil {
+			confirm(d, id, before, o.Sent)
+		}
+	}()
 	return true
 }
 

@@ -583,7 +583,13 @@ func (a *App) SendKeys(task, text string, keys []string) error {
 	}
 	a.Store.Event(task, "keys", text+strings.Join(keys, " "))
 	if text != "" {
-		return a.Tmux.SendText(t.Window, text)
+		// An Enter that didn't take leaves the text in the box (#467).
+		ok, err := tmux.Submit(a.Tmux, t.Window, text)
+		if err == nil && !ok {
+			a.Store.Event(task, "keys_unsubmitted", text)
+			return fmt.Errorf("typed into %s, but the text still sits in its input box after %d more Enters; peek at it", task, tmux.SubmitRetries)
+		}
+		return err
 	}
 	return a.Tmux.SendKeys(t.Window, keys...)
 }

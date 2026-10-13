@@ -10,6 +10,7 @@ import (
 )
 
 func TestGrokWorkerLaunch(t *testing.T) {
+	t.Setenv("SADDLE_HARNESS", "")
 	dir := t.TempDir()
 	gitInit(t, dir)
 	run := t.TempDir()

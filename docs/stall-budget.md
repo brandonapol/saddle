@@ -11,6 +11,7 @@ moving. It never picks a destructive default.
 [stall]
 budget = "30m"      # how long any card waits for an answer (default 30m)
 idle_alarm = "45m"  # the no-progress watchdog's threshold (default 45m)
+done_orphan = "20m" # how long a done-orphaned worker sits still per step (default 20m)
 
 [stall.kinds]       # per-kind budgets override budget
 stuck-stack = "1h"
@@ -65,6 +66,37 @@ naming the single root cause. The causes are checked in this order:
 
 The watchdog posts nothing more for the same cause and the same stall. When
 work moves again, the card closes by itself.
+
+## Done-orphaned workers
+
+A worker can call done, have its gate cancelled, and then go quiet: its
+work is committed but its branch is never queued (#467). `StallTick` runs
+`OrphanTick` each cycle, which flags a running or idle worker as
+`done-orphaned` when all of these hold:
+
+- its last done call's gate was cancelled (`done_called`,
+  `done_gate_started`, `done_gate_interrupted` or `done_gate_stale` is its
+  last done event; a red gate is the agent's to fix);
+- no gate holds its done-job lock, and it is not queued;
+- its screen has not changed for `done_orphan`.
+
+A flagged worker gets a `done-orphaned` card, shows in the headline and in
+`saddle status` (`done_orphaned`), and is healed one step per `done_orphan`
+window, with no human step:
+
+1. Saddle re-runs the done gate itself with the done call's summary, so a
+   clean, committed branch queues itself.
+2. If that can't run (a dirty tree) or the branch still isn't queued, saddle
+   queues a notice and types the wake line, pressing Enter again while the
+   text sits in the input box.
+3. If the screen still hasn't moved, saddle kills the session and spawns a
+   finisher on its branch, with its claims and summary, to check it and
+   call done.
+
+Any screen change means the agent is alive: the watch starts over and the
+card closes. A done gate the train cancelled by rebasing the branch onto a
+newer landing restarts on the rebased tree by itself (up to three times),
+so the agent never has to call done again for it.
 
 ## Issues
 
