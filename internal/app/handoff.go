@@ -111,7 +111,7 @@ func (a *App) HandOff(task string, now time.Time) (string, error) {
 	text := fmt.Sprintf("%s %q ran out of quota on %s (resets %s), so saddle handed it to %s: a new %s agent finishes it in the same worktree and branch. Nothing needs doing.",
 		t.ID, t.Title, e.Label(), e.when(), c.Label(), c.Adapter)
 	if cl := all[t.ID]; len(cl) > 0 && !ad.Hooks() {
-		text += fmt.Sprintf(" %s has no hooks, so its claims (%s) are advisory.", c.Adapter, strings.Join(cl, ", "))
+		text += fmt.Sprintf(" %s has no hooks, so saddle checks its claims (%s) only when it commits and calls done.", c.Adapter, strings.Join(cl, ", "))
 	}
 	return c.Adapter, a.Notify(OrchestratorID, store.NoticeInfo, text)
 }

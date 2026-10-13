@@ -42,13 +42,13 @@ func TestCodexLaunchWiresMCPAndBrief(t *testing.T) {
 	}
 	for _, want := range []string{"'codex'", "--model 'gpt-5-codex'", `mcp_servers.saddle.command="/bin/saddle"`,
 		`mcp_servers.saddle.args=["mcp"]`, `SADDLE_TASK="t5"`, "'--sandbox' 'danger-full-access'",
-		"cd '/repo/wt'", `"$(cat "$run/prompt.md")"`, "'/bin/saddle' exited 't5'"} {
+		"cd '/repo/wt'", `"$(cat "$run/prompt.md")"`, "'/bin/saddle' exited 't5'", "export SADDLE_HOOKLESS=1"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("launch.sh lacks %s:\n%s", want, script)
 		}
 	}
-	// No hooks: the brief rides in the first message, with the advisory claim rules.
-	if !strings.HasPrefix(prompt, "BRIEF") || !strings.HasSuffix(prompt, "PROMPT") || !strings.Contains(prompt, "advisory") {
+	// No hooks: the brief rides in the first message, with the claim rules.
+	if !strings.HasPrefix(prompt, "BRIEF") || !strings.HasSuffix(prompt, "PROMPT") || !strings.Contains(prompt, "checks claims when you commit") {
 		t.Errorf("prompt.md = %q", prompt)
 	}
 	if got := Recorded(l.RunDir); got != "codex" {
@@ -178,7 +178,7 @@ func TestGeminiLaunchWiresMCPAndBrief(t *testing.T) {
 			t.Errorf("launch.sh lacks %s:\n%s", want, script)
 		}
 	}
-	if !strings.HasPrefix(prompt, "BRIEF") || !strings.HasSuffix(prompt, "PROMPT") || !strings.Contains(prompt, "advisory") {
+	if !strings.HasPrefix(prompt, "BRIEF") || !strings.HasSuffix(prompt, "PROMPT") || !strings.Contains(prompt, "checks claims when you commit") {
 		t.Errorf("prompt.md = %q", prompt)
 	}
 	b, err := os.ReadFile(filepath.Join(l.RunDir, "gemini-settings.json"))

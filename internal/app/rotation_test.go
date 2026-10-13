@@ -127,7 +127,7 @@ func TestClaudeExhaustionRoutesNextSpawnToGrok(t *testing.T) {
 }
 
 // #321: rotating a claimed task onto codex, which has no hooks, tells the
-// owner its claims are advisory.
+// owner its claims are checked only at commit and done.
 func TestRotationOntoHooklessAdapterWarnsAboutClaims(t *testing.T) {
 	t.Parallel()
 	a, _, _ := rotationApp(t)
@@ -140,7 +140,7 @@ func TestRotationOntoHooklessAdapterWarnsAboutClaims(t *testing.T) {
 	if got := agent.Recorded(a.stateDir("run", c.ID)); got != usage.Codex {
 		t.Fatalf("spawn ran %s, want codex", got)
 	}
-	if ns := orchNotices(t, a, "advisory"); len(ns) != 1 || !strings.Contains(ns[0], c.ID) {
+	if ns := orchNotices(t, a, "only when it commits"); len(ns) != 1 || !strings.Contains(ns[0], c.ID) {
 		t.Errorf("claims warning = %q", ns)
 	}
 }
@@ -285,7 +285,7 @@ func TestAdaptersStatusShowsProviderAndQuota(t *testing.T) {
 }
 
 // #321: a claimed task resumed onto codex (no hooks) tells the owner its
-// claims are now advisory.
+// claims are now checked only at commit and done.
 func TestResumeOntoHooklessAdapterWarnsAboutClaims(t *testing.T) {
 	t.Parallel()
 	a, ft, _ := rotationApp(t)
@@ -301,7 +301,7 @@ func TestResumeOntoHooklessAdapterWarnsAboutClaims(t *testing.T) {
 	if got := agent.Recorded(a.stateDir("run", w.ID)); got != usage.Codex {
 		t.Fatalf("resumed on %s, want codex", got)
 	}
-	if ns := orchNotices(t, a, "advisory"); len(ns) != 1 || !strings.Contains(ns[0], w.ID) {
+	if ns := orchNotices(t, a, "only when it commits"); len(ns) != 1 || !strings.Contains(ns[0], w.ID) {
 		t.Errorf("claims warning = %q", ns)
 	}
 }

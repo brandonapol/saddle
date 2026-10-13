@@ -197,6 +197,17 @@ func TestDetectLooksPastRepoHookWrapper(t *testing.T) {
 	}
 }
 
+// #489: the ref guard's pre-commit checks a hookless task's claims, not the
+// repo's code, so it is not the gate either.
+func TestDetectLooksPastRefGuardPreCommit(t *testing.T) {
+	r := newRepo(t)
+	r.write("Makefile", makefile)
+	r.write(".git/hooks/pre-commit", "#!/bin/sh\n"+GuardMarker+": a hookless task commits only files no other task claims.\n")
+	if g := r.detect(); g.Cmd != "make check" || g.Hook != "" {
+		t.Fatalf("%+v", g)
+	}
+}
+
 func TestShippedHooks(t *testing.T) {
 	r := newRepo(t)
 	r.write("git/hooks/pre-commit", "#!/bin/sh\nmake check\n")

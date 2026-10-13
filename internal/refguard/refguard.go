@@ -9,6 +9,11 @@
 //
 // Pushes never run reference-transaction, so a pre-push hook beside it runs
 // `saddle refguard pre-push`: only the train pushes saddle's branches.
+//
+// A pre-commit hook runs `saddle refguard pre-commit` for agents that run no
+// saddle hooks of their own (codex, gemini): their commits may not take files
+// another task claims (#489). The CLI answers that state with the app's
+// claims; Hook itself ignores it.
 package refguard
 
 import (
@@ -41,7 +46,7 @@ const (
 )
 
 // marker identifies a hook saddle wrote, so Install never clobbers anyone else's.
-const marker = "# saddle refguard"
+const marker = lintgate.GuardMarker
 
 // Event is the data of a ref event.
 type Event struct {
@@ -91,6 +96,12 @@ func Install(root, bin string) error {
 		// `refguard <state>` shape that test binaries answer.
 		{"pre-push", "only the merge train pushes saddle's branches", "",
 			`SADDLE_PUSH_REMOTE="$1" "$bin" refguard pre-push`},
+		// Codex and gemini run no saddle hooks, so a commit is where their
+		// claims are enforced (#489). Only hookless launches export
+		// SADDLE_HOOKLESS; claude and grok commits skip it.
+		{"pre-commit", "a hookless task commits only files no other task claims",
+			`[ -n "$SADDLE_HOOKLESS" ] && [ "$SADDLE_TRAIN" != 1 ] && `,
+			`"$bin" refguard pre-commit`},
 	}
 	var chain []string
 	for _, sc := range scripts {
@@ -175,7 +186,7 @@ func hooksDir(root string) (string, error) {
 
 // HookState is what is installed at one of the hooks Install writes.
 type HookState struct {
-	Name    string // reference-transaction or pre-push
+	Name    string // reference-transaction, pre-push or pre-commit
 	Path    string
 	Present bool   // a file exists at Path
 	Saddle  bool   // saddle wrote it
@@ -185,15 +196,15 @@ type HookState struct {
 	Chained string
 }
 
-// Installed reports the state of the reference-transaction and pre-push
-// hooks in the repo at root, in that order.
+// Installed reports the state of the reference-transaction, pre-push and
+// pre-commit hooks in the repo at root, in that order.
 func Installed(root string) ([]HookState, error) {
 	hooks, err := hooksDir(root)
 	if err != nil {
 		return nil, err
 	}
 	var out []HookState
-	for _, name := range []string{"reference-transaction", "pre-push"} {
+	for _, name := range []string{"reference-transaction", "pre-push", "pre-commit"} {
 		h := HookState{Name: name, Path: filepath.Join(hooks, name)}
 		if b, err := os.ReadFile(h.Path); err == nil {
 			h.Present = true

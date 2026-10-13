@@ -246,7 +246,13 @@ close PRs and delete branches, and it handles those without anyone editing
   `streaming-messages-json`, which matches the Claude stream the TUI parses.
   `[adapters.grok]` cmd and args apply here too.
 - **Codex / one-shot Grok** (`adapter=codex|grok` under the Claude harness):
-  hookless, so claims are advisory and notices are typed in. Usage and status
+  hookless, so claims are checked at commit and done (#489) and notices are
+  typed in. Hookless launches export `SADDLE_HOOKLESS=1`; the pre-commit
+  hook saddle installs beside the ref guard then runs `saddle refguard
+  pre-commit`, which puts each staged file through the same claim check as
+  a hooked write, and done refuses a branch that changes another task's
+  files. `SADDLE_ALLOW_CLAIMED=1` overrides either, recorded as a
+  `claims_overridden` event and reported to the orchestrator. Usage and status
   come from their output on a best-effort basis: a hookless worker's screen
   marks it idle or running, and saddle types codex and grok on after a
   usage-limit reset. `docs/adapter-parity.md` lists every feature per adapter.

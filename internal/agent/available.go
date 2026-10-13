@@ -50,7 +50,7 @@ func Providers() []Provider {
 		{Adapter: "grok", Vendor: "SpaceXAI", Models: "Grok CLI: grok's default model, or [grok] model",
 			Strengths: "fast general coding and a second opinion; good for well-scoped features and fixes"},
 		{Adapter: "codex", Vendor: "OpenAI", Models: "Codex CLI: its default model",
-			Strengths: "well-specified implementation and cheap mechanical edits; no hooks, so give it tasks whose claims nobody else touches"},
+			Strengths: "well-specified implementation and cheap mechanical edits; no hooks, so claims are checked only at commit and done; give it tasks whose claims nobody else touches"},
 	}
 }
 

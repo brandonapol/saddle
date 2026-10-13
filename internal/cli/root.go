@@ -23,6 +23,7 @@ import (
 	"github.com/brandonapol/saddle/internal/ciwatch"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/doctor"
+	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/hook"
 	"github.com/brandonapol/saddle/internal/initcmd"
 	"github.com/brandonapol/saddle/internal/mcpserver"
@@ -734,7 +735,7 @@ func hookCmd() *cobra.Command {
 }
 
 // refguardCmd is the entrypoint of the reference-transaction hook and, with
-// state "pre-push", of the pre-push hook. An error exits non-zero, which
+// state "pre-push" or "pre-commit", of the pre-push and pre-commit hooks. An error exits non-zero, which
 // aborts the transaction or push. Hook finds the repo itself. The pre-push
 // hook reuses this command rather than adding its own so that Go test
 // binaries standing in for saddle answer it with the same `refguard <state>`.
@@ -746,9 +747,33 @@ func refguardCmd() *cobra.Command {
 		Args:   cobra.ExactArgs(1),
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if args[0] == "pre-commit" {
+				return preCommit()
+			}
 			return refguard.Hook(args[0], cmd.InOrStdin(), os.Getenv)
 		},
 	}
+}
+
+// preCommit checks a hookless task's staged files against claims (#489). It
+// runs in the worktree being committed; saddle problems fail open, so a
+// broken state db never blocks every commit.
+func preCommit() error {
+	task := os.Getenv("SADDLE_TASK")
+	if task == "" || os.Getenv("SADDLE_TRAIN") == "1" {
+		return nil
+	}
+	out, err := gitx.Run(".", "diff", "--cached", "--name-only", "--no-renames", "-z")
+	if err != nil || out == "" {
+		return nil
+	}
+	a, err := open()
+	if err != nil {
+		return nil
+	}
+	defer a.Close()
+	files := strings.Split(strings.TrimRight(out, "\x00"), "\x00")
+	return a.CheckCommit(task, files, os.Getenv(agent.AllowClaimedEnv) == "1")
 }
 
 func mcpCmd() *cobra.Command {

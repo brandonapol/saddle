@@ -6,7 +6,7 @@ Gemini is listed where it shares codex's hookless path.
 
 | Feature | claude | grok | codex |
 |---|---|---|---|
-| Saddle hooks (claims enforced, notices with tool calls) | yes | yes (project hooks, #181) | no: claims advisory, notices typed in |
+| Saddle hooks (claims enforced, notices with tool calls) | yes | yes (project hooks, #181) | no: claims checked at commit and done (#489), notices typed in |
 | Idle / running status | Stop hook | Stop hook | screen watcher (fixed) |
 | Composer read (`tmux.ReadInput`): draft guard, Enter retry | `❯` / `>` | `│ ❯ │` box, verified (#488) | `›`, placeholder in plain captures (#488) |
 | Approval and trust prompts (`DetectPrompt`) | yes | `1 (●) Yes` approval screen (#488) | approval and trust screens, verified (#488) |
@@ -111,11 +111,21 @@ CLIs' binaries, placed where each CLI prints a turn's error.
   `Deliver` and the orphan nudge don't. Workers run `bypassPermissions`,
   so the screen is rare.
 
-## Filed
+## Fixed in #489
 
-- #489: enforce claims for hookless adapters (codex, gemini) without the
-  agent's cooperation, e.g. a per-worktree pre-commit hook with an escape
-  hatch.
+- **Hookless claims.** Codex and gemini claims were advisory: saddle
+  only listed the claimed files a branch touched in the done notice. Now
+  hookless launches export `SADDLE_HOOKLESS=1`, and the pre-commit hook
+  `saddle init` installs (chaining any repo pre-commit) refuses a commit of
+  a file another task claims, naming the owner, and claims unowned files for
+  the committer. Done refuses a branch that still changes another task's
+  files, which catches `--no-verify`. `SADDLE_ALLOW_CLAIMED=1` overrides
+  both and is recorded. Claude and grok commits skip the check. Tests:
+  `TestCheckCommitEnforcesClaimsForHooklessTask`,
+  `TestCheckCommitLeavesHookedTasksAlone`,
+  `TestDoneRefusesHooklessBranchTouchingClaimedFile`,
+  `TestDoneAllowClaimedOverridesAndTellsOrchestrator`,
+  `TestPreCommitRunsOnlyForHooklessAgents`.
 
 ## Already at parity
 

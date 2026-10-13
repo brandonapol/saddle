@@ -157,8 +157,8 @@ func TestRepoHooksQueueAcrossWorktrees(t *testing.T) {
 	}
 }
 
-// A hook someone else installed is left alone; pre-push goes in the ref
-// guard's chained slot.
+// A hook someone else installed is never clobbered: the ref guard chains
+// its pre-commit (#489), and pre-push goes in the ref guard's chained slot.
 func TestInstallRepoHooksLeavesForeignHook(t *testing.T) {
 	root, _, _ := hookRepo(t)
 	if err := os.WriteFile(filepath.Join(root, "git/hooks/pre-push"), []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -175,8 +175,8 @@ func TestInstallRepoHooksLeavesForeignHook(t *testing.T) {
 	if err := Install(root, "/nonexistent/saddle"); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(hooks, "pre-commit")); string(b) != mine {
-		t.Fatalf("foreign pre-commit clobbered:\n%s", b)
+	if b, _ := os.ReadFile(filepath.Join(hooks, "pre-commit"+lintgate.ChainSuffix)); string(b) != mine {
+		t.Fatalf("foreign pre-commit not chained:\n%s", b)
 	}
 	b, err := os.ReadFile(filepath.Join(hooks, "pre-push"+lintgate.ChainSuffix))
 	if err != nil || !strings.Contains(string(b), lintgate.RepoHookMarker) {

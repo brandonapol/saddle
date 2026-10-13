@@ -150,8 +150,10 @@ harness for one run without touching config.
 Any orchestrator can still spawn a worker on any adapter that can run here
 (`claude`, `codex`, `gemini`, `grok`: CLI on `PATH` and signed in) by passing
 `adapter` to spawn; `saddle status` lists which are available. Claude and
-Grok workers run saddle's hooks, so their claims are enforced; Codex and
-Gemini claims are advisory.
+Grok workers run saddle's hooks, so their claims are enforced on every
+write; Codex and Gemini run none, so a saddle pre-commit hook and `done`
+check their claims instead (`SADDLE_ALLOW_CLAIMED=1` overrides, and is
+logged).
 
 The orchestrator knows the three providers (Anthropic `claude`, SpaceXAI
 `grok`, OpenAI `codex`) and picks one per task. When one runs out of quota,

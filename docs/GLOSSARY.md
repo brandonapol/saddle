@@ -11,7 +11,8 @@ no entry here, so add one when you add vocabulary. Keep entries sorted.
 The CLI an agent runs on: `claude`, `codex`, `gemini` or `grok`. Pick one per
 task with `adapter` on spawn; `[adapters] order` is the fallback order when one
 runs out of quota. Claude and Grok run saddle's hooks, so their claims are
-enforced; Codex and Gemini claims are advisory. `saddle status` lists which
+enforced on every write; Codex and Gemini claims are checked when they
+commit and call done. `saddle status` lists which
 adapters can run here. See [ARCHITECTURE.md](ARCHITECTURE.md#providers-per-task-choice-and-rotation-321).
 
 ### agent

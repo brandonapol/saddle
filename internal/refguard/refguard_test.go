@@ -250,7 +250,7 @@ func TestInstallChainsForeignHook(t *testing.T) {
 	if err := os.MkdirAll(shipped, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"reference-transaction", "pre-push"} {
+	for _, name := range []string{"reference-transaction", "pre-push", "pre-commit"} {
 		body := "#!/bin/sh\necho \"" + name + " $1\" >> '" + log + "'\ncat >> '" + log + "'\n[ -e '" + log + ".fail' ] && exit 3\nexit 0\n"
 		src := filepath.Join(shipped, name)
 		if err := os.WriteFile(src, []byte(body), 0o755); err != nil {
@@ -267,7 +267,7 @@ func TestInstallChainsForeignHook(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{"reference-transaction", "pre-push"} {
+	for _, name := range []string{"reference-transaction", "pre-push", "pre-commit"} {
 		chained := filepath.Join(hooks, name+lintgate.ChainSuffix)
 		if fi, err := os.Lstat(chained); err != nil || fi.Mode()&os.ModeSymlink == 0 {
 			t.Fatalf("%s: repo hook not kept as a symlink at %s: %v", name, chained, err)
@@ -376,5 +376,51 @@ func TestPushGuard(t *testing.T) {
 	}
 	if got := r.attempts(); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("events:\n got %v\nwant %v", got, want)
+	}
+}
+
+// #489: the pre-commit hook runs saddle's claims check only for a hookless
+// agent (SADDLE_HOOKLESS), never for the train, and its refusal blocks the
+// commit.
+func TestPreCommitRunsOnlyForHooklessAgents(t *testing.T) {
+	r := setup(t)
+	log := filepath.Join(t.TempDir(), "log")
+	bin := filepath.Join(t.TempDir(), "saddle")
+	script := "#!/bin/sh\n[ \"$2\" = pre-commit ] || exit 0\necho \"$SADDLE_TASK\" >> '" + log + "'\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(r.root, bin); err != nil {
+		t.Fatal(err)
+	}
+	commit := func(env ...string) error {
+		cmd := exec.Command("git", "-C", r.root, "commit", "-q", "--allow-empty", "-m", "x")
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, "SADDLE_") && !strings.HasPrefix(kv, "GIT_") {
+				cmd.Env = append(cmd.Env, kv)
+			}
+		}
+		cmd.Env = append(cmd.Env, "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+		cmd.Env = append(cmd.Env, env...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("%w: %s", err, out)
+		}
+		return nil
+	}
+	if err := commit("SADDLE_TASK=t1"); err != nil {
+		t.Fatalf("hooked agent's commit ran the claims check: %v", err)
+	}
+	if err := commit("SADDLE_TASK=t1", "SADDLE_HOOKLESS=1", "SADDLE_TRAIN=1"); err != nil {
+		t.Fatalf("train's commit ran the claims check: %v", err)
+	}
+	if b, _ := os.ReadFile(log); len(b) != 0 {
+		t.Fatalf("check ran: %q", b)
+	}
+	if err := commit("SADDLE_TASK=t2", "SADDLE_HOOKLESS=1"); err == nil {
+		t.Fatal("hookless commit went through a refusing check")
+	}
+	if b, _ := os.ReadFile(log); string(b) != "t2\n" {
+		t.Fatalf("check log = %q", b)
 	}
 }

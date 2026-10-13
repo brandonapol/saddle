@@ -218,6 +218,9 @@ func (a *App) doneReady(task string) (store.Task, error) {
 	if strings.TrimSpace(out) == "0" {
 		return t, errNothingToLand
 	}
+	if err := a.doneClaims(t); err != nil {
+		return t, err
+	}
 	return t, nil
 }
 
