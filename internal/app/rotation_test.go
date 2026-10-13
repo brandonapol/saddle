@@ -328,3 +328,22 @@ func TestCodexRelativeResetSetsOutOfQuotaUntil(t *testing.T) {
 		}
 	}
 }
+
+// #480: codex and gemini had no configured model, so their spawns ran the
+// CLI's default and status showed none. [adapters.<name>] model sets it.
+func TestAdapterModelFromConfig(t *testing.T) {
+	t.Parallel()
+	a, _, _ := rotationApp(t)
+	a.Cfg.Adapters = config.AdapterMap{usage.Codex: {Model: "gpt-5-codex"}}
+	w, err := a.Spawn(SpawnReq{Title: "codex work", Adapter: usage.Codex})
+	must(t, err)
+	if w.Model != "gpt-5-codex" {
+		t.Errorf("codex spawn model %q, want the configured gpt-5-codex", w.Model)
+	}
+	if got := a.modelFor(usage.Codex, "opus"); got != "gpt-5-codex" {
+		t.Errorf("a claude model on codex gave %q", got)
+	}
+	if got := a.modelFor(usage.Codex, "o3"); got != "o3" {
+		t.Errorf("a requested codex model gave %q", got)
+	}
+}

@@ -384,7 +384,7 @@ func (a *App) modelFor(adapter, requested string) string {
 	case usage.Claude:
 		return a.Cfg.Claude.Model
 	}
-	return ""
+	return a.Cfg.Adapters[adapter].Model
 }
 
 // modelFamily is the adapter a model name belongs to, or "" when unknown.

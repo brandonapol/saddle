@@ -186,6 +186,9 @@ type Orchestrator struct {
 type Adapter struct {
 	Cmd  string   `toml:"cmd"`
 	Args []string `toml:"args"`
+	// Model is the adapter's default model; empty leaves it to the CLI.
+	// Claude's and grok's come from [claude] and [grok] (#480).
+	Model string `toml:"model"`
 }
 
 // AdapterMap is the [adapters.<name>] tables. The [adapters] table also
@@ -219,6 +222,12 @@ func (m *AdapterMap) UnmarshalTOML(v any) error {
 					return fmt.Errorf("adapters.%s.cmd: want a string", name)
 				}
 				ad.Cmd = s
+			case "model":
+				s, ok := v.(string)
+				if !ok {
+					return fmt.Errorf("adapters.%s.model: want a string", name)
+				}
+				ad.Model = s
 			case "args":
 				l, ok := v.([]any)
 				if !ok {
@@ -800,10 +809,11 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # in this order that has quota and can run here (#321).
 # [adapters]
 # order = ["claude", "grok", "codex"]
-# Agent CLIs other than claude: the command and extra arguments.
+# Agent CLIs other than claude: the command, extra arguments and default model.
 # [adapters.codex]
 # cmd = "codex"
-# args = []   # e.g. sandbox/approval flags
+# args = []   # e.g. sandbox/approval flags; they replace saddle's own
+# model = ""  # e.g. "gpt-5-codex"; empty is codex's default
 # [adapters.grok]
 # cmd = "grok"
 # args = []

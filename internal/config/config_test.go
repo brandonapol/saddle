@@ -353,11 +353,11 @@ func TestAdaptersAndSpawnCaps(t *testing.T) {
 		t.Fatalf("defaults: spawn %+v, adapters %+v", cfg.Spawn, cfg.Adapters)
 	}
 	root := t.TempDir()
-	writeConfig(t, root, "[adapters.codex]\ncmd = \"/opt/codex\"\nargs = [\"--sandbox\", \"x\"]\n[spawn]\nmax_depth = 5\nmax_children = 2\n")
+	writeConfig(t, root, "[adapters.codex]\ncmd = \"/opt/codex\"\nargs = [\"--sandbox\", \"x\"]\nmodel = \"gpt-5-codex\"\n[spawn]\nmax_depth = 5\nmax_children = 2\n")
 	if cfg, err = Load(root); err != nil {
 		t.Fatal(err)
 	}
-	if c := cfg.Adapters["codex"]; c.Cmd != "/opt/codex" || len(c.Args) != 2 || c.Args[1] != "x" {
+	if c := cfg.Adapters["codex"]; c.Cmd != "/opt/codex" || len(c.Args) != 2 || c.Args[1] != "x" || c.Model != "gpt-5-codex" {
 		t.Fatalf("adapters.codex = %+v", c)
 	}
 	if cfg.Spawn.MaxDepth != 5 || cfg.Spawn.MaxChildren != 2 {
