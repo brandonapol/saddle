@@ -88,7 +88,7 @@ func (m *model) viewCounters() string {
 	if m.narr != nil {
 		extra += " · narrator"
 	}
-	right := sDim.Render(fmt.Sprintf("orchestrator %s · %s%s · $%.2f ", m.orchModel(), state, extra, m.cost))
+	right := sDim.Render(fmt.Sprintf("orchestrator %s · %s%s · $%.2f ", m.orchLabel(), state, extra, m.cost))
 	short := sDim.Render("orch " + state + " ")
 
 	line := " " + current
@@ -171,6 +171,15 @@ func (m *model) orchModel() string {
 		return m.model
 	}
 	return m.harness() + " default"
+}
+
+// orchLabel names the orchestrator's adapter and model for the header
+// (#479): "claude · opus", "grok · grok-4-fast", "claude · default".
+func (m *model) orchLabel() string {
+	if m.launch.Model == "" && m.model == "" {
+		return m.harness() + " · default"
+	}
+	return m.harness() + " · " + m.orchModel()
 }
 
 // repoName is the working repo's directory name, shown next to the logo.

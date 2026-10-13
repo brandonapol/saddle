@@ -24,7 +24,7 @@ func TestHeaderHeadlineGolden(t *testing.T) {
 		{80, " SADDLE   ▲ Needs you: t5 is waiting at a prompt.\n" +
 			" 1 control  2 plan  3 merge  4 runs  ▲ 1 need you  ● 1 running        orch idle "},
 		{200, " SADDLE   ▲ Needs you: t5 is waiting at a prompt.\n" +
-			" 1 control  2 plan  3 merge  4 runs  ▲ 1 need you  ● 1 running  ◆ train 1 queued  ✓ 1 landed  saddle-repo  main → saddle/integration                                   orchestrator opus · idle · $0.00 "},
+			" 1 control  2 plan  3 merge  4 runs  ▲ 1 need you  ● 1 running  ◆ train 1 queued  ✓ 1 landed  saddle-repo  main → saddle/integration                          orchestrator claude · opus · idle · $0.00 "},
 	}
 	for _, c := range cases {
 		m := newViewModel(c.width, 30)
