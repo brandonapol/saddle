@@ -76,12 +76,16 @@ func TestJourneyTUIBugs(t *testing.T) {
 		t.Fatalf("merge view lists a merged or superseded entry as returned:\n%s", s)
 	}
 
-	// #207: M on, then M again as soon as the result shows: off.
+	// #207: M on, then M again as soon as the result shows: off. The
+	// "turning auto-merge on…" flash contains "auto-merge on" too, so each
+	// wait also waits for the flash to give way to the result.
 	u.WaitScreen("auto-merge off")
 	u.Type("M")
 	u.WaitScreen("auto-merge on")
+	u.WaitGone("turning auto-merge")
 	u.Type("M")
 	u.WaitScreen("auto-merge off")
+	u.WaitGone("turning auto-merge")
 	if r := w.MustSaddle("automerge", "status"); !strings.Contains(r.Stdout, "auto-merge: off") {
 		t.Fatalf("second M left auto-merge on: %s", r)
 	}

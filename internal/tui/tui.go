@@ -112,8 +112,9 @@ type model struct {
 
 	width, height int
 	focus         int
-	view          int  // viewControl, viewPlan or viewMerge
-	helpOpen      bool // the key help overlay covers the body
+	view          int   // viewControl, viewPlan or viewMerge
+	helpOpen      bool  // the key help overlay covers the body
+	looks         looks // keystrokes, for the catch-up
 
 	tasks   []mcpserver.TaskView
 	stats   map[string]agentStats // tokens, context and activity per task
@@ -826,6 +827,7 @@ func (m *model) press(keys []tea.KeyMsg, c tea.Cmd) tea.Cmd {
 }
 
 func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
+	m.looked(time.Now())
 	if m.focus == focusTerm && m.term != nil {
 		return m.termKey(k), true
 	}
@@ -860,6 +862,8 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 	case key.Matches(k, keys.Details):
 		m.toggleDetails()
 		return nil, true
+	case key.Matches(k, keys.CatchUp):
+		return m.catchUp(), true
 	case key.Matches(k, keys.AskScreen) && m.asking():
 		return m.toggleAskScreen(), true
 	case key.Matches(k, keys.Focus):

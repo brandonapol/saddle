@@ -26,7 +26,7 @@ type keyMap struct {
 	Terminal, TermBack, TermScrollUp, TermScrollDown key.Binding
 
 	// Chat.
-	Send, Newline, Complete, Untarget, Interrupt, Details key.Binding
+	Send, Newline, Complete, Untarget, Interrupt, Details, CatchUp key.Binding
 
 	// Narrator questions.
 	Ask, AskScreen key.Binding
@@ -85,6 +85,8 @@ func newKeyMap() keyMap {
 		Interrupt: b("esc", "interrupt the orchestrator's turn", "esc"),
 		// Show or fold the details under each orchestrator headline (#402).
 		Details: b("alt+d", "details", "alt+d"),
+		// What happened since the owner last looked (#412).
+		CatchUp: b("alt+c", "catch me up", "alt+c"),
 
 		Ask:       b("alt+a", "ask narrator", "alt+a"),
 		AskScreen: b("alt+s", "send agent's screen", "alt+s"),
@@ -145,7 +147,7 @@ type keyGroup struct {
 func (k keyMap) groups() []keyGroup {
 	return []keyGroup{
 		{"Anywhere", []key.Binding{k.ViewControl, k.ViewPlan, k.ViewMerge, k.ViewRuns, k.Infinite, k.Help, k.NextAgent, k.PrevAgent, k.Focus, k.PageUp, k.PageDown, k.Restart, k.Quit}},
-		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget, k.Interrupt, k.Ask, k.AskScreen, k.Details}},
+		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget, k.Interrupt, k.Ask, k.AskScreen, k.Details, k.CatchUp}},
 		{"Agents", []key.Binding{k.Down, k.Up, k.Open, k.Skill, k.Spawn, k.Pause, k.Brief, k.Kill, k.Land, k.Back}},
 		{"Plan view", []key.Binding{k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.ModelDown, k.Go, k.PlanNext, k.PlanPrev, k.BotsUp, k.BotsDown}},
 		{"Merge view", []key.Binding{k.AutoMerge, k.Hold, k.Rebase, k.QueueDown, k.QueueUp, k.TakeOver}},
@@ -209,7 +211,7 @@ func (m *model) help() []key.Binding {
 			hs = append(hs, withHelp(k.Complete, "/", "skills"), k.Ask)
 		}
 		hs = append(hs, k.Details)
-		return append(hs, k.NextAgent, withHelp(k.Focus, "tab", "agents"), k.ViewControl, k.Infinite, k.Terminal, k.CopyMode, withHelp(k.Help, "f1", "keys"), k.PageUp, k.Restart, k.Quit)
+		return append(hs, k.NextAgent, withHelp(k.Focus, "tab", "agents"), k.ViewControl, k.Infinite, k.Terminal, k.CopyMode, k.CatchUp, withHelp(k.Help, "f1", "keys"), k.PageUp, k.Restart, k.Quit)
 	}
 	return []key.Binding{k.Down, k.NextAgent, k.Open, k.Brief, k.ViewControl, k.Infinite, m.detachHelp(), k.Skill, k.Spawn, k.Pause, k.Ask, k.Back, k.Kill, k.Land, k.CopyMode, k.Help, k.Restart, k.Quit}
 }
