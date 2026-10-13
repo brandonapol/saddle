@@ -25,7 +25,10 @@ import (
 func TestJourneyGateHangTimesOut(t *testing.T) {
 	scratch := t.TempDir()
 	hang, child := filepath.Join(scratch, "hang"), filepath.Join(scratch, "child")
-	gate := fmt.Sprintf("if [ -e %[1]s ]; then rm %[1]s; sleep 600 & echo $! > %[2]s; echo gate-hanging; wait; fi; true", shq(hang), shq(child))
+	// A timed-out gate is retried once (#430), so the first phase hangs
+	// twice: hang for the run and hang2 for its retry.
+	hang2 := hang + "2"
+	gate := fmt.Sprintf("if [ -e %[1]s ]; then rm %[1]s; elif [ -e %[3]s ]; then rm %[3]s; else true; exit 0; fi; sleep 600 & echo $! > %[2]s; echo gate-hanging; wait", shq(hang), shq(child), shq(hang2))
 	w := world(t, Options{TestCmd: gate, Tables: "[train]\nno_auto_rebase = true\ngate_timeout = \"2s\"\n"})
 	w.Spawn("t1", "Alpha work", []string{"alpha/**"}, finished("alpha", "alpha\n")...)
 	// The one-shot hang belongs to the first queued task. Wait for t1's
@@ -34,6 +37,7 @@ func TestJourneyGateHangTimesOut(t *testing.T) {
 	w.Spawn("t2", "Beta work", []string{"beta/**"}, finished("beta", "beta\n")...)
 	w.WaitTask("t2", "queued", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
 	must(t, os.WriteFile(hang, nil, 0o644))
+	must(t, os.WriteFile(hang2, nil, 0o644))
 
 	start := time.Now()
 	r := w.Saddle("land")

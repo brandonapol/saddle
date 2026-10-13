@@ -35,6 +35,9 @@ import (
 // EventGateEnv records a gate run that failed on the environment.
 const EventGateEnv = "gate_env"
 
+// EventGateTimeoutRetry records a gate rerun because its first run timed out.
+const EventGateTimeoutRetry = "gate_timeout_retry"
+
 // gateEnvRetries is how many times an environment failure is retried.
 const gateEnvRetries = 2
 
@@ -373,10 +376,18 @@ func (a *App) runGateEnv(ctx context.Context, task string, run GateRun, notify b
 	sweepStaleTemp(base, time.Now().Add(-gateStaleAge))
 	lease := a.gateLease(ctx, task, notify)
 	defer func() { lease.release(a, task, res.Err) }()
+	retriedTimeout := false
 	for attempt := 0; ; attempt++ {
 		res.Output, res.Err = a.gateOnce(ctx, base, run, lease)
 		var timedOut *GateTimeoutError
-		if res.Err == nil || errors.As(res.Err, &timedOut) || errors.Is(res.Err, ErrGateInterrupted) {
+		if errors.As(res.Err, &timedOut) && !retriedTimeout && !lease.isLost() {
+			// A timeout alone is no verdict on the branch: run the gate once
+			// more before reporting it (#430).
+			retriedTimeout = true
+			a.Store.Event(task, EventGateTimeoutRetry, res.Err.Error()+"; retrying once")
+			continue
+		}
+		if res.Err == nil || timedOut != nil || errors.Is(res.Err, ErrGateInterrupted) {
 			return res
 		}
 		if lease.isLost() {
