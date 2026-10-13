@@ -142,6 +142,9 @@ func (a *App) spawnRepairs() []string {
 		if l.State != TrainRepairing {
 			continue
 		}
+		if _, live := a.repairOf(l.ID); !live && a.skipAutoRepair(l.ID) {
+			continue // the owner killed its repair, or the day's cap is spent (#337)
+		}
 		seed, _ := a.seedOf(l.ID)
 		if r, created, err := a.ensureRepair(l.Task, seed, false); err == nil && created {
 			out = append(out, r.ID)
