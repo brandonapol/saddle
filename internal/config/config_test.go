@@ -783,3 +783,51 @@ func TestAdapterPolicy(t *testing.T) {
 		}
 	}
 }
+
+// #482: [adapters.<name>] exclude_models lists models saddle never runs
+// workers on. Unset, codex excludes astra; [] excludes nothing.
+func TestExcludeModels(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.ExcludedModel("codex", "gpt-6-astra"); got != "astra" {
+		t.Errorf("default excludes %q for gpt-6-astra, want astra", got)
+	}
+	if got := cfg.ExcludedModel("codex", "gpt-6-luna"); got != "" {
+		t.Errorf("luna excluded by %q", got)
+	}
+	if got := cfg.ExcludedModels("claude"); len(got) != 0 {
+		t.Errorf("claude excludes %v by default", got)
+	}
+	root := t.TempDir()
+	writeConfig(t, root, "[adapters.codex]\ncmd = \"codex\"\n")
+	if cfg, err = Load(root); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.ExcludedModels("codex"); strings.Join(got, ",") != "astra" {
+		t.Errorf("a codex table without exclude_models excludes %v, want the default astra", got)
+	}
+	writeConfig(t, root, "[adapters.codex]\nexclude_models = [\" Sol \", \"terra\"]\n")
+	if cfg, err = Load(root); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.ExcludedModels("codex"), ","); got != "sol,terra" {
+		t.Errorf("exclude_models = %s", got)
+	}
+	if cfg.ExcludedModel("codex", "astra") != "" {
+		t.Errorf("an explicit list still excludes astra")
+	}
+	writeConfig(t, root, "[adapters.codex]\nexclude_models = []\n")
+	if cfg, err = Load(root); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.ExcludedModels("codex"); got == nil || len(got) != 0 {
+		t.Errorf("exclude_models = [] gave %#v", got)
+	}
+	writeConfig(t, root, "[adapters.codex]\nexclude_models = \"astra\"\n")
+	if _, err := Load(root); err == nil {
+		t.Errorf("a string exclude_models loaded")
+	}
+}

@@ -215,3 +215,15 @@ func TestOrchestratorBriefsPointAtGlossary(t *testing.T) {
 		}
 	}
 }
+
+// #482: the orchestrator's model choice skips excluded models: its brief
+// names them (codex's astra by default).
+func TestOrchestratorBriefNamesExcludedModels(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	for name, brief := range map[string]string{"tui": a.orchestratorBrief(), "plugin": a.PluginBrief()} {
+		if !strings.Contains(brief, "excluded these models") || !strings.Contains(brief, "codex: astra") {
+			t.Errorf("%s brief does not name the excluded models", name)
+		}
+	}
+}

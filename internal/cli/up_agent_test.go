@@ -87,3 +87,12 @@ func TestWriteAdapterPicks(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// #482: status shows each adapter's excluded models as such.
+func TestWriteAdaptersShowsExcludedModels(t *testing.T) {
+	var b strings.Builder
+	writeAdapters(&b, []agent.Status{{Name: "claude", OK: true}, {Name: "codex", OK: true, ExcludedModels: []string{"astra"}}})
+	if got := b.String(); got != "adapters: claude, codex; codex excluded models: astra\n" {
+		t.Errorf("got %q", got)
+	}
+}

@@ -23,7 +23,7 @@ type SpawnIn struct {
 	Title  string   `json:"title" jsonschema:"short task title, e.g. 'meter ingestion worker'"`
 	Prompt string   `json:"prompt" jsonschema:"self-contained instructions: goal, files, constraints, how to verify, done-when"`
 	Claims []string `json:"claims,omitempty" jsonschema:"repo-relative path globs this task owns, e.g. internal/meter/**; must not overlap other live tasks"`
-	Model  string   `json:"model,omitempty" jsonschema:"model for the adapter, e.g. claude's opus, sonnet or haiku; defaults to config for claude and to the CLI's default otherwise"`
+	Model  string   `json:"model,omitempty" jsonschema:"model for the adapter, e.g. claude's opus, sonnet or haiku; defaults to config for claude and to the CLI's default otherwise. Models in status' excluded_models (codex's astra by default) are refused"`
 	// Adapter picks the agent CLI; see agent.ByName.
 	Adapter string `json:"adapter,omitempty" jsonschema:"agent to run: claude, codex, gemini or grok, any one listed as available in the brief or status. Omitted means the session default (saddle up <agent>, else harness in config). Claude and grok run saddle hooks; codex and gemini claims are advisory. An unavailable adapter fails with the reason, never a substitute"`
 	// Kind steers the adapter pick; see app.SpawnReq.Kind.
@@ -119,7 +119,7 @@ type StatusOut struct {
 	// it is idle.
 	HeavyRuns *app.HeavyRuns `json:"heavy_runs,omitempty" jsonschema:"the machine's heavy-run queue per class: slots, holders (task, repo, cmd, age, overdue past max_run) and waiters (position, task, wait, eta); absent while idle"`
 	// Adapters says which coding CLIs a worker can run on here (#182).
-	Adapters []agent.Status `json:"adapters" jsonschema:"each adapter (claude, codex, gemini, grok) and whether it can run here: CLI on PATH and logged in; reason when not. pick_rank orders them for the next spawn without adapter= (1 first, absent when it can't be picked) and pick says why"`
+	Adapters []agent.Status `json:"adapters" jsonschema:"each adapter (claude, codex, gemini, grok) and whether it can run here: CLI on PATH and logged in; reason when not. pick_rank orders them for the next spawn without adapter= (1 first, absent when it can't be picked) and pick says why. excluded_models are models the owner excluded: spawn refuses them, so never pass one as model="`
 	// AdapterPolicy is [adapters] policy and failover in words (#481).
 	AdapterPolicy string     `json:"adapter_policy,omitempty" jsonschema:"how spawns without adapter= pick (order, cost or quota) and what a worker does when its adapter runs out mid-task (handoff to the next adapter, or park until the reset)"`
 	Tasks         []TaskView `json:"tasks"`

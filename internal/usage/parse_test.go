@@ -120,7 +120,7 @@ func TestCollectorSplitsCodexByTurnModel(t *testing.T) {
 	}
 	got := map[string]int64{}
 	for _, b := range bs {
-		got[b.Model] += b.Tokens.Total()
+		got[b.Model] += b.Total()
 	}
 	want := map[string]int64{"gpt-6-luna": 1100, "gpt-6-terra": 2200, "gpt-6-sol": 3300, "gpt-6-astra": 4400}
 	if !reflect.DeepEqual(got, want) {

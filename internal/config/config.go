@@ -202,6 +202,34 @@ type Adapter struct {
 	// Kinds are the task kinds (spawn's kind=) this adapter is preferred
 	// for, e.g. ["docs", "mechanical"] (#481).
 	Kinds []string `toml:"kinds"`
+	// ExcludeModels are models saddle never spawns this adapter's workers
+	// on, e.g. codex's ["astra"]. Nil (unset) is the adapter's default
+	// exclusions; an empty list excludes nothing (#482).
+	ExcludeModels []string `toml:"exclude_models"`
+}
+
+// DefaultExcludeModels are the models excluded when [adapters.<name>]
+// exclude_models is unset: codex's astra burns too many tokens (#482).
+var DefaultExcludeModels = map[string][]string{HarnessCodex: {"astra"}}
+
+// ExcludedModels is the models adapter's workers never run on.
+func (c Config) ExcludedModels(adapter string) []string {
+	if ad, ok := c.Adapters[adapter]; ok && ad.ExcludeModels != nil {
+		return ad.ExcludeModels
+	}
+	return DefaultExcludeModels[adapter]
+}
+
+// ExcludedModel returns the exclude_models entry model matches for adapter,
+// or "". An entry matches the model id itself or one of its words, so
+// "astra" excludes "gpt-6-astra" too.
+func (c Config) ExcludedModel(adapter, model string) string {
+	for _, x := range c.ExcludedModels(adapter) {
+		if usage.ModelIs(model, x) {
+			return x
+		}
+	}
+	return ""
 }
 
 // Adapter selection policies (#481).
@@ -299,6 +327,21 @@ func (m *AdapterMap) UnmarshalTOML(v any) error {
 						return fmt.Errorf("adapters.%s.kinds: want an array of strings", name)
 					}
 					ad.Kinds = append(ad.Kinds, strings.ToLower(strings.TrimSpace(s)))
+				}
+			case "exclude_models":
+				l, ok := v.([]any)
+				if !ok {
+					return fmt.Errorf("adapters.%s.exclude_models: want an array of strings", name)
+				}
+				ad.ExcludeModels = []string{}
+				for _, x := range l {
+					s, ok := x.(string)
+					if !ok {
+						return fmt.Errorf("adapters.%s.exclude_models: want an array of strings", name)
+					}
+					if s = strings.ToLower(strings.TrimSpace(s)); s != "" {
+						ad.ExcludeModels = append(ad.ExcludeModels, s)
+					}
 				}
 			case "args":
 				l, ok := v.([]any)
@@ -921,6 +964,9 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # cost = 1        # relative cost, for policy = "cost"
 # budget = 0      # tokens per five hours, for policy = "quota"; 0 is unknown
 # kinds = []      # task kinds it is preferred for, e.g. ["docs", "mechanical"]
+# Models saddle never spawns workers on; a spawn naming one is refused.
+# Unset excludes astra, which burns too many tokens; [] excludes nothing.
+# exclude_models = ["astra"]
 # [adapters.grok]
 # cmd = "grok"
 # args = []
