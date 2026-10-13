@@ -22,6 +22,8 @@ type tracked struct {
 	cur      Cursor
 	parse    Parser
 	snapshot SnapshotParser
+	// rollout caches the model read from a Codex rollout at rolloutPath.
+	rollout, rolloutPath string
 }
 
 // Collector tails transcripts for registered sessions and aggregates the new
@@ -86,8 +88,12 @@ func (c *Collector) Poll() ([]Bucket, error) {
 			firstErr = err
 		}
 		model := t.Model
-		if model == "" && t.Agent == Codex && t.Path != "" {
-			model, _ = CodexRolloutModel(t.Path)
+		if model == "" && t.Agent == Codex && len(recs) > 0 {
+			if t.rolloutPath != t.Path || t.rollout == "" {
+				t.rollout, _ = CodexRolloutModel(t.Path)
+				t.rolloutPath = t.Path
+			}
+			model = t.rollout
 		}
 		for _, r := range recs {
 			if r.Time.IsZero() {

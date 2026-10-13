@@ -96,6 +96,10 @@ func TestCollectorTracksCodex(t *testing.T) {
 	var total Tokens
 	for _, b := range bs {
 		total = total.Add(b.Tokens)
+		// #478: codex usage is labeled by provider and its rollout's model.
+		if b.Adapter != Codex || b.Model != "gpt-5-codex" {
+			t.Errorf("bucket = %+v, want adapter codex model gpt-5-codex", b)
+		}
 	}
 	if total != (Tokens{Input: 800, CacheRead: 2900, Output: 130}) {
 		t.Errorf("total = %+v", total)

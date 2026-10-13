@@ -110,7 +110,7 @@ func TestUsageGraphRender(t *testing.T) {
 		}
 	}
 	out := g.render(120, graphH)
-	for _, want := range []string{"claude", "Anthropic", "105.0k tok", "codex", "OpenAI", "grok", "SpaceXAI", "peak 100.0k/m", "merges 1.2k opus"} {
+	for _, want := range []string{"claude", "Anthropic", "105.0k tok", "codex", "OpenAI", "grok", "xAI", "peak 100.0k/m", "merges 1.2k opus"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("legend lacks %q:\n%s", want, out)
 		}
@@ -146,7 +146,7 @@ func TestUsageGraphProviderRowShowsQuotaReset(t *testing.T) {
 	g := &usageGraph{}
 	g.QuotaResets[providerGrok] = "42m"
 	out := g.render(120, graphH)
-	if !strings.Contains(out, "grok · SpaceXAI") || !strings.Contains(out, "quota resets 42m") {
+	if !strings.Contains(out, "grok · xAI") || !strings.Contains(out, "quota resets 42m") {
 		t.Errorf("grok quota row missing:\n%s", out)
 	}
 }

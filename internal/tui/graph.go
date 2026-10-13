@@ -24,7 +24,7 @@ const (
 
 var (
 	providerNames  = [nProviders]string{usage.Claude, usage.Codex, usage.Grok, "other"}
-	providerOwners = [nProviders]string{"Anthropic", "OpenAI", "SpaceXAI", "unknown"}
+	providerOwners = [nProviders]string{"Anthropic", "OpenAI", "xAI", "unknown"}
 	providerColors = [nProviders]lipgloss.Color{cOpus, cSonnet, cHaiku, cDim}
 )
 

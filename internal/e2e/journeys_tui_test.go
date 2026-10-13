@@ -330,10 +330,20 @@ func TestJourneyTUIUsageStrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Minute)
 	must(t, w.App().Store.AddUsage("e2e-usage", false, []usage.Bucket{{
 		Key:    usage.Key{Minute: now, Task: "t0", Adapter: usage.Claude, Model: "claude-opus-4-5"},
-		Tokens: usage.Tokens{Input: 400000, Output: 450000}, Messages: 3,
+		Tokens: usage.Tokens{Input: 400000, Output: 400000}, Messages: 3,
+	}}))
+	// #478: codex and grok usage get their own provider rows, not "other".
+	must(t, w.App().Store.AddUsage("e2e-codex", false, []usage.Bucket{{
+		Key:    usage.Key{Minute: now, Task: "t0", Adapter: usage.Codex, Model: "gpt-5-codex"},
+		Tokens: usage.Tokens{Input: 20000, Output: 10000}, Messages: 1,
+	}}))
+	must(t, w.App().Store.AddUsage("e2e-grok", false, []usage.Bucket{{
+		Key:    usage.Key{Minute: now, Task: "t0", Adapter: usage.Grok, Model: "grok-4.7-build"},
+		Tokens: usage.Tokens{Input: 15000, Output: 5000}, Messages: 1, CostUSD: 0.5,
 	}}))
 	u := w.StartTUI(120, 45)
-	u.WaitScreen("85%", "850.0k tok", "USAGE · 60m", "claude · Anthropic")
+	u.WaitScreen("85%", "850.0k tok", "USAGE · 60m", "claude · Anthropic", "800.0k tok",
+		"codex · OpenAI", "30.0k tok", "grok · xAI", "20.0k tok", "$0.50")
 	strip := u.row("85%")
 	if !strings.Contains(strip, "warn") || !strings.Contains(strip, "resets") {
 		t.Fatalf("usage strip = %q, want a warning and the reset time", strip)
