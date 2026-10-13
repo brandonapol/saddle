@@ -169,3 +169,21 @@ func TestNotSentWhenPaneNeverChanges(t *testing.T) {
 		t.Fatalf("typed %d times, want exactly 1 (no resubmit)", f.count())
 	}
 }
+
+// Codex draws its composer as "› text" (#480): without reading it, saddle
+// typed over a codex user's draft and never re-pressed a lost Enter.
+func TestReadInputCodexComposer(t *testing.T) {
+	for line, want := range map[string]Input{
+		"›": InputEmpty,
+		"› \x1b[2mAsk Codex to do anything\x1b[22m": InputGhost,
+		"› fix the flaky test":                      InputDraft,
+		"› \x1b[1mfix the flaky test\x1b[0m":        InputDraft,
+	} {
+		if got := ReadInput("• Ran make check\n\n" + line + "\n\n  ⏎ send   ⌃J newline"); got != want {
+			t.Errorf("ReadInput(%q) = %v, want %v", line, got, want)
+		}
+	}
+	if !Unsubmitted("› [saddle] You have new notices", "[saddle] You have new notices") {
+		t.Error("saddle's own text sitting in codex's composer is not seen as unsubmitted")
+	}
+}
