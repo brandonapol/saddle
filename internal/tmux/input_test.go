@@ -111,7 +111,6 @@ func TestEmptyPromptNeedsNoClear(t *testing.T) {
 }
 
 func TestNotDeliveredOverRealDraft(t *testing.T) {
-	fast(t)
 	for _, name := range []string{"claude_draft", "claude_draft_after_suggestion"} {
 		f := newStyled(t, name)
 		SendWhenIdle(f, "@1", "hi", nil)
@@ -133,14 +132,7 @@ func TestForceClearsDraft(t *testing.T) {
 	}
 }
 
-func fastConfirm(t *testing.T) {
-	e, f := ConfirmEvery, ConfirmFor
-	ConfirmEvery, ConfirmFor = 5*time.Millisecond, 60*time.Millisecond
-	t.Cleanup(func() { ConfirmEvery, ConfirmFor = e, f })
-}
-
 func TestSentAfterPaneChanged(t *testing.T) {
-	fastConfirm(t)
 	f := newStyled(t, "claude_suggestion")
 	f.onSend = func() {
 		go func() {
@@ -163,7 +155,6 @@ func TestSentAfterPaneChanged(t *testing.T) {
 }
 
 func TestNotSentWhenPaneNeverChanges(t *testing.T) {
-	fastConfirm(t)
 	f := newStyled(t, "claude_empty")
 	var mu sync.Mutex
 	sent := false

@@ -29,10 +29,11 @@ func (f *fakeDriver) SendText(_, t string) error {
 func (f *fakeDriver) setPane(p string) { f.mu.Lock(); f.pane = p; f.mu.Unlock() }
 func (f *fakeDriver) count() int       { f.mu.Lock(); defer f.mu.Unlock(); return len(f.sent) }
 
-func fast(t *testing.T) {
-	e, f := RetryEvery, RetryFor
-	RetryEvery, RetryFor = 5*time.Millisecond, 100*time.Millisecond
-	t.Cleanup(func() { RetryEvery, RetryFor = e, f })
+// Timing paces retries quickly without writing the package defaults, which
+// parallel tests read (#384).
+func (f *fakeDriver) Timing() Timing {
+	return Timing{RetryEvery: 5 * time.Millisecond, RetryFor: 100 * time.Millisecond,
+		ConfirmEvery: 5 * time.Millisecond, ConfirmFor: 60 * time.Millisecond}
 }
 
 func waitFor(cond func() bool) bool {
@@ -68,7 +69,6 @@ func TestSendsWhenEmpty(t *testing.T) {
 }
 
 func TestDefersThenSends(t *testing.T) {
-	fast(t)
 	f := &fakeDriver{pane: draft, alive: true}
 	SendWhenIdle(f, "@1", "hi", nil)
 	time.Sleep(20 * time.Millisecond)
@@ -82,7 +82,6 @@ func TestDefersThenSends(t *testing.T) {
 }
 
 func TestGivesUp(t *testing.T) {
-	fast(t)
 	f := &fakeDriver{pane: draft, alive: true}
 	SendWhenIdle(f, "@1", "hi", nil)
 	time.Sleep(200 * time.Millisecond)
@@ -94,7 +93,6 @@ func TestGivesUp(t *testing.T) {
 }
 
 func TestNoLongerNeeded(t *testing.T) {
-	fast(t)
 	f := &fakeDriver{pane: draft, alive: true}
 	var mu sync.Mutex
 	need := true
