@@ -70,6 +70,7 @@ func (a *App) lintDone(t store.Task) error {
 		return nil
 	}
 	defer a.sweepScratchAfter(t.ID)
+	retriedTimeout := false
 	for attempt := 0; ; attempt++ {
 		out, err := a.runLintGate(t.Worktree, g.Cmd)
 		if errors.Is(err, ErrGateInterrupted) {
@@ -80,6 +81,13 @@ func (a *App) lintDone(t store.Task) error {
 			return nil
 		}
 		var timedOut *GateTimeoutError
+		if errors.As(err, &timedOut) && !retriedTimeout {
+			// A timeout says nothing about the tree (a loaded machine): run
+			// the gate once more before bouncing the branch (#430).
+			retriedTimeout = true
+			a.Store.Event(t.ID, EventGateTimeoutRetry, "done's lint gate: "+err.Error()+"; retrying once")
+			continue
+		}
 		p, env := ClassifyGateOutput(out)
 		if env && !errors.As(err, &timedOut) {
 			if attempt < gateEnvRetries {
