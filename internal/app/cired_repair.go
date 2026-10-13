@@ -98,6 +98,9 @@ func (a *App) CIRedRepair(task string, fails []CIRedFailure) (string, error) {
 	if slices.ContainsFunc(s.Repairs, func(r CIRepairRecord) bool { return r.Task == task && r.Head == l.Head }) {
 		return "", nil // one repair per red head
 	}
+	if why := a.ciRepairScreen(task, l.PR, l.Head, fails); why != "" {
+		return why, nil // no commit would fix it (#338)
+	}
 	key := task + "@" + l.Head
 	if sib, ok := CIRedExplained(a, task, fails); ok {
 		if slices.Contains(s.Explained, key) {
