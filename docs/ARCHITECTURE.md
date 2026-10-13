@@ -191,9 +191,12 @@ close PRs and delete branches, and it handles those without anyone editing
   on each PR (`.saddle/pr-bases.json`). A base GitHub reports that saddle
   didn't set, on the branch of a stacked task that landed earlier, is kept:
   it becomes a recorded dependency, so `restack` and `prs` stack the PR there.
-  Saddle never changes a base silently: each change from what GitHub had is a
+  A base on the branch of a saddle task outside the stack is a dependency too:
+  the PR stays there until that task's PR merges. When GitHub can't say where
+  a PR points, `restack` doesn't re-set a base it already set. Saddle never
+  changes a base silently: each change from what GitHub had is a
   `pr_base` event naming the old and new base, and undoing a hand-set base
-  (onto main, a later layer or a branch outside the stack) also tells the
+  (onto main, a later layer or a branch saddle doesn't know) also tells the
   orchestrator why and how to keep tasks together (`saddle stack create`).
 - **needs-human means a decision.** Only a conflict labels PRs, and the comment
   names the conflict. Base moving, a merged bottom PR or a drifted branch just

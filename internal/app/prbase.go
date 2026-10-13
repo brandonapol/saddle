@@ -156,21 +156,49 @@ func (a *App) noteDependencies(stack []landedTask, info map[string]PRInfo) error
 		if l.PR == "" || live == "" || live == saved[l.ID] || live == a.Cfg.Base {
 			continue
 		}
-		// Only a layer that landed before it can sit under it; a retarget
-		// anywhere else is changed back, out loud (see notePRBase).
-		j := slices.IndexFunc(stack, func(o landedTask) bool { return o.Branch == live })
-		if j < 0 || j >= i {
+		// A layer that landed before it can sit under it. A saddle task out
+		// of the stack is a dependency too: the layer stays put while that
+		// task's PR is open (see waitingOn). A retarget onto a later layer,
+		// or onto a branch saddle doesn't know, is changed back, out loud
+		// (see notePRBase).
+		why := fmt.Sprintf("manual retarget: %s was moved onto %s outside saddle", l.PR, live)
+		if j := slices.IndexFunc(stack, func(o landedTask) bool { return o.Branch == live }); j >= 0 {
+			if j < i {
+				errs = append(errs, a.noteRetarget(l, stack[j].ID, why, "keeps it stacked there"))
+			}
 			continue
 		}
-		added, err := a.addAfter(l.ID, stack[j].ID, fmt.Sprintf("manual retarget: %s was moved onto %s outside saddle", l.PR, live))
-		errs = append(errs, err)
-		if added {
-			_ = a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
-				"%s's PR %s was retargeted onto %s's branch outside saddle. Saddle recorded that %s depends on %s and keeps it stacked there.",
-				l.ID, l.PR, stack[j].ID, l.ID, stack[j].ID))
+		if dep, ok := a.taskOnBranch(live); ok && dep != l.ID {
+			errs = append(errs, a.noteRetarget(l, dep, why, "leaves it there until "+dep+"'s PR merges"))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// noteRetarget records that l depends on dep because someone retargeted l's
+// PR onto dep's branch, and tells the orchestrator the first time.
+func (a *App) noteRetarget(l landedTask, dep, why, keeps string) error {
+	added, err := a.addAfter(l.ID, dep, why)
+	if added {
+		_ = a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
+			"%s's PR %s was retargeted onto %s's branch outside saddle. Saddle recorded that %s depends on %s and %s.",
+			l.ID, l.PR, dep, l.ID, dep, keeps))
+	}
+	return err
+}
+
+// taskOnBranch names the saddle task whose branch is branch.
+func (a *App) taskOnBranch(branch string) (string, bool) {
+	ts, err := a.Store.Tasks()
+	if err != nil {
+		return "", false
+	}
+	for _, t := range ts {
+		if t.Branch == branch {
+			return t.ID, true
+		}
+	}
+	return "", false
 }
 
 // setPRBase points t's PR at base and remembers that saddle set it. live is

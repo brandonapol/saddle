@@ -736,6 +736,16 @@ func (a *App) republishLayout(rs restackPlan, held map[int]string, info map[stri
 			}
 			a.Store.Event(r.ID, "restack_push", r.Branch+" "+short(head))
 		}
+		// GitHub couldn't say where the PR points, so a base saddle already
+		// set to what the layout wants stays: editing it could only undo
+		// someone's retarget, unseen (#359).
+		if _, asked := info[r.PR]; !asked && a.savedBases()[r.ID] == base {
+			a.Store.Event(r.ID, "restack_retarget_skipped", r.PR+": GitHub didn't report its base; left on "+base)
+			linked = append(linked, r.Task)
+			groups = append(groups, rs.layout[i].Group)
+			bases = append(bases, base)
+			continue
+		}
 		live := info[r.PR].BaseRefName
 		if err := a.setPRBase(r.Task, live, base, "restack"); err != nil {
 			if !strings.Contains(err.Error(), "closed pull request") {
