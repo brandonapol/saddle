@@ -566,13 +566,13 @@ func Harnesses() []string { return []string{HarnessClaude, HarnessCodex, Harness
 
 func Default() Config {
 	return Config{
-		Base:         "main",
-		Integration:  "saddle/integration",
-		Concurrency:  5,
-		CloseOnLand:  true,
-		Issues:       Issues{AutoFile: true},
-		Harness:      HarnessClaude,
-		AdapterOrder: []string{HarnessClaude, HarnessGrok, HarnessCodex},
+		Base:          "main",
+		Integration:   "saddle/integration",
+		Concurrency:   5,
+		CloseOnLand:   true,
+		Issues:        Issues{AutoFile: true},
+		Harness:       HarnessClaude,
+		AdapterOrder:  []string{HarnessClaude, HarnessGrok, HarnessCodex},
 		AdapterPolicy: AdapterPolicy{Pick: PickOrder, Failover: FailoverHandoff, HandoffWait: 15 * time.Minute},
 		Claude: Claude{
 			Cmd:               "claude",

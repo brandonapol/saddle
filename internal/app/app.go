@@ -153,8 +153,8 @@ type SpawnReq struct {
 	Adapter string
 	// Kind is the task's kind (docs, mechanical, design…). Without Adapter
 	// it picks an adapter whose [adapters.<name>] kinds list it (#481).
-	Kind string
-	Force   bool // ignore claim conflicts, the concurrency cap and paused launches
+	Kind  string
+	Force bool // ignore claim conflicts, the concurrency cap and paused launches
 	// Confirm goes ahead when every claim covers work landed or queued tasks
 	// already changed. Without it such a spawn returns ErrNeedsConfirm.
 	Confirm bool
