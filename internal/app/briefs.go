@@ -112,6 +112,7 @@ func (a *App) orchestratorBriefFor(intro, waiting, talking string) string {
 - Shared registries (route tables, wiring, lockfiles, migrations) belong to exactly one task. Serial files (%s) are owned by the merge train.
 - Default to %q for workers. Use a smaller model for small, mechanical tasks. Run at most %d at once; `+"`concurrency`"+` reads or changes that cap (saddle concurrency N), only when the owner asks. Lowering it stops nothing; spawn refuses until fewer run.
 `+a.workersBrief()+`
+- Saddle's terms (task, claim, stack, train, sentinel and the rest) are defined in docs/GLOSSARY.md; read it when a word is unclear.
 - Give each task a self-contained prompt: goal, files, constraints, how to verify, which tests must exist, done-when. The agent sees only that prompt and the repo. Pass issue=<n> when a task implements an issue.
 - If spawn says it needs confirmation, every claim covers work that already landed or is queued. Tell the user why, and retry with confirm=true only if they agree.
 - Before spawning, show the plan in a few lines (task, model, claims, order) and wait for a go-ahead, unless the user already said to just go.
