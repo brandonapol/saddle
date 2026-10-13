@@ -23,6 +23,8 @@ type fakeEnv struct {
 	spawns             []SpawnReq
 	spawnErr           map[int]error
 	nudges             []string
+	runways            []string // runway-plan nudges, kept apart from the stall nudges
+	snap               Snapshot
 	busy               bool
 	notices            []string
 	events             []string
@@ -77,9 +79,15 @@ func (f *fakeEnv) Nudge(s string) (bool, error) {
 	if f.busy {
 		return false, nil
 	}
-	f.nudges = append(f.nudges, s)
+	if strings.Contains(s, "runway plan") {
+		f.runways = append(f.runways, s)
+	} else {
+		f.nudges = append(f.nudges, s)
+	}
 	return true, nil
 }
+
+func (f *fakeEnv) Snapshot(time.Time) (Snapshot, error) { return f.snap, nil }
 
 func (f *fakeEnv) Spawn(r SpawnReq) (string, error) {
 	if err := f.spawnErr[r.Issue]; err != nil {

@@ -36,7 +36,11 @@ never merged. See [ARCHITECTURE.md](ARCHITECTURE.md#stack-upkeep-when-people-use
 on, saddle itself resumes lost agents, lands what is queued, publishes PRs and
 tops up to the concurrency cap from open issues labelled `ready` (oldest first,
 disjoint `claims:` only), until a stop condition. It never merges; that is
-`automerge`. See also *infinite mode*.
+`automerge`. Turning it on asks the orchestrator for a runway plan. A stall
+nudge carries saddle's records (owner blockers with their age, tasks, open and
+merged PRs, the train) and asks for a lookahead step instead of a status. The
+same unchanged idle state is nudged at most three times; then the owner hears
+once and the nudges stop until something changes. See also *infinite mode*.
 
 ### blockers
 `saddle blockers`: lists open `saddle-blocker` issues, most frequent first.
