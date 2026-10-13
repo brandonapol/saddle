@@ -39,7 +39,7 @@ func (a *App) ResumeAfterLimit(task string, b usage.LimitBanner, now time.Time) 
 	if agent.AutoResumes(ad.Name()) || !a.ownWindow(t) || a.ResumedPast(task, b) {
 		return false, nil
 	}
-	if _, out := a.ExhaustedAdapters(now)[ad.Name()]; out {
+	if _, out := quotaOut(a.ExhaustedAdapters(now), a.ExhaustedModels(now), ad.Name(), t.Model); out {
 		return false, nil
 	}
 	w := a.wakeState()

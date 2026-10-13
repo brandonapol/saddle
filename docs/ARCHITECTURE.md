@@ -308,6 +308,17 @@ parked worker's banner clears, the adapter is restored. With every adapter
 out, spawn returns a paused-launch error (autopilot and infinite mode sleep
 until the first reset).
 
+`[fallback]` chains (#483, `internal/app/fallback.go`) refine this per
+model: `"codex:sol" = ["claude:opus", "grok"]` makes a sol worker's limit
+mark only `codex:sol` out (an entry keyed `adapter:model` in
+`adapters-exhausted.json`), so codex's other models stay usable. Spawns that
+would run sol, its handed-off workers and its lost tasks go to the first chain
+entry that has quota, can run here and isn't in `exclude_models`; with none,
+`[adapters] policy` picks among the other adapters. An adapter key (`"grok" =
+["claude"]`) goes ahead of the policy while that adapter is out. A model with
+no key is tracked with its adapter, as before. Status shows each chain
+(`fallback`) and each adapter's `models_out_of_quota`.
+
 The TUI's orchestrator fails over too (#481, `internal/app/orchfailover.go`).
 When a turn fails, retries or exits on a quota error, saddle marks its
 adapter out and restarts the orchestrator on the next adapter with a headless

@@ -33,6 +33,7 @@ func (a *App) Adapters() []agent.Status {
 	ss := a.adapterStatus()
 	now := time.Now()
 	ex := a.ExhaustedAdapters(now)
+	exm := a.ExhaustedModels(now)
 	picks := map[string]AdapterChoice{}
 	for _, c := range a.rankAdapters(pickReq{def: a.Cfg.Harness}, ex, now) {
 		picks[c.Name] = c
@@ -48,6 +49,7 @@ func (a *App) Adapters() []agent.Status {
 		if e, out := ex[s.Name]; out {
 			s.OutOfQuotaUntil = e.when()
 		}
+		s.ModelsOutOfQuota = modelsOut(exm, s.Name)
 		if c, ok := picks[s.Name]; ok {
 			s.PickRank, s.Pick = c.Rank, c.Why
 		}
