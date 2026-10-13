@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
+	"hash/fnv"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -73,19 +76,119 @@ func provider(adapter, model string) int {
 // graphMinutes is how far back the usage graph reaches.
 const graphMinutes = 60
 
-// graphH is the usage graph's height: four bar rows, three providers and totals.
-const graphH = 8
+// graphBars is the usage graph's bar height. Below the bars are one row per
+// series and the totals.
+const graphBars = 4
 
-// usageGraph is the last hour of usage by provider, one slot per minute,
-// oldest first, provider totals/costs, and Opus tokens spent resolving merges.
-type usageGraph struct {
-	Minutes     [graphMinutes][nProviders]int64
-	Totals      [nProviders]int64
-	AllTokens   [nProviders]int64
-	Costs       [nProviders]float64
-	QuotaResets [nProviders]string
-	MergeOpus   int64
+// A series is one coloured row of the usage graph: a provider, or for codex
+// one model (#482).
+type series struct {
+	Provider int
+	Model    string // codex's model name; "" when the rollout didn't say
 }
+
+func seriesOf(adapter, model string) series {
+	p := provider(adapter, model)
+	if p == providerCodex {
+		return series{p, usage.CodexModelName(model)}
+	}
+	return series{Provider: p}
+}
+
+// codexColors tells the codex models apart; unknown models take one of
+// codexSpare by name, so they are never gray.
+var (
+	codexColors = map[string]lipgloss.Color{
+		"luna": "#A9B8FF", "terra": "#7FB069", "sol": "#F6D365", "astra": "#C77DFF",
+	}
+	codexSpare = []lipgloss.Color{"#5DADE2", "#F1948A", "#76D7C4", "#D7BDE2"}
+)
+
+func (s series) color() lipgloss.Color {
+	if s.Provider != providerCodex || s.Model == "" {
+		return providerColors[s.Provider]
+	}
+	if c, ok := codexColors[s.Model]; ok {
+		return c
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(s.Model))
+	return codexSpare[h.Sum32()%uint32(len(codexSpare))]
+}
+
+func (s series) label() string {
+	if s.Model != "" {
+		return providerNames[s.Provider] + " " + s.Model
+	}
+	return providerNames[s.Provider]
+}
+
+// usageGraph is the last hour of usage by series, one slot per minute,
+// oldest first, series totals/costs, and Opus tokens spent resolving merges.
+type usageGraph struct {
+	Minutes     [graphMinutes]map[series]int64
+	Totals      map[series]int64
+	AllTokens   map[series]int64
+	Costs       map[series]float64
+	QuotaResets [nProviders]string
+	// CodexExcluded are [adapters.codex] exclude_models; their rows say so.
+	CodexExcluded []string
+	MergeOpus     int64
+}
+
+// add counts n tokens (all with cache reads) costing cost in minute i.
+func (g *usageGraph) add(i int, s series, n, all int64, cost float64) {
+	if g.Minutes[i] == nil {
+		g.Minutes[i] = map[series]int64{}
+	}
+	if g.Totals == nil {
+		g.Totals, g.AllTokens, g.Costs = map[series]int64{}, map[series]int64{}, map[series]float64{}
+	}
+	g.Minutes[i][s] += n
+	g.Totals[s] += n
+	g.AllTokens[s] += all
+	g.Costs[s] += cost
+}
+
+// rows lists the series the graph shows, bottom-up: claude, each codex
+// model with usage (luna, terra, sol, astra, then others by name), grok,
+// and other when anything landed there. Claude, codex and grok always have
+// a row so their quota shows.
+func (g *usageGraph) rows() []series {
+	var codex []series
+	for s, n := range g.AllTokens {
+		if s.Provider == providerCodex && n > 0 {
+			codex = append(codex, s)
+		}
+	}
+	rank := func(s series) int {
+		if i := slices.Index(usage.CodexModels, s.Model); i >= 0 {
+			return i
+		}
+		if s.Model == "" {
+			return len(usage.CodexModels) + 1
+		}
+		return len(usage.CodexModels)
+	}
+	slices.SortFunc(codex, func(x, y series) int {
+		if c := cmp.Compare(rank(x), rank(y)); c != 0 {
+			return c
+		}
+		return strings.Compare(x.Model, y.Model)
+	})
+	if len(codex) == 0 {
+		codex = []series{{Provider: providerCodex}}
+	}
+	out := append([]series{{Provider: providerClaude}}, codex...)
+	out = append(out, series{Provider: providerGrok})
+	if g.AllTokens[series{Provider: providerOther}] > 0 {
+		out = append(out, series{Provider: providerOther})
+	}
+	return out
+}
+
+// height is the graph's height: the bars, a row per series and the totals.
+func (g *usageGraph) height() int { return graphBars + len(g.rows()) + 1 }
 
 func countTokens(t usage.Tokens, cacheReads bool) int64 {
 	n := t.Total()
@@ -105,6 +208,7 @@ func readUsage(a *app.App, now time.Time) (*usage.LimitEstimate, *usageGraph) {
 	e := usage.EstimateBuckets(bs, a.Cfg.Limits, now)
 	es, _ := a.Store.Events(2000)
 	g := buildGraphPrices(bs, es, now, a.Cfg.Usage.CountCacheReads, a.Cfg.Limits.Prices)
+	g.CodexExcluded = a.Cfg.ExcludedModels(usage.Codex)
 	if a.Root != "" {
 		for name, ex := range a.ExhaustedAdapters(now) {
 			p := provider(name, "")
@@ -130,16 +234,11 @@ func buildGraphPrices(bs []usage.Bucket, es []store.Event, now time.Time, cacheR
 		if i < 0 || i >= graphMinutes {
 			continue
 		}
-		n := countTokens(b.Tokens, cacheReads)
-		p := provider(b.Adapter, b.Model)
-		g.Minutes[i][p] += n
-		g.Totals[p] += n
-		g.AllTokens[p] += b.Total()
-		if b.CostUSD > 0 {
-			g.Costs[p] += b.CostUSD
-		} else {
-			g.Costs[p] += usage.CostUSD(b.Model, b.Tokens, prices)
+		cost := b.CostUSD
+		if cost <= 0 {
+			cost = usage.CostUSD(b.Model, b.Tokens, prices)
 		}
+		g.add(i, seriesOf(b.Adapter, b.Model), countTokens(b.Tokens, cacheReads), b.Total(), cost)
 	}
 	return g
 }
@@ -182,9 +281,10 @@ func mergeOpus(es []store.Event, bs []usage.Bucket, now time.Time, cacheReads bo
 	return n
 }
 
-// column assigns the cells of one bar, bottom-up, to providers in proportion
-// to v, scaled so peak fills h cells. Any usage gets at least one cell.
-func column(v [nProviders]int64, peak int64, h int) []int {
+// column assigns the cells of one bar, bottom-up, to series (indexes into
+// v) in proportion to v, scaled so peak fills h cells. Any usage gets at
+// least one cell.
+func column(v []int64, peak int64, h int) []int {
 	var total int64
 	for _, n := range v {
 		total += n
@@ -208,18 +308,22 @@ func column(v [nProviders]int64, peak int64, h int) []int {
 	return out
 }
 
-// render draws four rows of stacked provider bars, one row per known
-// provider, then peak and merge totals.
+// render draws stacked bars by series, one labelled row per series, then
+// peak and merge totals, in h lines.
 func (g *usageGraph) render(w, h int) string {
+	ss := g.rows()
 	n := min(graphMinutes, w)
-	cols := make([][nProviders]int64, n)
+	cols := make([][]int64, n)
+	for j := range cols {
+		cols[j] = make([]int64, len(ss))
+	}
 	var peakMin int64
 	for i, m := range g.Minutes {
 		j := i * n / graphMinutes
 		var t int64
-		for f, v := range m {
-			cols[j][f] += v
-			t += v
+		for f, s := range ss {
+			cols[j][f] += m[s]
+			t += m[s]
 		}
 		peakMin = max(peakMin, t)
 	}
@@ -231,7 +335,7 @@ func (g *usageGraph) render(w, h int) string {
 		}
 		peak = max(peak, t)
 	}
-	barH := max(h-4, 1)
+	barH := max(h-len(ss)-1, 1)
 	stacks := make([][]int, n)
 	for j, c := range cols {
 		stacks[j] = column(c, peak, barH)
@@ -239,10 +343,10 @@ func (g *usageGraph) render(w, h int) string {
 	rows := make([]string, 0, h)
 	for r := barH - 1; r >= 0; r-- {
 		var b strings.Builder
-		for _, s := range stacks {
+		for _, st := range stacks {
 			switch {
-			case r < len(s):
-				b.WriteString(lipgloss.NewStyle().Foreground(providerColors[s[r]]).Render("█"))
+			case r < len(st):
+				b.WriteString(lipgloss.NewStyle().Foreground(ss[st[r]].color()).Render("█"))
 			case r == 0:
 				b.WriteString(sFaint.Render("·"))
 			default:
@@ -251,14 +355,17 @@ func (g *usageGraph) render(w, h int) string {
 		}
 		rows = append(rows, b.String())
 	}
-	for p := providerClaude; p <= providerGrok; p++ {
+	for _, s := range ss {
 		quota := "quota ok"
-		if g.QuotaResets[p] != "" {
-			quota = "quota resets " + g.QuotaResets[p]
+		if g.QuotaResets[s.Provider] != "" {
+			quota = "quota resets " + g.QuotaResets[s.Provider]
 		}
-		row := lipgloss.NewStyle().Foreground(providerColors[p]).Render("■") + " " +
+		if s.Provider == providerCodex && slices.ContainsFunc(g.CodexExcluded, func(x string) bool { return usage.ModelIs(s.Model, x) }) {
+			quota = "excluded"
+		}
+		row := lipgloss.NewStyle().Foreground(s.color()).Render("■") + " " +
 			sDim.Render(fmt.Sprintf("%s · %s  %s tok · $%.2f · %s",
-				providerNames[p], providerOwners[p], humanTokens(g.AllTokens[p]), g.Costs[p], quota))
+				s.label(), providerOwners[s.Provider], humanTokens(g.AllTokens[s]), g.Costs[s], quota))
 		rows = append(rows, lipgloss.NewStyle().MaxWidth(w).Render(row))
 	}
 	legend := []string{sDim.Render("peak " + humanTokens(peakMin) + "/m")}
