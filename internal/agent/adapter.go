@@ -31,6 +31,9 @@ type Adapter interface {
 // UsageSource locates an agent's transcript for usage metering.
 type UsageSource struct {
 	Agent string // a usage agent kind: usage.Claude, usage.Codex or usage.Grok
+	// Snapshot says the path is a whole usage document rewritten as turns
+	// finish, rather than an append-only JSONL transcript.
+	Snapshot bool
 	// Transcript returns the transcript of session for an agent working in
 	// dir and launched from runDir. session is empty for agents whose hooks
 	// don't report one. It returns a best guess, or "" when there is nothing

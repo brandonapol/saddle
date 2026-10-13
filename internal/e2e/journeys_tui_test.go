@@ -324,16 +324,16 @@ func TestJourneyTUIMergedTaskNotShownAsConflict(t *testing.T) {
 
 // TestJourneyTUIUsageStrip: with a five-hour cap configured, usage near it
 // shows above the footer as a bar, percent and warning, and the 60-minute
-// usage box totals it by model.
+// usage box totals it by provider.
 func TestJourneyTUIUsageStrip(t *testing.T) {
 	w := world(t, Options{Tables: "[limits.five_hour]\ntokens = 1000000\n"})
 	now := time.Now().UTC().Truncate(time.Minute)
 	must(t, w.App().Store.AddUsage("e2e-usage", false, []usage.Bucket{{
-		Key:    usage.Key{Minute: now, Task: "t0", Model: "claude-opus-4-5"},
+		Key:    usage.Key{Minute: now, Task: "t0", Adapter: usage.Claude, Model: "claude-opus-4-5"},
 		Tokens: usage.Tokens{Input: 400000, Output: 450000}, Messages: 3,
 	}}))
 	u := w.StartTUI(120, 45)
-	u.WaitScreen("85%", "850.0k tok", "USAGE · 60m", "opus 850.0k")
+	u.WaitScreen("85%", "850.0k tok", "USAGE · 60m", "claude · Anthropic")
 	strip := u.row("85%")
 	if !strings.Contains(strip, "warn") || !strings.Contains(strip, "resets") {
 		t.Fatalf("usage strip = %q, want a warning and the reset time", strip)

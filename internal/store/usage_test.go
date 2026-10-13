@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -21,9 +22,22 @@ func openTest(t *testing.T) *Store {
 
 func bucket(minute time.Time, task, model string, in, out int64) usage.Bucket {
 	return usage.Bucket{
-		Key:      usage.Key{Minute: minute, Task: task, Model: model},
+		Key:      usage.Key{Minute: minute, Task: task, Adapter: usage.Claude, Model: model},
 		Tokens:   usage.Tokens{Input: in, Output: out, CacheRead: 10 * in},
 		Messages: 1,
+	}
+}
+
+func TestUsageBucketsKeepAdapterAndReportedCost(t *testing.T) {
+	s := openTest(t)
+	m := time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)
+	b := bucket(m, "t1", "grok-4.7-build", 5, 2)
+	b.Adapter, b.CostUSD = usage.Grok, 0.25
+	must(t, s.AddUsage("g1", false, []usage.Bucket{b}))
+	got, err := s.UsageBuckets(time.Time{})
+	must(t, err)
+	if len(got) != 1 || got[0].Adapter != usage.Grok || got[0].CostUSD != 0.25 {
+		t.Fatalf("buckets = %+v", got)
 	}
 }
 
@@ -74,6 +88,40 @@ func TestUsageMigrationFromV2(t *testing.T) {
 	got, err := s.UsageSince(time.Time{})
 	if err != nil || got.Input != 1 || got.Output != 2 {
 		t.Fatalf("after reopen: %+v, %v", got, err)
+	}
+}
+
+func TestUsageMigrationLabelsExistingProviderRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range migrations[:len(migrations)-1] {
+		if _, err := db.Exec(migration); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`PRAGMA user_version = ` + fmt.Sprint(len(migrations)-1)); err != nil {
+		t.Fatal(err)
+	}
+	for i, model := range []string{"claude-opus-5-5", "gpt-5-codex", "grok-4.7-build"} {
+		if _, err := db.Exec(`INSERT INTO usage(minute, task, model, session, input) VALUES(?,?,?,?,1)`, i+1, "t1", model, fmt.Sprintf("s%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	bs, err := s.UsageBuckets(time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bs) != 3 || bs[0].Adapter != usage.Claude || bs[1].Adapter != usage.Codex || bs[2].Adapter != usage.Grok {
+		t.Fatalf("migrated buckets = %+v", bs)
 	}
 }
 

@@ -231,6 +231,15 @@ func TestUnpricedModelsReported(t *testing.T) {
 	}
 }
 
+func TestProviderReportedCostOverridesModelPricing(t *testing.T) {
+	now := ts("2026-01-01T15:00:00Z")
+	recs := []Record{{Time: now, Model: "unpriced-provider-model", Tokens: Tokens{Input: 10}, CostUSD: 0.25}}
+	e := Estimate(recs, Limits{}, now)
+	if !near(e.FiveHour.USD, 0.25) || len(e.FiveHour.Unpriced) != 0 {
+		t.Errorf("provider cost = %+v", e.FiveHour)
+	}
+}
+
 func TestEstimateBucketsUsesMinute(t *testing.T) {
 	now := ts("2026-01-01T15:00:00Z")
 	b := []Bucket{

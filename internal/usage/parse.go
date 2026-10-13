@@ -1,7 +1,11 @@
 package usage
 
 import (
+	"bufio"
 	"encoding/json"
+	"fmt"
+	"os"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -129,6 +133,31 @@ func ParseCodex(line []byte) (Record, bool, error) {
 	}, true, nil
 }
 
+// CodexRolloutModel reads the first turn context from a rollout. Token-count
+// events do not repeat the model, so the collector uses this session metadata
+// to price and label their records.
+func CodexRolloutModel(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64<<10), 4<<20)
+	for sc.Scan() {
+		var l struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Model string `json:"model"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(sc.Bytes(), &l) == nil && l.Type == "turn_context" && l.Payload.Model != "" {
+			return l.Payload.Model, nil
+		}
+	}
+	return "", sc.Err()
+}
+
 type grokLine struct {
 	ID      string `json:"id"`
 	Created int64  `json:"created"`
@@ -203,6 +232,76 @@ func ParseGrok(line []byte) (Record, bool, error) {
 		ID: l.ID, Time: ts, Model: model,
 		Tokens: Tokens{Input: l.Usage.Prompt - cached, CacheRead: cached, Output: l.Usage.Completion},
 	}, true, nil
+}
+
+type grokSnapshotUsage struct {
+	Input         int64 `json:"inputTokens"`
+	Output        int64 `json:"outputTokens"`
+	CacheRead     int64 `json:"cachedReadTokens"`
+	CacheCreation int64 `json:"cacheCreationTokens"`
+	CostTicks     int64 `json:"costUsdTicks"`
+}
+
+// ParseGrokSnapshot reads Grok CLI's persisted usage.json. Completed turns
+// are stable records, and per-model rows preserve mixed-model sessions.
+func ParseGrokSnapshot(data []byte) ([]Record, error) {
+	var f struct {
+		Turns []struct {
+			Turn       int                          `json:"turnNumber"`
+			EndedAt    string                       `json:"endedAt"`
+			Primary    string                       `json:"primaryModelId"`
+			Input      int64                        `json:"inputTokens"`
+			Output     int64                        `json:"outputTokens"`
+			CacheRead  int64                        `json:"cachedReadTokens"`
+			CacheWrite int64                        `json:"cacheCreationTokens"`
+			CostTicks  int64                        `json:"costUsdTicks"`
+			Models     map[string]grokSnapshotUsage `json:"modelUsage"`
+		} `json:"turns"`
+	}
+	if err := json.Unmarshal(data, &f); err != nil {
+		return nil, err
+	}
+	var out []Record
+	for _, turn := range f.Turns {
+		if turn.EndedAt == "" {
+			continue
+		}
+		ts, err := parseTime(turn.EndedAt)
+		if err != nil {
+			return nil, err
+		}
+		models := make([]string, 0, len(turn.Models))
+		for model := range turn.Models {
+			models = append(models, model)
+		}
+		if len(models) == 0 {
+			model := turn.Primary
+			if model == "" {
+				model = Grok
+			}
+			models = append(models, model)
+			turn.Models = map[string]grokSnapshotUsage{model: {
+				Input: turn.Input, Output: turn.Output, CacheRead: turn.CacheRead,
+				CacheCreation: turn.CacheWrite, CostTicks: turn.CostTicks,
+			}}
+		}
+		sort.Strings(models)
+		for _, model := range models {
+			u := turn.Models[model]
+			// Grok's persisted inputTokens includes both cache classes;
+			// normalize it to the same disjoint buckets the other parsers use.
+			input := u.Input - u.CacheRead - u.CacheCreation
+			if input < 0 {
+				input = 0
+			}
+			out = append(out, Record{
+				ID: fmt.Sprintf("%d:%s:%s", turn.Turn, model, turn.EndedAt), Time: ts, Model: model,
+				Tokens:  Tokens{Input: input, Output: u.Output, CacheRead: u.CacheRead, CacheCreation: u.CacheCreation},
+				CostUSD: float64(u.CostTicks) / 1e10,
+			})
+		}
+	}
+	return out, nil
 }
 
 func parseTime(s string) (time.Time, error) {

@@ -140,6 +140,14 @@ CREATE TABLE usage(
 CREATE INDEX usage_session ON usage(session);
 `, `
 CREATE TABLE narrator_spend(day TEXT PRIMARY KEY, usd REAL NOT NULL DEFAULT 0);
+`, `
+ALTER TABLE usage ADD COLUMN adapter TEXT NOT NULL DEFAULT 'claude';
+ALTER TABLE usage ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0;
+UPDATE usage SET adapter = CASE
+  WHEN model LIKE 'grok%' THEN 'grok'
+  WHEN model LIKE 'gpt%' OR model LIKE '%codex%' THEN 'codex'
+  ELSE 'claude'
+END;
 `}
 
 // Open opens (creating if needed) the database at path and applies migrations,

@@ -116,6 +116,7 @@ type sample struct {
 	model    string
 	tokens   Tokens
 	messages int64
+	costUSD  float64
 }
 
 // Estimate computes plan-limit usage from records as of now. Records after
@@ -123,7 +124,7 @@ type sample struct {
 func Estimate(recs []Record, l Limits, now time.Time) LimitEstimate {
 	s := make([]sample, len(recs))
 	for i, r := range recs {
-		s[i] = sample{r.Time, r.Model, r.Tokens, 1}
+		s[i] = sample{r.Time, r.Model, r.Tokens, 1, r.CostUSD}
 	}
 	return estimate(s, l, now)
 }
@@ -133,7 +134,7 @@ func Estimate(recs []Record, l Limits, now time.Time) LimitEstimate {
 func EstimateBuckets(bs []Bucket, l Limits, now time.Time) LimitEstimate {
 	s := make([]sample, len(bs))
 	for i, b := range bs {
-		s[i] = sample{b.Minute, b.Model, b.Tokens, b.Messages}
+		s[i] = sample{b.Minute, b.Model, b.Tokens, b.Messages, b.CostUSD}
 	}
 	return estimate(s, l, now)
 }
@@ -199,11 +200,15 @@ func (w *WindowEstimate) sum(s []sample, l Limits, now time.Time, in func(time.T
 		}
 		w.Tokens = w.Tokens.Add(x.tokens)
 		w.Messages += x.messages
-		p, ok := PriceFor(x.model, l.Prices)
-		if !ok {
-			unpriced[x.model] = true
+		if x.costUSD > 0 {
+			w.USD += x.costUSD
+		} else {
+			p, ok := PriceFor(x.model, l.Prices)
+			if !ok {
+				unpriced[x.model] = true
+			}
+			w.USD += p.Cost(x.tokens)
 		}
-		w.USD += p.Cost(x.tokens)
 	}
 	for m := range unpriced {
 		w.Unpriced = append(w.Unpriced, m)

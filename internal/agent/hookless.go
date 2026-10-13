@@ -230,23 +230,44 @@ func (Gemini) Usage() UsageSource {
 // interactive session in the worktree with saddle's project hooks and MCP
 // server installed (see writeGrok), so it claims, spawns and calls done like
 // Claude Code (#181).
-type Grok struct{}
+type Grok struct {
+	// Home is Grok's state dir. Empty means $GROK_HOME, then ~/.grok.
+	Home string
+}
 
 func (Grok) Name() string         { return usage.Grok }
 func (Grok) Hooks() bool          { return true }
 func (Grok) Inject(string) string { return WakeLine }
-
-// grokTranscript is where grok usage is read from the run dir, best effort:
-// nothing writes it while grok's own session files go unparsed.
-const grokTranscript = "transcript.jsonl"
 
 func (Grok) Launch(l Launch) (string, error) {
 	l.Kind = KindGrok
 	return l.writeGrok()
 }
 
-func (Grok) Usage() UsageSource {
-	return UsageSource{Agent: usage.Grok, Transcript: func(_, runDir, _ string) string {
-		return filepath.Join(runDir, grokTranscript)
+func (g Grok) Usage() UsageSource {
+	return UsageSource{Agent: usage.Grok, Snapshot: true, Transcript: func(dir, _, session string) string {
+		return g.usageSnapshot(dir, session)
 	}}
+}
+
+// usageSnapshot locates the usage ledger Grok persists for a session. The
+// project directory encoding is an implementation detail, so session id is
+// the durable lookup key and also handles long-path hashed directories.
+func (g Grok) usageSnapshot(_ string, session string) string {
+	if session == "" {
+		return ""
+	}
+	home := g.Home
+	if home == "" {
+		home = os.Getenv("GROK_HOME")
+	}
+	if home == "" {
+		h, _ := os.UserHomeDir()
+		home = filepath.Join(h, ".grok")
+	}
+	matches, _ := filepath.Glob(filepath.Join(home, "sessions", "*", session, "usage.json"))
+	if len(matches) == 0 {
+		return ""
+	}
+	return matches[0]
 }

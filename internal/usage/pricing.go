@@ -21,10 +21,12 @@ func (p Price) Cost(t Tokens) float64 {
 		float64(t.CacheCreation)*p.CacheWrite) / 1e6
 }
 
-// DefaultPrices maps model id prefixes to Anthropic first-party list prices
-// (as of 2026-09). PriceFor picks the longest matching prefix, so dated ids
+// DefaultPrices maps model id prefixes to provider list prices (as of
+// 2026-10). PriceFor picks the longest matching prefix, so dated ids
 // like claude-haiku-4-5-20251001 resolve too.
 var DefaultPrices = map[string]Price{
+	"gpt-5.3-codex":     {Input: 1.75, Output: 14, CacheRead: 0.175},
+	"gpt-5-codex":       {Input: 1.25, Output: 10, CacheRead: 0.125},
 	"claude-fable-5-1":  {Input: 10, Output: 50, CacheRead: 0.25, CacheWrite: 12.5},
 	"claude-mythos-5-1": {Input: 10, Output: 50, CacheRead: 0.25, CacheWrite: 12.5},
 	"claude-fable-5":    {Input: 10, Output: 50, CacheRead: 1, CacheWrite: 12.5},

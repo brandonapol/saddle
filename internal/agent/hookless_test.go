@@ -143,6 +143,21 @@ func TestCodexTranscriptIsNewestRolloutForWorktree(t *testing.T) {
 	}
 }
 
+func TestGrokUsageFindsSessionSnapshot(t *testing.T) {
+	home := t.TempDir()
+	want := filepath.Join(home, "sessions", "project", "sid", "usage.json")
+	if err := os.MkdirAll(filepath.Dir(want), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(want, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := (Grok{Home: home}).Usage()
+	if got := src.Transcript("/repo/wt", "", "sid"); got != want || !src.Snapshot {
+		t.Errorf("source = path %q snapshot %v, want %q true", got, src.Snapshot, want)
+	}
+}
+
 // #182: gemini launches interactively in the worktree with the saddle MCP
 // server from a run-dir system settings file, so nothing lands in the repo.
 func TestGeminiLaunchWiresMCPAndBrief(t *testing.T) {

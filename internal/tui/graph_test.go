@@ -21,7 +21,7 @@ func ub(ago time.Duration, task, model string, tok usage.Tokens) usage.Bucket {
 	return usage.Bucket{Key: usage.Key{Minute: graphNow.Truncate(time.Minute).Add(-ago), Task: task, Model: model}, Tokens: tok, Messages: 1}
 }
 
-// Each of the last 60 minutes sums tokens by model family; older usage and
+// Each of the last 60 minutes sums tokens by provider; older usage and
 // cache reads (unless counted) stay out.
 func TestBuildUsageGraph(t *testing.T) {
 	bs := []usage.Bucket{
@@ -33,16 +33,16 @@ func TestBuildUsageGraph(t *testing.T) {
 		ub(0, "t4", "codex", usage.Tokens{Output: 1}),
 	}
 	g := buildGraph(bs, nil, graphNow, false)
-	if got := g.Minutes[0]; !reflect.DeepEqual(got, [nFamilies]int64{famOpus: 15}) {
+	if got := g.Minutes[0]; !reflect.DeepEqual(got, [nProviders]int64{providerClaude: 15}) {
 		t.Errorf("oldest minute = %v", got)
 	}
-	if got := g.Minutes[59]; !reflect.DeepEqual(got, [nFamilies]int64{30, 10, 4, 1}) {
+	if got := g.Minutes[59]; !reflect.DeepEqual(got, [nProviders]int64{44, 1, 0, 0}) {
 		t.Errorf("latest minute = %v", got)
 	}
-	if g.Totals != [nFamilies]int64{45, 10, 4, 1} {
+	if g.Totals != [nProviders]int64{59, 1, 0, 0} {
 		t.Errorf("totals = %v", g.Totals)
 	}
-	if g := buildGraph(bs, nil, graphNow, true); g.Minutes[0][famOpus] != 1015 {
+	if g := buildGraph(bs, nil, graphNow, true); g.Minutes[0][providerClaude] != 1015 {
 		t.Errorf("with cache reads counted, oldest minute = %v", g.Minutes[0])
 	}
 }
@@ -71,18 +71,17 @@ func TestMergeOpusTokens(t *testing.T) {
 	}
 }
 
-// A column stacks families bottom-up in proportion: opus, sonnet, haiku,
-// other.
+// A column stacks providers bottom-up in proportion.
 func TestGraphColumnStacks(t *testing.T) {
-	got := column([nFamilies]int64{famOpus: 75, famSonnet: 25}, 100, 4)
-	want := []int{famOpus, famOpus, famOpus, famSonnet}
+	got := column([nProviders]int64{providerClaude: 75, providerCodex: 25}, 100, 4)
+	want := []int{providerClaude, providerClaude, providerClaude, providerCodex}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("column = %v, want %v", got, want)
 	}
-	if got := column([nFamilies]int64{famHaiku: 1}, 100, 4); !reflect.DeepEqual(got, []int{famHaiku}) {
+	if got := column([nProviders]int64{providerGrok: 1}, 100, 4); !reflect.DeepEqual(got, []int{providerGrok}) {
 		t.Errorf("any usage shows at least one cell: %v", got)
 	}
-	if got := column([nFamilies]int64{}, 100, 4); len(got) != 0 {
+	if got := column([nProviders]int64{}, 100, 4); len(got) != 0 {
 		t.Errorf("an idle minute is empty: %v", got)
 	}
 }
@@ -106,23 +105,49 @@ func TestUsageGraphRender(t *testing.T) {
 				t.Errorf("width %d: %q too wide", w, l)
 			}
 		}
-		if !strings.Contains(out, "opus") {
+		if !strings.Contains(out, "claude") {
 			t.Errorf("width %d: no legend:\n%s", w, out)
 		}
 	}
 	out := g.render(120, graphH)
-	for _, want := range []string{"opus 75.0k", "sonnet 25.0k", "haiku 5.0k", "peak 100.0k/m", "merges 1.2k opus"} {
+	for _, want := range []string{"claude", "Anthropic", "105.0k tok", "codex", "OpenAI", "grok", "SpaceXAI", "peak 100.0k/m", "merges 1.2k opus"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("legend lacks %q:\n%s", want, out)
 		}
 	}
-	// The newest minute is the rightmost column: opus at the bottom, sonnet on top.
+	// The newest minute is the rightmost column and belongs to Claude.
 	rows := strings.Split(out, "\n")
-	if bottom := rows[graphH-2]; !strings.HasSuffix(strings.TrimSuffix(bottom, "\x1b[0m"), "█") || !strings.Contains(bottom, fg(cOpus)) {
+	if bottom := rows[graphH-5]; !strings.HasSuffix(strings.TrimSuffix(bottom, "\x1b[0m"), "█") || !strings.Contains(bottom, fg(cOpus)) {
 		t.Errorf("bottom row should end in an opus cell: %q", bottom)
 	}
-	if !strings.Contains(rows[0], fg(cSonnet)) {
-		t.Errorf("top row should hold the sonnet cell: %q", rows[0])
+}
+
+// #478: provider-backed agents have their own usage rows. A Codex-only run
+// must not disappear into a model-family row named "other".
+func TestUsageGraphRenderLabelsCodexProviderWithTokensAndCost(t *testing.T) {
+	withColor(t)
+	bs := []usage.Bucket{{
+		Key:    usage.Key{Minute: graphNow.Truncate(time.Minute), Task: "t5", Adapter: usage.Codex, Model: "gpt-5-codex"},
+		Tokens: usage.Tokens{Input: 1_000_000, CacheRead: 2_000_000, Output: 100_000}, Messages: 1,
+	}}
+	g := buildGraph(bs, nil, graphNow, false)
+	out := g.render(120, graphH)
+	for _, want := range []string{"codex", "OpenAI", "3.1M tok", "$2.50"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("provider row lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "other") {
+		t.Errorf("codex usage still labeled other:\n%s", out)
+	}
+}
+
+func TestUsageGraphProviderRowShowsQuotaReset(t *testing.T) {
+	g := &usageGraph{}
+	g.QuotaResets[providerGrok] = "42m"
+	out := g.render(120, graphH)
+	if !strings.Contains(out, "grok · SpaceXAI") || !strings.Contains(out, "quota resets 42m") {
+		t.Errorf("grok quota row missing:\n%s", out)
 	}
 }
 
@@ -131,8 +156,8 @@ func TestUsageGraphRender(t *testing.T) {
 func TestUsageGraphInViews(t *testing.T) {
 	m := newViewModel(160, 50)
 	m.graph = &usageGraph{MergeOpus: 0}
-	m.graph.Minutes[59][famOpus] = 10
-	m.graph.Totals[famOpus] = 10
+	m.graph.Minutes[59][providerClaude] = 10
+	m.graph.Totals[providerClaude] = 10
 	if out := m.viewLeft(100, 40); !strings.Contains(out, "USAGE · 60m") {
 		t.Errorf("no usage panel:\n%s", out)
 	}
@@ -167,7 +192,7 @@ func TestReadUsage(t *testing.T) {
 	if lim == nil || lim.FiveHour.Percent != want.FiveHour.Percent || lim.FiveHour.Percent != 0.5 {
 		t.Errorf("limits = %+v, want %+v", lim, want)
 	}
-	if g == nil || g.Minutes[59][famOpus] != 500 {
+	if g == nil || g.Minutes[59][providerClaude] != 500 {
 		t.Errorf("graph = %+v", g)
 	}
 }

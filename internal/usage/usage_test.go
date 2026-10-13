@@ -52,9 +52,31 @@ func TestPollBucketsModelsAndMalformed(t *testing.T) {
 	if got[2].Minute != ts("2026-01-01T10:01:00Z") || got[2].Task != "t3" || got[2].Input != 5 {
 		t.Errorf("bucket2 = %+v", got[2])
 	}
+	for _, b := range got {
+		if b.Adapter != Claude {
+			t.Errorf("bucket adapter = %q, want claude", b.Adapter)
+		}
+	}
 	cur, _ := c.Cursor("s1")
 	if cur.Malformed != 1 {
 		t.Errorf("malformed = %d", cur.Malformed)
+	}
+}
+
+func TestSnapshotPollAddsOnlyNewTurns(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "usage.json")
+	b, err := os.ReadFile(filepath.Join("testdata", "grok-usage.json"))
+	mustErr(t, err)
+	mustErr(t, os.WriteFile(p, b, 0o644))
+	c := NewCollector()
+	c.Track(Session{ID: "g1", Task: "t9", Agent: Grok, Path: p, Snapshot: true})
+	got, err := c.Poll()
+	mustErr(t, err)
+	if len(got) != 2 || got[0].Adapter != Grok {
+		t.Fatalf("first poll = %+v", got)
+	}
+	if got, err = c.Poll(); err != nil || len(got) != 0 {
+		t.Fatalf("second poll = %+v, %v", got, err)
 	}
 }
 

@@ -22,7 +22,9 @@ type UsageMeter struct {
 	ClaudeDir string
 	// CodexHome is Codex's state dir. Empty means $CODEX_HOME, then ~/.codex.
 	CodexHome string
-	sessions  map[string]*meterSession
+	// GrokHome is Grok's state dir. Empty means $GROK_HOME, then ~/.grok.
+	GrokHome string
+	sessions map[string]*meterSession
 }
 
 type meterSession struct {
@@ -99,12 +101,12 @@ func (m *UsageMeter) Sync() error {
 		if path == "" {
 			path = src.Transcript(t.Worktree, m.app.stateDir("run", t.ID), t.SessionID)
 		}
-		if !ad.Hooks() {
-			s.path = path // finding a hookless transcript can mean a scan
+		if !ad.Hooks() || src.Snapshot {
+			s.path = path // finding these provider-owned files can mean a scan
 		}
 		// Re-tracking keeps the cursor, and lets a transcript that appeared
 		// somewhere other than the expected path be found later.
-		s.col.Track(usage.Session{ID: key, Task: t.ID, Agent: src.Agent, Path: path})
+		s.col.Track(usage.Session{ID: key, Task: t.ID, Agent: src.Agent, Path: path, Model: t.Model, Snapshot: src.Snapshot})
 	}
 	var errs []error
 	for id, s := range m.sessions {
@@ -136,6 +138,8 @@ func (m *UsageMeter) adapter(t store.Task) agent.Adapter {
 		return agent.Claude{ConfigDir: m.ClaudeDir}
 	case agent.Codex:
 		return agent.Codex{Home: m.CodexHome}
+	case agent.Grok:
+		return agent.Grok{Home: m.GrokHome}
 	default:
 		return ad
 	}

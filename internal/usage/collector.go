@@ -9,16 +9,19 @@ import (
 
 // Session is one agent session whose transcript is being tailed.
 type Session struct {
-	ID    string // agent session id, as given by hooks
-	Task  string // saddle task the usage is attributed to
-	Agent string // Claude, Codex or Grok
-	Path  string // transcript file
+	ID       string // agent session id, as given by hooks
+	Task     string // saddle task the usage is attributed to
+	Agent    string // Claude, Codex or Grok
+	Path     string // transcript file
+	Model    string // configured model when the transcript omits it
+	Snapshot bool   // Path is a rewritten usage snapshot, not append-only JSONL
 }
 
 type tracked struct {
 	Session
-	cur   Cursor
-	parse Parser
+	cur      Cursor
+	parse    Parser
+	snapshot SnapshotParser
 }
 
 // Collector tails transcripts for registered sessions and aggregates the new
@@ -38,14 +41,18 @@ func NewCollector() *Collector {
 // false if the agent kind is unknown.
 func (c *Collector) Track(s Session) bool {
 	p := ParserFor(s.Agent)
-	if p == nil {
+	var snap SnapshotParser
+	if s.Snapshot && s.Agent == Grok {
+		snap = ParseGrokSnapshot
+	}
+	if p == nil || (s.Snapshot && snap == nil) {
 		return false
 	}
 	if t, ok := c.sessions[s.ID]; ok {
-		t.Session, t.parse = s, p
+		t.Session, t.parse, t.snapshot = s, p, snap
 		return true
 	}
-	c.sessions[s.ID] = &tracked{Session: s, parse: p}
+	c.sessions[s.ID] = &tracked{Session: s, parse: p, snapshot: snap}
 	return true
 }
 
@@ -68,15 +75,28 @@ func (c *Collector) Poll() ([]Bucket, error) {
 	agg := NewAggregator()
 	var firstErr error
 	for _, t := range c.sessions {
-		recs, err := Tail(t.Path, &t.cur, t.parse)
+		var recs []Record
+		var err error
+		if t.snapshot != nil {
+			recs, err = ReadSnapshot(t.Path, &t.cur, t.snapshot)
+		} else {
+			recs, err = Tail(t.Path, &t.cur, t.parse)
+		}
 		if err != nil && firstErr == nil {
 			firstErr = err
+		}
+		model := t.Model
+		if model == "" && t.Agent == Codex && t.Path != "" {
+			model, _ = CodexRolloutModel(t.Path)
 		}
 		for _, r := range recs {
 			if r.Time.IsZero() {
 				r.Time = c.Now()
 			}
-			agg.Add(t.Task, r)
+			if model != "" && (r.Model == "" || r.Model == t.Agent) {
+				r.Model = model
+			}
+			agg.Add(t.Task, t.Agent, r)
 		}
 	}
 	return agg.Flush(), firstErr

@@ -13,18 +13,27 @@ import (
 	"github.com/brandonapol/saddle/internal/usage"
 )
 
-// Model families, stacked bottom-up in this order.
+// Provider adapters, stacked bottom-up in this order.
+const (
+	providerClaude = iota
+	providerCodex
+	providerGrok
+	providerOther
+	nProviders
+)
+
+var (
+	providerNames  = [nProviders]string{usage.Claude, usage.Codex, usage.Grok, "other"}
+	providerOwners = [nProviders]string{"Anthropic", "OpenAI", "SpaceXAI", "unknown"}
+	providerColors = [nProviders]lipgloss.Color{cOpus, cSonnet, cHaiku, cDim}
+)
+
+// Model families remain useful for the merge-waste counter.
 const (
 	famOpus = iota
 	famSonnet
 	famHaiku
 	famOther
-	nFamilies
-)
-
-var (
-	famNames  = [nFamilies]string{"opus", "sonnet", "haiku", "other"}
-	famColors = [nFamilies]lipgloss.Color{cOpus, cSonnet, cHaiku, cDim}
 )
 
 func family(model string) int {
@@ -39,18 +48,43 @@ func family(model string) int {
 	return famOther
 }
 
+func provider(adapter, model string) int {
+	switch adapter {
+	case usage.Claude:
+		return providerClaude
+	case usage.Codex:
+		return providerCodex
+	case usage.Grok:
+		return providerGrok
+	}
+	// Buckets written before adapters were persisted get a best-effort
+	// classification from their model.
+	switch m := strings.ToLower(model); {
+	case strings.HasPrefix(m, "claude"):
+		return providerClaude
+	case strings.HasPrefix(m, "grok"):
+		return providerGrok
+	case strings.HasPrefix(m, "gpt"), strings.Contains(m, "codex"):
+		return providerCodex
+	}
+	return providerOther
+}
+
 // graphMinutes is how far back the usage graph reaches.
 const graphMinutes = 60
 
-// graphH is the usage graph's height: bar rows plus the legend.
-const graphH = 5
+// graphH is the usage graph's height: four bar rows, three providers and totals.
+const graphH = 8
 
-// usageGraph is the last hour of usage by model family, one slot per minute,
-// oldest first, and the Opus tokens spent resolving merges.
+// usageGraph is the last hour of usage by provider, one slot per minute,
+// oldest first, provider totals/costs, and Opus tokens spent resolving merges.
 type usageGraph struct {
-	Minutes   [graphMinutes][nFamilies]int64
-	Totals    [nFamilies]int64
-	MergeOpus int64
+	Minutes     [graphMinutes][nProviders]int64
+	Totals      [nProviders]int64
+	AllTokens   [nProviders]int64
+	Costs       [nProviders]float64
+	QuotaResets [nProviders]string
+	MergeOpus   int64
 }
 
 func countTokens(t usage.Tokens, cacheReads bool) int64 {
@@ -70,10 +104,25 @@ func readUsage(a *app.App, now time.Time) (*usage.LimitEstimate, *usageGraph) {
 	}
 	e := usage.EstimateBuckets(bs, a.Cfg.Limits, now)
 	es, _ := a.Store.Events(2000)
-	return &e, buildGraph(bs, es, now, a.Cfg.Usage.CountCacheReads)
+	g := buildGraphPrices(bs, es, now, a.Cfg.Usage.CountCacheReads, a.Cfg.Limits.Prices)
+	if a.Root != "" {
+		for name, ex := range a.ExhaustedAdapters(now) {
+			p := provider(name, "")
+			if ex.Resets != "" {
+				g.QuotaResets[p] = ex.Resets
+			} else if ex.Until.After(now) {
+				g.QuotaResets[p] = shortDur(ex.Until.Sub(now))
+			}
+		}
+	}
+	return &e, g
 }
 
 func buildGraph(bs []usage.Bucket, es []store.Event, now time.Time, cacheReads bool) *usageGraph {
+	return buildGraphPrices(bs, es, now, cacheReads, nil)
+}
+
+func buildGraphPrices(bs []usage.Bucket, es []store.Event, now time.Time, cacheReads bool, prices map[string]usage.Price) *usageGraph {
 	g := &usageGraph{MergeOpus: mergeOpus(es, bs, now, cacheReads)}
 	last := now.UTC().Truncate(time.Minute)
 	for _, b := range bs {
@@ -82,8 +131,15 @@ func buildGraph(bs []usage.Bucket, es []store.Event, now time.Time, cacheReads b
 			continue
 		}
 		n := countTokens(b.Tokens, cacheReads)
-		g.Minutes[i][family(b.Model)] += n
-		g.Totals[family(b.Model)] += n
+		p := provider(b.Adapter, b.Model)
+		g.Minutes[i][p] += n
+		g.Totals[p] += n
+		g.AllTokens[p] += b.Tokens.Total()
+		if b.CostUSD > 0 {
+			g.Costs[p] += b.CostUSD
+		} else {
+			g.Costs[p] += usage.CostUSD(b.Model, b.Tokens, prices)
+		}
 	}
 	return g
 }
@@ -126,9 +182,9 @@ func mergeOpus(es []store.Event, bs []usage.Bucket, now time.Time, cacheReads bo
 	return n
 }
 
-// column assigns the cells of one bar, bottom-up, to families in proportion
+// column assigns the cells of one bar, bottom-up, to providers in proportion
 // to v, scaled so peak fills h cells. Any usage gets at least one cell.
-func column(v [nFamilies]int64, peak int64, h int) []int {
+func column(v [nProviders]int64, peak int64, h int) []int {
 	var total int64
 	for _, n := range v {
 		total += n
@@ -152,11 +208,11 @@ func column(v [nFamilies]int64, peak int64, h int) []int {
 	return out
 }
 
-// render draws the graph in w columns and h lines: h-1 rows of stacked bars,
-// newest minute on the right, then a legend.
+// render draws four rows of stacked provider bars, one row per known
+// provider, then peak and merge totals.
 func (g *usageGraph) render(w, h int) string {
 	n := min(graphMinutes, w)
-	cols := make([][nFamilies]int64, n)
+	cols := make([][nProviders]int64, n)
 	var peakMin int64
 	for i, m := range g.Minutes {
 		j := i * n / graphMinutes
@@ -175,7 +231,7 @@ func (g *usageGraph) render(w, h int) string {
 		}
 		peak = max(peak, t)
 	}
-	barH := h - 1
+	barH := max(h-4, 1)
 	stacks := make([][]int, n)
 	for j, c := range cols {
 		stacks[j] = column(c, peak, barH)
@@ -186,7 +242,7 @@ func (g *usageGraph) render(w, h int) string {
 		for _, s := range stacks {
 			switch {
 			case r < len(s):
-				b.WriteString(lipgloss.NewStyle().Foreground(famColors[s[r]]).Render("█"))
+				b.WriteString(lipgloss.NewStyle().Foreground(providerColors[s[r]]).Render("█"))
 			case r == 0:
 				b.WriteString(sFaint.Render("·"))
 			default:
@@ -195,15 +251,17 @@ func (g *usageGraph) render(w, h int) string {
 		}
 		rows = append(rows, b.String())
 	}
-	var legend []string
-	for f := range nFamilies {
-		if f != famOpus && g.Totals[f] == 0 {
-			continue
+	for p := providerClaude; p <= providerGrok; p++ {
+		quota := "quota ok"
+		if g.QuotaResets[p] != "" {
+			quota = "quota resets " + g.QuotaResets[p]
 		}
-		legend = append(legend, lipgloss.NewStyle().Foreground(famColors[f]).Render("■")+" "+
-			sDim.Render(famNames[f]+" "+humanTokens(g.Totals[f])))
+		row := lipgloss.NewStyle().Foreground(providerColors[p]).Render("■") + " " +
+			sDim.Render(fmt.Sprintf("%s · %s  %s tok · $%.2f · %s",
+				providerNames[p], providerOwners[p], humanTokens(g.AllTokens[p]), g.Costs[p], quota))
+		rows = append(rows, lipgloss.NewStyle().MaxWidth(w).Render(row))
 	}
-	legend = append(legend, sDim.Render("peak "+humanTokens(peakMin)+"/m"))
+	legend := []string{sDim.Render("peak " + humanTokens(peakMin) + "/m")}
 	merges := sDim.Render(fmt.Sprintf("merges %s opus", humanTokens(g.MergeOpus)))
 	if g.MergeOpus > 0 {
 		merges = lipgloss.NewStyle().Foreground(cAlert).Render(fmt.Sprintf("merges %s opus", humanTokens(g.MergeOpus)))

@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -37,6 +38,13 @@ func TestParseCodexRollout(t *testing.T) {
 	}
 }
 
+func TestCodexRolloutModel(t *testing.T) {
+	got, err := CodexRolloutModel(filepath.Join("testdata", "codex-rollout.jsonl"))
+	if err != nil || got != "gpt-5-codex" {
+		t.Fatalf("model = %q, %v", got, err)
+	}
+}
+
 func TestParseGrokOutput(t *testing.T) {
 	recs, c := tailFixture(t, "grok-output.jsonl", ParseGrok)
 	// Plain text is console output, not a malformed transcript line.
@@ -50,6 +58,28 @@ func TestParseGrokOutput(t *testing.T) {
 		t.Errorf("first = %+v", r)
 	}
 	if r := recs[1]; r.Model != "grok-2-image" || r.Tokens.Input != 50 {
+		t.Errorf("second = %+v", r)
+	}
+}
+
+func TestParseGrokUsageSnapshot(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("testdata", "grok-usage.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, err := ParseGrokSnapshot(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("records = %+v", recs)
+	}
+	if r := recs[0]; r.ID != "1:grok-4.7-build:2026-10-02T10:00:00Z" || r.Model != "grok-4.7-build" ||
+		r.Tokens != (Tokens{Input: 500, CacheRead: 400, Output: 60}) || r.CostUSD != 0.0125 ||
+		!r.Time.Equal(time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)) {
+		t.Errorf("first = %+v", r)
+	}
+	if r := recs[1]; r.ID != "2:grok-4.7-build:2026-10-02T10:01:00Z" || r.Tokens.Input != 50 || r.CostUSD != 0.0025 {
 		t.Errorf("second = %+v", r)
 	}
 }
