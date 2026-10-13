@@ -1,6 +1,11 @@
 package usage
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // issue180Screen is the pane t24 and t26 showed in #180.
 const issue180Screen = `⏺ Running the tests now.
@@ -54,4 +59,61 @@ func lines(n int) string {
 		s += "⏺ more output\n"
 	}
 	return s
+}
+
+// screen reads a captured pane from testdata and puts msg where the CLI
+// prints a turn's error: codex's "■ …" line, the end of grok's last turn.
+func screen(t *testing.T, name, msg string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", name+".txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if msg == "" {
+		return s
+	}
+	var anchor string
+	switch name {
+	case "codex_error":
+		i := strings.Index(s, "■ ")
+		anchor, msg = s[i:i+strings.Index(s[i:], "\n\n")], "■ "+msg
+	case "grok_idle":
+		i := strings.Index(s, "     done ")
+		anchor, msg = s[i:i+strings.Index(s[i:], "\n")], "     "+msg
+	}
+	if !strings.Contains(s, anchor) {
+		t.Fatalf("%s has no %q", name, anchor)
+	}
+	return strings.Replace(s, anchor, msg, 1)
+}
+
+// The quota errors codex 0.154 and grok 1.0.50 print, in the layout of a
+// real pane of each (#488). The wordings come from the CLIs' binaries; a
+// real out-of-quota pane couldn't be produced on demand.
+func TestDetectLimitBannerCapturedPanes(t *testing.T) {
+	cases := []struct {
+		name, pane, msg, resets string
+		on                      bool
+	}{
+		{"codex idle, reset available", "codex_error", "", "", false},
+		{"codex plus", "codex_error", "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try\nagain at 3:04 PM.", "3:04 PM", true},
+		{"codex per model", "codex_error", "You've hit your usage limit for gpt-5.6-sol. Switch to another model now, or try again in 2 hours 5 minutes.", "in 2 hours 5 minutes", true},
+		{"codex reached", "codex_error", "Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex.", "", true},
+		{"codex workspace credits", "codex_error", "Your workspace is out of credits. Add credits to continue.", "", true},
+		{"codex spend cap", "codex_error", "You hit your spend cap set in your workspace. Increase your spend cap to continue.", "", true},
+		{"codex credit limit", "codex_error", "You've reached your workspace credit limit", "", true},
+		{"grok idle", "grok_idle", "", "", false},
+		{"grok weekly", "grok_idle", "You hit your weekly limit. Upgrade to a higher tier for more usage", "", true},
+		{"grok free", "grok_idle", "You hit your free usage limit. Unlock all features with SuperGrok.", "", true},
+		{"grok credits", "grok_idle", "Error: out of credits or over your spending limit. Add credits and retry.", "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b, on := DetectLimitBanner(screen(t, c.pane, c.msg))
+			if on != c.on || b.Resets != c.resets {
+				t.Fatalf("got %+v %v, want resets %q %v", b, on, c.resets, c.on)
+			}
+		})
+	}
 }
