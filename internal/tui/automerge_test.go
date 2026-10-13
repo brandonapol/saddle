@@ -293,6 +293,26 @@ func TestMergeKeysToggleAgainstFreshState(t *testing.T) {
 	}
 }
 
+// M pressed twice back to back from off, with no refresh in between, turns
+// auto-merge on and then off again: the second press flips what the first
+// put on screen, not the stale state the last refresh read (#207).
+func TestMergeKeyTwiceFlipsBack(t *testing.T) {
+	m := newViewModel(120, 40)
+	f := &fakeAutomerger{}
+	m.amer = f
+	m.am = &automerge.Status{}
+	m.Update(altKey('3'))
+
+	runKey(m, runeKey('M'))
+	runKey(m, runeKey('M'))
+	if want := []string{"on", "off"}; !slices.Equal(f.calls, want) {
+		t.Errorf("calls = %q, want %q", f.calls, want)
+	}
+	if long, _, _ := m.amHeader(); long != "auto-merge off" {
+		t.Errorf("header after M M: %q", long)
+	}
+}
+
 // A refresh that reads the state an action saved, landing before the action
 // does, must not show its result while the action still runs: the header
 // would say "auto-merge off" while the next key is refused as "still turning
