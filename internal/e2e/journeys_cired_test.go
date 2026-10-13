@@ -288,3 +288,60 @@ func TestJourneyCIRedEscalatesAfterRepairAttempts(t *testing.T) {
 		t.Fatalf("status doesn't show the escalation:\n%s", st.Stdout)
 	}
 }
+
+// TestJourneyCIRedRespawnsKilledRepair (#466): t3, done and queued with a
+// broad claim over alpha/**, waits in the train when t1's CI goes red. The
+// repair t4 needs a file under t3's claim and is killed. The next cycle
+// clears it and spawns t5 for the same head; t5 may write under the done
+// task's claim, lands and folds into t1's layer, and once t1 is green the
+// hold on t3 lifts.
+func TestJourneyCIRedRespawnsKilledRepair(t *testing.T) {
+	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
+	urls := landTwo(t, w)
+	low := prNumber(t, w.GHState(), urls["t1"])
+	w.Spawn("t3", "Alpha follow-up", []string{"alpha/**", "zeta/**"},
+		fa.Write("alpha/work.txt", "alpha fixed\n"), fa.Commit("alpha follow-up"), fa.Done("Fixes alpha."))
+	w.WaitTask("t3", "queued", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
+	must(t, fa.Script{Steps: []fa.Step{fa.Wait("never")}}.Save(w.Scripts, "t4"))
+	must(t, fa.Script{Steps: []fa.Step{
+		fa.Write("alpha/fix.txt", "fix\n"), fa.Commit("fix alpha's CI"), fa.Done("Fixes t1's CI.")}}.Save(w.Scripts, "t5"))
+	must(t, w.GH.SetChecks(low.Number, ciCheck(fakegh.Fail)))
+
+	w.CIRedTick()
+	if rs := repairTasks(w, "t1"); len(rs) != 1 || rs[0].ID != "t4" {
+		t.Fatalf("repairs = %+v, want t4", rs)
+	}
+	if r := w.MustSaddle("land"); w.Task("t3").Status == "landed" {
+		t.Fatalf("t3 changes red t1's file but landed: %s", r)
+	}
+	w.MustSaddle("kill", "t4")
+	rep := w.CIRedTick()
+	if rs := repairTasks(w, "t1"); len(rs) != 2 || rs[1].ID != "t5" {
+		t.Fatalf("after t4 was killed: repairs = %+v (report %+v), want t5 respawned", rs, rep)
+	}
+	a := w.App()
+	if holds, err := a.CIRedHolds(); err != nil || len(holds) != 1 || holds[0].Repair != "t5" {
+		t.Fatalf("holds = %+v, %v; want t1 repaired by t5", holds, err)
+	}
+	t5, err := a.Store.Task("t5")
+	must(t, err)
+	if !strings.Contains(t5.Prompt, "t3") {
+		t.Fatalf("t5's prompt doesn't name t3, the queued work held behind t1:\n%s", t5.Prompt)
+	}
+	w.WaitTask("t5", "queued", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
+	if r := w.MustSaddle("land"); w.Task("t5").Status != "landed" {
+		t.Fatalf("the repair was held instead of landing: %s", r)
+	}
+	w.CIRedTick() // folds t5 into t1's layer
+	if got := w.OriginFile(w.Task("t1").Branch, "alpha/fix.txt"); got != "fix\n" {
+		t.Fatalf("t1's PR branch has alpha/fix.txt = %q, want t5's fix", got)
+	}
+	must(t, w.GH.SetChecks(low.Number, ciCheck(fakegh.Pass)))
+	if rep := w.CIRedTick(); len(rep.Red) != 0 {
+		t.Fatalf("after green: %+v", rep)
+	}
+	w.MustSaddle("land")
+	if v := w.Task("t3"); v.Status != "landed" {
+		t.Fatalf("t3 still held after t1 went green: %+v", v)
+	}
+}

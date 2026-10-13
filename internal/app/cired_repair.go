@@ -32,6 +32,7 @@ const (
 	eventCIRepairSpawned = "ci_repair_spawned" // data: repair task id
 	eventCIRepairFailed  = "ci_repair_failed"  // data: why it couldn't be spawned
 	eventCIRepairFolded  = "ci_repair_folded"  // data: repair task id
+	eventCIRepairKilled  = "ci_repair_killed"  // data: repair task id and its status
 	eventCIRepairFixer   = "ci_repair_fixer"   // data: fixer command and commit
 	eventCIRedExplained  = "ci_red_explained"  // data: the sibling that explains it
 	eventCIRedEscalated  = "ci_red_escalated"
@@ -95,16 +96,25 @@ func (a *App) CIRedRepair(task string, fails []CIRedFailure) (string, error) {
 		a.Store.Event(task, eventCIRepairSpawned, fix.ID)
 		return save(fix.ID + " is repairing it on " + task + "'s layer.")
 	}
-	if slices.ContainsFunc(s.Repairs, func(r CIRepairRecord) bool { return r.Task == task && r.Head == l.Head }) {
-		return "", nil // one repair per red head
+	if slices.ContainsFunc(s.Repairs, func(r CIRepairRecord) bool {
+		return r.Task == task && r.Head == l.Head && r.State != ciRepairKilled
+	}) {
+		return "", nil // one repair per red head, unless it was killed (#466)
+	}
+	// A killed repair's head is looked at once more, here; a spawn that
+	// fails returns before saving, so the next cycle tries again.
+	for i, r := range s.Repairs {
+		if r.Task == task && r.Head == l.Head && r.State == ciRepairKilled {
+			s.Repairs[i].Retried = true
+		}
 	}
 	if why := a.ciRepairScreen(task, l.PR, l.Head, fails); why != "" {
-		return why, nil // no commit would fix it (#338)
+		return save(why) // no commit would fix it (#338)
 	}
 	key := task + "@" + l.Head
 	if sib, ok := CIRedExplained(a, task, fails); ok {
 		if slices.Contains(s.Explained, key) {
-			return "", nil
+			return save("")
 		}
 		s.Explained = append(s.Explained, key)
 		a.Store.Event(task, eventCIRedExplained, sib)
@@ -118,7 +128,7 @@ func (a *App) CIRedRepair(task string, fails []CIRedFailure) (string, error) {
 	}
 	if n >= a.Cfg.CI.RepairAttempts {
 		if l.Escalated {
-			return "", nil
+			return save("")
 		}
 		l.Escalated = true
 		a.Store.Event(task, eventCIRedEscalated, fmt.Sprintf("%d repairs", n))
@@ -172,11 +182,75 @@ func (a *App) liveCIRepair(s CIRedState, task string) (string, bool) {
 		if r.Task != task || r.State != ciRepairSpawned {
 			continue
 		}
-		if t, err := a.Store.Task(r.Repair); err == nil && t.Status != store.Killed {
+		if t, err := a.Store.Task(r.Repair); err == nil && !ciRepairDead(t) {
 			return r.Repair, true
 		}
 	}
 	return "", false
+}
+
+// ciRepairDead reports a repair that will never land: killed, or finished
+// with nothing to land.
+func ciRepairDead(t store.Task) bool { return t.Status == store.Killed || t.Status == store.NoChange }
+
+// ReapCIRepairs marks every spawned repair that died (killed, or done with
+// nothing to land) as killed and clears it from its red layer, so the layer
+// isn't left waiting on a repair that will never land (#466). It returns
+// the red tasks whose repair it reaped; CIRepairsDue then lists those still
+// red on the head the repair was spawned for.
+func (a *App) ReapCIRepairs() ([]string, error) {
+	s, err := a.CIRed()
+	if err != nil {
+		return nil, err
+	}
+	var reaped []string
+	for i, r := range s.Repairs {
+		if r.State != ciRepairSpawned {
+			continue
+		}
+		t, err := a.Store.Task(r.Repair)
+		if err != nil || !ciRepairDead(t) {
+			continue
+		}
+		s.Repairs[i].State, s.Repairs[i].Note = ciRepairKilled, r.Repair+" was "+t.Status
+		a.Store.Event(r.Task, eventCIRepairKilled, r.Repair+" "+t.Status)
+		reaped = append(reaped, r.Task)
+		if j := slices.IndexFunc(s.Red, func(l CIRedLayer) bool { return l.Task == r.Task && l.Repair == r.Repair }); j >= 0 {
+			s.Red[j].Repair = ""
+		}
+	}
+	if len(reaped) == 0 {
+		return nil, nil
+	}
+	return reaped, a.SetCIRed(s)
+}
+
+// CIRepairsDue lists the red layers whose repair was killed on the head
+// they are still red on, with no other repair for that head and no second
+// look yet: CIRedRepair should run for them again (#466).
+func (a *App) CIRepairsDue() []string {
+	s, err := a.CIRed()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range s.Red {
+		killed, other := false, false
+		for _, r := range s.Repairs {
+			if r.Task != l.Task || r.Head != l.Head {
+				continue
+			}
+			if r.State == ciRepairKilled {
+				killed = killed || !r.Retried
+			} else {
+				other = true
+			}
+		}
+		if killed && !other {
+			out = append(out, l.Task)
+		}
+	}
+	return out
 }
 
 // layerFiles lists the files task's landed layer changed.
@@ -286,12 +360,37 @@ func (a *App) ciRepairPrompt(owner store.Task, l CIRedLayer, fails []CIRedFailur
 	} else if fixer != "" {
 		fmt.Fprintf(&b, "This looks like a lint or format failure; the repo's fixer is `%s`. Run it first.\n\n", fixer)
 	}
+	if held := a.ciRedQueuedBehind(l.Task); len(held) > 0 {
+		fmt.Fprintf(&b, "Queued work waits in the train behind this red layer: %s. It hasn't landed, so your branch lacks it; "+
+			"if one of those branches already fixes the failure, reuse its change instead of writing your own (#466).\n\n", strings.Join(held, ", "))
+	}
 	fmt.Fprintf(&b, "Your branch is cut from %s, so it has %s's work (branch %s). Reproduce the failure, fix it with the smallest change, "+
 		"run the tests, commit, and call the saddle done tool. When your branch lands, saddle folds your commits into %s's layer: "+
 		"they go out on %s's PR, not as a new PR, and the layers stacked above it wait until its CI is green. "+
 		"Fix only what makes %s's CI red. Don't touch %s yourself and don't open a PR. This is repair attempt %d of %d.",
 		a.Cfg.Integration, owner.ID, owner.Branch, owner.ID, owner.ID, owner.ID, owner.Branch, attempt, a.Cfg.CI.RepairAttempts)
 	return b.String()
+}
+
+// ciRedQueuedBehind names the queued tasks land holds for red task, each
+// with its branch.
+func (a *App) ciRedQueuedBehind(task string) []string {
+	holds, err := a.CIRedHolds()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, h := range holds {
+		if h.Task != task {
+			continue
+		}
+		for _, id := range h.Queued {
+			if t, err := a.Store.Task(id); err == nil {
+				out = append(out, fmt.Sprintf("%s %q (branch %s)", id, t.Title, t.Branch))
+			}
+		}
+	}
+	return out
 }
 
 // tokenRe finds names a failure log may mention: paths, targets, symbols.

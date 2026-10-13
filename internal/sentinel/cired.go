@@ -103,6 +103,11 @@ func (c *CIRed) Check(ctx context.Context) (CIRedReport, error) {
 	if _, err := a.FoldCIRepairs(); err != nil {
 		a.Store.Event("", EventCIRedError, "fold: "+err.Error())
 	}
+	// A repair that was killed will never land: forget it, so its layer
+	// gets another below instead of holding the stack forever (#466).
+	if _, err := a.ReapCIRepairs(); err != nil {
+		a.Store.Event("", EventCIRedError, "reap: "+err.Error())
+	}
 	targets, err := a.CIRedTargets()
 	if err != nil {
 		return rep, err
@@ -157,6 +162,21 @@ func (c *CIRed) Check(ctx context.Context) (CIRedReport, error) {
 		note := c.onRed(ctx, red)
 		rep.Notes = append(rep.Notes, note)
 		errs = append(errs, a.Notify(app.OrchestratorID, store.NoticeInfo, redNotice(red, note)))
+	}
+	for _, task := range a.CIRepairsDue() {
+		if slices.Contains(rep.New, task) {
+			continue
+		}
+		s, err := a.CIRed()
+		if err != nil {
+			errs = append(errs, err)
+			break
+		}
+		red, _ := s.Layer(task)
+		note := c.onRed(ctx, red)
+		rep.Notes = append(rep.Notes, note)
+		errs = append(errs, a.Notify(app.OrchestratorID, store.NoticeInfo, fmt.Sprintf(
+			"The CI repair of %s's red PR %s was killed or finished with nothing to land. %s", task, red.PR, note)))
 	}
 	if err := c.label(); err != nil {
 		errs = append(errs, err)

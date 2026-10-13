@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/brandonapol/saddle/internal/store"
 )
 
 func TestAboveFollowsTheStackChain(t *testing.T) {
@@ -195,5 +197,54 @@ func TestScreenCIPollIgnoresCanceledAndRerunsInfraOnce(t *testing.T) {
 	fails = []CIRedFailure{{Check: "CI / ci", RunURL: runURL, LogTail: "--- FAIL: TestThing"}}
 	if got, _ = a.ScreenCIPoll(p, fails, rerun); !slices.Equal(got.Failed, []string{"CI / ci"}) {
 		t.Fatalf("real failure screened out: %+v", got)
+	}
+}
+
+// #466: a killed repair is reaped off its red layer, which is then due for
+// one more look on the same head; a repair that finished with nothing to
+// land counts as dead too, and a live one is left alone.
+func TestReapCIRepairsMakesKilledRepairDue(t *testing.T) {
+	t.Parallel()
+	a := trainSetup(t)
+	for _, id := range []string{"t2", "t3", "t4"} {
+		_, err := a.Spawn(SpawnReq{ID: id, Title: "repair " + id, Parent: OrchestratorID})
+		must(t, err)
+	}
+	must(t, a.Store.SetStatus("t2", store.Killed))
+	must(t, a.Store.SetStatus("t3", store.NoChange))
+	must(t, a.SetCIRed(CIRedState{
+		Red: []CIRedLayer{
+			{Task: "t1", Head: "abc", Repair: "t2"},
+			{Task: "t5", Head: "def", Repair: "t3"},
+			{Task: "t6", Head: "fed", Repair: "t4"},
+		},
+		Repairs: []CIRepairRecord{
+			{Task: "t1", Head: "abc", Repair: "t2", State: ciRepairSpawned},
+			{Task: "t5", Head: "old", Repair: "t3", State: ciRepairSpawned},
+			{Task: "t6", Head: "fed", Repair: "t4", State: ciRepairSpawned},
+		},
+	}))
+	reaped, err := a.ReapCIRepairs()
+	must(t, err)
+	if !slices.Equal(reaped, []string{"t1", "t5"}) {
+		t.Fatalf("reaped %v, want t1 and t5", reaped)
+	}
+	s, err := a.CIRed()
+	must(t, err)
+	if s.Red[0].Repair != "" || s.Red[1].Repair != "" || s.Red[2].Repair != "t4" {
+		t.Fatalf("red = %+v, want dead repairs cleared and live t4 kept", s.Red)
+	}
+	// t5's repair was spawned for an older head, which a new head's red
+	// cycle handles already.
+	if due := a.CIRepairsDue(); !slices.Equal(due, []string{"t1"}) {
+		t.Fatalf("due = %v, want t1", due)
+	}
+	s.Repairs[0].Retried = true
+	must(t, a.SetCIRed(s))
+	if due := a.CIRepairsDue(); len(due) != 0 {
+		t.Fatalf("due = %v after the second look", due)
+	}
+	if again, err := a.ReapCIRepairs(); err != nil || len(again) != 0 {
+		t.Fatalf("reaped again: %v, %v", again, err)
 	}
 }

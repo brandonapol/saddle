@@ -84,6 +84,7 @@ Each row says how it is handled, linking the code or issue, or says **gap**.
 | A CI repair goes red itself (repair-of-repair recursion) | `repair_of_repair` | history weighting | Refused and escalated: `internal/app/historyscan.go` (#405) | |
 | Stacks stuck with nobody fixing them, restack loops | `stuck_stack` | history weighting | Stuck-stack card: `internal/app/stuckstack.go`; restack journal: `internal/app/restack_journal.go`, [docs/restack-recovery.md](restack-recovery.md) | |
 | A branch fails to land too often | `train_escalated` | history weighting | Escalated after `[train] max_attempts`: `internal/app/train.go` | |
+| A CI repair is killed or blocked by a done task's claim, leaving its red layer held forever | `ci_red` | none | Reaped and respawned for the same head; a repair may write under a done task's claim: `internal/app/cired_repair.go`, `internal/app/claims.go` (#466) | |
 | CI still red after the repair attempts | `ci_red` | history weighting | `internal/app/cired_repair.go`, blocker issue (#407) | |
 | Respawning killed tasks (#337) | | none | none | **gap** |
 | state.db lock or corruption; schema downgrade (#137) | | `saddle doctor` (state.db) | `internal/store/schema.go`, `internal/app/lock.go` | |
