@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"io"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,15 +23,41 @@ import (
 // Idle, not just quiet on the clock (#249): on a loaded machine the second
 // half of ESC <key> can sit unread in the terminal for longer than the wait
 // while Bubble Tea's reader waits for a CPU. The hold lasts until no unread
-// input has been seen for a whole wait. Once the reader has the bytes it
-// hands their keys over at once, so they reach Update ahead of the flush.
+// input has been seen for a whole wait.
+//
+// Read is not the end of it (#459): once Bubble Tea's reader has the bytes
+// the terminal no longer counts them, but the reader still has to parse
+// them and hand the keys over, and it can wait for a CPU there too. With
+// input set, keys the reader holds count as pending as well.
 type mouseScrub struct {
 	state   int
 	wait    time.Duration // how long a bare esc waits for a rune to join; 0 sends it at once
 	held    *tea.KeyMsg   // the esc or alt+[ waiting for the next key
 	seq     int           // tells a stale timer from the current one
 	pending func() bool   // input has arrived but not been read; nil if unknown
+	input   *inputWatch   // the reader Bubble Tea reads input from; nil if unknown
 }
+
+// inputWatch wraps the reader Bubble Tea reads input from. Bubble Tea reads,
+// queues every key it parsed for Update, and only then reads again. So
+// while it is not inside Read it may hold keys not yet queued, and a flush
+// queued then would overtake them.
+type inputWatch struct {
+	r       io.Reader
+	started atomic.Bool
+	reading atomic.Bool
+}
+
+func (w *inputWatch) Read(p []byte) (int, error) {
+	w.started.Store(true)
+	w.reading.Store(true)
+	n, err := w.r.Read(p)
+	w.reading.Store(false)
+	return n, err
+}
+
+// unfed reports keys read but not yet queued for Update.
+func (w *inputWatch) unfed() bool { return w.started.Load() && !w.reading.Load() }
 
 // escWait is how long the TUI holds a bare esc, as Bubble Tea v2 and vim's
 // esckeys do: long enough for the second read of a split ESC <key>, too
@@ -119,7 +147,7 @@ func (s *mouseScrub) feed(k tea.KeyMsg) ([]tea.KeyMsg, tea.Cmd) {
 func (s *mouseScrub) hold(k tea.KeyMsg) tea.Cmd {
 	s.held = &k
 	s.seq++
-	seq, wait, pending := s.seq, s.wait, s.pending
+	seq, wait, pending := s.seq, s.wait, s.unseen()
 	if wait == 0 {
 		wait = escWait
 	}
@@ -127,6 +155,16 @@ func (s *mouseScrub) hold(k tea.KeyMsg) tea.Cmd {
 		idleWait(wait, maxHold, pending)
 		return escFlushMsg{seq}
 	}
+}
+
+// unseen reports input that has arrived but not reached Update: unread in
+// the terminal or held by Bubble Tea's reader. Nil if neither can be seen.
+func (s *mouseScrub) unseen() func() bool {
+	tty, in := s.pending, s.input
+	if in == nil {
+		return tty
+	}
+	return func() bool { return in.unfed() || (tty != nil && tty()) }
 }
 
 // idleWait returns once pending has been false for wait, polling it, or
