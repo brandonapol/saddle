@@ -19,7 +19,8 @@ import (
 // When the banner clears claude is back, the parked worker finishes, and
 // the next spawn runs claude again.
 func TestJourneyAdapterRotation(t *testing.T) {
-	w := world(t, Options{})
+	// The running worker parks here; handing it off has its own journey (#481).
+	w := world(t, Options{Tables: "[adapters]\nfailover = \"park\"\n"})
 	args := filepath.Join(w.Root, "grok-args")
 	fake := "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > " + args + "\nexec sleep 600\n"
 	must(t, os.WriteFile(filepath.Join(w.Bin, "grok"), []byte(fake), 0o755))
