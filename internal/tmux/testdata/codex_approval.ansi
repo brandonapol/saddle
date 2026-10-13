@@ -1,0 +1,40 @@
+[2m│ [0mSee [4m[38;5;6m]8;;https://github.com/openai/codex\https://github.com/openai/codex[0m]8;;\ for installation options.[2m │[0m
+[2m│                                                               │[0m
+[2m│ [0mSee full release notes:[2m                                       │[0m
+[2m│ [0;4m[38;5;6m]8;;https://github.com/openai/codex/releases/latest\https://github.com/openai/codex/releases/latest[0;2m]8;;\               │[0m
+[2m╰───────────────────────────────────────────────────────────────╯[0m
+
+[2m╭────────────────────────────────────────────────────────╮[0m
+[2m│ >_ [0;1mOpenAI Codex[0;2m (v0.154.0)                             │[0m
+[2m│                                                        │[0m
+[2m│ model:     [0mgpt-5.6-sol high[2m   [0m[38;5;6m/model[2m[39m to change         │[0m
+[2m│ directory: [0m~/code/proj[2m │[0m
+[2m╰────────────────────────────────────────────────────────╯[0m
+
+  [1mTip:[0m You can run any shell command from Codex using [38;5;6m![39m (e.g. [38;5;6m!ls[39m)
+
+[2m• [0mYou have 1 usage limit reset available. Run /usage to use one.
+
+
+[1;2m› [0mCreate a file named bye.txt containing hi, using the shell command: echo hi > bye.txt (request escalation if the
+  sandbox blocks it)
+
+
+[2m• [0mI’ll run the exact shell command in the workspace and verify the file contents.
+
+[1m[38;2;128;128;128m•[0m [1mRunning[0m [38;2;137;180;250mecho[38;2;205;214;244m hi [38;2;148;226;213m>[38;2;205;214;244m bye.txt[39m
+
+
+  [1mWould you like to run the following command?[0m
+
+  Environment: [1mlocal[0m
+
+  Reason: [3mThe workspace is read-only in the sandbox. Allow the requested command to create bye.txt containing hi?[0m
+
+  $ [38;2;137;180;250mecho[38;2;205;214;244m hi [38;2;148;226;213m>[38;2;205;214;244m bye.txt[39m
+
+[1m[38;5;6m› 1. Yes, proceed (y)[0m
+  2. Yes, and don't ask again for commands that start with `echo hi > bye.txt` ([2mp[0m)
+  3. No, and tell Codex what to do differently ([2mesc[0m)
+
+  [2mPress enter to confirm or esc to cancel
