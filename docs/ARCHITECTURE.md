@@ -261,12 +261,22 @@ second opinion; codex for well-specified or mechanical edits whose claims no
 one else touches (it has no hooks). `status` shows each adapter's `provider`,
 `hooks` and, while it is out, `out_of_quota_until`.
 
-A spawn with no `adapter` uses the session's harness (`saddle up
-claude|grok|codex`, or `harness`). That holds for every path saddle spawns on
-its own: CI fix and CI-red repair tasks, stuck-task repairs, autopilot
-top-ups, and resumes of tasks whose run dir recorded no adapter. A model from
-another provider's family (a ticket's `opus`, a repair's `sonnet`) falls back
-to the chosen adapter's default.
+A spawn with no `adapter` is picked by `[adapters] policy` (#481,
+`internal/app/adapterpick.go`). Only adapters with quota that can run here
+count. A spawn's `kind` (docs, mechanical, design…) puts adapters whose
+`[adapters.<name>] kinds` list it first; a task with claims then prefers
+adapters that run hooks. Then the policy decides: `order` (the default) takes
+the session's harness (`saddle up claude|grok|codex`, or `harness`) and then
+`[adapters] order`, and never trades the harness for the hooks preference;
+`cost` takes the lowest `[adapters.<name>] cost` (unset is 1); `quota` takes
+the most of its five-hour `budget` left, from the metered usage (no budget
+means no known limit). `status` shows `adapter_policy` and each adapter's
+`pick_rank` and `pick` (why), and `saddle status` prints the order as "next
+spawn:". That holds for every path saddle spawns on its own: CI fix and
+CI-red repair tasks, stuck-task repairs, autopilot top-ups, and resumes of
+tasks whose run dir recorded no adapter. A model from another provider's
+family (a ticket's `opus`, a repair's `sonnet`) falls back to the chosen
+adapter's default.
 
 When a worker's screen shows a usage-limit banner (Claude Code's, Codex's
 "usage limit" or an OpenAI/Grok out-of-quota error; `usage.DetectLimitBanner`),
@@ -276,11 +286,29 @@ The state lives in `.saddle/adapters-exhausted.json`. Spawns that would use
 that adapter go to the next one in `[adapters] order` (default `["claude",
 "grok", "codex"]`) that has quota and can run here; an explicit `adapter=` on
 an exhausted one is refused unless forced. A lost or paused task whose adapter
-is out resumes on the next one with its brief. Tasks already running on it
-are never killed: they park and continue on their own after the reset. When
-the reset passes, or a parked worker's banner clears, the adapter is restored.
-With every adapter out, spawn returns a paused-launch error (autopilot and
-infinite mode sleep until the first reset).
+is out resumes on the next one with its brief. A task running on it when it
+runs out is handed off (#481, `internal/app/handoff.go`, `[adapters]
+failover = "handoff"`, the default): saddle snapshots its work, closes its
+window and launches the best adapter with quota (a hooked one when it claims
+paths) in the same worktree and branch, its prompt plus a note that it is
+taking over and should start from `git status` and the branch's log. The
+orchestrator gets a digest line. It parks as before (and continues after the
+reset) with `failover = "park"`, when the reset is within `handoff_wait`
+(15m), or when no other adapter has quota. When the reset passes, or a
+parked worker's banner clears, the adapter is restored. With every adapter
+out, spawn returns a paused-launch error (autopilot and infinite mode sleep
+until the first reset).
+
+The TUI's orchestrator fails over too (#481, `internal/app/orchfailover.go`).
+When a turn fails, retries or exits on a quota error, saddle marks its
+adapter out and restarts the orchestrator on the next adapter with a headless
+session (claude or grok; codex has none), recorded in
+`.saddle/orchestrator-adapter`. A conversation can't move across CLIs, so
+the new session's first message is a state summary: the headline, the live
+tasks with their adapters, the last two hours' catch-up and the end of the
+old conversation. Its brief, status identity and transcript follow it. The
+next `saddle up` goes back to the default once that has quota again. The
+plugin orchestrator is the owner's own session, which saddle can't restart.
 
 Each rotation notifies the owner once: a footer banner in the TUI, an action
 notice to the orchestrator naming who ran out, who takes over and when it

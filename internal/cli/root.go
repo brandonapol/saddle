@@ -411,6 +411,7 @@ func statusCmd() *cobra.Command {
 				return err
 			}
 			writeAdapters(cmd.OutOrStdout(), st.Adapters)
+			writeAdapterPicks(cmd.OutOrStdout(), st.Adapters, st.AdapterPolicy)
 			if st.HeavyRuns != nil {
 				writeHeavyRuns(cmd.OutOrStdout(), *st.HeavyRuns)
 			}
@@ -432,6 +433,26 @@ func writeAdapters(out io.Writer, ss []agent.Status) {
 		if !s.OK {
 			line += fmt.Sprintf("; %s unavailable (%s)", s.Name, s.Reason)
 		}
+	}
+	fmt.Fprintln(out, line)
+}
+
+// writeAdapterPicks prints the order the next spawn without adapter= tries
+// the adapters in, with why, and the policy behind it (#481).
+func writeAdapterPicks(out io.Writer, ss []agent.Status, policy string) {
+	ranked := slices.Clone(ss)
+	ranked = slices.DeleteFunc(ranked, func(s agent.Status) bool { return s.PickRank == 0 })
+	if len(ranked) == 0 {
+		return
+	}
+	slices.SortFunc(ranked, func(x, y agent.Status) int { return x.PickRank - y.PickRank })
+	var picks []string
+	for _, s := range ranked {
+		picks = append(picks, fmt.Sprintf("%s (%s)", s.Name, s.Pick))
+	}
+	line := "next spawn: " + strings.Join(picks, ", ")
+	if policy != "" {
+		line += "; " + policy
 	}
 	fmt.Fprintln(out, line)
 }
