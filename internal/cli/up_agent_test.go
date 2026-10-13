@@ -73,3 +73,17 @@ func TestWriteAdapters(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// #481: status says which adapter the next spawn takes, in order and why,
+// and the policy behind it; ones that can't be picked are left out.
+func TestWriteAdapterPicks(t *testing.T) {
+	var b strings.Builder
+	writeAdapterPicks(&b, []agent.Status{
+		{Name: "claude", OK: true, OutOfQuotaUntil: "3pm", Pick: "out of quota until 3pm"},
+		{Name: "codex", OK: true, PickRank: 2, Pick: "next in order"},
+		{Name: "grok", OK: true, PickRank: 1, Pick: "next in order"},
+	}, "policy order, failover handoff")
+	if got := b.String(); got != "next spawn: grok (next in order), codex (next in order); policy order, failover handoff\n" {
+		t.Fatalf("got %q", got)
+	}
+}

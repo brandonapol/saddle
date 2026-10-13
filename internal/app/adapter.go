@@ -27,11 +27,16 @@ func (a *App) adapterCmd(name string) (string, []string) {
 }
 
 // Adapters lists which adapters can run on this machine (#182).
-// Each carries its provider, whether it runs hooks, and when it is out of
-// quota, its reset (#321).
+// Each carries its provider, whether it runs hooks, when it is out of
+// quota, its reset (#321), and its rank for the next pick (#481).
 func (a *App) Adapters() []agent.Status {
 	ss := a.adapterStatus()
-	ex := a.ExhaustedAdapters(time.Now())
+	now := time.Now()
+	ex := a.ExhaustedAdapters(now)
+	picks := map[string]AdapterChoice{}
+	for _, c := range a.rankAdapters(pickReq{def: a.Cfg.Harness}, ex, now) {
+		picks[c.Name] = c
+	}
 	for i := range ss {
 		s := &ss[i]
 		if s.Provider == "" {
@@ -42,6 +47,9 @@ func (a *App) Adapters() []agent.Status {
 		}
 		if e, out := ex[s.Name]; out {
 			s.OutOfQuotaUntil = e.when()
+		}
+		if c, ok := picks[s.Name]; ok {
+			s.PickRank, s.Pick = c.Rank, c.Why
 		}
 	}
 	return ss

@@ -747,3 +747,39 @@ func TestTmpConfig(t *testing.T) {
 		}
 	}
 }
+
+// #481: [adapters] policy, failover and handoff_wait set how spawns pick an
+// adapter and what a worker does when its adapter runs out, and each
+// [adapters.<name>] table carries its cost, budget and task kinds.
+func TestAdapterPolicy(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := cfg.AdapterPolicy; p.Pick != PickOrder || p.Failover != FailoverHandoff || p.HandoffWait != 15*time.Minute {
+		t.Fatalf("default policy = %+v", p)
+	}
+	root := t.TempDir()
+	writeConfig(t, root, "[adapters]\norder = [\"codex\", \"claude\"]\npolicy = \"cost\"\nfailover = \"park\"\nhandoff_wait = \"1h\"\n"+
+		"[adapters.codex]\ncost = 0.5\nbudget = 2000000\nkinds = [\"Docs\", \"mechanical\"]\n[adapters.claude]\ncost = 3\n")
+	if cfg, err = Load(root); err != nil {
+		t.Fatal(err)
+	}
+	if p := cfg.AdapterPolicy; p.Pick != PickCost || p.Failover != FailoverPark || p.HandoffWait != time.Hour {
+		t.Fatalf("policy = %+v", p)
+	}
+	if got := strings.Join(cfg.AdapterOrder, ","); got != "codex,claude" {
+		t.Fatalf("order = %s", got)
+	}
+	c := cfg.Adapters["codex"]
+	if c.Cost != 0.5 || c.Budget != 2000000 || strings.Join(c.Kinds, ",") != "docs,mechanical" || cfg.Adapters["claude"].Cost != 3 {
+		t.Fatalf("adapters = %+v", cfg.Adapters)
+	}
+	for _, bad := range []string{"[adapters]\npolicy = \"cheapest\"\n", "[adapters]\nfailover = \"wait\"\n", "[adapters.codex]\ncost = \"low\"\n", "[adapters.codex]\nkinds = \"docs\"\n"} {
+		writeConfig(t, root, bad)
+		if _, err := Load(root); err == nil {
+			t.Errorf("%q loaded", bad)
+		}
+	}
+}

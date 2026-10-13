@@ -191,9 +191,16 @@ func (a *App) workersBrief() string {
 	for _, p := range agent.Providers() {
 		b += fmt.Sprintf("  - %s = %s (%s): %s.\n", p.Vendor, p.Adapter, p.Models, p.Strengths)
 	}
-	b += "  Weigh the task (hard design or refactor, review, a cheap mechanical edit), claims (hooked adapters for tasks next to other claimed work) and quota: status shows each adapter's provider, hooks and out_of_quota_until.\n"
-	b += fmt.Sprintf("- When an adapter runs out of quota, saddle marks it out until its reset and sends spawns that would use it to the next one in [adapters] order (%s) that can run here. You get a notice naming who ran out, who took over and when it resets; tell the owner. Tasks already on it park and continue on their own; don't kill them. With every adapter out, spawn refuses until the first reset.",
+	b += "  Weigh the task (hard design or refactor, review, a cheap mechanical edit), claims (hooked adapters for tasks next to other claimed work) and quota: status shows each adapter's provider, hooks, out_of_quota_until and pick_rank.\n"
+	b += fmt.Sprintf("- Spawns without adapter= are picked by [adapters] policy (%s): pass kind=<docs, mechanical, design…> and an adapter whose [adapters.<name>] kinds list it goes first; a task with claims prefers hooked adapters. status shows adapter_policy and why each adapter ranks where it does.\n", a.AdapterPolicy())
+	b += fmt.Sprintf("- When an adapter runs out of quota, saddle marks it out until its reset and sends spawns that would use it to the next one by that policy (order: %s) that can run here. You get a notice naming who ran out, who took over and when it resets; tell the owner. ",
 		strings.Join(a.Cfg.AdapterOrder, ", "))
+	if a.Cfg.AdapterPolicy.Failover == config.FailoverHandoff {
+		b += "A worker that runs out mid-task is handed off: saddle relaunches it on the next adapter with quota in the same worktree and branch, and you get a notice; it parks instead when its reset is close or no adapter has quota. Don't kill it."
+	} else {
+		b += "Tasks already on it park and continue after the reset; don't kill them."
+	}
+	b += " With every adapter out, spawn refuses until the first reset."
 	return b
 }
 

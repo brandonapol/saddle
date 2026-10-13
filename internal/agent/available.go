@@ -19,6 +19,10 @@ type Status struct {
 	Hooks bool `json:"hooks"`
 	// OutOfQuotaUntil is set while the adapter is out of quota: its reset.
 	OutOfQuotaUntil string `json:"out_of_quota_until,omitempty"`
+	// PickRank orders the adapters for the next spawn without adapter=:
+	// 1 is picked first, 0 can't be picked now (#481). Pick says why.
+	PickRank int    `json:"pick_rank,omitempty"`
+	Pick     string `json:"pick,omitempty"`
 }
 
 // Provider describes who serves an adapter's models and what it is good

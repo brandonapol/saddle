@@ -14,6 +14,8 @@ Gemini is listed where it shares codex's hookless path.
 | Quota banner (`DetectLimitBanner`) | yes | xAI credit and spend-cap errors (fixed) | absolute, dated and relative resets (fixed) |
 | `out_of_quota_until` | banner reset | banner reset, else 1h | banner reset, including "in 2 hours" (fixed) |
 | After the quota reset | continues on its own | saddle types a continue line (fixed) | saddle types a continue line (fixed) |
+| Out of quota mid-task (#481) | handed to the next adapter in its worktree, or parks (`[adapters] failover`) | same | same |
+| Orchestrator out of quota (#481) | TUI moves it to grok with a state summary | TUI moves it to claude | n/a: no headless session |
 | Orchestrator context meter | transcript | usage.json snapshot | n/a: `saddle up codex` runs the orchestrator on Claude Code |
 | Auto-compact | `/compact <keep>` | none: told to summarize (#488) | `/compact` |
 | Hung gates, orphaned done | adapter-agnostic | same | same; the orphan nudge types notices in whole |

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/claims"
@@ -151,7 +152,10 @@ type SpawnReq struct {
 	After []string
 	// Adapter is the agent to launch: claude (the default), codex or grok.
 	Adapter string
-	Force   bool // ignore claim conflicts, the concurrency cap and paused launches
+	// Kind is the task's kind (docs, mechanical, design…). Without Adapter
+	// it picks an adapter whose [adapters.<name>] kinds list it (#481).
+	Kind  string
+	Force bool // ignore claim conflicts, the concurrency cap and paused launches
 	// Confirm goes ahead when every claim covers work landed or queued tasks
 	// already changed. Without it such a spawn returns ErrNeedsConfirm.
 	Confirm bool
@@ -214,7 +218,7 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	}
 	// No adapter means the session default (#150), rotated past adapters out
 	// of quota (#321).
-	picked, rotated, err := a.spawnAdapter(r.Adapter, r.Force)
+	picked, rotated, why, err := a.spawnAdapter(r.Adapter, r.Kind, len(r.Claims) > 0, r.Force)
 	if err != nil {
 		return t, err
 	}
@@ -321,7 +325,7 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 		return t, a.spawnFailed(t, true, hadBranch, fmt.Errorf("launch: %w", err))
 	}
 	t.Window = win
-	a.Store.Event(id, "spawn", fmt.Sprintf("parent=%s adapter=%s model=%s claims=%s%s", r.Parent, ad.Name(), model, strings.Join(r.Claims, ","), hint))
+	a.Store.Event(id, "spawn", fmt.Sprintf("parent=%s adapter=%s (%s) model=%s claims=%s%s", r.Parent, ad.Name(), why, model, strings.Join(r.Claims, ","), hint))
 	if rotated != "" {
 		if err := a.rotatedTask(t, rotated, ad, r.Claims); err != nil {
 			return t, err
@@ -497,6 +501,7 @@ func (a *App) Orchestrator() (agent.Launch, string, error) {
 	if err := errors.Join(a.Store.SetStatus(t.ID, store.Running), a.Store.SetField(t.ID, "window", "")); err != nil {
 		return agent.Launch{}, "", err
 	}
+	a.clearStaleOverride(time.Now())
 	l := a.newLaunch(t, a.Root, a.orchModel(), a.orchestratorBrief(), "", agent.OrchestratorAllow(), agent.OrchestratorDeny())
 	if err := a.applyAdvisor(&l); err != nil {
 		return agent.Launch{}, "", err
@@ -510,7 +515,7 @@ func (a *App) Orchestrator() (agent.Launch, string, error) {
 	return l, resume, nil
 }
 
-// newLaunch fills the CLI-specific fields from config. Workers pass nil allow
+// newLaunch fills the orchestrator's CLI-specific fields from config. Workers pass nil allow
 // so the Claude adapter uses its edit allow-list; grok uses its permission mode.
 func (a *App) newLaunch(t store.Task, dir, model, brief, prompt string, allow, deny []string) agent.Launch {
 	l := agent.Launch{
@@ -518,7 +523,7 @@ func (a *App) newLaunch(t store.Task, dir, model, brief, prompt string, allow, d
 		RunDir: a.stateDir("run", t.ID), Brief: brief, Prompt: prompt, Allow: allow, Deny: deny,
 		ShimDir: a.WriteShims(),
 	}
-	if a.Cfg.Harness == config.HarnessGrok {
+	if a.orchestratorAgent() == usage.Grok {
 		l.Kind = agent.KindGrok
 		l.Cmd, l.Args = a.adapterCmd(usage.Grok)
 		if l.Cmd == "" {
@@ -544,7 +549,7 @@ func (a *App) workerModel() string {
 }
 
 func (a *App) orchModel() string {
-	if a.Cfg.Harness == config.HarnessGrok {
+	if a.orchestratorAgent() == usage.Grok {
 		return a.Cfg.Grok.OrchestratorModel
 	}
 	return a.Cfg.Claude.OrchestratorModel
