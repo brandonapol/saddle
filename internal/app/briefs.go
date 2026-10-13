@@ -202,6 +202,9 @@ func (a *App) workersBrief() string {
 		b += "Tasks already on it park and continue after the reset; don't kill them."
 	}
 	b += " With every adapter out, spawn refuses until the first reset."
+	if len(a.Cfg.Fallback) > 0 {
+		b += " [fallback] chains route by model too: a model with a chain (status fallback) is marked out on its own, its adapter's other models stay usable, and its spawns and workers go down its chain; status shows models_out_of_quota per adapter."
+	}
 	return b
 }
 
