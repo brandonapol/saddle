@@ -46,6 +46,7 @@ const (
 	ciRepairSpawned = "spawned" // the repair task is working, or landed and not yet folded
 	ciRepairFolded  = "folded"  // its commits joined the red layer
 	ciRepairFailed  = "failed"  // it could not be folded into the red layer
+	ciRepairKilled  = "killed"  // it was killed or finished with nothing to land (#466)
 )
 
 // CIRepairRecord is one repair spawned for a red layer (see cired_repair.go).
@@ -54,8 +55,11 @@ type CIRepairRecord struct {
 	Head   string `json:"head"`   // the red head it was spawned for
 	Repair string `json:"repair"` // the repair task
 	Fixer  string `json:"fixer,omitempty"`
-	State  string `json:"state"` // spawned, folded or failed
+	State  string `json:"state"` // spawned, folded, failed or killed
 	Note   string `json:"note,omitempty"`
+	// Retried is set on a killed repair once its red head was looked at
+	// again, whether or not that spawned another.
+	Retried bool `json:"retried,omitempty"`
 }
 
 // CIRedState is what the ci-red watcher knows, saved under .saddle.

@@ -76,12 +76,13 @@ func (a *App) CheckWrite(task, abs string) Decision {
 			return Decision{Reason: fmt.Sprintf("%s is a serial file (%s) owned by the merge train. Don't edit it; it is regenerated when your branch lands. If you truly need a change, say so in your done summary.", rel, g)}
 		}
 	}
-	var reason string
+	var reason, owner string
 	_, err = a.Store.Claim(task, func(all map[string][]string) ([]string, error) {
 		if _, ok := claims.Covering(all[task], rel); ok {
 			return nil, nil
 		}
-		if owner, glob := claims.Owner(all, task, rel); owner != "" {
+		var glob string
+		if owner, glob = claims.Owner(all, task, rel); owner != "" {
 			reason = a.denyReason(rel, owner, glob)
 			return nil, nil
 		}
@@ -90,7 +91,7 @@ func (a *App) CheckWrite(task, abs string) Decision {
 	if err != nil {
 		return Decision{Allow: true} // fail open
 	}
-	if reason != "" && a.ciRepairMayWrite(task, rel) {
+	if reason != "" && a.ciRepairMayWrite(task, rel, owner) {
 		a.Store.Event(task, "ci_repair_carveout", rel)
 		return Decision{Allow: true}
 	}
@@ -110,16 +111,25 @@ func (a *App) denyReason(rel, owner, glob string) string {
 		rel, owner, ot.Title, glob, owner, owner, rel, owner, rel, glob, owner)
 }
 
-// ciRepairMayWrite reports whether task is a live CI repair and rel is one of
-// the files its red layer landed. Those files already merged, so a running
-// task's claim over them must not block the repair (#292).
-func (a *App) ciRepairMayWrite(task, rel string) bool {
+// ciRepairMayWrite reports whether task is a live CI repair that may write
+// rel over owner's claim. The files its red layer landed already merged, so
+// a running task's claim over them must not block the repair (#292). A done
+// task's claims only guard its queued work, which red CI holds behind the
+// repair anyway, so they block it nowhere (#466): the train rebases what
+// overlaps when the hold lifts.
+func (a *App) ciRepairMayWrite(task, rel, owner string) bool {
 	s, err := a.CIRed()
 	if err != nil {
 		return false
 	}
 	for _, r := range s.Repairs {
-		if r.Repair == task && r.State == ciRepairSpawned && slices.Contains(a.layerFiles(r.Task), rel) {
+		if r.Repair != task || r.State != ciRepairSpawned {
+			continue
+		}
+		if o, err := a.Store.Task(owner); err == nil && o.Status == store.Done {
+			return true
+		}
+		if slices.Contains(a.layerFiles(r.Task), rel) {
 			return true
 		}
 	}

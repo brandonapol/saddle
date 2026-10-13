@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/brandonapol/saddle/internal/store"
 )
 
 // #292: task A claims dir/**, releases dir/f.go, and task B can then edit it.
@@ -104,5 +106,35 @@ func TestCIRepairCarveOutForLandedLayerFiles(t *testing.T) {
 	// Files outside the layer are still the holder's.
 	if d := a.CheckWrite(fix.ID, filepath.Join(fix.Worktree, "runq/other.go")); d.Allow || !strings.Contains(d.Reason, holder.ID) {
 		t.Fatalf("repair allowed outside its layer: %+v", d)
+	}
+}
+
+// #466: a done task's claims guard queued work against conflicts, not a
+// CI repair: the repair may write under them anywhere, while a running
+// task's claim still blocks it outside the red layer.
+func TestCIRepairMayWriteUnderDoneTaskClaim(t *testing.T) {
+	t.Parallel()
+	a := trainSetup(t)
+	red := landTask(t, a, "t1", "shim", map[string]string{"runq/shim.go": "package runq\n"})
+	done, err := a.Spawn(SpawnReq{ID: "t2", Title: "runq follow-up", Claims: []string{"runq/**"}, Confirm: true})
+	must(t, err)
+	must(t, a.Store.SetStatus(done.ID, store.Done))
+	running, err := a.Spawn(SpawnReq{ID: "t3", Title: "docs rework", Claims: []string{"docs/**"}})
+	must(t, err)
+	fix, err := a.Spawn(SpawnReq{ID: "t4", Title: ciFixTitle(red), Parent: OrchestratorID})
+	must(t, err)
+	f := filepath.Join(fix.Worktree, "runq/shim_test.go")
+	if d := a.CheckWrite(fix.ID, f); d.Allow {
+		t.Fatal("non-repair task allowed under the done task's claim")
+	}
+	must(t, a.SetCIRed(CIRedState{
+		Red:     []CIRedLayer{{Task: red.ID, Head: "abc", Checks: []string{"CI / test"}, Repair: fix.ID}},
+		Repairs: []CIRepairRecord{{Task: red.ID, Head: "abc", Repair: fix.ID, State: ciRepairSpawned}},
+	}))
+	if d := a.CheckWrite(fix.ID, f); !d.Allow {
+		t.Fatalf("CI repair denied a file only done %s claims: %s", done.ID, d.Reason)
+	}
+	if d := a.CheckWrite(fix.ID, filepath.Join(fix.Worktree, "docs/x.md")); d.Allow || !strings.Contains(d.Reason, running.ID) {
+		t.Fatalf("repair allowed under running %s's claim: %+v", running.ID, d)
 	}
 }
