@@ -28,7 +28,7 @@ type cell struct {
 // ReadInput classifies the last prompt line ("> text", "❯ text", Codex's
 // "› text", with or without a surrounding box border) of a captured pane. A capture with SGR
 // escapes (capture-pane -e) tells a faint or grey suggestion from typed
-// text; a plain capture can only spot the "Try …" placeholder, so any other
+// text; a plain capture can only spot the known placeholders, so any other
 // text counts as a draft.
 func ReadInput(pane string) Input {
 	styled := strings.Contains(pane, "\x1b[")
@@ -43,7 +43,7 @@ func ReadInput(pane string) Input {
 			return InputEmpty
 		}
 		if !styled {
-			if strings.HasPrefix(cellText(rest), "Try ") {
+			if placeholder(cellText(rest)) {
 				return InputGhost
 			}
 			return InputDraft
@@ -56,6 +56,16 @@ func ReadInput(pane string) Input {
 		return InputGhost
 	}
 	return InputEmpty
+}
+
+// placeholder reports whether a plain capture's input text is a hint the
+// CLI draws itself: Claude Code's "Try …" or one of Codex's (#488).
+func placeholder(text string) bool {
+	switch text {
+	case "Ask Codex to do anything", "Ask a follow-up question":
+		return true
+	}
+	return strings.HasPrefix(text, "Try ")
 }
 
 // promptGlyph reports whether r starts an agent's input line: Claude Code's

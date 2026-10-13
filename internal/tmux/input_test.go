@@ -187,3 +187,29 @@ func TestReadInputCodexComposer(t *testing.T) {
 		t.Error("saddle's own text sitting in codex's composer is not seen as unsubmitted")
 	}
 }
+
+// Real codex 0.154 and grok 1.0.50 panes (#488), read both styled and as a
+// plain capture. Codex's dim placeholder must stay a ghost without SGR
+// escapes too, or Deliver waits on it. A numbered approval menu behind a
+// composer glyph reads as a draft, so nothing is typed into it.
+func TestReadInputCodexGrokFixtures(t *testing.T) {
+	for name, want := range map[string]Input{
+		"codex_placeholder": InputGhost,
+		"codex_idle":        InputGhost,
+		"codex_working":     InputGhost,
+		"codex_draft":       InputDraft,
+		"codex_approval":    InputDraft,
+		"grok_empty":        InputEmpty,
+		"grok_idle":         InputEmpty,
+		"grok_working":      InputEmpty,
+		"grok_draft":        InputDraft,
+	} {
+		pane := fixture(t, name)
+		if got := ReadInput(pane); got != want {
+			t.Errorf("ReadInput(%s) = %v, want %v", name, got, want)
+		}
+		if got := ReadInput(StripANSI(pane)); got != want {
+			t.Errorf("ReadInput(plain %s) = %v, want %v", name, got, want)
+		}
+	}
+}
