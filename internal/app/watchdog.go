@@ -22,11 +22,12 @@ import (
 
 // Root causes, most fundamental first: Diagnose names the first that holds.
 const (
-	CauseGHAuth   = "gh-auth"  // gh can't reach GitHub: nothing opens or merges
-	CauseQuota    = "quota"    // every adapter is out of quota: nothing starts
-	CausePrompts  = "prompts"  // every live worker sits on a prompt
-	CauseOverload = "overload" // the machine is too loaded to make headway
-	CauseUnknown  = "unknown"  // none of the above
+	CauseGHAuth   = "gh-auth"   // gh can't reach GitHub: nothing opens or merges
+	CauseQuota    = "quota"     // every adapter is out of quota: nothing starts
+	CausePrompts  = "prompts"   // every live worker sits on a prompt
+	CauseHungGate = "hung-gate" // a gate or test runs far past its own timeout
+	CauseOverload = "overload"  // the machine is too loaded to make headway
+	CauseUnknown  = "unknown"   // none of the above
 )
 
 // WatchStatus is what the watchdog looks at.
@@ -38,6 +39,7 @@ type WatchStatus struct {
 	PromptBlocked int            // live workers sitting on a prompt
 	Adapters      []agent.Status // which adapters run, and their quota
 	GHAuth        error          // gh auth status; nil when fine
+	Hung          []HungGate     // gate and test processes far past their timeout
 	Load1         float64        // the 1-minute load average
 	CPUs          int
 }
@@ -69,10 +71,14 @@ func Diagnose(s WatchStatus) RootCause {
 	if s.Live > 0 && s.PromptBlocked >= s.Live {
 		return RootCause{CausePrompts, fmt.Sprintf("all %d live workers sit on a prompt nobody answered.", s.Live), "answer the prompts in the needs-you band"}
 	}
+	// A wedged gate loads the machine too, so it outranks overload (#432).
+	if len(s.Hung) > 0 {
+		return hungGateCause(s.Hung)
+	}
 	if s.CPUs > 0 && s.Load1 > 2*float64(s.CPUs) {
 		return RootCause{CauseOverload, fmt.Sprintf("the machine is overloaded (load %.0f on %d CPUs), so gates and agents crawl.", s.Load1, s.CPUs), "lower [concurrency] or stop other heavy jobs"}
 	}
-	return RootCause{CauseUnknown, "work waits but nothing moved, and saddle sees no quota, auth, prompt or load problem.", "saddle status, then peek at the oldest open task"}
+	return RootCause{CauseUnknown, "work waits but nothing moved, and saddle sees no quota, auth, prompt, hung gate or load problem.", "saddle status, then peek at the oldest open task"}
 }
 
 // watchdogState is what the watchdog last posted, saved under .saddle.
@@ -166,7 +172,7 @@ func noProgressCard(rc RootCause, idle time.Duration, st WatchStatus) DecisionCa
 var progressKinds = map[string]bool{"landed": true, "spawn": true, automerge.EventMerged: true, "pr_merged": true}
 
 // WatchdogTick runs the watchdog on this repo's status at now. The costly
-// checks (gh auth, adapters, load) run only in a stall.
+// checks (gh auth, adapters, processes, load) run only in a stall.
 func (a *App) WatchdogTick(now time.Time) (RootCause, bool, error) {
 	st, err := a.watchStatus()
 	if err != nil {
@@ -176,6 +182,9 @@ func (a *App) WatchdogTick(now time.Time) (RootCause, bool, error) {
 		st.Adapters = a.Adapters()
 		if _, err := gh(a.Root, "auth", "status"); err != nil {
 			st.GHAuth = err
+		}
+		if ts, err := a.Store.Tasks(); err == nil {
+			st.Hung = HungGates(psProcs, ts)
 		}
 		st.Load1, st.CPUs = loadAvg(), runtime.NumCPU()
 	}
