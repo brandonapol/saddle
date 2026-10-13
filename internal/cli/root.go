@@ -27,6 +27,7 @@ import (
 	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/remote"
 	"github.com/brandonapol/saddle/internal/sentinel"
+	"github.com/brandonapol/saddle/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -520,6 +521,10 @@ func doneCmd() *cobra.Command {
 			}
 			if err := a.Done(id, summary); err != nil {
 				return err
+			}
+			if t, err := a.Store.Task(id); err == nil && t.Status == store.NoChange {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s finished with no change: nothing to land\n", id)
+				return nil
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s queued\n", id)
 			return nil

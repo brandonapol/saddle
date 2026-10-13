@@ -760,6 +760,8 @@ func New(a *app.App, task string) *mcp.Server {
 // doneMessage is what the done tool tells the agent about job (#368).
 func doneMessage(job app.DoneJob) string {
 	switch {
+	case job.NoChange:
+		return "Your branch has no commits the integration branch lacks, so there is nothing to land. The task is finished with no change and the orchestrator was told. You can stop now."
 	case job.Joined:
 		return fmt.Sprintf("Done gate %s is already checking your branch; no second check started. You can stop now: a [saddle] notice says when it is queued, or why not.", job.ID)
 	case job.Running:

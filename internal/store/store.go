@@ -25,6 +25,9 @@ const (
 	Conflict = "conflict"  // returned from the train; agent must sync and resolve
 	Landed   = "landed"
 	Killed   = "killed"
+	// NoChange is a task that finished with nothing to land: its branch had
+	// no commits integration lacks (#452). It never enters the stack.
+	NoChange = "no_change"
 )
 
 // Train entry states.
@@ -71,7 +74,9 @@ type Task struct {
 }
 
 // Active reports whether the task still holds claims and can receive notices.
-func (t Task) Active() bool { return t.Status != Landed && t.Status != Killed }
+func (t Task) Active() bool {
+	return t.Status != Landed && t.Status != Killed && t.Status != NoChange
+}
 
 type TrainEntry struct {
 	Task     string
@@ -262,7 +267,7 @@ func (s *Store) NextID() (string, error) {
 // Claims returns every claim held by an active task, keyed by task id.
 func (s *Store) Claims() (map[string][]string, error) {
 	rows, err := s.db.Query(`SELECT c.task, c.glob FROM claims c JOIN tasks t ON t.id = c.task
-		WHERE t.status NOT IN (?, ?) ORDER BY c.task, c.glob`, Landed, Killed)
+		WHERE t.status NOT IN (?, ?, ?) ORDER BY c.task, c.glob`, Landed, Killed, NoChange)
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +292,7 @@ func (s *Store) Claim(task string, decide ClaimFunc) ([]string, error) {
 	var granted []string
 	err := s.tx(func(tx *sql.Tx) error {
 		rows, err := tx.Query(`SELECT c.task, c.glob FROM claims c JOIN tasks t ON t.id = c.task
-			WHERE t.status NOT IN (?, ?)`, Landed, Killed)
+			WHERE t.status NOT IN (?, ?, ?)`, Landed, Killed, NoChange)
 		if err != nil {
 			return err
 		}
@@ -450,6 +455,12 @@ func (s *Store) NarratorSpend(day string) (float64, error) {
 func (s *Store) SetNarratorSpend(day string, usd float64) error {
 	_, err := s.db.Exec(`INSERT INTO narrator_spend(day, usd) VALUES(?, ?)
 		ON CONFLICT(day) DO UPDATE SET usd = excluded.usd`, day, usd)
+	return err
+}
+
+// Dequeue takes task out of the merge train altogether: no entry, no note.
+func (s *Store) Dequeue(task string) error {
+	_, err := s.db.Exec(`DELETE FROM train WHERE task = ?`, task)
 	return err
 }
 

@@ -19,6 +19,9 @@ import (
 // MCP done tool uses DoneAsync.
 func (a *App) Done(task, summary string) error {
 	t, err := a.doneReady(task)
+	if errors.Is(err, errNothingToLand) {
+		return a.finishNoChange(t, summary, "its branch has no commits "+a.Cfg.Integration+" lacks")
+	}
 	if err != nil {
 		return err
 	}
@@ -38,6 +41,9 @@ type DoneJob struct {
 	// Joined is set when a gate for the task was already running, so this
 	// call started none.
 	Joined bool
+	// NoChange is set when the branch had nothing to land, so the task
+	// finished with no change instead of queueing (#452).
+	NoChange bool
 }
 
 // DoneAsync is done that doesn't hold its caller for the gate (#368). An
@@ -51,6 +57,9 @@ type DoneJob struct {
 // the repo hooks' lock, so they run one at a time across worktrees.
 func (a *App) DoneAsync(task, summary string) (DoneJob, error) {
 	t, err := a.doneReady(task)
+	if errors.Is(err, errNothingToLand) {
+		return DoneJob{NoChange: true}, a.Done(task, summary)
+	}
 	if err != nil {
 		return DoneJob{}, err
 	}
@@ -131,8 +140,13 @@ func takeDoneJob(state, task string) (lock *os.File, id string, ok bool, err err
 	return f, id, true, nil
 }
 
+// errNothingToLand is doneReady's answer for a branch with no work
+// integration lacks: done finishes it with no change (#452).
+var errNothingToLand = errors.New("branch has no commits beyond the integration branch; nothing to land")
+
 // doneReady checks t can be done at all: a worker with a clean worktree
-// and commits to land.
+// and commits to land. It returns errNothingToLand, with t, when every
+// commit is already on integration or there are none.
 func (a *App) doneReady(task string) (store.Task, error) {
 	t, err := a.Store.Task(task)
 	if err != nil {
@@ -151,14 +165,40 @@ func (a *App) doneReady(task string) (store.Task, error) {
 	if len(dirty) > 0 {
 		return t, fmt.Errorf("worktree has uncommitted changes; commit them first:\n%s", strings.Join(dirty, "\n"))
 	}
-	n, err := gitx.CommitsBetween(t.Worktree, a.Cfg.Integration, "HEAD")
+	// Commits whose patch integration already has (another task landed the
+	// same fix) don't count: the train would rebase them away (#452).
+	out, err := gitx.Run(t.Worktree, "rev-list", "--count", "--cherry-pick", "--right-only", a.Cfg.Integration+"...HEAD")
 	if err != nil {
 		return t, err
 	}
-	if n == 0 {
-		return t, errors.New("branch has no commits beyond the integration branch; nothing to land")
+	if strings.TrimSpace(out) == "0" {
+		return t, errNothingToLand
 	}
 	return t, nil
+}
+
+// finishNoChange ends t with nothing to land (#452): the issue was already
+// fixed, or its work reached integration another way. It never enters the
+// train or the PR stack, so no empty landing can flag the stack at risk.
+func (a *App) finishNoChange(t store.Task, summary, why string) error {
+	if summary != "" {
+		if err := a.Store.SetField(t.ID, "summary", summary); err != nil {
+			return err
+		}
+	}
+	if err := errors.Join(
+		a.Store.Dequeue(t.ID),
+		a.Store.Release(t.ID),
+		a.Store.SetStatus(t.ID, store.NoChange),
+	); err != nil {
+		return err
+	}
+	a.Store.Event(t.ID, "no_change", why)
+	msg := fmt.Sprintf("%s %q finished with no change: %s, so there is nothing to land. It is out of the merge train and the PR stack.", t.ID, t.Title, why)
+	if summary != "" {
+		msg += "\nSummary: " + summary
+	}
+	return a.Notify(OrchestratorID, store.NoticeAction, msg)
 }
 
 // finishDone marks t done and queues it, once its gate passed.
