@@ -43,8 +43,12 @@ func (a *App) prRange(from, to string) (commits, files []string) {
 }
 
 // stackPRBody is the body of l's stacked PR: its summary laid into the repo's
-// PR template, or the summary alone when the repo has none (#361).
+// PR template, or the summary alone when the repo has none (#361). A PR that
+// replaces one restack detached keeps that PR's body untouched (#338).
 func (a *App) stackPRBody(l landedTask) string {
+	if body := a.detachedPRBody(l); strings.TrimSpace(body) != "" {
+		return body
+	}
 	tmpl := a.prTemplate(l.To)
 	if strings.TrimSpace(tmpl) == "" {
 		return l.Summary
