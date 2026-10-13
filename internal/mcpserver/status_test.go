@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -181,4 +182,36 @@ func TestStatusShowsFailedSpawnReason(t *testing.T) {
 		return
 	}
 	t.Fatalf("%s missing from status", id)
+}
+
+// #480: status named each task's model but not its adapter, and codex and
+// grok workers on their CLI's default model showed neither.
+func TestStatusNamesEachTasksAdapter(t *testing.T) {
+	a, _ := stackSetup(t)
+	a.AdapterStatus = func() []agent.Status {
+		var out []agent.Status
+		for _, n := range agent.Names() {
+			out = append(out, agent.Status{Name: n, OK: true})
+		}
+		return out
+	}
+	cl, err := a.Spawn(app.SpawnReq{Title: "claude work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cx, err := a.Spawn(app.SpawnReq{Title: "codex work", Adapter: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts, err := Tasks(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, v := range ts {
+		got[v.ID] = v.Adapter
+	}
+	if got[cl.ID] != "claude" || got[cx.ID] != "codex" {
+		t.Fatalf("adapters = %v", got)
+	}
 }
