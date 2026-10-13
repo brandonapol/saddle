@@ -216,6 +216,11 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 			return t, err
 		}
 	}
+	// Excluded models are refused even with force: the owner never wants
+	// workers on them (#482).
+	if err := a.excludedModelErr(r.Model); err != nil {
+		return t, err
+	}
 	// No adapter means the session default (#150), rotated past adapters out
 	// of quota (#321).
 	picked, rotated, why, err := a.spawnAdapter(r.Adapter, r.Kind, len(r.Claims) > 0, r.Force)

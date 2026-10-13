@@ -23,6 +23,9 @@ type Status struct {
 	// 1 is picked first, 0 can't be picked now (#481). Pick says why.
 	PickRank int    `json:"pick_rank,omitempty"`
 	Pick     string `json:"pick,omitempty"`
+	// ExcludedModels are [adapters.<name>] exclude_models: spawns naming
+	// one are refused (#482).
+	ExcludedModels []string `json:"excluded_models,omitempty"`
 }
 
 // Provider describes who serves an adapter's models and what it is good

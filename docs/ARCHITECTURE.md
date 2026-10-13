@@ -278,6 +278,15 @@ tasks whose run dir recorded no adapter. A model from another provider's
 family (a ticket's `opus`, a repair's `sonnet`) falls back to the chosen
 adapter's default.
 
+`[adapters.<name>] exclude_models` lists models saddle never runs workers on
+(#482). Unset, codex excludes `astra`, which burns too many tokens; `[]`
+excludes nothing. An entry matches the model id or one of its words, so
+`astra` covers `gpt-6-astra`. A spawn naming an excluded model is refused,
+even with force, with a message naming the config key; a handoff or resume
+carrying one falls back to the adapter's default (or the CLI's own when that
+is excluded too). The orchestrator brief lists the exclusions, `status` gives
+each adapter's `excluded_models`, and `saddle status` prints them.
+
 When a worker's screen shows a usage-limit banner (Claude Code's, Codex's
 "usage limit" or an OpenAI/Grok out-of-quota error; `usage.DetectLimitBanner`),
 the engine or the TUI parks it as in #180 and marks its adapter out of quota
@@ -340,7 +349,11 @@ record: Claude Code transcript JSONL, Codex rollout JSONL, and Grok session
 `usage.json` ledgers. It is bucketed per minute by task, adapter and model;
 provider-reported cost wins when available, otherwise model pricing supplies
 the estimate. The TUI graph and rows are per provider, including an observed
-quota reset when adapter rotation has marked one exhausted. Plan-limit bars
+quota reset when adapter rotation has marked one exhausted. Codex is split by
+model (#482): each rollout `turn_context` names the model of the token counts
+after it, and luna, terra, sol and astra each get a row and bar colour of
+their own; any other codex model gets its own labelled row, and a model in
+`exclude_models` says "excluded". Plan-limit bars
 remain estimates against caps you configure.
 
 ## Heavy-run queue

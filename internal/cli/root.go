@@ -434,6 +434,11 @@ func writeAdapters(out io.Writer, ss []agent.Status) {
 			line += fmt.Sprintf("; %s unavailable (%s)", s.Name, s.Reason)
 		}
 	}
+	for _, s := range ss {
+		if len(s.ExcludedModels) > 0 {
+			line += fmt.Sprintf("; %s excluded models: %s", s.Name, strings.Join(s.ExcludedModels, ", "))
+		}
+	}
 	fmt.Fprintln(out, line)
 }
 

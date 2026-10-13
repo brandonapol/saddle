@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -357,21 +358,51 @@ func (a *App) notifyExternal(text string) {
 }
 
 // modelFor is the model a task on adapter runs: the requested one unless it
-// names another adapter's family (a ticket's "opus" on grok), then the
-// adapter's configured default.
+// names another adapter's family (a ticket's "opus" on grok) or is in
+// adapter's exclude_models, then the adapter's configured default, or ""
+// (the CLI's own) when that is excluded too (#482).
 func (a *App) modelFor(adapter, requested string) string {
-	if requested != "" {
+	if requested != "" && a.Cfg.ExcludedModel(adapter, requested) == "" {
 		if fam := modelFamily(requested); fam == "" || fam == adapter {
 			return requested
 		}
 	}
+	var def string
 	switch adapter {
 	case usage.Grok:
-		return a.Cfg.Grok.Model
+		def = a.Cfg.Grok.Model
 	case usage.Claude:
-		return a.Cfg.Claude.Model
+		def = a.Cfg.Claude.Model
+	default:
+		def = a.Cfg.Adapters[adapter].Model
 	}
-	return a.Cfg.Adapters[adapter].Model
+	if a.Cfg.ExcludedModel(adapter, def) != "" {
+		return ""
+	}
+	return def
+}
+
+// excludedModelErr refuses a spawn that names a model some adapter's
+// exclude_models lists (#482), saying how to allow it.
+func (a *App) excludedModelErr(model string) error {
+	if model == "" {
+		return nil
+	}
+	names := config.AdapterNames()
+	for n := range a.Cfg.Adapters {
+		if !slices.Contains(names, n) {
+			names = append(names, n)
+		}
+	}
+	slices.Sort(names)
+	for _, n := range names {
+		if x := a.Cfg.ExcludedModel(n, model); x != "" {
+			return fmt.Errorf("spawn: model %q is excluded: [adapters.%s] exclude_models lists %q (excluded: %s), so saddle never runs workers on it. "+
+				"Pick another model, or leave model= empty for the adapter's default. The owner can allow it by editing exclude_models in .saddle/config.toml (exclude_models = [] excludes nothing)",
+				model, n, x, strings.Join(a.Cfg.ExcludedModels(n), ", "))
+		}
+	}
+	return nil
 }
 
 // modelFamily is the adapter a model name belongs to, or "" when unknown.

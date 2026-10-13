@@ -32,17 +32,18 @@ func TestBuildUsageGraph(t *testing.T) {
 		ub(0, "t3", "claude-haiku-4-5", usage.Tokens{Output: 4}),
 		ub(0, "t4", "codex", usage.Tokens{Output: 1}),
 	}
+	claude, codex := series{Provider: providerClaude}, series{Provider: providerCodex}
 	g := buildGraph(bs, nil, graphNow, false)
-	if got := g.Minutes[0]; !reflect.DeepEqual(got, [nProviders]int64{providerClaude: 15}) {
+	if got := g.Minutes[0]; !reflect.DeepEqual(got, map[series]int64{claude: 15}) {
 		t.Errorf("oldest minute = %v", got)
 	}
-	if got := g.Minutes[59]; !reflect.DeepEqual(got, [nProviders]int64{44, 1, 0, 0}) {
+	if got := g.Minutes[59]; !reflect.DeepEqual(got, map[series]int64{claude: 44, codex: 1}) {
 		t.Errorf("latest minute = %v", got)
 	}
-	if g.Totals != [nProviders]int64{59, 1, 0, 0} {
+	if !reflect.DeepEqual(g.Totals, map[series]int64{claude: 59, codex: 1}) {
 		t.Errorf("totals = %v", g.Totals)
 	}
-	if g := buildGraph(bs, nil, graphNow, true); g.Minutes[0][providerClaude] != 1015 {
+	if g := buildGraph(bs, nil, graphNow, true); g.Minutes[0][claude] != 1015 {
 		t.Errorf("with cache reads counted, oldest minute = %v", g.Minutes[0])
 	}
 }
@@ -73,15 +74,15 @@ func TestMergeOpusTokens(t *testing.T) {
 
 // A column stacks providers bottom-up in proportion.
 func TestGraphColumnStacks(t *testing.T) {
-	got := column([nProviders]int64{providerClaude: 75, providerCodex: 25}, 100, 4)
-	want := []int{providerClaude, providerClaude, providerClaude, providerCodex}
+	got := column([]int64{75, 25, 0}, 100, 4)
+	want := []int{0, 0, 0, 1}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("column = %v, want %v", got, want)
 	}
-	if got := column([nProviders]int64{providerGrok: 1}, 100, 4); !reflect.DeepEqual(got, []int{providerGrok}) {
+	if got := column([]int64{0, 0, 1}, 100, 4); !reflect.DeepEqual(got, []int{2}) {
 		t.Errorf("any usage shows at least one cell: %v", got)
 	}
-	if got := column([nProviders]int64{}, 100, 4); len(got) != 0 {
+	if got := column([]int64{0, 0, 0}, 100, 4); len(got) != 0 {
 		t.Errorf("an idle minute is empty: %v", got)
 	}
 }
@@ -95,6 +96,10 @@ func TestUsageGraphRender(t *testing.T) {
 	}
 	g := buildGraph(bs, nil, graphNow, false)
 	g.MergeOpus = 1200
+	graphH := g.height()
+	if graphH != 8 {
+		t.Errorf("height = %d, want 4 bars, claude, codex and grok rows and totals", graphH)
+	}
 	for _, w := range []int{30, 40, 120} {
 		out := g.render(w, graphH)
 		if n := lipgloss.Height(out); n != graphH {
@@ -131,8 +136,8 @@ func TestUsageGraphRenderLabelsCodexProviderWithTokensAndCost(t *testing.T) {
 		Tokens: usage.Tokens{Input: 1_000_000, CacheRead: 2_000_000, Output: 100_000}, Messages: 1,
 	}}
 	g := buildGraph(bs, nil, graphNow, false)
-	out := g.render(120, graphH)
-	for _, want := range []string{"codex", "OpenAI", "3.1M tok", "$2.50"} {
+	out := g.render(120, g.height())
+	for _, want := range []string{"codex gpt-5-codex · OpenAI", "3.1M tok", "$2.50"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("provider row lacks %q:\n%s", want, out)
 		}
@@ -145,7 +150,7 @@ func TestUsageGraphRenderLabelsCodexProviderWithTokensAndCost(t *testing.T) {
 func TestUsageGraphProviderRowShowsQuotaReset(t *testing.T) {
 	g := &usageGraph{}
 	g.QuotaResets[providerGrok] = "42m"
-	out := g.render(120, graphH)
+	out := g.render(120, g.height())
 	if !strings.Contains(out, "grok · xAI") || !strings.Contains(out, "quota resets 42m") {
 		t.Errorf("grok quota row missing:\n%s", out)
 	}
@@ -156,8 +161,7 @@ func TestUsageGraphProviderRowShowsQuotaReset(t *testing.T) {
 func TestUsageGraphInViews(t *testing.T) {
 	m := newViewModel(160, 50)
 	m.graph = &usageGraph{MergeOpus: 0}
-	m.graph.Minutes[59][providerClaude] = 10
-	m.graph.Totals[providerClaude] = 10
+	m.graph.add(59, series{Provider: providerClaude}, 10, 10, 0)
 	if out := m.viewLeft(100, 40); !strings.Contains(out, "USAGE · 60m") {
 		t.Errorf("no usage panel:\n%s", out)
 	}
@@ -192,7 +196,75 @@ func TestReadUsage(t *testing.T) {
 	if lim == nil || lim.FiveHour.Percent != want.FiveHour.Percent || lim.FiveHour.Percent != 0.5 {
 		t.Errorf("limits = %+v, want %+v", lim, want)
 	}
-	if g == nil || g.Minutes[59][providerClaude] != 500 {
+	if g == nil || g.Minutes[59][series{Provider: providerClaude}] != 500 {
 		t.Errorf("graph = %+v", g)
+	}
+}
+
+// #482: a codex rollout using luna, terra, sol and astra renders one row per
+// model, each in its own colour, and an excluded model's row says so.
+func TestUsageGraphSplitsCodexByModel(t *testing.T) {
+	withColor(t)
+	c := usage.NewCollector()
+	c.Now = func() time.Time { return graphNow }
+	if !c.Track(usage.Session{ID: "codex:t6", Task: "t6", Agent: usage.Codex, Path: filepath.Join("..", "usage", "testdata", "codex-models.jsonl")}) {
+		t.Fatal("codex not tracked")
+	}
+	bs, err := c.Poll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range bs {
+		bs[i].Minute = graphNow.Truncate(time.Minute).Add(-time.Duration(len(bs)-i) * time.Minute)
+	}
+	g := buildGraph(bs, nil, graphNow, false)
+	g.CodexExcluded = []string{"astra"}
+	out := g.render(120, g.height())
+	lines := strings.Split(out, "\n")
+	if len(lines) != graphBars+7 {
+		t.Fatalf("%d lines, want bars, claude, 4 codex rows, grok and totals:\n%s", len(lines), out)
+	}
+	colors := map[lipgloss.Color]bool{}
+	for i, m := range []string{"luna", "terra", "sol", "astra"} {
+		row := lines[graphBars+1+i]
+		if !strings.Contains(row, "codex "+m+" · OpenAI") {
+			t.Errorf("row %d = %q, want codex %s", i, row, m)
+		}
+		col := series{providerCodex, m}.color()
+		if col == cDim || col == providerColors[providerCodex] || colors[col] {
+			t.Errorf("%s colour %s is gray, generic or shared", m, col)
+		}
+		colors[col] = true
+		if !strings.Contains(row, fg(col)) {
+			t.Errorf("%s row not drawn in its colour: %q", m, row)
+		}
+		if excluded := strings.Contains(row, "excluded"); excluded != (m == "astra") {
+			t.Errorf("%s row excluded = %v: %q", m, excluded, row)
+		}
+	}
+	if !strings.Contains(lines[graphBars+3], "3.3k tok") {
+		t.Errorf("sol row lacks its tokens: %q", lines[graphBars+3])
+	}
+	bars := strings.Join(lines[:graphBars], "\n")
+	for c := range colors {
+		if !strings.Contains(bars, fg(c)) {
+			t.Errorf("no bar cell in %s", c)
+		}
+	}
+}
+
+// #482: a codex model saddle doesn't know gets its own labelled, coloured
+// row rather than gray.
+func TestUsageGraphUnknownCodexModelRow(t *testing.T) {
+	bs := []usage.Bucket{{
+		Key:    usage.Key{Minute: graphNow.Truncate(time.Minute), Task: "t5", Adapter: usage.Codex, Model: "gpt-7-nova"},
+		Tokens: usage.Tokens{Output: 10}, Messages: 1,
+	}}
+	g := buildGraph(bs, nil, graphNow, false)
+	if !strings.Contains(g.render(120, g.height()), "codex gpt-7-nova · OpenAI") {
+		t.Errorf("no row for the unknown model:\n%s", g.render(120, g.height()))
+	}
+	if c := (series{providerCodex, "gpt-7-nova"}).color(); c == cDim {
+		t.Errorf("unknown codex model is gray")
 	}
 }

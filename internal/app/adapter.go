@@ -51,6 +51,7 @@ func (a *App) Adapters() []agent.Status {
 		if c, ok := picks[s.Name]; ok {
 			s.PickRank, s.Pick = c.Rank, c.Why
 		}
+		s.ExcludedModels = a.Cfg.ExcludedModels(s.Name)
 	}
 	return ss
 }

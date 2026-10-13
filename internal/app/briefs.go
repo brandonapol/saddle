@@ -192,6 +192,7 @@ func (a *App) workersBrief() string {
 		b += fmt.Sprintf("  - %s = %s (%s): %s.\n", p.Vendor, p.Adapter, p.Models, p.Strengths)
 	}
 	b += "  Weigh the task (hard design or refactor, review, a cheap mechanical edit), claims (hooked adapters for tasks next to other claimed work) and quota: status shows each adapter's provider, hooks, out_of_quota_until and pick_rank.\n"
+	b += a.excludedModelsBrief()
 	b += fmt.Sprintf("- Spawns without adapter= are picked by [adapters] policy (%s): pass kind=<docs, mechanical, design…> and an adapter whose [adapters.<name>] kinds list it goes first; a task with claims prefers hooked adapters. status shows adapter_policy and why each adapter ranks where it does.\n", a.AdapterPolicy())
 	b += fmt.Sprintf("- When an adapter runs out of quota, saddle marks it out until its reset and sends spawns that would use it to the next one by that policy (order: %s) that can run here. You get a notice naming who ran out, who took over and when it resets; tell the owner. ",
 		strings.Join(a.Cfg.AdapterOrder, ", "))
@@ -219,4 +220,20 @@ func serialList(s []string) string {
 		return "none configured"
 	}
 	return strings.Join(s, ", ")
+}
+
+// excludedModelsBrief tells the orchestrator which models the owner
+// excluded, so its model choice skips them (#482).
+func (a *App) excludedModelsBrief() string {
+	var ex []string
+	for _, n := range config.AdapterNames() {
+		if ms := a.Cfg.ExcludedModels(n); len(ms) > 0 {
+			ex = append(ex, fmt.Sprintf("%s: %s", n, strings.Join(ms, ", ")))
+		}
+	}
+	if len(ex) == 0 {
+		return ""
+	}
+	return "- The owner excluded these models ([adapters.<name>] exclude_models): " + strings.Join(ex, "; ") +
+		". Never pass one as model=; spawn refuses it. Pick another model or leave model= empty.\n"
 }

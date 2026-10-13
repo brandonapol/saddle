@@ -347,3 +347,55 @@ func TestAdapterModelFromConfig(t *testing.T) {
 		t.Errorf("a requested codex model gave %q", got)
 	}
 }
+
+// #482: the owner excludes models with [adapters.<name>] exclude_models, and
+// codex's astra is excluded by default. A spawn naming one is refused with a
+// message saying why and how to allow it; nothing is created.
+func TestSpawnRefusesExcludedModel(t *testing.T) {
+	t.Parallel()
+	a, _, _ := rotationApp(t)
+	for _, req := range []SpawnReq{
+		{Title: "astra work", Adapter: usage.Codex, Model: "astra"},
+		{Title: "astra id", Adapter: usage.Codex, Model: "gpt-6-astra"},
+		{Title: "astra on default", Model: "astra"},
+	} {
+		_, err := a.Spawn(req)
+		if err == nil {
+			t.Fatalf("%+v: spawn on an excluded model went ahead", req)
+		}
+		for _, want := range []string{"excluded", "exclude_models", "[adapters.codex]"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%+v: error %q lacks %q", req, err, want)
+			}
+		}
+	}
+	ts, err := a.Store.Tasks()
+	must(t, err)
+	for _, tk := range ts {
+		if tk.Role == store.RoleWorker {
+			t.Errorf("refused spawn left task %s behind", tk.ID)
+		}
+	}
+	// exclude_models = [] lets the owner allow it again.
+	a.Cfg.Adapters = config.AdapterMap{usage.Codex: {ExcludeModels: []string{}}}
+	w, err := a.Spawn(SpawnReq{Title: "astra allowed", Adapter: usage.Codex, Model: "astra"})
+	must(t, err)
+	if w.Model != "astra" {
+		t.Errorf("allowed astra spawn ran %q", w.Model)
+	}
+}
+
+// #482: a handoff or resume carrying an excluded model is remapped to the
+// adapter's default rather than run on it.
+func TestModelForSkipsExcludedModel(t *testing.T) {
+	t.Parallel()
+	a, _, _ := rotationApp(t)
+	a.Cfg.Adapters = config.AdapterMap{usage.Codex: {Model: "gpt-6-luna"}}
+	if got := a.modelFor(usage.Codex, "gpt-6-astra"); got != "gpt-6-luna" {
+		t.Errorf("excluded astra mapped to %q, want the default luna", got)
+	}
+	a.Cfg.Adapters = config.AdapterMap{usage.Codex: {Model: "astra"}}
+	if got := a.modelFor(usage.Codex, ""); got != "" {
+		t.Errorf("an excluded default gave %q, want the CLI's own", got)
+	}
+}

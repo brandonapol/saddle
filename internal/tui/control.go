@@ -258,8 +258,8 @@ func (m *model) viewLeft(w, h int) string {
 	}
 
 	usageH := 0
-	if m.graph != nil && h-listH-claimsH-(graphH+2) >= 6 {
-		usageH = graphH + 2
+	if m.graph != nil && h-listH-claimsH-(m.graph.height()+2) >= 6 {
+		usageH = m.graph.height() + 2
 	}
 	peekH := h - listH - claimsH - usageH
 	title := "PEEK"
@@ -295,7 +295,7 @@ func (m *model) viewLeft(w, h int) string {
 	}
 	parts = append(parts, box(title, w, peekH, false, body))
 	if usageH > 0 {
-		parts = append(parts, box("USAGE · 60m", w, usageH, false, m.graph.render(w-2, graphH)))
+		parts = append(parts, box("USAGE · 60m", w, usageH, false, m.graph.render(w-2, usageH-2)))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
