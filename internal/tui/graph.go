@@ -134,7 +134,7 @@ func buildGraphPrices(bs []usage.Bucket, es []store.Event, now time.Time, cacheR
 		p := provider(b.Adapter, b.Model)
 		g.Minutes[i][p] += n
 		g.Totals[p] += n
-		g.AllTokens[p] += b.Tokens.Total()
+		g.AllTokens[p] += b.Total()
 		if b.CostUSD > 0 {
 			g.Costs[p] += b.CostUSD
 		} else {
