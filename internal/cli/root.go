@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/signal"
 	"slices"
@@ -412,6 +413,9 @@ func statusCmd() *cobra.Command {
 			}
 			writeAdapters(cmd.OutOrStdout(), st.Adapters)
 			writeAdapterPicks(cmd.OutOrStdout(), st.Adapters, st.AdapterPolicy)
+			for _, f := range st.Fallback {
+				fmt.Fprintln(cmd.OutOrStdout(), "fallback: "+f.String())
+			}
 			if st.HeavyRuns != nil {
 				writeHeavyRuns(cmd.OutOrStdout(), *st.HeavyRuns)
 			}
@@ -437,6 +441,11 @@ func writeAdapters(out io.Writer, ss []agent.Status) {
 	for _, s := range ss {
 		if len(s.ExcludedModels) > 0 {
 			line += fmt.Sprintf("; %s excluded models: %s", s.Name, strings.Join(s.ExcludedModels, ", "))
+		}
+	}
+	for _, s := range ss {
+		for _, m := range slices.Sorted(maps.Keys(s.ModelsOutOfQuota)) {
+			line += fmt.Sprintf("; %s:%s out of quota until %s", s.Name, m, s.ModelsOutOfQuota[m])
 		}
 	}
 	fmt.Fprintln(out, line)

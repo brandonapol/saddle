@@ -831,3 +831,43 @@ func TestExcludeModels(t *testing.T) {
 		t.Errorf("a string exclude_models loaded")
 	}
 }
+
+// #483: [fallback] maps an adapter or adapter:model to the chain that takes
+// over while it is out of quota. A model key is matched by usage.ModelIs
+// and tracked on its own; the adapter key covers its other models.
+func TestFallbackChains(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	writeConfig(t, root, "[fallback]\n\"codex:sol\" = [\"claude:opus\", \"grok\"]\n\"codex\" = [\"claude\"]\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	km, chain, ok := cfg.FallbackFor("codex", "gpt-6-sol")
+	if !ok || km != "sol" || strings.Join(chain, ",") != "claude:opus,grok" {
+		t.Errorf("FallbackFor(codex, gpt-6-sol) = %q %v %v", km, chain, ok)
+	}
+	km, chain, ok = cfg.FallbackFor("codex", "gpt-6-terra")
+	if !ok || km != "" || strings.Join(chain, ",") != "claude" {
+		t.Errorf("FallbackFor(codex, gpt-6-terra) = %q %v %v", km, chain, ok)
+	}
+	if _, _, ok := cfg.FallbackFor("grok", ""); ok {
+		t.Errorf("grok has a chain")
+	}
+	if m, ok := cfg.TracksModel("codex", "sol"); !ok || m != "sol" {
+		t.Errorf("TracksModel(codex, sol) = %q %v", m, ok)
+	}
+	if _, ok := cfg.TracksModel("codex", "terra"); ok {
+		t.Errorf("terra tracked on its own without a key")
+	}
+	for _, bad := range []string{
+		"[fallback]\n\"cursor:x\" = [\"claude\"]\n",
+		"[fallback]\n\"codex:sol\" = [\"nope\"]\n",
+		"[fallback]\n\"codex:sol\" = [\"codex:sol\"]\n",
+	} {
+		writeConfig(t, root, bad)
+		if _, err := Load(root); err == nil {
+			t.Errorf("loaded %q", bad)
+		}
+	}
+}

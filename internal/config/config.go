@@ -65,6 +65,12 @@ type Config struct {
 	// AdapterPolicy is the rest of [adapters]: how saddle picks an adapter
 	// per task and what happens to a worker whose adapter runs out (#481).
 	AdapterPolicy AdapterPolicy `toml:"-"`
+	// Fallback is [fallback]: per adapter or model, the adapters and models
+	// that take over while it is out of quota, in order (#483). Keys and
+	// entries are "adapter" or "adapter:model", e.g. "codex:sol" =
+	// ["claude:opus", "grok"]. A model with a chain is tracked out of quota
+	// on its own: the adapter's other models stay usable.
+	Fallback map[string][]string `toml:"fallback"`
 	// Notify sends owner notifications (adapter rotation) beyond the TUI and
 	// the orchestrator.
 	Notify Notify `toml:"notify"`
@@ -366,6 +372,73 @@ func (m *AdapterMap) UnmarshalTOML(v any) error {
 
 // AdapterNames lists the adapters [adapters] order may name.
 func AdapterNames() []string { return []string{HarnessClaude, HarnessCodex, "gemini", HarnessGrok} }
+
+// ParseModelRef splits a [fallback] key or entry, "adapter" or
+// "adapter:model", checking the adapter is one saddle knows.
+func ParseModelRef(s string) (adapter, model string, err error) {
+	adapter, model, _ = strings.Cut(strings.TrimSpace(s), ":")
+	adapter, model = strings.ToLower(strings.TrimSpace(adapter)), strings.TrimSpace(model)
+	if !slices.Contains(AdapterNames(), adapter) {
+		return "", "", fmt.Errorf("%q: want adapter or adapter:model, adapter one of %s", s, strings.Join(AdapterNames(), ", "))
+	}
+	return adapter, model, nil
+}
+
+// checkFallback refuses a [fallback] key or entry that doesn't parse, and
+// a chain that names its own key.
+func checkFallback(m map[string][]string) error {
+	for k, chain := range m {
+		ka, km, err := ParseModelRef(k)
+		if err != nil {
+			return fmt.Errorf("fallback key %w", err)
+		}
+		for _, e := range chain {
+			ea, em, err := ParseModelRef(e)
+			if err != nil {
+				return fmt.Errorf("fallback.%q entry %w", k, err)
+			}
+			if ea == ka && strings.EqualFold(em, km) {
+				return fmt.Errorf("fallback.%q: the chain names its own key", k)
+			}
+		}
+	}
+	return nil
+}
+
+// FallbackFor finds the [fallback] chain for model on adapter: the key
+// naming that model (usage.ModelIs, so "sol" matches "gpt-6-sol"), else
+// the adapter's own key. It returns the key's model ("" for the adapter's
+// key), the chain, and whether there is one.
+func (c Config) FallbackFor(adapter, model string) (string, []string, bool) {
+	var whole []string
+	found := false
+	keys := make([]string, 0, len(c.Fallback))
+	for k := range c.Fallback {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		ka, km, err := ParseModelRef(k)
+		if err != nil || ka != adapter {
+			continue
+		}
+		if km == "" {
+			whole, found = c.Fallback[k], true
+			continue
+		}
+		if usage.ModelIs(model, km) {
+			return km, c.Fallback[k], true
+		}
+	}
+	return "", whole, found
+}
+
+// TracksModel reports whether model on adapter is tracked out of quota on
+// its own: a [fallback] key names it. It returns the key's model.
+func (c Config) TracksModel(adapter, model string) (string, bool) {
+	km, _, ok := c.FallbackFor(adapter, model)
+	return km, ok && km != ""
+}
 
 // Notify configures owner notifications beyond the TUI banner and the
 // orchestrator's notice, e.g. when an adapter runs out of quota (#321).
@@ -748,6 +821,9 @@ func Load(root string) (Config, error) {
 	if cfg.AdapterPolicy.HandoffWait < 0 {
 		return cfg, fmt.Errorf("adapters.handoff_wait %s: must not be negative", cfg.AdapterPolicy.HandoffWait)
 	}
+	if err := checkFallback(cfg.Fallback); err != nil {
+		return cfg, err
+	}
 	if cfg.Claude.Advisor.Lead == "" {
 		cfg.Claude.Advisor.Lead = cfg.Claude.OrchestratorModel
 	}
@@ -970,6 +1046,15 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # [adapters.grok]
 # cmd = "grok"
 # args = []
+
+# Fallback chains (#483): who takes over while an adapter, or one of its
+# models, is out of quota. A model with a chain is marked out on its own, so
+# the adapter's other models stay usable; new spawns and running workers on
+# it move to the first entry that has quota, can run here and isn't in
+# exclude_models. Without a chain, [adapters] policy picks.
+# [fallback]
+# "codex:sol" = ["claude:opus", "grok"]
+# "grok" = ["claude"]
 
 # Owner notifications on adapter rotation, beyond the TUI banner and the
 # orchestrator's notice.

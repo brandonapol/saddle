@@ -223,11 +223,12 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	}
 	// No adapter means the session default (#150), rotated past adapters out
 	// of quota (#321).
-	picked, rotated, why, err := a.spawnAdapter(r.Adapter, r.Kind, len(r.Claims) > 0, r.Force)
+	pick, err := a.spawnAdapter(r.Adapter, r.Model, r.Kind, len(r.Claims) > 0, r.Force)
 	if err != nil {
 		return t, err
 	}
-	r.Adapter = picked
+	r.Adapter = pick.Name
+	rotated, why := pick.Rotated, pick.Why
 	ad, err := agent.ByName(r.Adapter)
 	if err != nil {
 		return t, err
@@ -298,6 +299,9 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	// A model from another adapter's family (a ticket's "opus", a repair's
 	// "sonnet") falls back to this adapter's default.
 	model := a.modelFor(ad.Name(), r.Model)
+	if pick.ModelSet {
+		model = pick.Model // a [fallback] entry's model (#483)
+	}
 	hint := a.retryHint(r.Title)
 	t = store.Task{
 		ID: id, Title: r.Title, Prompt: r.Prompt, Parent: r.Parent, Role: store.RoleWorker, Model: model,

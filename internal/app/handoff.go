@@ -63,25 +63,25 @@ func (a *App) HandOff(task string, now time.Time) (string, error) {
 		return "", nil
 	}
 	from := a.taskAdapter(t).Name()
-	ex := a.ExhaustedAdapters(now)
-	e, out := ex[from]
-	if !out {
-		return "", nil
-	}
-	if p.HandoffWait > 0 && e.Until.Sub(now) <= p.HandoffWait {
-		a.Store.Event(task, EventHandoffSkipped, fmt.Sprintf("%s resets at %s, within handoff_wait %s", from, e.when(), p.HandoffWait))
-		return "", nil
-	}
 	all, err := a.Store.Claims()
 	if err != nil {
 		return "", err
 	}
-	c, err := a.bestAdapter(pickReq{def: from, claims: len(all[t.ID]) > 0}, ex, now)
-	if err != nil {
+	// Its adapter, or its model when [fallback] tracks that on its own
+	// (#483), is out: the chain, else the policy, picks the finisher.
+	c, e, out, rerr := a.reroute(from, t.Model, pickReq{claims: len(all[t.ID]) > 0}, now)
+	if !out {
+		return "", nil
+	}
+	if p.HandoffWait > 0 && e.Until.Sub(now) <= p.HandoffWait {
+		a.Store.Event(task, EventHandoffSkipped, fmt.Sprintf("%s resets at %s, within handoff_wait %s", e.Label(), e.when(), p.HandoffWait))
+		return "", nil
+	}
+	if rerr != nil {
 		a.Store.Event(task, EventHandoffSkipped, "no other adapter has quota")
 		return "", nil
 	}
-	ad, err := agent.ByName(c.Name)
+	ad, err := agent.ByName(c.Adapter)
 	if err != nil {
 		return "", err
 	}
@@ -91,27 +91,27 @@ func (a *App) HandOff(task string, now time.Time) (string, error) {
 	if err := a.Tmux.KillWindow(t.Window); err != nil {
 		a.Store.Event(task, "handoff_kill_failed", err.Error())
 	}
-	t.Model = a.modelFor(c.Name, t.Model)
+	t.Model = c.Model
 	if err := a.Store.SetField(t.ID, "model", t.Model); err != nil {
 		return "", err
 	}
-	prompt := strings.TrimSpace(t.Prompt + "\n\n" + handoffNote(from, c.Name, a.Cfg.Integration))
+	prompt := strings.TrimSpace(t.Prompt + "\n\n" + handoffNote(e.Label(), c.Label(), a.Cfg.Integration))
 	win, err := a.start(t, all[t.ID], ad, "", prompt)
 	if err != nil {
 		// Its window is gone; ResumeLost relaunches it on an adapter with quota.
 		_ = a.Store.SetField(t.ID, "window", "")
 		a.Store.Event(task, "handoff_failed", err.Error())
-		return "", fmt.Errorf("hand %s to %s: %w", task, c.Name, err)
+		return "", fmt.Errorf("hand %s to %s: %w", task, c.Label(), err)
 	}
 	if err := a.Store.SetStatus(t.ID, store.Running); err != nil {
 		return "", err
 	}
 	a.ForgetResumed(task)
-	a.Store.Event(task, EventAdapterHandoff, fmt.Sprintf("%s -> %s (%s) window %s", from, c.Name, c.Why, win))
+	a.Store.Event(task, EventAdapterHandoff, fmt.Sprintf("%s -> %s (%s) window %s", e.Label(), c.Label(), c.Why, win))
 	text := fmt.Sprintf("%s %q ran out of quota on %s (resets %s), so saddle handed it to %s: a new %s agent finishes it in the same worktree and branch. Nothing needs doing.",
-		t.ID, t.Title, from, e.when(), c.Name, c.Name)
+		t.ID, t.Title, e.Label(), e.when(), c.Label(), c.Adapter)
 	if cl := all[t.ID]; len(cl) > 0 && !ad.Hooks() {
-		text += fmt.Sprintf(" %s has no hooks, so its claims (%s) are advisory.", c.Name, strings.Join(cl, ", "))
+		text += fmt.Sprintf(" %s has no hooks, so its claims (%s) are advisory.", c.Adapter, strings.Join(cl, ", "))
 	}
-	return c.Name, a.Notify(OrchestratorID, store.NoticeInfo, text)
+	return c.Adapter, a.Notify(OrchestratorID, store.NoticeInfo, text)
 }

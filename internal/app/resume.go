@@ -111,15 +111,16 @@ func (a *App) resume(t store.Task) (Resumed, error) {
 	}
 	prompt := strings.TrimSpace(t.Prompt + "\n\n" + relaunchNote)
 	ad := a.taskAdapter(t)
-	// An adapter out of quota would only park it again: relaunch it on the
-	// next one with quota (#321). Its session can't move across adapters.
-	if next, err := a.nextAdapter(ad.Name(), a.ExhaustedAdapters(time.Now())); err == nil && next != ad.Name() {
-		if nad, err := agent.ByName(next); err == nil {
-			t.Model = a.modelFor(next, t.Model)
+	// An adapter or model out of quota would only park it again: relaunch
+	// it on the next one with quota (#321, #483). Its session can't move
+	// across adapters or models.
+	if next, e, out, err := a.reroute(ad.Name(), t.Model, pickReq{claims: len(all[t.ID]) > 0}, time.Now()); out && err == nil {
+		if nad, err := agent.ByName(next.Adapter); err == nil {
+			t.Model = next.Model
 			if err := a.Store.SetField(t.ID, "model", t.Model); err != nil {
 				return r, err
 			}
-			if err := a.rotatedTask(t, ad.Name(), nad, all[t.ID]); err != nil {
+			if err := a.rotatedTask(t, e.Label(), nad, all[t.ID]); err != nil {
 				return r, err
 			}
 			ad = nad

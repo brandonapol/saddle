@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -39,12 +40,24 @@ const (
 // no reset saddle can read. A banner that clears sooner restores it.
 var ExhaustFor = time.Hour
 
-// Exhaustion is one adapter out of quota.
+// Exhaustion is one adapter, or one of its models (#483), out of quota.
 type Exhaustion struct {
 	Adapter string    `json:"adapter"`
+	Model   string    `json:"model,omitempty"` // set when only this model is out
 	Since   time.Time `json:"since"`
 	Until   time.Time `json:"until"`
 	Resets  string    `json:"resets,omitempty"` // as the banner words it
+}
+
+// Label is "adapter", or "adapter:model" for a model out on its own. It is
+// the entry's key in the exhausted file.
+func (e Exhaustion) Label() string { return exhaustKey(e.Adapter, e.Model) }
+
+func exhaustKey(adapter, model string) string {
+	if model == "" {
+		return adapter
+	}
+	return adapter + ":" + model
 }
 
 // when is the reset as the owner should read it.
@@ -94,9 +107,25 @@ func (a *App) writeExhausted(m map[string]Exhaustion) error {
 	return os.Rename(tmp, p)
 }
 
-// ExhaustedAdapters lists the adapters out of quota at now. Ones whose reset
-// has passed are dropped, and the owner hears they are back.
+// ExhaustedAdapters lists the adapters out of quota at now, by name. Ones
+// whose reset has passed are dropped, and the owner hears they are back.
+// Models out on their own are ExhaustedModels.
 func (a *App) ExhaustedAdapters(now time.Time) map[string]Exhaustion {
+	m := a.exhausted(now)
+	maps.DeleteFunc(m, func(_ string, e Exhaustion) bool { return e.Model != "" })
+	return m
+}
+
+// ExhaustedModels lists the models out of quota on their own at now (#483),
+// keyed "adapter:model".
+func (a *App) ExhaustedModels(now time.Time) map[string]Exhaustion {
+	m := a.exhausted(now)
+	maps.DeleteFunc(m, func(_ string, e Exhaustion) bool { return e.Model == "" })
+	return m
+}
+
+// exhausted lists every adapter and model out of quota at now, by Label.
+func (a *App) exhausted(now time.Time) map[string]Exhaustion {
 	exhaustMu.Lock()
 	m := a.readExhausted()
 	var back []Exhaustion
@@ -111,7 +140,7 @@ func (a *App) ExhaustedAdapters(now time.Time) map[string]Exhaustion {
 	}
 	exhaustMu.Unlock()
 	for _, e := range back {
-		a.restored(e.Adapter, m)
+		a.restored(e.Label(), m)
 	}
 	return m
 }
@@ -139,10 +168,14 @@ func (a *App) MarkExhausted(adapter string, until time.Time, resets string) erro
 		return err
 	}
 	a.Store.Event(OrchestratorID, EventAdapterExhausted, fmt.Sprintf("%s until %s", adapter, e.when()))
-	next, nerr := a.nextAdapter(adapter, m)
+	ex = a.ExhaustedAdapters(now)
+	next, nerr := a.nextAdapter(adapter, ex)
+	if p, _, ok := a.chainPick(adapter, a.modelFor(adapter, ""), ex, a.ExhaustedModels(now)); ok {
+		next, nerr = p.Label(), nil
+	}
 	var text string
 	if nerr != nil {
-		first := firstReset(m)
+		first := firstReset(ex)
 		text = fmt.Sprintf("All adapters are out of quota (%s ran out last). New spawns are refused until the first reset: %s at %s. "+
 			"Running tasks stay parked and continue after their reset; nothing is killed.", adapter, first.Adapter, first.when())
 	} else {
@@ -159,11 +192,15 @@ func (a *App) MarkExhausted(adapter string, until time.Time, resets string) erro
 	return a.tellOwner(text)
 }
 
-// restored tells the orchestrator an adapter has quota again: routine
-// news, so no desktop or webhook notification.
-func (a *App) restored(adapter string, still map[string]Exhaustion) {
-	a.Store.Event(OrchestratorID, EventAdapterRestored, adapter)
-	text := fmt.Sprintf("Adapter %s has quota again; spawns that would use it go back to it.", adapter)
+// restored tells the orchestrator an adapter or model (by Label) has quota
+// again: routine news, so no desktop or webhook notification.
+func (a *App) restored(label string, still map[string]Exhaustion) {
+	a.Store.Event(OrchestratorID, EventAdapterRestored, label)
+	what := "Adapter"
+	if strings.Contains(label, ":") {
+		what = "Model"
+	}
+	text := fmt.Sprintf("%s %s has quota again; spawns that would use it go back to it.", what, label)
 	if len(still) > 0 {
 		var names []string
 		for n := range still {
@@ -175,8 +212,8 @@ func (a *App) restored(adapter string, still map[string]Exhaustion) {
 	_ = a.Notify(OrchestratorID, store.NoticeInfo, text)
 }
 
-// ClearExhausted restores adapter early, e.g. when a parked agent's limit
-// banner cleared.
+// ClearExhausted restores an adapter, or a model by its Label, early, e.g.
+// when a parked agent's limit banner cleared.
 func (a *App) ClearExhausted(adapter string) error {
 	exhaustMu.Lock()
 	m := a.readExhausted()
@@ -205,12 +242,17 @@ func resumeHow(adapter string) string {
 // AdapterLimitHit marks the adapter task runs on exhausted: its screen shows
 // a usage-limit banner. The reset comes from the banner when saddle can read
 // it, otherwise ExhaustFor from now.
+// A model [fallback] names is marked out on its own (#483).
 func (a *App) AdapterLimitHit(task string, b usage.LimitBanner) error {
 	t, err := a.Store.Task(task)
 	if err != nil {
 		return err
 	}
-	return a.markOut(a.taskAdapter(t).Name(), b)
+	ad := a.taskAdapter(t).Name()
+	if m, ok := a.Cfg.TracksModel(ad, t.Model); ok {
+		return a.markModelOut(ad, m, b)
+	}
+	return a.markOut(ad, b)
 }
 
 // AdapterLimitCleared restores task's adapter: its usage-limit banner cleared.
@@ -219,24 +261,28 @@ func (a *App) AdapterLimitCleared(task string) error {
 	if err != nil {
 		return err
 	}
-	return a.ClearExhausted(a.taskAdapter(t).Name())
+	ad := a.taskAdapter(t).Name()
+	if m, ok := a.Cfg.TracksModel(ad, t.Model); ok {
+		return a.ClearExhausted(exhaustKey(ad, m))
+	}
+	return a.ClearExhausted(ad)
 }
 
 // RotationBanner is the TUI's line while any adapter is out of quota, or "".
 func (a *App) RotationBanner(now time.Time) string {
-	ex := a.ExhaustedAdapters(now)
-	if len(ex) == 0 {
+	all := a.exhausted(now)
+	if len(all) == 0 {
 		return ""
 	}
 	var outs []string
-	for _, e := range sortedExhaustion(ex) {
-		outs = append(outs, fmt.Sprintf("%s until %s", e.Adapter, e.when()))
+	for _, e := range sortedExhaustion(all) {
+		outs = append(outs, fmt.Sprintf("%s until %s", e.Label(), e.when()))
 	}
 	line := "out of quota: " + strings.Join(outs, ", ")
-	if next, err := a.nextAdapter(a.Cfg.Harness, ex); err != nil {
+	if p, _, out, err := a.reroute(a.Cfg.Harness, "", pickReq{}, now); err != nil {
 		line += "; all adapters out, spawns paused"
-	} else if next != a.Cfg.Harness {
-		line += "; new spawns go to " + next
+	} else if out {
+		line += "; new spawns go to " + p.Label()
 	}
 	return line
 }
@@ -261,7 +307,7 @@ func sortedExhaustion(m map[string]Exhaustion) []Exhaustion {
 		if !out[i].Until.Equal(out[j].Until) {
 			return out[i].Until.Before(out[j].Until)
 		}
-		return out[i].Adapter < out[j].Adapter
+		return out[i].Label() < out[j].Label()
 	})
 	return out
 }
@@ -273,33 +319,71 @@ func firstReset(m map[string]Exhaustion) Exhaustion {
 	return Exhaustion{}
 }
 
+// spawnPick is the adapter, and maybe the model, a spawn runs on.
+type spawnPick struct {
+	Name string
+	// Model, when ModelSet, is the model a [fallback] or rotation chose in
+	// place of the requested one (#483).
+	Model    string
+	ModelSet bool
+	// Rotated names the adapter or adapter:model it replaced because that
+	// one is out of quota.
+	Rotated string
+	Why     string // what picked it
+}
+
 // spawnAdapter picks the adapter for a spawn: the requested one, else the
 // best one by [adapters] policy for the task's kind and claims, rotated past
-// adapters out of quota (#481). rotated names the session default it
-// replaced because that one is out of quota; why says what picked it.
-func (a *App) spawnAdapter(requested, kind string, claims, force bool) (name, rotated, why string, err error) {
+// adapters out of quota (#481). A model out on its own, or an adapter out
+// with a [fallback] chain, goes to the chain's first entry with quota (#483).
+func (a *App) spawnAdapter(requested, model, kind string, claims, force bool) (spawnPick, error) {
 	now := time.Now()
 	ex := a.ExhaustedAdapters(now)
 	if requested != "" {
-		if e, out := ex[requested]; out && !force {
-			hint := "no other adapter has quota"
-			if next, err := a.nextAdapter(requested, ex); err == nil {
-				hint = "spawn without adapter (or adapter=" + next + ") to use " + next
-			}
-			return "", "", "", fmt.Errorf("adapter %s is out of quota until %s: %s, or pass force to launch it anyway", requested, e.when(), hint)
+		if force {
+			return spawnPick{Name: requested, Why: "requested"}, nil
 		}
-		return requested, "", "requested", nil
+		m := a.modelFor(requested, model)
+		if e, out := quotaOut(ex, a.ExhaustedModels(now), requested, m); out {
+			hint := "no other adapter has quota"
+			if p, _, _, err := a.reroute(requested, model, pickReq{claims: claims}, now); err == nil {
+				hint = "spawn without adapter (or adapter=" + p.Adapter + ") to use " + p.Label()
+			}
+			what := "adapter " + requested
+			if e.Model != "" {
+				what = "model " + e.Label()
+			}
+			return spawnPick{}, fmt.Errorf("%s is out of quota until %s: %s, or pass force to launch it anyway", what, e.when(), hint)
+		}
+		return spawnPick{Name: requested, Why: "requested"}, nil
 	}
 	def := a.Cfg.Harness
-	c, err := a.bestAdapter(pickReq{def: def, kind: strings.ToLower(strings.TrimSpace(kind)), claims: claims}, ex, now)
+	r := pickReq{def: def, kind: strings.ToLower(strings.TrimSpace(kind)), claims: claims}
+	c, err := a.bestAdapter(r, ex, now)
 	if err != nil {
 		first := firstReset(ex)
-		return "", "", "", fmt.Errorf("%w; the first reset is %s at %s. Running agents stay parked", ErrAllExhausted, first.Adapter, first.when())
+		return spawnPick{}, fmt.Errorf("%w; the first reset is %s at %s. Running agents stay parked", ErrAllExhausted, first.Adapter, first.when())
 	}
+	pick := spawnPick{Name: c.Name, Why: c.Why}
 	if _, out := ex[def]; out && c.Name != def {
-		rotated = def
+		pick.Rotated = def
 	}
-	return c.Name, rotated, c.Why, nil
+	// A chain for the out default overrides the policy's pick; a model out
+	// on the picked adapter moves on down its chain.
+	from := c.Name
+	if _, out := ex[def]; out {
+		if _, _, chained := a.Cfg.FallbackFor(def, a.modelFor(def, model)); chained {
+			from = def
+		}
+	}
+	p, e, out, err := a.reroute(from, model, r, now)
+	if err != nil {
+		return spawnPick{}, fmt.Errorf("%w; %s is out until %s and nothing in its [fallback] chain or [adapters] has quota. Running agents stay parked", ErrAllExhausted, e.Label(), e.when())
+	}
+	if out {
+		pick = spawnPick{Name: p.Adapter, Model: p.Model, ModelSet: true, Rotated: e.Label(), Why: p.Why}
+	}
+	return pick, nil
 }
 
 // rotatedTask records that t runs on ad because from is out of quota, and
