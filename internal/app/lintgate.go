@@ -221,32 +221,45 @@ func lockHooks(state string, max time.Duration) (unlock func()) {
 	return func() { _ = os.RemoveAll(dir) }
 }
 
-// trainLint runs the gate on the rebased tree in dir after the tests. It
-// returns the failure message, "" when green, off, the same command the
-// tests just ran (#270) or a tree that already passed it, and
+// trainLint runs the gate on the rebased tree in dir after the tests. Like
+// lintDone it waits its turn on the repo hooks' lock and skips a tree that
+// already passed, and like the test gate it runs through runGateEnv, so a
+// machine failure (parallel golangci-lint, a full disk) is retried and,
+// if it persists, returned as env rather than charged to the branch
+// (#395). It returns the failure message, "" when green, off, the same
+// command the tests just ran (#270) or a tree that already passed it, and
 // ErrGateInterrupted when saddle was told to stop.
-func (a *App) trainLint(id, dir string) (string, error) {
+func (a *App) trainLint(id, dir string) (string, *GateEnvProblem, error) {
 	g := a.LintGate()
 	if g.Cmd == "" || lintgate.SameCmd(g.Cmd, a.Cfg.Test.Cmd) {
-		return "", nil
+		return "", nil, nil
 	}
 	state, tree := hooksState(dir), cleanTree(dir)
 	if passedLint(state, tree, g) {
 		a.Store.Event(id, "lint_skipped", "tree "+tree+" already passed")
-		return "", nil
+		return "", nil, nil
 	}
-	out, err := a.runLintGate(dir, g.Cmd)
-	if errors.Is(err, ErrGateInterrupted) {
-		return "", err
+	unlock := lockHooks(state, a.GateTimeout())
+	defer unlock()
+	if passedLint(state, tree, g) { // the hook we waited on passed it
+		a.Store.Event(id, "lint_skipped", "tree "+tree+" already passed")
+		return "", nil, nil
 	}
-	if err == nil {
+	r := a.RunGateEnv(context.Background(), id, ShellGate(dir, g.Cmd, a.GateTimeout()))
+	if errors.Is(r.Err, ErrGateInterrupted) {
+		return "", nil, r.Err
+	}
+	if r.Err == nil {
 		stampLint(state, tree, g)
-		return "", nil
+		return "", nil, nil
 	}
-	if a.brokenGate(id, g, out) {
-		return "", nil
+	if r.Env != nil {
+		return "", r.Env, nil
 	}
-	return lintFailure(g, out, "Your branch rebased cleanly onto "+a.Cfg.Integration+" and passed its tests, but on the result"), nil
+	if a.brokenGate(id, g, r.Output) {
+		return "", nil, nil
+	}
+	return lintFailure(g, r.Output, "Your branch rebased cleanly onto "+a.Cfg.Integration+" and passed its tests, but on the result"), nil, nil
 }
 
 // noRule is make's complaint about a target the makefile lacks.
