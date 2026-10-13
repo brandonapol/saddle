@@ -480,6 +480,21 @@ func (a *App) landOne(id string, run *landRun) LandResult {
 		regenerated = " (regenerated " + strings.Join(taken, ", ") + ")"
 		a.Store.Event(id, "train_regen", strings.Join(taken, "\n"))
 	}
+	if head, err := gitx.RevParse(t.Worktree, "HEAD"); err == nil && head == old {
+		// Integration already holds every commit, regenerated files too (#452): landing would record
+		// an empty old..old range the stack sentinel reads as lost work.
+		res.State, res.Note = store.NoChange, "nothing to land: "+a.Cfg.Integration+" already has its work"
+		if err := a.finishNoChange(t, "", "the rebase onto "+a.Cfg.Integration+" left no commits; its work is already there"); err != nil {
+			res.Note += " (could not record: " + err.Error() + ")"
+		}
+		if a.Cfg.CloseOnLand {
+			if t.Window != "" && a.Tmux.Alive(t.Window) {
+				_ = a.Tmux.KillWindow(t.Window)
+			}
+			_ = gitx.WorktreeRemove(a.Root, t.Worktree)
+		}
+		return res
+	}
 	if msg := a.secretGate(t.Worktree); msg != "" {
 		return fail(store.TestFailed, "a commit adds a secret-shaped literal", msg)
 	}

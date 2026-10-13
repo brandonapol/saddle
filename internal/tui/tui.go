@@ -605,7 +605,7 @@ func rank(status string) int {
 		return 3
 	case store.Done:
 		return 4
-	case store.Landed:
+	case store.Landed, store.NoChange:
 		return 5
 	}
 	return 6
@@ -1647,6 +1647,8 @@ func statusLabel(s string) string {
 		return "needs you"
 	case store.Done:
 		return "queued"
+	case store.NoChange:
+		return "no change"
 	}
 	return s
 }

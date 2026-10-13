@@ -74,8 +74,8 @@ func statusView(out StatusOut, in StatusIn, now time.Time) (StatusOut, error) {
 // finished names why a compact status leaves v out, or "" to list it.
 func finished(v TaskView) string {
 	switch {
-	case v.Status == store.Killed:
-		return store.Killed
+	case v.Status == store.Killed, v.Status == store.NoChange:
+		return v.Status
 	case trainState(v.Train) == "merged":
 		return "merged"
 	}

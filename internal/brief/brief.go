@@ -68,7 +68,7 @@ func Build(id, prompt string, tasks []mcpserver.TaskView, serial []string) (Brie
 	}
 	b.DoNotTouch = slices.Clone(serial)
 	for _, o := range tasks {
-		if o.ID == id || o.Status == store.Landed || o.Status == store.Killed {
+		if o.ID == id || o.Status == store.Landed || o.Status == store.Killed || o.Status == store.NoChange {
 			continue
 		}
 		for _, g := range o.Claims {

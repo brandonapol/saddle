@@ -194,7 +194,7 @@ func Compact(st mcpserver.StatusOut, queued int, automerge string) Snapshot {
 		case store.Landed:
 			s.Counts.Landed++
 			continue
-		case store.Killed:
+		case store.Killed, store.NoChange:
 			continue
 		}
 		s.Tasks = append(s.Tasks, TaskLine{ID: t.ID, Title: t.Title, Status: t.Status, Train: t.Train, PR: t.PR})
