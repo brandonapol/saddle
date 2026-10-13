@@ -158,6 +158,7 @@ type OrchContext struct {
 	Window    int64  `json:"window"`     // context window in tokens
 	CompactAt int    `json:"compact_at"` // percent at which saddle compacts it
 	Model     string `json:"model,omitempty"`
+	Adapter   string `json:"adapter,omitempty"` // what the orchestrator runs on: claude or grok (#479)
 }
 
 // StackRisk is the stack sentinel's flag: the stack is at risk from Task up.
@@ -331,7 +332,7 @@ func Status(a *app.App) (StatusOut, error) {
 	}
 	if u, err := a.OrchestratorContext(); err == nil && u.Prompt > 0 {
 		out.OrchestratorContext = &OrchContext{Percent: int(math.Round(u.Fraction() * 100)), Tokens: u.Prompt,
-			Window: u.Window, CompactAt: int(math.Round(a.CompactAt() * 100)), Model: u.Model}
+			Window: u.Window, CompactAt: int(math.Round(a.CompactAt() * 100)), Model: u.Model, Adapter: u.Adapter}
 	}
 	if v, err := a.HeavyRuns(); err != nil {
 		out.Warnings = append(out.Warnings, "heavy-run queue: "+err.Error())
@@ -474,7 +475,7 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, OK{Message: fmt.Sprintf("released %d claim(s) of %s", n, owner)}, nil
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "List saddle tasks with status and merge-train state, plus warnings, heavy_runs (the machine's heavy-run queue: holders and waiters per class) while it is busy, stack_at_risk when the stack sentinel has flagged the PR stack, and orchestrator_context: how full your context is against the compact_at threshold. Compact by default: essentials per task, killed and merged tasks counted in hidden. Filter with state, ids or since; detail=true is the full dump with claims, branches and worktrees, and can be large."},
+	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "List saddle tasks with status and merge-train state, plus warnings, heavy_runs (the machine's heavy-run queue: holders and waiters per class) while it is busy, stack_at_risk when the stack sentinel has flagged the PR stack, and orchestrator_context: the adapter and model you run on, and how full your context is against the compact_at threshold. Compact by default: essentials per task, killed and merged tasks counted in hidden. Filter with state, ids or since; detail=true is the full dump with claims, branches and worktrees, and can be large."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in StatusIn) (*mcp.CallToolResult, StatusOut, error) {
 			out, err := Status(a)
 			if err != nil {
