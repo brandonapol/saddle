@@ -323,6 +323,11 @@ A file only the merge train may change (lockfiles, migrations), listed in
 `saddle spawn`: starts an agent on its own branch, worktree and tmux window,
 with a brief and claims.
 
+### sre
+`saddle sre check-config`: validates `.saddle/sre.toml`, the per-repo SRE
+mode config of known checks, endpoints and credential references (see
+`docs/sre.md`). Plaintext secrets are rejected.
+
 ### stack
 The landed tasks that have open PRs, chained so each PR's base is the one below.
 `saddle stack` draws them with CI, mergeability, holds and distance behind base.
