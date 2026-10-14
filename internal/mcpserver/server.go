@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,7 +32,7 @@ type SpawnIn struct {
 	// Kind steers the adapter pick; see app.SpawnReq.Kind.
 	Kind  string `json:"kind,omitempty" jsonschema:"task kind, e.g. docs, mechanical, design, review; without adapter it picks an adapter whose [adapters.<name>] kinds list it, else [adapters] policy picks (status shows adapter_policy and each adapter's pick rank)"`
 	ID    string `json:"id,omitempty" jsonschema:"optional task id; defaults to the next tN"`
-	Issue int    `json:"issue,omitempty" jsonschema:"GitHub issue number this task implements; its PR will close it"`
+	Issue int    `json:"issue,omitempty" jsonschema:"GitHub issue number this task implements; its PR will close it. Set it whenever the task implements a ticket: without it no PR closes the issue"`
 	// After becomes explicit stack edges; see app.SpawnReq.After.
 	After []string `json:"after,omitempty" jsonschema:"ids of unmerged tasks this one builds on, e.g. [\"t61\"] when it uses a make target or API t61 adds; its PR stacks on theirs even when their files don't overlap"`
 	// Confirm overrides app.ErrNeedsConfirm.
@@ -60,6 +62,45 @@ type SpawnOut struct {
 	ID     string `json:"id"`
 	Branch string `json:"branch"`
 	Window string `json:"window"`
+	// Warning flags a spawn that names an issue without setting issue (#557).
+	Warning string `json:"warning,omitempty"`
+}
+
+// issueRefRe matches a #N issue reference that isn't part of a word or an
+// HTML entity.
+var issueRefRe = regexp.MustCompile(`(?:^|[^\w&])#(\d+)\b`)
+
+// issueRefs is the distinct issue numbers texts name as #N, in order.
+func issueRefs(texts ...string) []int {
+	var out []int
+	seen := map[int]bool{}
+	for _, s := range texts {
+		for _, m := range issueRefRe.FindAllStringSubmatch(s, -1) {
+			if n, err := strconv.Atoi(m[1]); err == nil && n > 0 && !seen[n] {
+				seen[n] = true
+				out = append(out, n)
+			}
+		}
+	}
+	return out
+}
+
+// spawnIssueWarning is the warning for a spawn that leaves issue unset while
+// its title or prompt names one: its PR won't close anything (#557).
+func spawnIssueWarning(in SpawnIn) string {
+	if in.Issue > 0 {
+		return ""
+	}
+	refs := issueRefs(in.Title, in.Prompt)
+	if len(refs) == 0 {
+		return ""
+	}
+	names := make([]string, len(refs))
+	for i, n := range refs {
+		names[i] = "#" + strconv.Itoa(n)
+	}
+	return fmt.Sprintf("issue is unset, so this task's PR closes nothing, though it names %s. If it implements one, kill it and spawn again with issue=%d (or the right number).",
+		strings.Join(names, ", "), refs[0])
 }
 
 type PathsIn struct {
@@ -459,7 +500,7 @@ func New(a *app.App, task string) *mcp.Server {
 			if err != nil {
 				return nil, SpawnOut{}, err
 			}
-			return nil, SpawnOut{ID: t.ID, Branch: t.Branch, Window: t.Window}, nil
+			return nil, SpawnOut{ID: t.ID, Branch: t.Branch, Window: t.Window, Warning: spawnIssueWarning(in)}, nil
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "claim", Description: "Reserve paths or globs for your task. Paths that overlap another live task are denied, naming the owner."},

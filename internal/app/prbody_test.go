@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/brandonapol/saddle/internal/store"
 )
 
 // #338: the owner strips the attribution footer from t2's PR, then merges
@@ -70,6 +72,29 @@ func TestStackPRBodyWithoutAnEarlierPRIsTheSummary(t *testing.T) {
 		}
 	}
 	t.Fatal("t1 didn't land")
+}
+
+// #557: a repo with no PR template still gets "Closes #N" for a task that
+// implements an issue, once, and keeps any attribution footer last.
+func TestStackPRBodyWithoutATemplateClosesTheIssue(t *testing.T) {
+	t.Parallel()
+	a := trainSetup(t)
+	const footer = "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+	for _, c := range []struct {
+		name, summary string
+		issue         int
+		want          string
+	}{
+		{"adds the line", "Adds one.", 7, "Adds one.\n\nCloses #7"},
+		{"already closes", "Adds one.\n\nCloses #7", 7, "Adds one.\n\nCloses #7"},
+		{"no issue", "Adds one.", 0, "Adds one."},
+		{"footer stays last", "Adds one.\n\n" + footer, 7, "Adds one.\n\nCloses #7\n\n" + footer + "\n"},
+	} {
+		l := landedTask{Task: store.Task{ID: "t9", Summary: c.summary, Issue: c.issue}}
+		if got := a.stackPRBody(l); got != c.want {
+			t.Errorf("%s: stackPRBody = %q, want %q", c.name, got, c.want)
+		}
+	}
 }
 
 // setPRBody is setPR for a PR whose body is body.
