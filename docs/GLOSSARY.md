@@ -327,6 +327,11 @@ with a brief and claims.
 `saddle sre check-config`: validates `.saddle/sre.toml`, the per-repo SRE
 mode config of known checks, endpoints and credential references (see
 `docs/sre.md`). Plaintext secrets are rejected.
+During an incident, the read-only production guard holds investigators
+read-only until a root cause is stated (`saddle sre root-cause`) and verified
+by a different agent (`saddle sre verify`); even then a production action is
+filed in the decision queue as irreversible, not run. `saddle sre incident`
+shows the state; `saddle sre close` lifts the guard.
 
 ### stack
 The landed tasks that have open PRs, chained so each PR's base is the one below.
