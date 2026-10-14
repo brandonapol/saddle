@@ -16,6 +16,7 @@ import (
 	"github.com/brandonapol/saddle/internal/autopilot"
 	"github.com/brandonapol/saddle/internal/sentinel"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/triage"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -125,9 +126,19 @@ type StatusOut struct {
 	// Fallback is the [fallback] chains (#483).
 	Fallback []app.FallbackStatus `json:"fallback,omitempty" jsonschema:"[fallback] chains: from (adapter or adapter:model), the chain that takes over while it is out of quota, out_of_quota_until while it is, now (the entry new spawns and handed-off workers go to) and skipped (entries passed over: out, excluded or unable to run here)"`
 	Tasks    []TaskView           `json:"tasks"`
+	// Jev is the triage log rolled up (#512). Zero calls is reported, so a
+	// quiet judge is visible rather than absent.
+	Jev JevStatus `json:"jev" jsonschema:"Jev triage so far: how many calls, how many failed, and approximate list-price spend in USD"`
 	// Hidden counts tasks the compact status tool left out, by status (#340).
 	Hidden map[string]int `json:"hidden,omitempty" jsonschema:"tasks left out of the compact view, by status; ask with detail, state or ids to see them"`
 	Hint   string         `json:"hint,omitempty"`
+}
+
+// JevStatus is the triage log rolled up for saddle status.
+type JevStatus struct {
+	Calls    int     `json:"calls" jsonschema:"Jev calls recorded"`
+	Errors   int     `json:"errors" jsonschema:"calls that returned an error"`
+	SpendUSD float64 `json:"spend_usd" jsonschema:"approximate spend in USD at Jev's list price for the reported input tokens"`
 }
 
 // CatchUpIn picks where a catch-up starts.
@@ -349,6 +360,11 @@ func Status(a *app.App) (StatusOut, error) {
 	out.Adapters = a.Adapters()
 	out.AdapterPolicy = a.AdapterPolicy()
 	out.Fallback = a.Fallbacks(time.Now())
+	if ts, terr := a.Store.TriageStats(); terr != nil {
+		out.Warnings = append(out.Warnings, "jev: "+terr.Error())
+	} else {
+		out.Jev = JevStatus{Calls: ts.Calls, Errors: ts.Errors, SpendUSD: triage.ApproxSpendUSD(ts.InputTokens)}
+	}
 	out.Tasks, err = Tasks(a)
 	return out, err
 }

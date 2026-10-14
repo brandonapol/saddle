@@ -28,7 +28,10 @@ func fakeJev(t *testing.T, answers map[string]Answer, status ...int) *Client {
 			calls++
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"model": "jev-1.13.0", "answers": answers})
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "jev-1.13.0", "answers": answers,
+			"usage": map[string]int{"input_tokens": 400, "output_tokens": 20},
+		})
 	}))
 	t.Cleanup(srv.Close)
 	return &Client{Key: "k", BaseURL: srv.URL}
@@ -80,5 +83,41 @@ func TestErrorFallsBackToOrchestrator(t *testing.T) {
 	d, err := Screen(context.Background(), cl, "x", permScreen)
 	if err == nil || d.Route != Orchestrator {
 		t.Fatalf("got %+v, %v", d, err)
+	}
+}
+
+func TestScreenRecordsOutcome(t *testing.T) {
+	var got []Call
+	cl := fakeJev(t, map[string]Answer{"verdict": {Choice: "working", Confidence: 0.9}})
+	cl.OnCall = func(c Call) { got = append(got, c) }
+	d, err := Screen(context.Background(), cl.About("t3"), "create hello.txt", "✻ Cooking…")
+	if err != nil || d.Route != Drop {
+		t.Fatalf("Screen = %+v, %v", d, err)
+	}
+	if len(got) != 1 || got[0].Purpose != PurposeScreen || got[0].Task != "t3" || got[0].Verdict != "working" ||
+		got[0].Confidence != 0.9 || got[0].Route != Drop || got[0].Error != "" || got[0].InputTokens != 400 {
+		t.Fatalf("recorded %+v", got)
+	}
+}
+
+func TestNeedsUserRecordsFailure(t *testing.T) {
+	var got []Call
+	cl := fakeJev(t, nil, http.StatusUnauthorized)
+	cl.OnCall = func(c Call) { got = append(got, c) }
+	ok, err := NeedsUser(context.Background(), cl.About("t0"), "approve deleting build/?")
+	if err == nil || ok {
+		t.Fatalf("NeedsUser = %v, %v", ok, err)
+	}
+	if len(got) != 1 || got[0].Purpose != PurposeNeedsUser || got[0].Task != "t0" || got[0].Error == "" || got[0].InputTokens != 0 {
+		t.Fatalf("recorded %+v", got)
+	}
+}
+
+func TestApproxSpendUSD(t *testing.T) {
+	if got := ApproxSpendUSD(1_000_000); got != InputUSDPerMillion {
+		t.Fatalf("spend = %v, want %v", got, InputUSDPerMillion)
+	}
+	if got := ApproxSpendUSD(0); got != 0 {
+		t.Fatalf("zero spend = %v", got)
 	}
 }

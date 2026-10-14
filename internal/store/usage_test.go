@@ -91,18 +91,24 @@ func TestUsageMigrationFromV2(t *testing.T) {
 	}
 }
 
+// adapterMigration is the migration that adds usage.adapter and labels
+// existing rows from the model id. Pin it: a later migration must not be
+// treated as "the last one", or the labeling UPDATE would run before these
+// rows exist and every adapter would stay the default.
+const adapterMigration = 4
+
 func TestUsageMigrationLabelsExistingProviderRows(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	db, err := sql.Open("sqlite", "file:"+path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, migration := range migrations[:len(migrations)-1] {
+	for _, migration := range migrations[:adapterMigration] {
 		if _, err := db.Exec(migration); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := db.Exec(`PRAGMA user_version = ` + fmt.Sprint(len(migrations)-1)); err != nil {
+	if _, err := db.Exec(`PRAGMA user_version = ` + fmt.Sprint(adapterMigration)); err != nil {
 		t.Fatal(err)
 	}
 	for i, model := range []string{"claude-opus-5-5", "gpt-5-codex", "grok-4.7-build"} {

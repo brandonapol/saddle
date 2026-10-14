@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // Routes for an agent event.
@@ -41,11 +42,19 @@ const (
 
 var numberedYes = regexp.MustCompile(`(?m)^\s*(?:❯\s*)?1\.\s*Yes\b`)
 
+// Purposes of a recorded Jev call.
+const (
+	PurposeScreen    = "screen"
+	PurposeNeedsUser = "needs_user"
+)
+
 // Screen triages a worker's terminal. task is a one-line description of what
 // the agent is meant to be doing, so "routine" can be judged against it.
+// The call, including a failure, is recorded on c when c.OnCall is set.
 func Screen(ctx context.Context, c *Client, task, screen string) (Decision, error) {
+	start := time.Now()
 	state := "Task the agent was given: " + task + "\n\nThe agent's terminal (Claude Code):\n" + screen
-	ans, err := c.Ask(ctx, state, map[string]Question{
+	ans, tokens, err := c.ask(ctx, state, map[string]Question{
 		"verdict": {
 			Type:         "choice",
 			Instructions: "What is this coding agent's terminal showing right now?",
@@ -53,9 +62,13 @@ func Screen(ctx context.Context, c *Client, task, screen string) (Decision, erro
 		},
 	})
 	if err != nil {
-		return Decision{Route: Orchestrator}, err
+		d := Decision{Route: Orchestrator}
+		c.record(PurposeScreen, start, "", 0, d.Route, tokens, err)
+		return d, err
 	}
-	return route(ans["verdict"], screen), nil
+	d := route(ans["verdict"], screen)
+	c.record(PurposeScreen, start, d.Verdict, d.Confidence, d.Route, tokens, nil)
+	return d, nil
 }
 
 func route(a Answer, screen string) Decision {
@@ -80,16 +93,25 @@ func route(a Answer, screen string) Decision {
 }
 
 // NeedsUser reports whether an orchestrator message asks the user to act or
-// decide, as opposed to a status update. It returns false on error.
+// decide, as opposed to a status update. It returns false on error. The
+// call, including a failure, is recorded on c when c.OnCall is set.
 func NeedsUser(ctx context.Context, c *Client, message string) (bool, error) {
-	ans, err := c.Ask(ctx, strings.TrimSpace(message), map[string]Question{
+	start := time.Now()
+	ans, tokens, err := c.ask(ctx, strings.TrimSpace(message), map[string]Question{
 		"needs_user": {
 			Type:         "noul",
 			Instructions: "This message asks the reader to do something, answer a question, approve something, or make a decision. A pure status update (started, still running, landed, done) is false.",
 		},
 	})
 	if err != nil {
+		c.record(PurposeNeedsUser, start, "", 0, "", tokens, err)
 		return false, err
 	}
-	return ans["needs_user"].Noul >= 0.5, nil
+	needs := ans["needs_user"].Noul >= 0.5
+	verdict, route := "status", Drop
+	if needs {
+		verdict, route = "needs_user", Human
+	}
+	c.record(PurposeNeedsUser, start, verdict, ans["needs_user"].Noul, route, tokens, nil)
+	return needs, nil
 }
