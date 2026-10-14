@@ -199,6 +199,37 @@ type grokLine struct {
 	} `json:"usage"`
 }
 
+type grokContextLine struct {
+	Timestamp int64 `json:"timestamp"`
+	Params    *struct {
+		Meta *struct {
+			TotalTokens int64  `json:"totalTokens"`
+			EventID     string `json:"eventId"`
+		} `json:"_meta"`
+	} `json:"params"`
+}
+
+// ParseGrokContext reads one Grok updates.jsonl event. Grok's usage.json
+// totals every model call in a user turn; _meta.totalTokens is the prompt size
+// of this model call and therefore the useful context-window reading.
+func ParseGrokContext(line []byte) (Record, bool, error) {
+	var l grokContextLine
+	if err := json.Unmarshal(line, &l); err != nil {
+		return Record{}, false, err
+	}
+	if l.Params == nil || l.Params.Meta == nil || l.Params.Meta.TotalTokens <= 0 {
+		return Record{}, false, nil
+	}
+	var ts time.Time
+	if l.Timestamp > 0 {
+		ts = time.Unix(l.Timestamp, 0)
+	}
+	return Record{
+		ID: l.Params.Meta.EventID, Time: ts, Model: Grok,
+		Tokens: Tokens{Input: l.Params.Meta.TotalTokens},
+	}, true, nil
+}
+
 // ParseGrok reads Grok CLI output. Three shapes count:
 // streaming-messages-json assistant lines (same as Claude), a native
 // {"type":"usage",...} event, and an OpenAI-style completion tee'd from a
