@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-func fullIncident() Incident {
+func fullRecord() PostmortemRecord {
 	s := time.Date(2026, 10, 14, 9, 30, 0, 0, time.UTC)
-	return Incident{
+	return PostmortemRecord{
 		Title:         "Users table empty in prod!",
 		Start:         s,
 		End:           s.Add(95 * time.Minute),
@@ -35,7 +35,7 @@ func testCfg(t *testing.T) *Config {
 }
 
 func TestRenderFull(t *testing.T) {
-	out := RenderPostmortem(fullIncident(), testCfg(t))
+	out := RenderPostmortem(fullRecord(), testCfg(t))
 	for _, want := range []string{
 		"# Postmortem: Users table empty in prod!",
 		"## Timeline", "## Root cause", "## Verification", "## Fix", "## Follow-ups",
@@ -59,7 +59,7 @@ func TestRenderFull(t *testing.T) {
 }
 
 func TestRenderMissingOptional(t *testing.T) {
-	out := RenderPostmortem(Incident{Title: "Odd blip", Start: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)}, nil)
+	out := RenderPostmortem(PostmortemRecord{Title: "Odd blip", Start: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)}, nil)
 	for _, want := range []string{"# Postmortem: Odd blip", "## Timeline", "## Root cause", "## Verification", "## Fix", "## Follow-ups", "Unknown", "ongoing"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -83,14 +83,14 @@ func TestSlugAndName(t *testing.T) {
 	if len(long) > 60 || strings.HasSuffix(long, "-") {
 		t.Errorf("long slug = %q", long)
 	}
-	if got := PostmortemName(fullIncident()); got != "2026-10-14-users-table-empty-in-prod.md" {
+	if got := PostmortemName(fullRecord()); got != "2026-10-14-users-table-empty-in-prod.md" {
 		t.Errorf("name = %q", got)
 	}
 }
 
 func TestWriteNoOverwrite(t *testing.T) {
 	root := t.TempDir()
-	inc := fullIncident()
+	inc := fullRecord()
 	p1, err := WritePostmortem(root, inc, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func TestWriteNoOverwrite(t *testing.T) {
 
 func TestWriteDoesNotTouchRunbooks(t *testing.T) {
 	root := t.TempDir()
-	if _, err := WritePostmortem(root, fullIncident(), testCfg(t)); err != nil {
+	if _, err := WritePostmortem(root, fullRecord(), testCfg(t)); err != nil {
 		t.Fatal(err)
 	}
 	ents, _ := os.ReadDir(root)

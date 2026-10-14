@@ -32,7 +32,7 @@ func PostmortemSlug(title string) string {
 }
 
 // PostmortemName is the file name <date>-<slug>.md, dated by the incident start.
-func PostmortemName(inc Incident) string {
+func PostmortemName(inc PostmortemRecord) string {
 	return inc.Start.UTC().Format("2006-01-02") + "-" + PostmortemSlug(inc.Title) + ".md"
 }
 
@@ -40,7 +40,7 @@ func PostmortemName(inc Incident) string {
 // returns the path. It never overwrites: if the name is taken it appends -2,
 // -3, ... cfg may be nil; it only supplies check details for the runbook
 // proposals. No runbook file is touched.
-func WritePostmortem(root string, inc Incident, cfg *Config) (string, error) {
+func WritePostmortem(root string, inc PostmortemRecord, cfg *Config) (string, error) {
 	dir := filepath.Join(root, PostmortemDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -70,7 +70,7 @@ func WritePostmortem(root string, inc Incident, cfg *Config) (string, error) {
 
 // RenderPostmortem renders inc as markdown. Empty sections say so rather than
 // disappearing, so the format stays predictable.
-func RenderPostmortem(inc Incident, cfg *Config) string {
+func RenderPostmortem(inc PostmortemRecord, cfg *Config) string {
 	var b strings.Builder
 	title := strings.TrimSpace(inc.Title)
 	if title == "" {

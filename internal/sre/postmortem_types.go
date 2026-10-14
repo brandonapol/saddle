@@ -2,9 +2,9 @@ package sre
 
 import "time"
 
-// Incident is the record an SRE-mode incident ends with. It is the input to
+// PostmortemRecord is the record an SRE-mode incident ends with. It is the input to
 // WritePostmortem and deliberately knows nothing about lanes or the guard.
-type Incident struct {
+type PostmortemRecord struct {
 	Title string
 	Start time.Time
 	End   time.Time // zero while unresolved
