@@ -222,3 +222,37 @@ func TestParseOpenCodeLimit(t *testing.T) {
 		}
 	}
 }
+
+// #573: the wordings captured from opencode 1.19.0 and OpenCode Zen. Zen's
+// own messages say "Resets in 2hr 5min"; opencode's retry status ends in
+// "[retrying in 9h 29m attempt #1]", and its spinner can overwrite spaces
+// with ⬝.
+func TestParseOpenCodeLimitCaptured(t *testing.T) {
+	cases := []struct {
+		in      string
+		ok      bool
+		resetIn time.Duration
+		retryIn time.Duration
+	}{
+		{"⬝⬝⬝⬝⬝⬝⬝⬝ Free usage exceeded, subscribe to Go [retrying in 9h 29m attempt #1]", true, 0, 9*time.Hour + 29*time.Minute},
+		{"⬝⬝⬝⬝⬝⬝5⬝hour usage limit reached. It will reset in 2 hours 5 minutes. To continue usin… (click to expand) [retrying i\n attempt #1]", true, 125 * time.Minute, 0},
+		{"5-hour usage limit reached. Resets in 2hr 5min. To continue using this model now, enable usage from your available balance: https://opencode.ai/workspace/wrk_123/go", true, 125 * time.Minute, 0},
+		{"Weekly usage limit reached. Resets in 3 days. To continue", true, 72 * time.Hour, 0},
+		{"Subscription quota exceeded. Retry in 45min.", true, 45 * time.Minute, 0},
+		{"⬝You⬝exceeded your current quota, please check your plan and billing details. For… (click to expand) [retrying in 1s attempt #3]", true, 0, time.Second},
+		{"Free limit reached [retrying in ~2 days attempt #2]", true, 0, 48 * time.Hour},
+		{"Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_123/billing", true, 0, 0},
+		{"Your workspace has reached its monthly spending limit of $20. Manage your limits here: https://opencode.ai/workspace/wrk_123/billing", true, 0, 0},
+		{"You have reached your monthly spending limit of $20.", true, 0, 0},
+		// Zen's free tier message alone reads like a plain rate limit: only
+		// the database row's error type says it is the free limit.
+		{"Rate limit exceeded. Please try again later.", false, 0, 0},
+		{"Too Many Requests [retrying in 4s attempt #2]", false, 0, 0},
+	}
+	for _, c := range cases {
+		l, ok := ParseOpenCodeLimit(c.in)
+		if ok != c.ok || l.ResetIn != c.resetIn || l.RetryIn != c.retryIn {
+			t.Errorf("%q: %+v %v", c.in, l, ok)
+		}
+	}
+}

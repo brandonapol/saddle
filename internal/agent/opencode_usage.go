@@ -28,8 +28,14 @@ type OpenCodeOut struct {
 
 func openCodeOut(l usage.OpenCodeLimit, model string, from, now time.Time) (OpenCodeOut, bool) {
 	until := from.Add(OpenCodeExhaustFor)
-	if l.ResetIn > 0 {
+	switch {
+	case l.ResetIn > 0:
 		until = from.Add(l.ResetIn)
+	case l.RetryIn > OpenCodeExhaustFor:
+		// opencode is waiting out the provider's retry-after (Zen's free
+		// tier resets at UTC midnight). A shorter wait may be a backoff, not
+		// a reset, so it keeps the default.
+		until = from.Add(l.RetryIn)
 	}
 	if !until.After(now) {
 		return OpenCodeOut{}, false
@@ -40,7 +46,10 @@ func openCodeOut(l usage.OpenCodeLimit, model string, from, now time.Time) (Open
 // OpenCodeScreenLimit reports whether a capture of opencode's screen shows
 // a quota or limit error, and marks model (the worker's provider/model,
 // empty for all of opencode) out until the reset the message gives, or for
-// OpenCodeExhaustFor when it gives none.
+// OpenCodeExhaustFor when it gives none. opencode retries Zen's limits,
+// waiting out their retry-after, so these show on the status line while
+// the turn is still running and reach the session database only once the
+// retries run out.
 func OpenCodeScreenLimit(screen, model string, now time.Time) (OpenCodeOut, bool) {
 	var tail []string
 	ls := strings.Split(screen, "\n")
