@@ -23,6 +23,15 @@ import (
 //   - a Go import path (example.com/mod/internal/x) claims the longest
 //     suffix that exists in the repo.
 //
+// A token counts only when it has a path separator or a known file
+// extension. Trailing punctuation (.,;:) is stripped. Issue refs (#N),
+// bare words and URLs are not paths.
+//
+// An explicit Claims: line, or a Claims section, is the whole list.
+// Nothing else in the body is read, and those paths are kept as written
+// (a Go file is not widened to its package), including a path that does
+// not exist yet. The repo check applies only when claims are inferred.
+//
 // Without a repo to check against, only paths that clearly are paths count:
 // globs, names with an extension, a trailing slash, or code spans.
 // Claims only reserve: a worker may still write unclaimed files, which the
@@ -50,17 +59,31 @@ var lockfiles = map[string]bool{
 // Claims: line declares, else the ones InferClaims reads from its body.
 // inferred says which; nil claims mean the ticket runs alone.
 func TicketClaims(body string, repo fs.FS) (globs []string, inferred bool) {
-	if c := ParseClaims(body); c != nil {
+	if c, ok := explicitClaims(body); ok {
 		return c, false
 	}
 	c := InferClaims(body, repo)
 	return c, c != nil
 }
 
+// explicitClaims is the claim list an issue declares. ok is false when it
+// declares none, so an empty list is not filled in from the rest of the body.
+func explicitClaims(body string) ([]string, bool) {
+	c, ok := scanClaims(body)
+	if !ok || len(c) == 0 {
+		return nil, ok
+	}
+	return c, true
+}
+
 // InferClaims reads the paths a ticket body names and turns them into
-// claim globs, checking them against repo when it isn't nil. It returns
-// nil when the body names no path.
+// claim globs, checking them against repo when it isn't nil. An explicit
+// Claims line is returned as written. It returns nil when the body names
+// no path.
 func InferClaims(body string, repo fs.FS) []string {
+	if c, ok := explicitClaims(body); ok {
+		return c
+	}
 	body = urlRe.ReplaceAllString(body, " ")
 	quoted := map[string]bool{}
 	for _, m := range codeSpan.FindAllStringSubmatch(body, -1) {
@@ -85,11 +108,62 @@ func InferClaims(body string, repo fs.FS) []string {
 
 // trimTok drops the sentence punctuation a path picks up in prose.
 func trimTok(t string) string {
-	return strings.TrimLeft(strings.TrimRight(t, ".-"), "-")
+	return strings.TrimLeft(strings.TrimRight(t, ".,;:-"), "-")
+}
+
+// cleanClaimToken strips the quotes and trailing punctuation a path picks
+// up in prose. It reports whether tok is a claim path: it has a separator
+// or a known extension, and it is not an issue ref, a bare word or a URL.
+func cleanClaimToken(tok string) (string, bool) {
+	tok = strings.Trim(tok, "`\"'")
+	tok = strings.TrimRight(tok, ".,;:")
+	tok = strings.TrimLeft(tok, "-")
+	if tok == "" || isIssueRef(tok) || isURL(tok) || strings.HasPrefix(tok, "/") || strings.Contains(tok, "//") {
+		return "", false
+	}
+	for _, s := range strings.Split(strings.Trim(tok, "/"), "/") {
+		if s == "." || s == ".." {
+			return "", false
+		}
+	}
+	if strings.Contains(tok, "/") || knownExt(path.Base(strings.TrimRight(tok, "/"))) {
+		return tok, true
+	}
+	return "", false
+}
+
+func isIssueRef(tok string) bool {
+	if len(tok) < 2 || tok[0] != '#' {
+		return false
+	}
+	for _, r := range tok[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isURL(tok string) bool {
+	return strings.Contains(tok, "://") || strings.HasPrefix(strings.ToLower(tok), "www.")
+}
+
+// knownExt reports whether base wears a file extension, so a bare name
+// such as README.md is a path and a bare word such as Builds is not.
+func knownExt(base string) bool {
+	ext := path.Ext(base)
+	return ext != "" && !strings.HasPrefix(base, ".")
 }
 
 // inferOne maps one token to a claim glob, or "" when it isn't a path.
 func inferOne(tok string, quoted bool, repo fs.FS) string {
+	// A code span is the author marking a path, so a quoted bare name can
+	// still count. Unquoted text has to look like a path on its own.
+	if !quoted {
+		if _, ok := cleanClaimToken(tok); !ok {
+			return ""
+		}
+	}
 	dirSlash := strings.HasSuffix(tok, "/")
 	p := claims.Clean(tok)
 	if p == "" || p == "." || strings.HasPrefix(tok, "/") || strings.Contains(p, "//") {
@@ -104,7 +178,7 @@ func inferOne(tok string, quoted bool, repo fs.FS) string {
 	if lockfiles[p] || segs[0] == ".git" || segs[0] == ".saddle" {
 		return "" // generated, or saddle's and git's own state
 	}
-	ext := path.Ext(segs[len(segs)-1]) != "" && !strings.HasPrefix(segs[len(segs)-1], ".")
+	ext := knownExt(segs[len(segs)-1])
 	if strings.ContainsAny(p, "*?") {
 		// A glob is meant literally; it only needs a root that exists.
 		if len(segs) == 1 {
