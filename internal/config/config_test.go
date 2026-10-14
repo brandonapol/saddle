@@ -678,7 +678,7 @@ func TestAdapterOrderAndNotify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(cfg.AdapterOrder, ","); got != "claude,grok,codex" {
+	if got := strings.Join(cfg.AdapterOrder, ","); got != "claude,grok,codex,opencode" {
 		t.Fatalf("default order = %s", got)
 	}
 	if cfg.Notify.Desktop || cfg.Notify.Webhook != "" {
@@ -869,5 +869,35 @@ func TestFallbackChains(t *testing.T) {
 		if _, err := Load(root); err == nil {
 			t.Errorf("loaded %q", bad)
 		}
+	}
+}
+
+// #520: opencode is an adapter [adapters] order and [fallback] can name,
+// and the default rotation includes it.
+func TestOpenCodeInAdapterOrderAndFallback(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.AdapterOrder, ","); got != "claude,grok,codex,opencode" {
+		t.Fatalf("default order = %s, want opencode in the rotation", got)
+	}
+	root := t.TempDir()
+	writeConfig(t, root, "[adapters]\norder = [\"claude\", \"opencode\", \"grok\"]\n"+
+		"[fallback]\n\"claude\" = [\"opencode\"]\n\"opencode:big-pickle\" = [\"grok\"]\n")
+	cfg, err = Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.AdapterOrder, ","); got != "claude,opencode,grok" {
+		t.Fatalf("order = %s", got)
+	}
+	if _, chain, ok := cfg.FallbackFor("claude", ""); !ok || strings.Join(chain, ",") != "opencode" {
+		t.Fatalf("claude fallback = %v %v", chain, ok)
+	}
+	km, chain, ok := cfg.FallbackFor("opencode", "big-pickle")
+	if !ok || km != "big-pickle" || strings.Join(chain, ",") != "grok" {
+		t.Fatalf("FallbackFor(opencode, big-pickle) = %q %v %v", km, chain, ok)
 	}
 }

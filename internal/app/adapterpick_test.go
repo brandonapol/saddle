@@ -114,3 +114,59 @@ func TestSpawnKindPicksAdapter(t *testing.T) {
 		t.Fatalf("no spawn event naming why: %+v", evs)
 	}
 }
+
+// #520: the default rotation picks opencode while it has quota and skips it
+// once it is out. An explicit spawn is refused the same way; a [fallback]
+// chain can name it, and is skipped once it is out too.
+func TestPickSkipsOpenCodeWhenOutOfQuota(t *testing.T) {
+	a, _ := setup(t)
+	now := time.Now()
+	if got := picked(a.rankAdapters(pickReq{def: a.Cfg.Harness}, nil, now)); !strings.Contains(","+got+",", ",opencode,") {
+		t.Fatalf("pick left opencode out: %s", got)
+	}
+	var listed agent.Status
+	for _, s := range a.Adapters() {
+		if s.Name == agent.OpenCodeName {
+			listed = s
+		}
+	}
+	if listed.Provider != "any (opencode)" || listed.Hooks || listed.PickRank == 0 || listed.OutOfQuotaUntil != "" {
+		t.Fatalf("status opencode = %+v", listed)
+	}
+	ex := map[string]Exhaustion{"opencode": {Adapter: "opencode", Until: now.Add(time.Hour), Resets: "in 2 hours"}}
+	rs := a.rankAdapters(pickReq{def: a.Cfg.Harness}, ex, now)
+	if strings.Contains(","+picked(rs)+",", ",opencode,") {
+		t.Fatalf("picked opencode while it is out: %+v", rs)
+	}
+	var why string
+	for _, r := range rs {
+		if r.Name == "opencode" {
+			why = r.Why
+			if r.Rank != 0 {
+				t.Fatalf("out opencode rank %d, want 0 (%+v)", r.Rank, r)
+			}
+		}
+	}
+	if !strings.Contains(why, "out of quota") {
+		t.Fatalf("opencode why = %q", why)
+	}
+
+	w, err := a.Spawn(SpawnReq{Title: "on opencode", Adapter: agent.OpenCodeName})
+	must(t, err)
+	if got := agent.Recorded(a.stateDir("run", w.ID)); got != agent.OpenCodeName {
+		t.Fatalf("spawn ran %s, want opencode", got)
+	}
+	must(t, a.MarkExhausted(agent.OpenCodeName, now.Add(time.Hour), "in 2 hours"))
+	if _, err := a.Spawn(SpawnReq{Title: "opencode again", Adapter: agent.OpenCodeName}); err == nil || !strings.Contains(err.Error(), "out of quota") {
+		t.Fatalf("explicit opencode while out: %v", err)
+	}
+
+	a.Cfg.Fallback = map[string][]string{"claude": {"opencode"}}
+	must(t, a.MarkExhausted(usage.Claude, now.Add(time.Hour), "3pm"))
+	// opencode is out, so the chain is skipped and the policy's next adapter runs.
+	next, err := a.Spawn(SpawnReq{Title: "claude out, opencode out"})
+	must(t, err)
+	if got := agent.Recorded(a.stateDir("run", next.ID)); got == agent.OpenCodeName || got == usage.Claude {
+		t.Fatalf("spawn ran %s, want it to skip claude and opencode", got)
+	}
+}
