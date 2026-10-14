@@ -71,7 +71,8 @@ type Task struct {
 	Summary   string
 	SessionID string
 	PR        string
-	Issue     int // GitHub issue this task works on; its PR closes it
+	Issue     int    // GitHub issue this task works on; its PR closes it
+	Adapter   string // claude, codex, gemini or grok; "" on rows from before it was recorded (#507)
 	CreatedAt time.Time
 }
 
@@ -161,6 +162,8 @@ CREATE TABLE triage_calls(
   error TEXT NOT NULL DEFAULT '',
   input_tokens INTEGER NOT NULL DEFAULT 0
 );
+`, `
+ALTER TABLE tasks ADD COLUMN adapter TEXT NOT NULL DEFAULT '';
 `}
 
 // Open opens (creating if needed) the database at path and applies migrations,
@@ -224,21 +227,21 @@ func (s *Store) tx(fn func(*sql.Tx) error) error {
 
 func now() int64 { return time.Now().Unix() }
 
-const taskCols = `id, title, prompt, parent, role, model, branch, worktree, window, status, summary, session_id, pr, issue, created_at`
+const taskCols = `id, title, prompt, parent, role, model, branch, worktree, window, status, summary, session_id, pr, issue, created_at, adapter`
 
 func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	var created int64
 	err := row.Scan(&t.ID, &t.Title, &t.Prompt, &t.Parent, &t.Role, &t.Model, &t.Branch, &t.Worktree,
-		&t.Window, &t.Status, &t.Summary, &t.SessionID, &t.PR, &t.Issue, &created)
+		&t.Window, &t.Status, &t.Summary, &t.SessionID, &t.PR, &t.Issue, &created, &t.Adapter)
 	t.CreatedAt = time.Unix(created, 0)
 	return t, err
 }
 
 func (s *Store) CreateTask(t Task) error {
-	_, err := s.db.Exec(`INSERT INTO tasks(`+taskCols+`, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err := s.db.Exec(`INSERT INTO tasks(`+taskCols+`, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Title, t.Prompt, t.Parent, t.Role, t.Model, t.Branch, t.Worktree, t.Window, t.Status,
-		t.Summary, t.SessionID, t.PR, t.Issue, now(), now())
+		t.Summary, t.SessionID, t.PR, t.Issue, now(), t.Adapter, now())
 	return err
 }
 
@@ -270,7 +273,7 @@ func (s *Store) Tasks() ([]Task, error) {
 // SetField updates one column of a task. Only known column names are accepted.
 func (s *Store) SetField(id, field, value string) error {
 	switch field {
-	case "status", "window", "summary", "session_id", "pr", "worktree", "model":
+	case "status", "window", "summary", "session_id", "pr", "worktree", "model", "adapter":
 	default:
 		return fmt.Errorf("unknown task field %q", field)
 	}

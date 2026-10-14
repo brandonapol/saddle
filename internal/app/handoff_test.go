@@ -45,8 +45,14 @@ func TestLimitHitHandsWorkerToNextAdapter(t *testing.T) {
 	if to != usage.Grok {
 		t.Fatalf("handed to %q, want grok (hooked, for a task with claims)", to)
 	}
+	if tk.Adapter != usage.Claude {
+		t.Fatalf("spawned task records adapter %q, want claude", tk.Adapter)
+	}
 	got, err := a.Store.Task(tk.ID)
 	must(t, err)
+	if got.Adapter != usage.Grok || a.AdapterOf(got) != usage.Grok {
+		t.Fatalf("handed-off task adapter %q, want grok", got.Adapter)
+	}
 	if got.Status != store.Running || got.Window == "" || got.Window == old || got.Worktree != tk.Worktree || got.Branch != tk.Branch {
 		t.Fatalf("after handoff: %+v (old window %s)", got, old)
 	}

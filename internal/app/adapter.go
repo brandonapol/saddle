@@ -105,7 +105,12 @@ func (a *App) TaskAdapterName(task string) string {
 }
 
 // AdapterOf is the adapter t was launched with, for status (#480).
-func (a *App) AdapterOf(t store.Task) string { return a.taskAdapter(t).Name() }
+func (a *App) AdapterOf(t store.Task) string {
+	if t.Adapter != "" {
+		return t.Adapter
+	}
+	return a.taskAdapter(t).Name()
+}
 
 // injectNotices types every pending notice into a hookless agent's window:
 // it has no hook to collect them and never reports itself idle. Notices are
