@@ -19,6 +19,9 @@ import (
 // killed, and its checkpoint is pruned once kill saved the work. No
 // checkpoint ever reaches the remote.
 func TestJourneyCheckpointsKeepWorkBetweenCommits(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	var steps []fa.Step
 	for _, f := range []string{"a", "b", "c", "d", "e", "f", "g", "h"} {

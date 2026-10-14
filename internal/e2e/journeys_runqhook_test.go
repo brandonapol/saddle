@@ -25,6 +25,9 @@ import (
 //     --class go-test --prio worker -- make check`, and the tools the
 //     Makefile starts ride that one lease. SADDLE_RUNQ=off leaves it alone.
 func TestJourneyHeavyRunsInterceptedInAgentPanes(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	if _, err := exec.LookPath("make"); err != nil {
 		t.Skip("make not installed")
 	}

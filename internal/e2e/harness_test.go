@@ -12,6 +12,9 @@ import (
 )
 
 func TestHarnessRepoFactory(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	if got := w.OriginFile("main", "README.md"); got != "# demo\n" {
 		t.Fatalf("origin main README = %q", got)
@@ -31,6 +34,9 @@ func TestHarnessRepoFactory(t *testing.T) {
 }
 
 func TestHarnessCLIRunner(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{NoInit: true})
 	if r := w.Saddle("version"); r.Code != 0 || strings.TrimSpace(r.Stdout) == "" {
 		t.Fatalf("version: %s", r)
@@ -46,6 +52,9 @@ func TestHarnessCLIRunner(t *testing.T) {
 }
 
 func TestHarnessPrivateTmux(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{NoInit: true})
 	if err := w.Tmux.NewSession("probe", 50, 10, w.Repo, "cat"); err != nil {
 		t.Fatal(err)
@@ -75,6 +84,9 @@ func TestHarnessPrivateTmux(t *testing.T) {
 }
 
 func TestHarnessFakeAgentThroughSpawn(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	w.Spawn("t1", "Add hello", []string{"hello.txt"},
 		fa.Write("hello.txt", "hi\n"), fa.Commit("add hello"), fa.Done("Adds hello.txt."))

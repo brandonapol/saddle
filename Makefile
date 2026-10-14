@@ -34,8 +34,13 @@ ENTRYPOINT := ./cmd/saddle
 
 # go test's -timeout for the whole e2e suite (E2E_TIMEOUT is the per-wait
 # timeout the journeys read). A race build (E2E_RACE=1) runs them
-# several times slower, so the nightly raises it.
+# several times slower, so the nightly raises it. Journeys run in parallel,
+# each in its own process; the suite fails a full run over its budget
+# (E2E_BUDGET, 400s on a quiet machine, scaled up for load; 0 turns it off)
+# and lists the slowest journeys.
 E2E_GO_TIMEOUT := $(or $(E2E_GO_TIMEOUT),15m)
+# How many journeys run at once (go test -parallel; empty means one per CPU).
+E2E_PARALLEL ?=
 
 # go test's -timeout for each package's test binary (Go's default is 10m).
 # internal/app, the slowest, takes about 75s idle but several times that at
@@ -143,7 +148,11 @@ test/e2e: ## Run the end-to-end journeys (RUN=Journey to pick some; needs tmux)
 	# hermetic temp repos with a private tmux server. See internal/e2e;
 	# test/e2e holds the remote-control journeys over a real listener.
 	# E2E_RACE=1 also race-builds saddle itself (slow: minutes, not seconds).
-	E2E_GO_TAGS='$(GO_TAGS)' $(GO) test -tags '$(GO_TAGS) e2e' -race -count=1 -timeout $(E2E_GO_TIMEOUT) $(if $(RUN),-run '$(RUN)') ./internal/e2e/... ./test/e2e/...
+	# Each journey package appends its slowest journeys to E2E_REPORT, shown
+	# after the run whether it passed or not.
+	rep="$$(mktemp)"; trap 'rm -f "$$rep"' EXIT; \
+	E2E_REPORT="$$rep" E2E_GO_TAGS='$(GO_TAGS)' $(GO) test -tags '$(GO_TAGS) e2e' -race -count=1 -timeout $(E2E_GO_TIMEOUT) $(if $(E2E_PARALLEL),-parallel $(E2E_PARALLEL)) $(if $(RUN),-run '$(RUN)') ./internal/e2e/... ./test/e2e/...; \
+	code=$$?; cat "$$rep"; exit $$code
 
 .PHONY: test/scripts
 test/scripts: ## Test the shell scripts (upgrade, release, install)

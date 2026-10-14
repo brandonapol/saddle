@@ -39,6 +39,9 @@ func (w *World) queueRun(t *testing.T, task, prio, script string) *contender {
 // `saddle spawn --force` still works. When the queue drains, spawn works
 // again.
 func TestJourneySpawnBackpressure(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	must(t, os.MkdirAll(filepath.Join(w.Home, ".config", "saddle"), 0o755))
 	must(t, os.WriteFile(filepath.Join(w.Home, ".config", "saddle", "runq.toml"), []byte(

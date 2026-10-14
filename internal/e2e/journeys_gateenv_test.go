@@ -20,6 +20,9 @@ import (
 // the repo (under the user cache dir), t1 is never returned to its producer or charged an attempt,
 // and it lands.
 func TestJourneyGateEnvFailureDoesNotBounce(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	scratch := t.TempDir()
 	once, seen := filepath.Join(scratch, "failed-once"), filepath.Join(scratch, "tmpdirs")
 	gate := "if [ ! -e " + once + " ]; then touch " + once + "; echo \"open $TMPDIR/TestX/db: disk quota exceeded\"; exit 1; fi; " +

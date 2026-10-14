@@ -30,6 +30,9 @@ func orchLogHas(t *testing.T, w *World, want string) {
 // call. The chat says Interrupted, the same session takes the next message,
 // and saddle up keeps running.
 func TestJourneyInterruptOrchestrator(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	u := w.StartTUI(140, 40)
 	u.WaitScreen("ORCHESTRATOR")
@@ -93,6 +96,9 @@ func countCalls(log string) int {
 // processes per tick (one window list, one batched capture), not two per
 // agent.
 func TestJourneyRefreshTmuxExecs(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	if _, err := os.Stat("/proc/self/comm"); err != nil {
 		t.Skip("needs /proc to tell saddle's tmux calls apart")
 	}
@@ -140,6 +146,9 @@ func (w *World) startTUIEnv(width, height int, env string) *TUI {
 //   - P2: at 80x24 the header keeps the orchestrator's state, and at 60x20
 //     the chat says how to reach the hidden agents.
 func TestJourneyTUIPolish(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	u := w.startTUIEnv(140, 40, "NO_COLOR=1")
 	u.WaitScreen("▶ ORCHESTRATOR")

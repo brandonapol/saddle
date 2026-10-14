@@ -30,6 +30,9 @@ const quarkHook = "#!/bin/sh\n# Run the repo's checks before every commit.\nif [
 // agent's worktree and refuses with the red check's output (#212), and the
 // branch lands once the agent runs the fixer.
 func TestJourneyLintDetectMakeFi(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\nno_auto_rebase = true\n"})
 	w.WriteFile("Makefile", checkFixMakefile)
 	w.WriteFile("git/hooks/pre-commit", quarkHook)

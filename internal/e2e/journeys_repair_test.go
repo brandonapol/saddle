@@ -31,6 +31,9 @@ func repairsOf(w *World, orig string) []mcpserver.TaskView {
 // branch and lands normally; t1 is superseded, its PR closed, and the stack
 // checks clean with no human edit.
 func TestJourneyOrphanedConflictRepairs(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	w.Spawn("t1", "Shared edit", []string{"shared.txt"},
 		fa.Write("shared.txt", "one\n"), fa.Commit("one"), fa.Done("shared.txt says one."))
@@ -147,6 +150,9 @@ func checkCollapsed(t *testing.T, w *World, low, high *fakegh.PR) {
 // retargets the top PR to main, sees CI green, squash-merges it, marks both
 // tasks merged, closes the bottom PR with a comment, and restacks.
 func TestJourneyStackCollapseRedBottom(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	low, high := redBottomStack(t, w)
 	r := w.MustSaddle("stack", "collapse", "t1")
@@ -159,6 +165,9 @@ func TestJourneyStackCollapseRedBottom(t *testing.T) {
 // TestJourneyAutoCollapseRedBottom: auto-merge's hook. A red bottom with a
 // green PR above that holds its commits collapses with no human step.
 func TestJourneyAutoCollapseRedBottom(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	low, high := redBottomStack(t, w)
 	pr, err := w.App().AutoCollapse("t1", nil)

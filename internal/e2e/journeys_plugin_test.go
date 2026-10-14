@@ -31,6 +31,9 @@ func (w *World) marker() string {
 // happens once per repo: later commands go straight to work. The plugin's
 // hook, which runs in every project, never sets a repo up by itself.
 func TestJourneyPluginOnboarding(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{NoInit: true})
 
 	// The hook runs on every tool call in every project: it stays out.
@@ -76,6 +79,9 @@ func TestJourneyPluginOnboarding(t *testing.T) {
 // each later use reruns only the doctor (no second greeting) until it
 // passes, then carries on.
 func TestJourneyPluginOnboardingBlockedByFailingDoctor(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{NoInit: true})
 	must(t, w.GH.Update(func(s *fakegh.State) error {
 		s.Repo.AllowMerge = true // stacked PRs need linear history: a hard fail
@@ -118,6 +124,9 @@ func TestJourneyPluginOnboardingBlockedByFailingDoctor(t *testing.T) {
 // TestJourneyInitBannerOnlyOnTTY: saddle init greets a person at a terminal,
 // in color, and prints no banner into a pipe or with --quiet.
 func TestJourneyInitBannerOnlyOnTTY(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{NoInit: true})
 	w.trustRepo()
 	if r := w.MustSaddle("init"); strings.Contains(r.Stdout, howdyLine) {

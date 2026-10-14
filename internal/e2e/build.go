@@ -8,6 +8,7 @@
 package e2e
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -27,11 +28,10 @@ type Bins struct {
 	Agent  string // the fake agent
 }
 
-// Build compiles saddle, the gh shim and the fake agent into dir. With
+// Build compiles saddle, the gh shim and the fake agent into dir, at once. With
 // E2E_RACE=1 saddle is built with the race detector.
 func Build(dir string) (Bins, error) {
-	b := Bins{Dir: dir, Saddle: filepath.Join(dir, "saddle"), GH: filepath.Join(dir, "gh"),
-		Agent: filepath.Join(dir, "fakeagent")}
+	b := binsIn(dir)
 	root, err := moduleRoot()
 	if err != nil {
 		return b, err
@@ -40,22 +40,41 @@ func Build(dir string) (Bins, error) {
 	if tags == "" {
 		tags = DefaultTags
 	}
-	for out, pkg := range map[string]string{
+	pkgs := map[string]string{
 		b.Saddle: "./cmd/saddle",
 		b.GH:     "./internal/e2e/fakegh/cmd/gh",
 		b.Agent:  "./internal/e2e/fakeagent/cmd/fakeagent",
-	} {
-		args := []string{"build", "-tags", tags, "-o", out}
-		if os.Getenv("E2E_RACE") == "1" && out == b.Saddle {
-			args = append(args, "-race") // races in the product fail the journeys
-		}
-		cmd := exec.Command("go", append(args, pkg)...)
-		cmd.Dir = root
-		if o, err := cmd.CombinedOutput(); err != nil {
-			return b, fmt.Errorf("go build %s: %w\n%s", pkg, err, o)
-		}
+	}
+	errs := make(chan error, len(pkgs))
+	for out, pkg := range pkgs {
+		go func() {
+			args := []string{"build", "-tags", tags, "-o", out}
+			if os.Getenv("E2E_RACE") == "1" && out == b.Saddle {
+				args = append(args, "-race") // races in the product fail the journeys
+			}
+			cmd := exec.Command("go", append(args, pkg)...)
+			cmd.Dir = root
+			if o, err := cmd.CombinedOutput(); err != nil {
+				errs <- fmt.Errorf("go build %s: %w\n%s", pkg, err, o)
+				return
+			}
+			errs <- nil
+		}()
+	}
+	var all []error
+	for range pkgs {
+		all = append(all, <-errs)
+	}
+	if err := errors.Join(all...); err != nil {
+		return b, err
 	}
 	return b, nil
+}
+
+// binsIn are the binaries Build puts in dir.
+func binsIn(dir string) Bins {
+	return Bins{Dir: dir, Saddle: filepath.Join(dir, "saddle"), GH: filepath.Join(dir, "gh"),
+		Agent: filepath.Join(dir, "fakeagent")}
 }
 
 func moduleRoot() (string, error) {

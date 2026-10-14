@@ -75,6 +75,9 @@ func queued(v mcpserver.TaskView) bool { return v.Status == "done" && v.Train ==
 // it; t2 is relaunched with its brief and a note. Both finish and land, and
 // the orchestrator hears about it once.
 func TestJourneyResumeAfterTmuxServerDies(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	idleAgent(w, "t1", "Alpha work", "alpha/**")
 	idleAgent(w, "t2", "Beta work", "beta/**")
@@ -136,6 +139,9 @@ func TestJourneyResumeAfterTmuxServerDies(t *testing.T) {
 // TestJourneyDownThenUpResumes (#254): saddle down pauses the running task,
 // keeping its claims, and says so; saddle up resumes it, and it finishes.
 func TestJourneyDownThenUpResumes(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	idleAgent(w, "t1", "Alpha work", "alpha/**")
 
@@ -162,6 +168,9 @@ func TestJourneyDownThenUpResumes(t *testing.T) {
 // survives losing its window: saddle rescue saves it to rescue/<task> and a
 // patch, kills the task and frees its claims, and the patch restores it.
 func TestJourneyRescueRestoresUncommitted(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	w.Spawn("t1", "Alpha work", []string{"alpha/**"}, fa.Write("alpha/wip.txt", "half done\n"), fa.Wait("never-comes"))
 	w.WaitStatus("t1", "idle")

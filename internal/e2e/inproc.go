@@ -9,8 +9,7 @@ import (
 // gh calls go to the shim on PATH and tmux calls to the private server.
 func (w *World) App() *app.App {
 	w.T.Helper()
-	a, err := app.Open(w.Repo)
-	must(w.T, err)
+	a := w.open()
 	w.T.Cleanup(func() { _ = a.Close() })
 	return a
 }
@@ -19,10 +18,20 @@ func (w *World) App() *app.App {
 // up` and `saddle plugin engine` run every two minutes, with no wait.
 func (w *World) AutomergeTick() automerge.Status {
 	w.T.Helper()
-	a, err := app.Open(w.Repo)
-	must(w.T, err)
+	a := w.open()
 	defer func() { _ = a.Close() }()
 	st, err := a.NewAutomerge(nil).Check()
 	must(w.T, err)
 	return st
+}
+
+// open opens the World's repo in this process. The App runs the World's
+// saddle binary, not this test binary (its os.Executable), wherever it
+// starts saddle: agents' hooks, gates, the MCP server.
+func (w *World) open() *app.App {
+	w.T.Helper()
+	a, err := app.Open(w.Repo)
+	must(w.T, err)
+	a.Bin = w.Bins.Saddle
+	return a
 }

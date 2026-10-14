@@ -122,6 +122,9 @@ func logLines(dir string) string {
 // at position 1 behind the first session's and starts by itself when it
 // ends.
 func TestJourneyRunqTwoSessionsTakeTurns(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	state, dir := t.TempDir(), t.TempDir()
 	cfg := "max_load_per_cpu = 0\nmax_cpu_pressure = 0\n[classes.flutter-test]\nslots = 1\n"
 	a := runqWorld(t, Options{}, cfg, "XDG_STATE_HOME="+state)
@@ -196,6 +199,9 @@ func readPID(t *testing.T, p string) int {
 // waiting agent starts within about one heartbeat (1s), and the dead
 // holder's child is gone.
 func TestJourneyRunqCrashedHolderFreesSlot(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	dir := t.TempDir()
 	w := runqWorld(t, Options{}, "max_load_per_cpu = 0\nmax_cpu_pressure = 0\n[classes.flutter-test]\nslots = 1\n")
 	fakeFlutter(t, w, dir, false)
@@ -246,6 +252,9 @@ func TestJourneyRunqCrashedHolderFreesSlot(t *testing.T) {
 // the gate. Nothing deadlocks: the land finishes, then t2's check runs on a
 // lease of its own and its commit goes through.
 func TestJourneyRunqHookReentrancy(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	if _, err := exec.LookPath("make"); err != nil {
 		t.Skip("make not installed")
 	}
@@ -341,6 +350,9 @@ func TestJourneyRunqHookReentrancy(t *testing.T) {
 // reads idle, the runs go two at a time: the sampled count of burners
 // never exceeds the ceiling, and all six finish.
 func TestJourneyRunqLoadCeiling(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	const ceiling, agents = 2, 6
 	dir, proc := t.TempDir(), t.TempDir()
 	must(t, os.MkdirAll(filepath.Join(proc, "proc", "pressure"), 0o755))

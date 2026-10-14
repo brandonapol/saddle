@@ -129,6 +129,9 @@ func (s runqShells) status(t *testing.T) runqJSON {
 // position and the holder, runq status --json shows both, and it starts by
 // itself when the first ends. Exit codes come through.
 func TestJourneySaddleRunTwoShellsTakeTurns(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	s := newRunqShells(t)
 	dir := t.TempDir()
 	log, gate := filepath.Join(dir, "log"), filepath.Join(dir, "release-a")
@@ -174,6 +177,9 @@ func TestJourneySaddleRunTwoShellsTakeTurns(t *testing.T) {
 // run. Its command dies with it and the waiter starts within about one
 // heartbeat (1s).
 func TestJourneySaddleRunKilledHolderFreesSlot(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	s := newRunqShells(t)
 	dir := t.TempDir()
 	pidFile, log := filepath.Join(dir, "pid"), filepath.Join(dir, "log")
@@ -229,6 +235,9 @@ func TestJourneySaddleRunKilledHolderFreesSlot(t *testing.T) {
 // slot runs another saddle run of the same class (a pre-commit hook's make
 // check inside an agent's run). The inner run rides on the outer lease.
 func TestJourneySaddleRunNestedDoesNotDeadlock(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	s := newRunqShells(t)
 	log := filepath.Join(t.TempDir(), "log")
 	outer := s.run(t, "ta", "e2e",

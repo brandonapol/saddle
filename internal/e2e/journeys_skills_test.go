@@ -16,6 +16,9 @@ import (
 // the orchestrator as typed, whose reply streams into the chat. /help stays
 // in the TUI. saddle doctor lists what the orchestrator sees.
 func TestJourneySkillsFromChat(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	skill := filepath.Join(w.Home, ".claude", "skills", "greet")
 	must(t, os.MkdirAll(skill, 0o755))

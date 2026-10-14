@@ -52,6 +52,9 @@ func (u *TUI) altBracketThenX() {
 //   - #200: alt+` whose ESC and backtick arrive in separate writes still
 //     toggles the pane, and no backtick reaches chat.
 func TestJourneyTUIBugs(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	urls := landTwo(t, w)
 	must(t, w.GH.MergeByHand(prNumber(t, w.GHState(), urls["t1"]).Number, "squash"))

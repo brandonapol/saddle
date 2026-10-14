@@ -24,6 +24,9 @@ func (w *World) queueLines() []string {
 // a held entry keeps its place while land skips it, calling done again
 // doesn't release it, and once released it lands with its new work.
 func TestJourneyQueueMoveHoldRelease(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	w.Spawn("t1", "alpha work", []string{"alpha/**"}, append(finished("alpha", "alpha\n"),
 		fa.Wait("redo-now"), fa.Write("alpha/more.txt", "more\n"), fa.Commit("more alpha"), fa.Done("Adds more alpha."))...)
@@ -104,6 +107,9 @@ func TestJourneyQueueMoveHoldRelease(t *testing.T) {
 // the others, one per tick, says the held stack waits on its hold, and
 // merges it once released.
 func TestJourneyAutomergeHoldKeepsGreenStack(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	urls := landThree(t, w)
 	must(t, w.GH.SetAllChecks(fakegh.Pass))
@@ -163,6 +169,9 @@ func (g *pausingGH) PR(url string) (automerge.PR, error) {
 // reading GitHub, so the hold is silently dropped and the held stack can
 // merge on the next tick.
 func TestJourneyAutomergeHoldDuringCheckSticks(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	t.Skip("#209: a check saves the state it loaded first, dropping holds and toggles made meanwhile")
 	w := world(t, Options{})
 	landThree(t, w)

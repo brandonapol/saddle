@@ -54,6 +54,9 @@ func (u *TUI) waitFits(width int) {
 // merge views at 120 and at 36 columns, every view fits the width, and the
 // keys never type into the chat input.
 func TestJourneyTUIViewRouter(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	u := w.StartTUI(120, 40)
 	for _, width := range []int{120, 36} {
@@ -109,6 +112,9 @@ func idleTwo(t *testing.T, w *World) {
 // agents from the chat or the agent list, b swaps the peek for the agent's
 // brief and back, and at 36 columns tab shows the agents and peek alone.
 func TestJourneyTUIPeekCycleAndBrief(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	idleTwo(t, w)
 	u := w.StartTUI(120, 40)
@@ -170,6 +176,9 @@ var helpDescs = []string{
 // is a character) and lists every group and binding; ? opens it from the
 // agent list; esc closes it; it fits a 36-column terminal.
 func TestJourneyTUIHelpOverlay(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	u := w.StartTUI(160, 60)
 
@@ -211,6 +220,9 @@ func TestJourneyTUIHelpOverlay(t *testing.T) {
 // off, h holds and releases the selected stack, and r rebases it onto a
 // main that moved; each shows in the view and in saddle automerge status.
 func TestJourneyTUIMergeViewKeys(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	urls := landThree(t, w)
 	// CI stays pending, so nothing merges while auto-merge is on.
@@ -276,6 +288,9 @@ func TestJourneyTUIMergeViewKeys(t *testing.T) {
 // say so. Today every call rebuilds every branch with new SHAs, so each
 // press force-moved the PR heads (restarting their CI). Fixed by #219.
 func TestJourneyRebaseStackIsIdempotent(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	landThree(t, w)
 	must(t, w.GH.MergeByHand(prNumber(t, w.GHState(), w.Task("t1").PR).Number, "squash"))
@@ -302,6 +317,9 @@ func TestJourneyRebaseStackIsIdempotent(t *testing.T) {
 // merges its train entry is "merged". The merge view must list it as done,
 // not under returned, and the header must not count it as a conflict.
 func TestJourneyTUIMergedTaskNotShownAsConflict(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	urls := landThree(t, w)
 	must(t, w.GH.MergeByHand(prNumber(t, w.GHState(), urls["t1"]).Number, "squash"))
@@ -326,6 +344,9 @@ func TestJourneyTUIMergedTaskNotShownAsConflict(t *testing.T) {
 // shows above the footer as a bar, percent and warning, and the 60-minute
 // usage box totals it by provider.
 func TestJourneyTUIUsageStrip(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[limits.five_hour]\ntokens = 1000000\n"})
 	now := time.Now().UTC().Truncate(time.Minute)
 	must(t, w.App().Store.AddUsage("e2e-usage", false, []usage.Bucket{{

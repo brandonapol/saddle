@@ -27,6 +27,9 @@ const usageBanner = `You've hit your session limit · resets 12:10pm (America/Ne
 // When the banner clears the worker is running again with no second
 // notice, and it finishes.
 func TestJourneyUsageLimitParksAndResumes(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	reset, finish := filepath.Join(w.Scripts, "t1.reset"), filepath.Join(w.Scripts, "t1.finish")
 	// The agent draws the banner on its own terminal, then waits for the

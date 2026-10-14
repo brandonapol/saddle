@@ -125,6 +125,9 @@ func fileHas(path, want string) func() error {
 // run flutter tests with one slot. The second sees its position and the
 // holder, starts by itself when the first ends, and the runs never overlap.
 func TestJourneyRunqTwoContendersTakeTurns(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	bin := buildRunq(t)
 	dir := t.TempDir()
 	db, log := filepath.Join(dir, "runq.db"), filepath.Join(dir, "log")
@@ -161,6 +164,9 @@ func TestJourneyRunqTwoContendersTakeTurns(t *testing.T) {
 // child dies with it (no orphaned heavy run) and the waiter starts within
 // one heartbeat (1s here).
 func TestJourneyRunqCrashedHolder(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	bin := buildRunq(t)
 	dir := t.TempDir()
 	db, pidFile, log := filepath.Join(dir, "runq.db"), filepath.Join(dir, "pid"), filepath.Join(dir, "log")
@@ -207,6 +213,9 @@ func TestJourneyRunqCrashedHolder(t *testing.T) {
 // starts another `runq run` of the same class (a pre-commit hook's make
 // check inside an agent's run); the inner run rides on the outer lease.
 func TestJourneyRunqNestedRunDoesNotDeadlock(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	bin := buildRunq(t)
 	dir := t.TempDir()
 	db, log := filepath.Join(dir, "runq.db"), filepath.Join(dir, "log")

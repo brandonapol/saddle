@@ -32,6 +32,9 @@ func gateRunqWorld(t *testing.T, testCmd string) *World {
 // `saddle run --class go-test`. The hook rides on the gate's lease through
 // SADDLE_RUNQ_LEASE instead of queueing behind it, so the land finishes.
 func TestJourneyGateHookRidesLease(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	gate := filepath.Join(t.TempDir(), "gate.sh")
 	w := gateRunqWorld(t, "sh "+gate)
 	log := filepath.Join(w.Root, "hook.log")
@@ -79,6 +82,9 @@ func TestJourneyGateHookRidesLease(t *testing.T) {
 // and meanwhile the train shows "queued: position 1 of 1 for go-test,
 // holder t83 …". Once the worker's run ends the gate runs and t1 lands.
 func TestJourneyGateWaitShowsQueuedInTrain(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := gateRunqWorld(t, "go test -h >/dev/null 2>&1; true")
 	w.Spawn("t1", "Alpha work", []string{"alpha/**"}, finished("alpha", "alpha\n")...)
 	w.WaitTask("t1", "queued in the train", func(v mcpserver.TaskView) bool { return v.Status == "done" && v.Train == "queued" })

@@ -14,6 +14,9 @@ import (
 // claude ready, one `saddle up` runs init's local setup itself, then the
 // doctor, and opens the TUI. No --skip-doctor, no saddle init first.
 func TestJourneyFirstUpSetsUpTheRepo(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	t.Setenv("SADDLE_TRUST", "")
 	w := world(t, Options{NoInit: true})
 
@@ -50,6 +53,9 @@ func TestJourneyFirstUpSetsUpTheRepo(t *testing.T) {
 // everything once trusted, keeps an existing config.toml on a rerun, and
 // shows the next steps.
 func TestJourneyDoctorFixHalfInit(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	t.Setenv("SADDLE_TRUST", "")
 	w := world(t, Options{NoInit: true})
 	// Any app command creates state.db without running init.

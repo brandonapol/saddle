@@ -43,6 +43,9 @@ func exists(p string) bool { _, err := os.Lstat(p); return err == nil }
 // it and the spawn goes ahead, with no human step. The owner's own files in
 // the OS temp dir are never touched.
 func TestScratchFillAndRecover(t *testing.T) {
+	if harness.Fork(t) {
+		return
+	}
 	w := harness.New(t, bins, harness.Options{})
 	t.Cleanup(w.Diagnose)
 	root := filepath.Join(w.Root, "scratch")

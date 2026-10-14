@@ -71,6 +71,9 @@ func (w *World) tmuxUp() bool {
 // refuse), g hands it to the orchestrator, and a on an approved plan reopens
 // it.
 func TestJourneyPlanViewKeys(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	w.fakePlanner("add a cli task",
 		[]planTask{task("api", "Build the API", "api/**"), task("docs", "Write the docs", "docs/**")},

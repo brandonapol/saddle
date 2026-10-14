@@ -50,6 +50,9 @@ func checkHeavyPositions(t *testing.T, where, otherLabel string, v *app.HeavyRun
 // holder and positions. In the TUI's runs view x asks before killing, n
 // keeps the lease, and x then y kills it: the next waiter gets the slot.
 func TestJourneyHeavyRunsQueueVisible(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	must(t, os.MkdirAll(filepath.Join(w.Home, ".config", "saddle"), 0o755))
 	must(t, os.WriteFile(filepath.Join(w.Home, ".config", "saddle", "runq.toml"),

@@ -51,6 +51,9 @@ func rebases(log []string) int {
 // N + N(N-1)/2 rebases in all. Now each lands with exactly one rebase, its
 // own on its turn.
 func TestJourneyLandRebasesEachQueuedTaskOnce(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	const n = 6
 	w := world(t, Options{Top: "concurrency = 8\n"})
 	var ids []string
@@ -87,6 +90,9 @@ const quarkMakeHook = "#!/bin/sh\nset -eu\nif command -v gmake >/dev/null 2>&1; 
 // make check twice on the same tree. Now doctor reports make check and a
 // land runs it once.
 func TestJourneyMakeVariableHookRunsOncePerLand(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{TestCmd: "make check"})
 	calls := filepath.Join(w.Root, "make-check.log")
 	w.WriteFile("Makefile", ".PHONY: check\ncheck:\n\t@echo call >> "+calls+"\n")
@@ -121,6 +127,9 @@ func TestJourneyMakeVariableHookRunsOncePerLand(t *testing.T) {
 // not the layer, holds t2 without marking it red, and publishes it once
 // there is room.
 func TestJourneyPrepublishGateEnvironmentFailure(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	full := filepath.Join(t.TempDir(), "disk-full")
 	check := "test ! -f beta/work.txt || test ! -e " + full + " || { echo 'compile: writing output: disk quota exceeded'; exit 1; }"
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\nprepublish.cmd = \"" + check + "\"\n"})

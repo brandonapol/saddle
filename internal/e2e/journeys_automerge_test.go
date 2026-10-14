@@ -61,6 +61,9 @@ func events(t *testing.T, a *app.App, kind string) []string {
 // the first in train order with red CI. Auto-merge refuses the red one and
 // merges the two green ones, one per tick, instead of waiting behind it.
 func TestJourneyAutomergeSkipsRedStackAndMergesReadyOne(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	urls := landThree(t, w)
 	must(t, w.GH.SetAllChecks(fakegh.Pass))
@@ -101,6 +104,9 @@ func TestJourneyAutomergeSkipsRedStackAndMergesReadyOne(t *testing.T) {
 // merged and why, and retries within seconds, so the PR merges as soon as
 // the lock frees, long before the next regular tick.
 func TestJourneyAutomergeRetriesSoonAfterBusyTrain(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	w.Spawn("t1", "alpha work", []string{"alpha/**"}, finished("alpha", "alpha\n")...)
 	w.WaitTask("t1", "queued in the train", func(v mcpserver.TaskView) bool { return v.Status == "done" && v.Train == "queued" })

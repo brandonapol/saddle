@@ -17,6 +17,9 @@ import (
 // adapters, and a gemini spawn that can't sign in fails with the reason
 // and creates no task.
 func TestJourneyAdapters(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	for _, k := range []string{"GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_GCA"} {
 		if os.Getenv(k) != "" {
 			t.Skip(k + " is set, so gemini counts as signed in")
