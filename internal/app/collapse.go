@@ -237,6 +237,7 @@ func (a *App) markCollapsed(res CollapseResult) error {
 		}
 		errs = append(errs, a.Store.SetTrain(l.ID, TrainMerged, l.rangeNote(), false))
 		a.Store.Event(l.ID, "unstacked", fmt.Sprintf("%s: %s carried it into %s (stack collapse)", TrainMerged, res.PR, a.Cfg.Base))
+		a.closeMergedIssue(l.Task, fmt.Sprintf("the stack collapse PR %s carried it into %s", res.PR, a.Cfg.Base))
 	}
 	return errors.Join(errs...)
 }
