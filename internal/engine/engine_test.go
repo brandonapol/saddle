@@ -507,3 +507,55 @@ func TestEngineMarksHooklessWorkerIdleFromItsScreen(t *testing.T) {
 		t.Fatalf("codex working again is %q", st.Status)
 	}
 }
+
+// batchTmux is a screenTmux that batches like tmux.Tmux and counts the tmux
+// processes each call would start.
+type batchTmux struct {
+	*screenTmux
+	execs int
+}
+
+func (b *batchTmux) Alive(w string) bool { b.execs++; return b.screenTmux.Alive(w) }
+func (b *batchTmux) Capture(w string, n int) (string, error) {
+	b.execs++
+	return b.screenTmux.Capture(w, n)
+}
+func (b *batchTmux) Windows() (map[string]bool, error) {
+	b.execs++
+	ws := map[string]bool{}
+	for w := range b.screens {
+		ws[w] = true
+	}
+	return ws, nil
+}
+func (b *batchTmux) CaptureMany(lines map[string]int) (map[string]string, error) {
+	b.execs++
+	out := map[string]string{}
+	for w := range lines {
+		out[w] = b.screens[w]
+	}
+	return out, nil
+}
+
+// With 16 idle workers a tick starts two tmux processes, not two per
+// worker (#272).
+func TestEngineTickTmuxExecs(t *testing.T) {
+	a, ft := setup(t)
+	bt := &batchTmux{screenTmux: ft}
+	a.Tmux = bt
+	for i := 1; i <= 16; i++ {
+		w := fmt.Sprintf("@%d", i)
+		ft.screens[w] = "idle " + w
+		must(t, a.Store.CreateTask(store.Task{ID: fmt.Sprintf("t%d", i), Title: "idle", Status: store.Idle, Window: w}))
+	}
+	e := New(a)
+	must(t, e.Tick())
+	bt.execs = 0
+	must(t, e.Tick())
+	if bt.execs > 2 {
+		t.Fatalf("a steady tick ran %d tmux processes with 16 idle workers, want at most 2", bt.execs)
+	}
+	if got := e.screens["t7"]; got == nil || got.text != "idle @7" {
+		t.Fatalf("t7's screen = %+v, want it read", got)
+	}
+}

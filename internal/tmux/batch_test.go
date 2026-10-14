@@ -63,3 +63,25 @@ func TestCaptureManyRealTmux(t *testing.T) {
 		t.Fatalf("Windows = %v, %v", ws, err)
 	}
 }
+
+// CaptureLive reads every live window in two tmux processes and leaves a
+// gone window out instead of failing the whole batch (#272).
+func TestCaptureLiveTwoCalls(t *testing.T) {
+	var got []string
+	old := run
+	run = func(args ...string) (string, error) {
+		got = append(got, strings.Join(args, " "))
+		if args[0] == "list-windows" {
+			return "@1\n@2\n", nil
+		}
+		return "", nil
+	}
+	t.Cleanup(func() { run = old })
+	CaptureLive(Tmux{Session: "s"}, map[string]int{"@1": 25, "@2": 25, "@9": 25})
+	if len(got) != 2 {
+		t.Fatalf("tmux calls = %d, want 2:\n%s", len(got), strings.Join(got, "\n"))
+	}
+	if strings.Contains(got[1], "@9") {
+		t.Fatalf("captured a gone window: %s", got[1])
+	}
+}
