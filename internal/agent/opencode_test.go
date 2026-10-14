@@ -34,7 +34,7 @@ func TestOpenCodeLaunchRunsFakeBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	if a.Hooks() {
-		t.Fatal("opencode runs no saddle hooks yet")
+		t.Fatal("opencode's claims plugin is not a full hook set: Hooks() stays false (#532)")
 	}
 	cmd, err := a.Launch(l)
 	if err != nil {

@@ -203,9 +203,8 @@ was run in tmux against a scratch repo. Findings:
 - **Hooks.** opencode has JS/TS plugins (`.opencode/plugin/`, or `plugin`
   in config) with `tool.execute.before`/`after` and session events such as
   `session.idle`. A plugin that throws in `tool.execute.before` blocks the
-  tool call, so claims could be enforced like claude's and grok's. Saddle
-  installs no plugin yet, so `Hooks()` is false: claims are checked at
-  commit and done (#489) and status shows `hooks: false`.
+  tool call, so claims can be enforced like claude's and grok's: see the
+  claims plugin (#532) below.
 - **Login.** Status shows opencode ok when it is on PATH and has a
   credential: `auth.json` under `$XDG_DATA_HOME/opencode` (default
   `~/.local/share/opencode`), written by `opencode providers login`, or a
@@ -230,8 +229,7 @@ was run in tmux against a scratch repo. Findings:
   `saddle_status` and went idle.
 
 Not yet (later tickets in #508): screen detectors for these panes
-(`DetectPrompt`, `ReadInput`, working indicator, `DetectLimitBanner`), a
-claims plugin, usage metering (`opencode stats`, or its `opencode.db`
+(`DetectPrompt`, `ReadInput`, working indicator, `DetectLimitBanner`), usage metering (`opencode stats`, or its `opencode.db`
 sessions), and a headless orchestrator (`opencode run` or `opencode
 serve`). Until the detectors land, the hookless idle watcher's working indicator
 (`esc to interrupt`, `esc to cancel`, `Ctrl+c:cancel`) never matches
@@ -242,6 +240,39 @@ opencode is not in `config.AdapterNames`, so `[adapters] order` and
 rotation (`Providers`). Tests: `TestOpenCodeLaunchRunsFakeBinary`,
 `TestOpenCodeLaunchWithoutModel`, `TestOpenCodeApprovalFlags`,
 `TestOpenCodeAvailability`.
+
+## opencode claims plugin (#532)
+
+Launch writes `saddle-claims.mjs` into the run dir and the run-dir
+`opencode.json` loads it (`plugin: ["file://…/saddle-claims.mjs"]`), so
+nothing lands in the repo. Its `tool.execute.before` sends each `write`,
+`edit`, `multiedit`, `apply_patch`, `patch` and `bash` call to `saddle hook`
+as a PreToolUse payload: opencode's tool name, its args as `tool_input`, and
+the session directory as `cwd`. That is Claude's hook matcher; reads never
+reach saddle. When saddle denies, the plugin throws, and opencode fails the
+call with saddle's reason, which the model reads. The hook resolves a
+relative `filePath` against `cwd` and checks every file an `apply_patch`
+patch adds, updates, deletes or moves to. As with claude and grok, an
+unclaimed file becomes the task's, and `git commit --no-verify` is denied. If
+saddle can't run or errors, the call goes through (the hook fails open), and
+the commit check below still catches it.
+
+Verified with opencode 1.19.0 and `opencode/big-pickle` in a scratch repo:
+a write to a file another task claimed failed with the write-guard reason
+naming the owner, a new file was written, edited and claimed for the task,
+and `git commit --no-verify` was refused. opencode resolves its project from
+`$PWD`, which launch.sh's `cd` sets.
+
+`Hooks()` stays false. In saddle it means more than claims: the session id
+comes from SessionStart, notices arrive as hook context after a wake line,
+the Stop hook marks the agent idle, and commits skip the claims check. The
+plugin does none of these, so opencode still gets its notices typed in, the
+screen watcher marks it idle, and the pre-commit and done checks (#489) stay
+on as a backstop. Status shows `hooks: false`. Tests:
+`TestOpenCodeLaunchWritesClaimsPlugin`, `TestOpenCodeClaimsPluginHarness`
+(runs the generated plugin under bun or node against a fake saddle; skipped
+when neither is installed), `TestOpenCodePluginPayloadEnforcesClaims`,
+`TestPatchPaths`.
 
 ## Already at parity
 
