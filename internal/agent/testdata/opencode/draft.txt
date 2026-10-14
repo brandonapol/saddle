@@ -1,0 +1,40 @@
+  ┃  Create notes.txt containing 'hello from opencode', git add and commit it with message 'add notes', then call the
+  ┃  saddle status tool and say how many tasks it lists. Do not run saddle done.
+  ┃
+
+     Let me do this task. Create notes.txt, commit, then call saddle status and count tasks.</think>
+
+  ┃
+  ┃  # Wrote notes.txt
+  ┃
+  ┃   1 hello from opencode
+  ┃   2
+  ┃
+
+     </think>
+
+  ┃
+  ┃  $ git add notes.txt && git commit -m 'add notes' && git log --oneline -1
+  ┃
+  ┃  [main fc485be] add notes
+  ┃   1 file changed, 1 insertion(+)
+  ┃   create mode 100644 notes.txt
+  ┃  fc485be add notes
+  ┃
+
+     </think>
+
+     ⚙ saddle_status
+
+     The status lists tasks: [] — zero tasks.</think>Committed notes.txt (fc485be, message "add notes"). Saddle
+     status lists 0 tasks ("tasks":[]).
+
+     ▣  Build · Big Pickle · 13.2s
+
+  ┃
+  ┃  half-typed owner draft
+  ┃
+  ┃  Build auto · Big Pickle OpenCode
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /repo/wt                          17.2K (9%)  ctrl+p commands
+

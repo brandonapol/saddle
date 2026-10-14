@@ -61,8 +61,11 @@ func ProviderOf(name string) string {
 			return p.Vendor
 		}
 	}
-	if name == GeminiName {
+	switch name {
+	case GeminiName:
 		return "Google"
+	case OpenCodeName:
+		return "any (opencode)"
 	}
 	return ""
 }
@@ -73,6 +76,7 @@ type auth struct {
 	bin      string   // default binary
 	env      []string // API keys or switches the CLI accepts
 	homeEnv  string   // overrides the home dir below
+	homeSub  string   // joined to $homeEnv, when the variable names a parent dir
 	home     string   // relative to the user's home
 	files    []string // relative to home; any one is enough
 	login    string   // how the user logs in
@@ -88,6 +92,13 @@ var auths = map[string]auth{
 		home: ".gemini", files: []string{"oauth_creds.json"}, login: "gemini (sign in), or set GEMINI_API_KEY"},
 	"grok": {bin: "grok", env: []string{"XAI_API_KEY", "GROK_API_KEY"},
 		home: ".grok", files: []string{"auth.json"}, login: "grok login"},
+	// opencode reaches any provider, so any provider's key counts. Its free
+	// opencode/* models run with no login at all, but saddle wants an account
+	// it can meter and fail over from (#509).
+	OpenCodeName: {bin: "opencode", env: []string{"OPENCODE_API_KEY", "OPENCODE_AUTH_CONTENT", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+		"OPENROUTER_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "XAI_API_KEY", "GROQ_API_KEY", "DEEPSEEK_API_KEY"},
+		homeEnv: "XDG_DATA_HOME", homeSub: "opencode", home: ".local/share/opencode", files: []string{"auth.json"},
+		login: "opencode providers login"},
 }
 
 // machine is what availability looks at, so tests can fake it.
@@ -168,6 +179,9 @@ func (m machine) check(name, cmd string) error {
 		return nil
 	}
 	home := m.getenv(a.homeEnv)
+	if home != "" && a.homeSub != "" {
+		home = filepath.Join(home, a.homeSub)
+	}
 	if a.homeEnv == "" || home == "" {
 		home = filepath.Join(m.home, a.home)
 	}
