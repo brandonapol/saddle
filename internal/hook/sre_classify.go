@@ -87,12 +87,12 @@ func readOnlyArgv(w []string, extra [][]string) bool {
 		return gitReadOnly(args)
 	case "go":
 		p := positionals(args, nil)
-		return len(p) > 0 && goCode[p[0]] && !(p[0] == "env" && slices.Contains(args, "-w"))
+		return len(p) > 0 && goCode[p[0]] && (p[0] != "env" || !slices.Contains(args, "-w"))
 	case "saddle":
 		// saddle is the investigators' own coordination surface; only
 		// opening or closing the incident is the owner's.
 		p := positionals(args, nil)
-		return !(len(p) >= 2 && p[0] == "sre" && (p[1] == "open" || p[1] == "close"))
+		return len(p) < 2 || p[0] != "sre" || p[1] != "open" && p[1] != "close"
 	}
 	return false
 }
