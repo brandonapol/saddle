@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -119,6 +122,20 @@ type Driver struct {
 	IdleRepeats int
 	Rules       string // the repo's agent rules, put in every prompt
 	DoneWhen    string // e.g. the check command that must pass
+	// Repo is the checkout claims are inferred against (#504). Nil means
+	// the repo that holds Path's .saddle directory, if it sits in one.
+	Repo fs.FS
+}
+
+// repo is Repo, else the checkout around a .saddle/ state file.
+func (d *Driver) repo() fs.FS {
+	if d.Repo != nil {
+		return d.Repo
+	}
+	if dir := filepath.Dir(d.Path); filepath.Base(dir) == ".saddle" {
+		return os.DirFS(filepath.Dir(dir))
+	}
+	return nil
 }
 
 func (d *Driver) now() time.Time {
@@ -371,12 +388,13 @@ func (d *Driver) Tick() (Report, error) {
 	ready := 0      // issues that could start but for claims, deps, cap, sleep or a drain
 	exclusive := "" // a claimless task picked this tick
 	var whyStuck string
+	repo := d.repo()
 	for _, is := range issues {
 		why, after := d.blocked(is, byIssue, inQueue)
 		if why == "" && exclusive != "" {
 			why = exclusive + " declares no claims, so it runs alone"
 		}
-		want := ParseClaims(is.Body)
+		want, inferred := TicketClaims(is.Body, repo)
 		if why == "" {
 			for _, o := range occupied {
 				if why = o.overlap(want); why != "" {
@@ -437,7 +455,11 @@ func (d *Driver) Tick() (Report, error) {
 			exclusive = id
 		}
 		slots--
-		env.Event(EventSpawn, fmt.Sprintf("%s for #%d %q (%s, claims %s)", id, is.Number, is.Title, req.Model, orNone(want)))
+		how := "claims"
+		if inferred {
+			how = "inferred claims"
+		}
+		env.Event(EventSpawn, fmt.Sprintf("%s for #%d %q (%s, %s %s)", id, is.Number, is.Title, req.Model, how, orNone(want)))
 		if st.Draining == "" {
 			st.Draining = stopReason(st, now, use)
 		}

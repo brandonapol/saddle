@@ -501,3 +501,26 @@ func TestNeverRespawnsAnIssue(t *testing.T) {
 		t.Fatalf("respawned #1: %v, skips %v", r.env.spawned(), rep.Skipped)
 	}
 }
+
+// #504: a lane runs disjoint tickets side by side, and overlapping ones
+// one after the other.
+func TestDisjointTicketsSpawnAtOnceAndOverlappingRunInSequence(t *testing.T) {
+	r := newRig(t, 4, claimed(1, "a/**"), claimed(2, "b/**"), claimed(3, "c/**"))
+	r.on(Options{})
+	if r.tick(); !slices.Equal(r.env.spawned(), []int{1, 2, 3}) {
+		t.Fatalf("spawned %v, want three workers in one tick", r.env.spawned())
+	}
+
+	r = newRig(t, 4, claimed(1, "a/**"), claimed(2, "a/x/**"))
+	r.on(Options{})
+	r.tick()
+	r.tick()
+	if got := r.env.spawned(); !slices.Equal(got, []int{1}) {
+		t.Fatalf("spawned %v; #2 overlaps #1 and waits", got)
+	}
+	r.env.finish(1)
+	r.tick()
+	if got := r.env.spawned(); !slices.Equal(got, []int{1, 2}) {
+		t.Fatalf("spawned %v, want #2 once #1 is done", got)
+	}
+}

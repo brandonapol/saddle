@@ -15,6 +15,9 @@ func TestParseClaims(t *testing.T) {
 		{"Claims: internal/foo/**, `cmd/x.go`\n", []string{"internal/foo/**", "cmd/x.go"}},
 		{"**Claims:** internal/a/** internal/b.go", []string{"internal/a/**", "internal/b.go"}},
 		{"intro\nclaims:\n- `internal/bar/**`\n- docs/BAR.md\n\nmore text", []string{"internal/bar/**", "docs/BAR.md"}},
+		// The section a GitHub issue form renders.
+		{"### Goal\n\nx\n\n### Claims\n\ninternal/a/**\n- `docs/a.md`\n\n### Acceptance\n\ny", []string{"internal/a/**", "docs/a.md"}},
+		{"### Claims\r\n\r\n_No response_\r\n\r\n### Acceptance\r\n\r\ninternal/x.go", nil},
 	}
 	for _, c := range cases {
 		if got := ParseClaims(c.body); !slices.Equal(got, c.want) {

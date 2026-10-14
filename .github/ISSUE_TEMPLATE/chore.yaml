@@ -70,6 +70,14 @@ body:
       label: Why now?
       description: Blocking a task, routine hygiene, or a supply-chain concern. Optional.
   - type: textarea
+    id: claims
+    attributes:
+      label: Claims
+      description: Path globs this ticket will change, one per line. Autopilot reserves them so disjoint tickets run in parallel. Leave empty and it infers them from the paths named above. See docs/tickets.md.
+      placeholder: |
+        internal/autopilot/**
+        docs/tickets.md
+  - type: textarea
     id: acceptance
     attributes:
       label: Acceptance
