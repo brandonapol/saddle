@@ -131,6 +131,45 @@ func TestIdleIsNotNeedAttention(t *testing.T) {
 	}
 }
 
+// P5: several agents that stop in one refresh show as one chat line and
+// one orchestrator event, not one of each per agent.
+func TestBulkIdleCollapses(t *testing.T) {
+	m := slashModel(t)
+	var running, idle []mcpserver.TaskView
+	for i := 1; i <= 10; i++ {
+		id := fmt.Sprintf("t%d", i)
+		running = append(running, mcpserver.TaskView{ID: id, Title: "task " + id, Status: store.Running})
+		idle = append(idle, mcpserver.TaskView{ID: id, Title: "task " + id, Status: store.Idle})
+	}
+	m.prev = map[string]string{}
+	m.tasks = running
+	m.noticeTransitions(running)
+	before := len(m.chat)
+	m.noticeTransitions(idle)
+	if got := len(m.chat) - before; got != 1 {
+		t.Fatalf("10 agents stopping added %d chat lines, want 1: %v", got, m.chat[before:])
+	}
+	if last := m.chat[len(m.chat)-1].text; !strings.Contains(last, "10 agents") || !strings.Contains(last, "t10") {
+		t.Errorf("chat line = %q", last)
+	}
+	if len(m.pending) != 1 {
+		t.Fatalf("pending = %d events, want 1", len(m.pending))
+	}
+	for _, id := range []string{"t1", "t9", "t10"} {
+		if !strings.Contains(m.pending[0], id+" (task "+id+")") {
+			t.Errorf("event lacks %s: %q", id, m.pending[0])
+		}
+	}
+
+	// One agent stopping alone still reads as before.
+	m.chat, m.pending = nil, nil
+	m.noticeTransitions(running)
+	m.noticeTransitions(append([]mcpserver.TaskView{idle[0]}, running[1:]...))
+	if len(m.chat) != 1 || !strings.Contains(m.chat[0].text, "t1 (task t1) stopped without calling done") {
+		t.Errorf("single stop = %v", m.chat)
+	}
+}
+
 // P5: Claude Code's notification texts read short in the status column.
 func TestActivityShortensNotifications(t *testing.T) {
 	cases := map[string]string{
