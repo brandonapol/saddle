@@ -304,7 +304,7 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	}
 	hint := a.retryHint(r.Title)
 	t = store.Task{
-		ID: id, Title: r.Title, Prompt: r.Prompt, Parent: r.Parent, Role: store.RoleWorker, Model: model,
+		ID: id, Title: r.Title, Prompt: r.Prompt, Parent: r.Parent, Role: store.RoleWorker, Model: model, Adapter: ad.Name(),
 		Branch: "saddle/" + name, Worktree: a.stateDir("worktrees", name), Status: store.Running, Issue: r.Issue,
 	}
 	hadBranch := gitx.BranchExists(a.Root, t.Branch)

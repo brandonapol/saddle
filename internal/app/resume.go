@@ -116,8 +116,11 @@ func (a *App) resume(t store.Task) (Resumed, error) {
 	// across adapters or models.
 	if next, e, out, err := a.reroute(ad.Name(), t.Model, pickReq{claims: len(all[t.ID]) > 0}, time.Now()); out && err == nil {
 		if nad, err := agent.ByName(next.Adapter); err == nil {
-			t.Model = next.Model
+			t.Model, t.Adapter = next.Model, next.Adapter
 			if err := a.Store.SetField(t.ID, "model", t.Model); err != nil {
+				return r, err
+			}
+			if err := a.Store.SetField(t.ID, "adapter", t.Adapter); err != nil {
 				return r, err
 			}
 			if err := a.rotatedTask(t, e.Label(), nad, all[t.ID]); err != nil {

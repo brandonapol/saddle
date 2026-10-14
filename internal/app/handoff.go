@@ -91,8 +91,11 @@ func (a *App) HandOff(task string, now time.Time) (string, error) {
 	if err := a.Tmux.KillWindow(t.Window); err != nil {
 		a.Store.Event(task, "handoff_kill_failed", err.Error())
 	}
-	t.Model = c.Model
+	t.Model, t.Adapter = c.Model, c.Adapter
 	if err := a.Store.SetField(t.ID, "model", t.Model); err != nil {
+		return "", err
+	}
+	if err := a.Store.SetField(t.ID, "adapter", t.Adapter); err != nil {
 		return "", err
 	}
 	prompt := strings.TrimSpace(t.Prompt + "\n\n" + handoffNote(e.Label(), c.Label(), a.Cfg.Integration))

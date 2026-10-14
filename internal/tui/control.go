@@ -106,7 +106,7 @@ func ctxLimit(model string) int64 {
 const (
 	idW     = 5
 	statusW = 9
-	modelW  = 6
+	modelW  = 12 // claude sonnet
 	ctxW    = 12 // ▕█████▏  42%
 	tokW    = 6
 	winW    = 4
@@ -166,7 +166,7 @@ func (m *model) agentRow(t mcpserver.TaskView, c agentCols) string {
 	row := lipgloss.NewStyle().Foreground(gc).Render(g) + " " + sDim.Render(fmt.Sprintf("%-*s", idW, t.ID)) + " " +
 		sText.Render(fmt.Sprintf("%-*s", c.titleW, truncate(t.Title, c.titleW)))
 	if c.model {
-		row += " " + lipgloss.NewStyle().Foreground(modelColor(t.Model)).Render(fmt.Sprintf("%-*s", modelW, truncate(t.Model, modelW)))
+		row += " " + lipgloss.NewStyle().Foreground(agentColor(t.Adapter, t.Model)).Render(fmt.Sprintf("%-*s", modelW, truncate(agentLabel(t.Adapter, t.Model), modelW)))
 	}
 	if c.status {
 		row += " " + sDim.Render(fmt.Sprintf("%-*s", statusW, truncate(statusLabel(t.Status), statusW)))
@@ -362,4 +362,24 @@ func (m *model) pause() tea.Cmd {
 		}
 		return flashMsg("paused " + id + " (Esc); message it to go on")
 	}
+}
+
+// agentLabel is what the AGENTS model column shows: the adapter, then its
+// model when it has one ("grok", "codex sol", "claude opus"). A row from
+// before adapters were recorded shows its model alone (#507).
+func agentLabel(adapter, model string) string {
+	return strings.TrimSpace(adapter + " " + model)
+}
+
+// agentColor colors a worker by its provider, claude by model family.
+func agentColor(adapter, model string) lipgloss.Color {
+	switch adapter {
+	case "codex":
+		return cCodex
+	case "grok":
+		return cGrok
+	case "gemini":
+		return cGemini
+	}
+	return modelColor(model)
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/usage"
 )
@@ -26,7 +27,7 @@ func withStats(m *model) *model {
 // context bar, tokens and what it is doing now.
 func TestAgentRowsShowCtxTokensActivity(t *testing.T) {
 	m := withStats(newViewModel(160, 40))
-	out := m.viewLeft(110, 30)
+	out := m.viewLeft(120, 30)
 	row := linesWith(out, "t1")[0]
 	for _, want := range []string{"@1", "opus", "running", "42%", "1.3M", "Edit internal/tui/control.go"} {
 		if !strings.Contains(row, want) {
@@ -172,6 +173,38 @@ func TestAgentRowNeverWraps(t *testing.T) {
 			if w := 1 + lipgloss.Width(m.agentRow(task, c)); w > iw {
 				t.Fatalf("inner width %d: %s row is %d wide", iw, task.ID, w)
 			}
+		}
+	}
+}
+
+func TestAgentLabel(t *testing.T) {
+	for _, c := range []struct{ adapter, model, want string }{
+		{"grok", "", "grok"},
+		{"codex", "sol", "codex sol"},
+		{"claude", "opus", "claude opus"},
+		{"", "opus", "opus"}, // a row from before adapters were recorded
+		{"", "", ""},
+	} {
+		if got := agentLabel(c.adapter, c.model); got != c.want {
+			t.Errorf("agentLabel(%q, %q) = %q, want %q", c.adapter, c.model, got, c.want)
+		}
+	}
+}
+
+func TestAgentRowShowsAdapter(t *testing.T) {
+	m := withStats(newViewModel(160, 40))
+	c := layoutCols(160)
+	for _, v := range []struct {
+		task mcpserver.TaskView
+		want string
+	}{
+		{mcpserver.TaskView{ID: "t1", Status: store.Running, Adapter: "grok"}, "grok"},
+		{mcpserver.TaskView{ID: "t2", Status: store.Running, Adapter: "claude", Model: "opus"}, "claude opus"},
+		{mcpserver.TaskView{ID: "t3", Status: store.Running, Model: "sonnet"}, "sonnet"}, // old row
+		{mcpserver.TaskView{ID: "t4", Status: store.Running}, ""},                        // old row, no model
+	} {
+		if row := m.agentRow(v.task, c); !strings.Contains(row, v.want) {
+			t.Errorf("%s row %q lacks %q", v.task.ID, row, v.want)
 		}
 	}
 }
