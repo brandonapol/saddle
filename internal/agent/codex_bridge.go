@@ -230,17 +230,16 @@ func (br *codexBridge) compact(keep string) {
 		return
 	}
 	br.resume = fresh.session
-	writeLine(br.w, map[string]any{
-		"type": "system", "subtype": "init", "session_id": fresh.session, "model": br.spec.Model,
-	})
-	writeLine(br.w, map[string]any{
-		"type": "system", "subtype": "compact_boundary", "session_id": fresh.session,
-		"compact_metadata": map[string]any{"trigger": "manual"},
-	})
-	writeLine(br.w, map[string]any{
-		"type": "result", "subtype": "success", "is_error": false,
-		"result": "Compacted.", "session_id": fresh.session,
-	})
+	for _, l := range []map[string]any{
+		{"type": "system", "subtype": "init", "session_id": fresh.session, "model": br.spec.Model},
+		{"type": "system", "subtype": "compact_boundary", "session_id": fresh.session,
+			"compact_metadata": map[string]any{"trigger": "manual"}},
+		{"type": "result", "subtype": "success", "is_error": false, "result": "Compacted.", "session_id": fresh.session},
+	} {
+		if writeLine(br.w, l) != nil {
+			return
+		}
+	}
 }
 
 // compactRequest reports whether text is a /compact command, and its

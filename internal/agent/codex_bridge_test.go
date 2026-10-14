@@ -141,9 +141,10 @@ func TestCodexBridgeResumesAcrossTurns(t *testing.T) {
 			}
 		case "assistant":
 			for _, c := range l.Message.Content {
-				if c.Type == "text" {
+				switch c.Type {
+				case "text":
 					texts = append(texts, c.Text)
-				} else if c.Type == "tool_use" {
+				case "tool_use":
 					tools = append(tools, c.Name+" "+string(c.Input))
 				}
 			}
