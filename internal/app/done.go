@@ -78,12 +78,13 @@ func (a *App) DoneAsync(task, summary string) (DoneJob, error) {
 	if !ok {
 		return DoneJob{ID: id, Running: true, Joined: true}, nil
 	}
+	since := a.eventCursor()
 	a.Store.Event(task, "done_gate_started", id+" "+g.Cmd)
 	a.doneJobs.Add(1)
 	go func() {
 		defer a.doneJobs.Done()
 		defer lock.Close()
-		a.runDoneJob(t, id, tree, summary)
+		a.runDoneJob(t, id, tree, summary, since)
 	}()
 	return DoneJob{ID: id, Running: true}, nil
 }
@@ -96,37 +97,39 @@ const EventDoneCalled = "done_called"
 func (a *App) WaitDoneJobs() { a.doneJobs.Wait() }
 
 // runDoneJob is the background half of DoneAsync: gate, then queue or
-// tell the agent why not.
-func (a *App) runDoneJob(t store.Task, id, tree, summary string) {
+// tell the agent why not. since is the event cursor when the job started.
+func (a *App) runDoneJob(t store.Task, id, tree, summary string, since int64) {
 	fail := func(event, text string) {
 		a.Store.Event(t.ID, event, id)
 		_ = a.Notify(t.ID, store.NoticeAction, fmt.Sprintf("done gate %s: %s", id, text))
 	}
 	head, _ := gitx.RevParse(t.Worktree, "HEAD")
-	for restarts := 0; ; restarts++ {
-		err := a.lintDone(t)
-		if errors.Is(err, ErrGateInterrupted) {
-			fail("done_gate_interrupted", "saddle stopped the gate before it finished. Your branch is not queued; call the saddle done tool again.")
-			return
-		}
-		if err != nil {
-			fail("done_gate_failed", err.Error())
-			return
-		}
-		now, _ := gitx.Run(t.Worktree, "rev-parse", "HEAD^{tree}")
-		if now == tree {
-			break
-		}
-		// The train rebasing the branch onto a newer landing changes the
-		// tree, not the work: check the rebased tree instead of asking the
-		// agent to call done again (#467).
+	err := a.lintDone(t)
+	if errors.Is(err, ErrGateInterrupted) {
+		fail("done_gate_interrupted", "saddle stopped the gate before it finished. Your branch is not queued; call the saddle done tool again.")
+		return
+	}
+	if err != nil {
+		fail("done_gate_failed", err.Error())
+		return
+	}
+	if files := a.rebaseConflicts(t.ID, since); len(files) > 0 {
+		fail("done_gate_failed", fmt.Sprintf("the gate passed, but work that landed on %s while it ran conflicts with your branch in %s, so it is not queued. "+
+			"Run `saddle sync`, resolve the conflicts keeping both sides' intent, run the tests, then call the saddle done tool again.",
+			a.Cfg.Integration, strings.Join(files, ", ")))
+		return
+	}
+	if now, _ := gitx.Run(t.Worktree, "rev-parse", "HEAD^{tree}"); now != tree {
+		// The train rebasing the branch onto newer landings changes the
+		// tree, not the work. The train tests the branch on the new tip
+		// before it lands, so queue it rather than check it again here,
+		// where every landing would restart the gate (#467, #525).
 		next, ok := a.rebasedOnly(t, head)
-		if !ok || restarts >= doneGateRestarts {
+		if !ok {
 			fail("done_gate_stale", "your branch moved while the gate checked it, so it is not queued. Commit everything, then call the saddle done tool again.")
 			return
 		}
-		a.Store.Event(t.ID, "done_gate_restarted", id+" "+short(head)+" → "+short(next))
-		head, tree = next, now
+		a.Store.Event(t.ID, "done_gate_rebased", id+" "+short(head)+" → "+short(next))
 	}
 	if err := a.finishDone(t, summary); err != nil {
 		fail("done_gate_failed", "the gate passed but queueing failed: "+err.Error()+"\nCall the saddle done tool again.")
@@ -135,9 +138,29 @@ func (a *App) runDoneJob(t store.Task, id, tree, summary string) {
 	_ = a.Notify(t.ID, store.NoticeInfo, fmt.Sprintf("done gate %s passed; your branch is queued in the merge train. You can stop now.", id))
 }
 
-// doneGateRestarts is how many times one done job checks a branch again
-// after it was rebased mid-gate, before it gives up and asks the agent.
-const doneGateRestarts = 3
+// rebaseConflicts is the files the last auto-rebase of task after event
+// since conflicted in, nil when there was none or it went cleanly. Derived
+// files alone don't count: the train regenerates them as it lands.
+func (a *App) rebaseConflicts(task string, since int64) []string {
+	es, err := a.Store.EventsSince(since)
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for _, e := range es {
+		if e.Task != task || e.Kind != "auto_rebase" {
+			continue
+		}
+		files = nil
+		if c, ok := strings.CutPrefix(e.Data, "conflicts="); ok {
+			files = strings.Split(c, ",")
+		}
+	}
+	if allRegen(a.Cfg.Regen, files) {
+		return nil
+	}
+	return files
+}
 
 // rebasedOnly reports whether t's branch, which was at from when its gate
 // started, has only been rebased since: its worktree is clean and has no
@@ -269,4 +292,14 @@ func (a *App) finishDone(t store.Task, summary string) error {
 	}
 	return a.Notify(OrchestratorID, store.NoticeAction,
 		fmt.Sprintf("%s %q is done and queued in the merge train: %s\nRun the saddle land tool when you're ready.%s", task, t.Title, summary, advisory))
+}
+
+// eventCursor is the id of the newest event, for EventsSince; 0 when there
+// is none or the store can't say.
+func (a *App) eventCursor() int64 {
+	es, err := a.Store.Events(1)
+	if err != nil || len(es) == 0 {
+		return 0
+	}
+	return es[0].ID
 }
