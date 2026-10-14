@@ -117,6 +117,19 @@ func TestJourneyAutomergeRetriesSoonAfterBusyTrain(t *testing.T) {
 	w.MustSaddle("automerge", "on")
 
 	a := w.App()
+	// The busy watcher reads GitHub once per interval, an hour here: start it
+	// only once GitHub calls the PR ready, or it may keep a read from before
+	// (#568).
+	Eventually(t, "GitHub to call the PR ready", func() error {
+		st, err := a.NewAutomerge(nil).Plan()
+		if err != nil {
+			return err
+		}
+		if len(st.Stacks) != 1 || !st.Stacks[0].Ready {
+			return errorf("stacks = %+v", st.Stacks)
+		}
+		return nil
+	})
 	unlock, ok, err := a.TryLockTrain()
 	must(t, err)
 	if !ok {
