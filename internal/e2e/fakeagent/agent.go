@@ -280,7 +280,7 @@ func (a *Agent) step(st Step) error {
 	case st.Remove != "":
 		return a.bash("rm -f -- " + shellQuote(st.Remove))
 	case st.Commit != "":
-		return a.bash("git add -A && git commit -q -m " + shellQuote(st.Commit))
+		return a.bash(IndexLockRetry("git add -A && git commit -q -m " + shellQuote(st.Commit)))
 	case st.Run != "" && st.Unhooked:
 		return a.exec(st.Run)
 	case st.Run != "":
@@ -291,7 +291,7 @@ func (a *Agent) step(st Step) error {
 		if err := os.WriteFile(a.path(st.Resolve), []byte(st.Content), 0o644); err != nil {
 			return err
 		}
-		return a.bash("git add -- " + shellQuote(st.Resolve) + " && GIT_EDITOR=true git rebase --continue")
+		return a.bash(IndexLockRetry("git add -- " + shellQuote(st.Resolve) + " && GIT_EDITOR=true git rebase --continue"))
 	case st.MCP != "":
 		return a.mcp(st.MCP, st.Args)
 	case st.Notify != "":
@@ -513,3 +513,32 @@ func (a *Agent) skills() []fakeSkill {
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// IndexLockRetry runs cmd in a subshell, retrying while git cannot create
+// index.lock. The engine's checkpoint watcher runs `git status` in the
+// worker worktree, and that refresh holds index.lock; the agent's
+// `git add` / `git commit` then fails at once. Git 2.55 no longer retries
+// that lock (core.filesLockTimeout is gone; the default wait was 100ms,
+// which a loaded machine exceeds). #502. A failure that is not the lock
+// is returned immediately. cmd is a shell command; sh -c keeps its quotes.
+func IndexLockRetry(cmd string) string {
+	// sh -c so 2>&1 covers every command in cmd, not only the last one
+	// of an && list. git add is what reports index.lock.
+	return `(
+n=0
+while true; do
+  out=$(sh -c ` + shellQuote(cmd) + ` 2>&1)
+  code=$?
+  if [ "$code" -eq 0 ]; then
+    printf '%s\n' "$out"
+    exit 0
+  fi
+  n=$((n+1))
+  if [ "$n" -ge 100 ] || ! printf '%s\n' "$out" | grep -q 'index.lock'; then
+    printf '%s\n' "$out" >&2
+    exit "$code"
+  fi
+  sleep 0.05
+done
+)`
+}
