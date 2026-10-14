@@ -1242,9 +1242,11 @@ func (m *model) failOver(text string) bool {
 }
 
 // noticeTransitions turns worker status changes into events for the
-// orchestrator, with the agent's screen when it is blocked.
+// orchestrator, with the agent's screen when it is blocked. Without Jev,
+// agents that stop in the same refresh go out as one event (#266 P5).
 func (m *model) noticeTransitions(ts []mcpserver.TaskView) []tea.Cmd {
 	var cmds []tea.Cmd
+	var stopped []mcpserver.TaskView
 	first := len(m.prev) == 0 && len(m.tasks) == 0
 	for _, t := range ts {
 		was, seen := m.prev[t.ID]
@@ -1260,7 +1262,11 @@ func (m *model) noticeTransitions(ts []mcpserver.TaskView) []tea.Cmd {
 			if strings.HasPrefix(t.Train, store.Queued) {
 				continue
 			}
-			ev = fmt.Sprintf("%s (%s) stopped without calling done. It may be asking something, stuck, or finished without saying so.", t.ID, t.Title)
+			if m.jev == nil {
+				stopped = append(stopped, t)
+				continue
+			}
+			ev = stoppedText(t)
 		default:
 			continue
 		}
@@ -1269,7 +1275,38 @@ func (m *model) noticeTransitions(ts []mcpserver.TaskView) []tea.Cmd {
 			cmds = append(cmds, c)
 		}
 	}
+	switch len(stopped) {
+	case 0:
+	case 1:
+		t := stopped[0]
+		screen, _ := m.app.Peek(t.ID, 30)
+		m.escalate(attention{task: t.ID, title: t.Title, text: stoppedText(t), screen: screen}, false)
+	default:
+		m.escalateStopped(stopped)
+	}
 	return cmds
+}
+
+func stoppedText(t mcpserver.TaskView) string {
+	return fmt.Sprintf("%s (%s) stopped without calling done. It may be asking something, stuck, or finished without saying so.", t.ID, t.Title)
+}
+
+// escalateStopped reports several agents that stopped at once, such as a
+// bulk spawn settling, as one chat line and one event with a short screen
+// each, so the orchestrator's turn stays small.
+func (m *model) escalateStopped(ts []mcpserver.TaskView) {
+	ids := make([]string, len(ts))
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d agents stopped without calling done. Each may be asking something, stuck, or finished without saying so.", len(ts))
+	for i, t := range ts {
+		ids[i] = t.ID
+		fmt.Fprintf(&b, "\n\n%s (%s)", t.ID, t.Title)
+		if screen, _ := m.app.Peek(t.ID, 12); screen != "" {
+			b.WriteString(", its screen:\n```\n" + screen + "\n```")
+		}
+	}
+	m.pending = append(m.pending, b.String())
+	m.addChat(store.ChatEvent, fmt.Sprintf("▲ %d agents stopped without calling done: %s", len(ts), strings.Join(ids, ", ")))
 }
 
 // raise routes a worker event. With Jev, the screen is triaged first so that
