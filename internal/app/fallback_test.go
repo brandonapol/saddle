@@ -101,13 +101,22 @@ func TestModelFallbackSkipsOutEntriesAndResets(t *testing.T) {
 	t.Parallel()
 	a, _, _ := fallbackApp(t)
 	must(t, a.MarkExhausted(usage.Claude, time.Now().Add(time.Hour), ""))
-	must(t, a.MarkModelExhausted(usage.Codex, "sol", time.Now().Add(80*time.Millisecond), ""))
+	must(t, a.MarkModelExhausted(usage.Codex, "sol", time.Now().Add(time.Hour), ""))
 	g, err := a.Spawn(SpawnReq{Title: "would be sol"})
 	must(t, err)
 	if r := agent.Recorded(a.stateDir("run", g.ID)); r != usage.Grok {
 		t.Fatalf("spawn ran %s, want grok (claude is out)", r)
 	}
-	time.Sleep(100 * time.Millisecond)
+	// Sol's reset passes. Moving it into the past, rather than marking a
+	// short window and sleeping, keeps a slow first spawn from outliving it.
+	exhaustMu.Lock()
+	m := a.readExhausted()
+	e := m[exhaustKey(usage.Codex, "sol")]
+	e.Until = time.Now().Add(-time.Second)
+	m[exhaustKey(usage.Codex, "sol")] = e
+	err = a.writeExhausted(m)
+	exhaustMu.Unlock()
+	must(t, err)
 	s, err := a.Spawn(SpawnReq{Title: "sol again"})
 	must(t, err)
 	if r := agent.Recorded(a.stateDir("run", s.ID)); r != usage.Codex || s.Model != "gpt-6-sol" {
