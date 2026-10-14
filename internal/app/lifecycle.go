@@ -220,6 +220,9 @@ func (a *App) unmerged(tip string, t store.Task, base string) string {
 	if ancestor(a.Root, tip, a.Cfg.Integration) || ancestor(a.Root, tip, base) {
 		return ""
 	}
+	if t.ID != "" && a.taskTrailerOn(t.ID, base, tip) {
+		return "" // base names the task, after tip's last commit (#331)
+	}
 	mb, err := gitx.Run(a.Root, "merge-base", tip, base)
 	if err != nil {
 		return "can't compare with " + a.Cfg.Base + ": " + err.Error()
