@@ -141,16 +141,28 @@ func sreCloseCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
 			by := os.Getenv("SADDLE_TASK")
+			var rec sre.PostmortemRecord
 			if err := sre.UpdateIncident(a.Root, func(inc *sre.Incident) error {
 				if inc.Guarded(by) {
 					return fmt.Errorf("%s investigates incident %s and can't close it; ask the orchestrator", by, inc.ID)
 				}
 				inc.Close(time.Now())
+				rec = sre.PostmortemFromIncident(inc)
 				return nil
 			}); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "incident closed; the read-only guard is lifted")
+			cfg, _ := sre.Load(a.Root) // optional: only enriches runbook proposals
+			path, err := sre.WritePostmortem(a.Root, rec, cfg)
+			if err != nil {
+				return fmt.Errorf("incident closed, but writing the postmortem failed: %w", err)
+			}
+			kind := "postmortem"
+			if rec.RootCause == "" {
+				kind = "postmortem (unresolved: no verified root cause)"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s written: %s\n", kind, path)
 			return nil
 		}),
 	}

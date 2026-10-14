@@ -234,8 +234,8 @@ saddle sre check-config                         # validate .saddle/sre.toml
   `saddle sre refute` locks the guard again, `saddle sre incident` shows the
   state and `saddle sre close` ends the incident.
 - **Postmortems** go to `docs/postmortems/<date>-<slug>.md`, never
-  overwriting an existing file. The writer exists in `internal/sre`; no
-  command calls it yet. The checks that found the cause become
+  overwriting an existing file. `saddle sre close` writes one, marked
+  unresolved if no root cause was verified. The checks that found the cause become
   proposed runbook additions in the postmortem; no runbook is edited.
 
 See [docs/sre.md](docs/sre.md) and [docs/postmortems/](docs/postmortems/README.md).
