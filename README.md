@@ -203,3 +203,39 @@ directly. It forwards stdin, stdout, signals and the exit code. It starts in
 To enforce the slots, set `mode = "enforce"` in `~/.config/saddle/runq.toml`
 or `.saddle/runq.toml`. `SADDLE_RUNQ=off|observe|enforce` overrides the mode
 for one shell. See [docs/runq.md](docs/runq.md).
+
+### SRE mode: `saddle sre`
+
+Paste an incident and saddle runs the known checks, then spawns read-only
+investigators:
+
+```
+saddle sre "API 500s since deploy v2.3.1 ..."   # or pipe the text on stdin
+saddle sre --dry-run < incident.txt             # run the checks, print the plan, spawn nothing
+saddle sre check-config                         # validate .saddle/sre.toml
+```
+
+- **`.saddle/sre.toml`** lists the repo's frequent problems as `[[check]]`
+  entries (a read-only `command` or a `surface` to look at, plus `expect`),
+  its endpoints and its credentials. Credentials are references only, an env
+  var name or a `kube-context:`/`vault:` style ref; a plaintext secret fails
+  validation.
+- **Intake** runs the checks read-only, then plans 3 or 4 disjoint lanes:
+  code diffs and deploys, logs and errors, then infrastructure and/or
+  dependencies, picked from the incident text and failed checks. One investigator spawns per lane. Only the
+  code lane claims paths, the files the incident names.
+- **The read-only guard** holds the investigators while the incident in
+  `.saddle/sre-incident.json` is open. The hook lets read-only calls run
+  (`kubectl get`, `curl` GET, `git log`, the config's own check commands, ...)
+  and denies anything that may mutate until one agent states a root cause
+  (`saddle sre root-cause`) and a different agent verifies it (`saddle sre
+  verify`). Even then a production action does not run: it goes to the
+  decision queue as irreversible, and runs only if the owner picks it.
+  `saddle sre refute` locks the guard again, `saddle sre incident` shows the
+  state and `saddle sre close` ends the incident.
+- **Postmortems** go to `docs/postmortems/<date>-<slug>.md`, never
+  overwriting an existing file. The writer exists in `internal/sre`; no
+  command calls it yet. The checks that found the cause become
+  proposed runbook additions in the postmortem; no runbook is edited.
+
+See [docs/sre.md](docs/sre.md) and [docs/postmortems/](docs/postmortems/README.md).
