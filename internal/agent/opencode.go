@@ -9,9 +9,11 @@ import (
 // OpenCode is the opencode adapter (#509): its interactive TUI in the
 // worktree, with the task prompt submitted by --prompt and the saddle MCP
 // server in a run-dir config that OPENCODE_CONFIG merges over the user's own,
-// so nothing lands in the repo. opencode has JS plugins but saddle installs
-// none yet, so it runs hookless: claims are checked at commit and done (#489)
-// and notices are typed in.
+// so nothing lands in the repo. The same config loads saddle's claims plugin
+// (#532), which denies writes to paths another task claims, as the claude and
+// grok hooks do. Notices, session ids and idle status still come from no
+// hook, so Hooks() is false: claims are also checked at commit and done
+// (#489), notices are typed in, and the screen watcher marks it idle.
 type OpenCode struct{}
 
 // OpenCodeName is the opencode adapter's name; usage has no opencode parser yet.
@@ -27,8 +29,13 @@ func (OpenCode) Launch(l Launch) (string, error) {
 	if err := os.MkdirAll(l.RunDir, 0o755); err != nil {
 		return "", err
 	}
+	plugin, err := l.writeOpenCodePlugin()
+	if err != nil {
+		return "", err
+	}
 	cfg := map[string]any{
 		"$schema": "https://opencode.ai/config.json",
+		"plugin":  []string{plugin},
 		"mcp": map[string]any{"saddle": map[string]any{
 			"type": "local", "command": []string{l.Bin, "mcp"}, "environment": l.env(), "enabled": true,
 		}},
