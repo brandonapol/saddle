@@ -40,7 +40,7 @@ them against the repo:
 | a glob (`internal/autopilot/**`) | the glob |
 
 URLs, prose like `and/or`, branch and ref names (`saddle/integration`),
-bare words (`docs`) and lockfiles (`go.mod`, `go.sum`, …) are ignored. A
+bare words (`docs`), `.git/` and `.saddle/` paths, and lockfiles (`go.mod`, `go.sum`, …) are ignored. A
 claim another one covers is dropped. If nothing matches, the ticket has no
 claims and runs alone, as before. The spawn event says `inferred claims` so
 you can tell the two apart.

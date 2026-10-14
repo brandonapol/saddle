@@ -14,7 +14,7 @@ func repoFS() fstest.MapFS {
 		"internal/autopilot/driver.go", "internal/autopilot/issue.go",
 		"internal/claims/claims.go", "internal/app/app.go", "cmd/saddle/main.go",
 		"docs/ARCHITECTURE.md", "docs/runq.md", "README.md", "Makefile", "go.mod", "go.sum",
-		".github/ISSUE_TEMPLATE/feature.yaml",
+		".github/ISSUE_TEMPLATE/feature.yaml", ".saddle/state.db",
 	} {
 		f[p] = &fstest.MapFile{Data: []byte("x")}
 	}
@@ -40,6 +40,7 @@ func TestInferClaimsFromIssueBody(t *testing.T) {
 			[]string{"internal/autopilot/**"}},
 		{"root files only when named as files", "Update README.md and the Makefile; bump go.mod.", []string{"README.md"}},
 		{"dotdirs", "Edit .github/ISSUE_TEMPLATE/feature.yaml.", []string{".github/ISSUE_TEMPLATE/feature.yaml"}},
+		{"saddle state ignored", "Back up .saddle/state.db first.", nil},
 		{"prose slashes ignored", "Read/write the saddle/integration branch, refs/saddle/wip/t1.", nil},
 	}
 	repo := repoFS()

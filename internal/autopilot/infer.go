@@ -101,8 +101,8 @@ func inferOne(tok string, quoted bool, repo fs.FS) string {
 			return ""
 		}
 	}
-	if lockfiles[p] {
-		return ""
+	if lockfiles[p] || segs[0] == ".git" || segs[0] == ".saddle" {
+		return "" // generated, or saddle's and git's own state
 	}
 	ext := path.Ext(segs[len(segs)-1]) != "" && !strings.HasPrefix(segs[len(segs)-1], ".")
 	if strings.ContainsAny(p, "*?") {
