@@ -97,3 +97,21 @@ func TestCarveOutsReleasePathsUnderAGlob(t *testing.T) {
 		t.Fatal("a carve-out covers a path")
 	}
 }
+
+// #292: releasing a whole subtree under a glob frees it for a glob claim too,
+// not only for writes and plain-path claims.
+func TestCarvedOutSubtreeIsClaimableAsAGlob(t *testing.T) {
+	for _, out := range []string{"!internal/runq/shim/**", "!internal/runq/shim"} {
+		all := map[string][]string{"t1": {"internal/runq/**", out}}
+		for _, w := range []string{"internal/runq/shim/**", "internal/runq/shim/*_test.go", "internal/runq/shim"} {
+			if c := Conflicts(all, "t2", []string{w}); len(c) != 0 {
+				t.Errorf("carve-out %s: claim %s conflicts: %v", out, w, c)
+			}
+		}
+		for _, w := range []string{"internal/runq/**", "internal/runq/*.go", "internal/runq/shimx/**"} {
+			if c := Conflicts(all, "t2", []string{w}); len(c) != 1 {
+				t.Errorf("carve-out %s: claim %s reaching past it doesn't conflict: %v", out, w, c)
+			}
+		}
+	}
+}

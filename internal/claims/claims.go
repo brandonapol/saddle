@@ -142,6 +142,33 @@ func Excluded(gs []string, p string) bool {
 	return false
 }
 
+// carvedOut reports whether one of gs carves out all of claim w. A glob is
+// carved out when it lies wholly inside a released directory or subtree
+// ("x", "x/**"); otherwise only an identical carve-out frees it.
+func carvedOut(gs []string, w string) bool {
+	w = Clean(w)
+	if !hasMeta(w) {
+		return Excluded(gs, w)
+	}
+	for _, g := range gs {
+		if !IsNot(g) {
+			continue
+		}
+		c := Clean(strings.TrimPrefix(strings.TrimSpace(g), Not))
+		if c == w {
+			return true
+		}
+		base, tree := strings.CutSuffix(c, "/**")
+		if c == "**" {
+			base, tree = "", true
+		}
+		if (tree || !hasMeta(c)) && !hasMeta(base) && underOrEqual(prefix(w), base) {
+			return true
+		}
+	}
+	return false
+}
+
 // Covering returns the claim among gs that covers p, honoring carve-outs.
 func Covering(gs []string, p string) (string, bool) {
 	if Excluded(gs, p) {
@@ -173,7 +200,7 @@ func Conflicts(all map[string][]string, self string, want []string) map[string]s
 	out := map[string]string{}
 	for _, w := range want {
 		for t, gs := range all {
-			if t == self || (!hasMeta(Clean(w)) && Excluded(gs, w)) {
+			if t == self || carvedOut(gs, w) {
 				continue
 			}
 			for _, g := range gs {
