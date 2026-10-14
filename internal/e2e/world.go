@@ -322,6 +322,23 @@ func (w *World) WaitAgentLog(id, want string) {
 	})
 }
 
+// WaitNotices runs `saddle plugin wait` until what the waits printed holds
+// want, and returns all of it. One wait returns as soon as any action
+// notice is pending, which may be one queued just before the awaited one
+// (#568), so a single wait can't be trusted to show it.
+func (w *World) WaitNotices(want string) string {
+	w.T.Helper()
+	var out strings.Builder
+	Eventually(w.T, "a notice saying "+want, func() error {
+		out.WriteString(w.MustSaddle("plugin", "wait", "--timeout", "2s").Stdout)
+		if strings.Contains(out.String(), want) {
+			return nil
+		}
+		return fmt.Errorf("plugin wait printed:\n%s", out.String())
+	})
+	return out.String()
+}
+
 // GHState is a snapshot of the fake GitHub.
 func (w *World) GHState() *fakegh.State {
 	w.T.Helper()

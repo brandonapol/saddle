@@ -122,16 +122,45 @@ func (a *App) ciRepairMayWrite(task, rel, owner string) bool {
 	if err != nil {
 		return false
 	}
-	for _, r := range s.Repairs {
-		if r.Repair != task || r.State != ciRepairSpawned {
-			continue
-		}
+	for _, red := range a.ciRepairing(s, task) {
 		if o, err := a.Store.Task(owner); err == nil && o.Status == store.Done {
 			return true
 		}
-		if slices.Contains(a.layerFiles(r.Task), rel) {
+		if slices.Contains(a.layerFiles(red), rel) {
 			return true
 		}
 	}
 	return false
+}
+
+// ciRepairing lists the red layers task is the live CI repair of. A repair
+// is recorded only after Spawn returns, and its agent may write before
+// that (#568): until a record names it, a live task titled as a red layer's
+// repair counts as that layer's.
+func (a *App) ciRepairing(s CIRedState, task string) []string {
+	var out []string
+	recorded := false
+	for _, r := range s.Repairs {
+		if r.Repair != task {
+			continue
+		}
+		recorded = true
+		if r.State == ciRepairSpawned {
+			out = append(out, r.Task)
+		}
+	}
+	if recorded {
+		return out
+	}
+	t, err := a.Store.Task(task)
+	if err != nil || !t.Active() {
+		return nil
+	}
+	if orig, ok := strings.CutPrefix(t.Title, ciFixPrefix); ok {
+		orig, _, _ = strings.Cut(orig, " ")
+		if slices.ContainsFunc(s.Red, func(l CIRedLayer) bool { return l.Task == orig }) {
+			return []string{orig}
+		}
+	}
+	return nil
 }

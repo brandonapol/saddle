@@ -578,6 +578,41 @@ func TestBusyTickRecordsWhyAndRetriesSoon(t *testing.T) {
 	}
 }
 
+// #568: a busy tick whose read of GitHub failed must not reuse that read
+// for a whole interval: the next retry reads again, so the ready PR is
+// reported while the lock stays busy.
+func TestBusyTickRereadsAfterAFailedRead(t *testing.T) {
+	r := newRig(t, "", "t3")
+	c := &clock{time.Date(2026, 10, 3, 12, 41, 0, 0, time.Local)}
+	r.w.Now = c.now
+	r.on(t)
+	r.w.Lock = func() (func(), bool, error) { return nil, false, nil }
+	pr := r.gh.prs["pr/t3"]
+	delete(r.gh.prs, "pr/t3") // gh fails on it, as under load
+
+	got := check(t, r.w)
+	if !got.Busy || len(got.Stacks) != 1 || got.Stacks[0].Ready || len(r.idles()) != 0 {
+		t.Fatalf("first busy tick = %+v, idle %q", got, r.idles())
+	}
+	r.gh.prs["pr/t3"] = pr
+	c.t = c.t.Add(DefaultBusyRetry)
+	got = check(t, r.w)
+	if len(got.Stacks) != 1 || !got.Stacks[0].Ready {
+		t.Fatalf("retry reused the failed read: %+v", got.Stacks)
+	}
+	if idle := r.idles(); len(idle) != 1 || !strings.Contains(idle[0], "pr/t3 ready but not merged: the train lock is busy") {
+		t.Fatalf("idle events = %q", idle)
+	}
+	// A good read is reused until the interval is up.
+	reads := 0
+	r.gh.onPR = func(string) { reads++ }
+	c.t = c.t.Add(DefaultBusyRetry)
+	check(t, r.w)
+	if reads != 0 {
+		t.Fatalf("retry after a good read asked GitHub %d times", reads)
+	}
+}
+
 func TestRunRetriesSoonAfterBusyTick(t *testing.T) {
 	r := newRig(t, "", "t1")
 	r.on(t)

@@ -41,12 +41,12 @@ func TestJourneyAdapterRotation(t *testing.T) {
 	startEngine(w)
 
 	w.WaitStatus("t1", "paused")
-	r := w.MustSaddle("plugin", "wait", "--timeout", "30s")
-	if !strings.Contains(r.Stdout, "Adapter claude is out of quota until 12:10pm") || !strings.Contains(r.Stdout, "go to grok") {
-		t.Fatalf("plugin wait:\n%s", r.Stdout)
+	got := w.WaitNotices("Adapter claude is out of quota until 12:10pm")
+	if !strings.Contains(got, "go to grok") {
+		t.Fatalf("plugin wait:\n%s", got)
 	}
-	if n := strings.Count(r.Stdout, "out of quota until"); n != 1 {
-		t.Fatalf("rotation told %d times:\n%s", n, r.Stdout)
+	if n := strings.Count(got, "out of quota until"); n != 1 {
+		t.Fatalf("rotation told %d times:\n%s", n, got)
 	}
 	out := map[string]string{}
 	for _, s := range w.Status().Adapters {

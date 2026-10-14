@@ -748,10 +748,10 @@ func (w *Watcher) vetoed(stack Stack) string {
 // busy records a tick that found the train lock held, marked busy since the
 // first busy tick in a row, with the next check after BusyRetry. It reads
 // GitHub without the lock, as Plan does, at most once per Interval; retries
-// in between reuse what it read.
+// in between reuse what it read, unless GitHub failed on a PR then (#568).
 func (w *Watcher) busy(s State) (Status, error) {
 	st := s.Last
-	if !st.Busy || w.now().Sub(st.Checked) >= w.interval() {
+	if !st.Busy || w.now().Sub(st.Checked) >= w.interval() || readFailed(st) {
 		nodes, err := w.read()
 		if err != nil {
 			return w.status(s, nil), err
@@ -770,6 +770,13 @@ func (w *Watcher) busy(s State) (Status, error) {
 	st.Busy = true
 	st.Next = w.now().Add(w.wait(true))
 	return w.record(s, &st, false)
+}
+
+// readFailed reports whether GitHub failed on any PR in st's read.
+func readFailed(st Status) bool {
+	return slices.ContainsFunc(st.Stacks, func(x Stack) bool {
+		return slices.ContainsFunc(x.Nodes, func(n Node) bool { return n.Error != "" })
+	})
 }
 
 // logIdle logs an EventIdle when a check merged nothing while auto-merge is

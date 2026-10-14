@@ -109,6 +109,34 @@ func TestCIRepairCarveOutForLandedLayerFiles(t *testing.T) {
 	}
 }
 
+// #568: CIRedRepair records a repair only after Spawn returns, and the new
+// agent may write before that. While its layer is red and no record names
+// it yet, a task titled as that layer's repair is already its repair.
+func TestCIRepairMayWriteBeforeItIsRecorded(t *testing.T) {
+	t.Parallel()
+	a := trainSetup(t)
+	red := landTask(t, a, "t1", "shim", map[string]string{"runq/shim.go": "package runq\n"})
+	done, err := a.Spawn(SpawnReq{ID: "t2", Title: "runq follow-up", Claims: []string{"runq/**"}, Confirm: true})
+	must(t, err)
+	must(t, a.Store.SetStatus(done.ID, store.Done))
+	must(t, a.SetCIRed(CIRedState{Red: []CIRedLayer{{Task: red.ID, Head: "abc", Checks: []string{"CI / test"}}}}))
+	fix, err := a.Spawn(SpawnReq{ID: "t3", Title: ciFixTitle(red), Parent: OrchestratorID})
+	must(t, err)
+	f := filepath.Join(fix.Worktree, "runq/shim_test.go")
+	if d := a.CheckWrite(fix.ID, f); !d.Allow {
+		t.Fatalf("CI repair denied before its record was saved: %s", d.Reason)
+	}
+
+	// Once a record names it as killed, the title no longer counts.
+	must(t, a.SetCIRed(CIRedState{
+		Red:     []CIRedLayer{{Task: red.ID, Head: "abc", Checks: []string{"CI / test"}}},
+		Repairs: []CIRepairRecord{{Task: red.ID, Head: "abc", Repair: fix.ID, State: ciRepairKilled}},
+	}))
+	if d := a.CheckWrite(fix.ID, filepath.Join(fix.Worktree, "runq/other_test.go")); d.Allow {
+		t.Fatal("killed repair allowed under the done task's claim")
+	}
+}
+
 // #466: a done task's claims guard queued work against conflicts, not a
 // CI repair: the repair may write under them anywhere, while a running
 // task's claim still blocks it outside the red layer.

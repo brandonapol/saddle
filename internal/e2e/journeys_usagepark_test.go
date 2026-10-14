@@ -44,10 +44,12 @@ func TestJourneyUsageLimitParksAndResumes(t *testing.T) {
 	startEngine(w)
 
 	w.WaitStatus("t1", "paused")
-	r := w.MustSaddle("plugin", "wait", "--timeout", "30s")
-	if !strings.Contains(r.Stdout, "t1 (Limited work) is parked on a Claude usage limit") ||
-		!strings.Contains(r.Stdout, "12:10pm (America/New_York)") {
-		t.Fatalf("plugin wait:\n%s", r.Stdout)
+	// Parking also says every adapter is out of quota, which may wake the
+	// first wait before the park notice is queued (#568).
+	const parked = "t1 (Limited work) is parked on a Claude usage limit"
+	out := w.WaitNotices(parked)
+	if n := strings.Count(out, parked); n != 1 || !strings.Contains(out, "12:10pm (America/New_York)") {
+		t.Fatalf("parked notice %d times, want once with the reset time:\n%s", n, out)
 	}
 	if got := w.MustSaddle("status").Stdout; !strings.Contains(got, "paused") {
 		t.Fatalf("status while parked:\n%s", got)
@@ -58,7 +60,7 @@ func TestJourneyUsageLimitParksAndResumes(t *testing.T) {
 
 	must(t, os.WriteFile(reset, nil, 0o644))
 	w.WaitStatus("t1", "running")
-	r = w.MustSaddle("plugin", "wait", "--timeout", "6s")
+	r := w.MustSaddle("plugin", "wait", "--timeout", "6s")
 	if !strings.Contains(r.Stdout, "No saddle events need you yet") {
 		t.Fatalf("nagged after the reset:\n%s", r.Stdout)
 	}

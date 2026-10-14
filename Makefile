@@ -56,11 +56,7 @@ define go_test
 	if $(GO) test $(1) 2>&1 | tee "$$log"; then exit 0; fi
 	echo
 	echo "make $@ FAILED:"
-	{
-	    grep -E '^FAIL[[:space:]]' "$$log" || echo "(no FAIL line: see the errors above)"
-	    grep -E '^panic: test timed out' "$$log" || true
-	    grep -E -- '--- FAIL' "$$log" || true
-	} | head -n 30
+	bash scripts/test-summary.sh "$$log"
 	exit 1
 endef
 
@@ -165,12 +161,13 @@ test/e2e: ## Run the end-to-end journeys (RUN=Journey to pick some; needs tmux)
 	code=$$?; cat "$$rep"; exit $$code
 
 .PHONY: test/scripts
-test/scripts: ## Test the shell scripts (upgrade, templeak, CI sharding)
+test/scripts: ## Test the shell scripts (upgrade, templeak, CI sharding, test summary)
 	bash scripts/upgrade_test.sh
 	bash scripts/templeak_test.sh
 	bash scripts/e2e-nightly-shard_test.sh
 	bash scripts/ci-race-shard_test.sh
 	bash scripts/cover-report_test.sh
+	bash scripts/test-summary_test.sh
 
 .PHONY: test/plugin
 test/plugin: ## Run the plugin's TypeScript tests (needs the claude CLI, 2.1.287+)
