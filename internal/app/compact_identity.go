@@ -19,8 +19,9 @@ type OrchIdentity struct {
 }
 
 // OrchestratorIdentity is the TUI's headless orchestrator: grok-bridge under
-// harness = "grok", Claude Code otherwise. Codex has no headless session, so
-// saddle up codex runs the orchestrator on Claude Code and only workers on codex.
+// harness = "grok", Claude Code otherwise, or the adapter a failover moved it
+// to (#481), codex included (#506). saddle up codex still runs the
+// orchestrator on Claude Code and only workers on codex.
 func (a *App) OrchestratorIdentity() OrchIdentity {
 	return a.identity(a.orchestratorAgent(), a.orchModel())
 }

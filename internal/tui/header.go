@@ -155,8 +155,11 @@ func (m *model) viewCounters() string {
 
 // harness names the orchestrator's CLI.
 func (m *model) harness() string {
-	if m.launch.Kind == agent.KindGrok {
+	switch m.launch.Kind {
+	case agent.KindGrok:
 		return "grok"
+	case agent.KindCodex:
+		return "codex"
 	}
 	return "claude"
 }
