@@ -154,15 +154,29 @@ test/e2e: ## Run the end-to-end journeys (RUN=Journey to pick some; needs tmux)
 	code=$$?; cat "$$rep"; exit $$code
 
 .PHONY: test/scripts
-test/scripts: ## Test the shell scripts (upgrade, templeak)
+test/scripts: ## Test the shell scripts (upgrade, templeak, CI sharding)
 	bash scripts/upgrade_test.sh
 	bash scripts/templeak_test.sh
+	bash scripts/e2e-nightly-shard_test.sh
+	bash scripts/ci-race-shard_test.sh
+
+.PHONY: test/plugin
+test/plugin: ## Run the plugin's TypeScript tests (needs the claude CLI, 2.1.287+)
+	# plugin_test.go skips when claude is missing; this target fails instead.
+	command -v claude >/dev/null 2>&1 || { echo "claude CLI not installed"; exit 1; }
+	cd plugin && claude plugin validate . && claude plugin test .
 
 .PHONY: test/race
-test/race: ## Run tests with the race detector
+test/race: ## Run tests with the race detector (PKGS="./internal/app" to pick some)
 	# The hook, MCP server and CLI share one SQLite file from separate processes,
 	# so races here are real bugs.
-	$(call go_test,$(GO_TAGFLAG) -race -timeout $(TEST_TIMEOUT) ./...)
+	$(call go_test,$(GO_TAGFLAG) -race -timeout $(TEST_TIMEOUT) $(or $(PKGS),./...))
+
+.PHONY: test/race/shard
+test/race/shard: ## Run one CI shard of the race suite (SHARD=1 TOTAL=3; shard 1 is internal/app)
+	pkgs="$$(GO=$(GO) GO_TAGS='$(GO_TAGS)' ./scripts/ci-race-shard.sh '$(SHARD)' '$(TOTAL)' | tr '\n' ' ')"
+	echo "race shard $(SHARD)/$(TOTAL): $$pkgs"
+	$(MAKE) --no-print-directory test/race PKGS="$$pkgs"
 
 .PHONY: bench
 bench: ## Run benchmarks (BENCH=Status to pick some)
@@ -180,7 +194,7 @@ test/cover: ## Run tests and write coverage.html
 ##@ Code quality
 
 .PHONY: check
-check: check/format check/tidy check/vet test check/templeak test/e2e test/scripts check/lint ## Run every check CI runs
+check: check/format check/tidy check/vet test check/templeak test/e2e test/scripts check/lint ## Run every check CI runs, bar the plugin tests (make test/plugin; they need claude)
 
 .PHONY: check/format
 check/format: ## Fail if any Go file needs gofmt
