@@ -155,11 +155,12 @@ func TestAllAdaptersExhausted(t *testing.T) {
 	must(t, a.MarkExhausted(usage.Grok, soon, "3pm"))
 	_ = orchNotices(t, a, "")
 	must(t, a.MarkExhausted(usage.Codex, later, ""))
+	must(t, a.MarkExhausted(agent.OpenCodeName, later, ""))
 	ns := orchNotices(t, a, "All adapters")
 	if len(ns) != 1 || !strings.Contains(ns[0], "grok") || !strings.Contains(ns[0], "3pm") {
 		t.Fatalf("all-exhausted notices = %q, want one naming the first reset (grok, 3pm)", ns)
 	}
-	if got := sink.all(); len(got) != 3 || !strings.Contains(got[2], "All adapters") {
+	if got := sink.all(); len(got) != 4 || !strings.Contains(got[3], "All adapters") {
 		t.Fatalf("owner notifications = %q", got)
 	}
 	_, err := a.Spawn(SpawnReq{Title: "nowhere to run"})
@@ -345,6 +346,17 @@ func TestAdapterModelFromConfig(t *testing.T) {
 	}
 	if got := a.modelFor(usage.Codex, "o3"); got != "o3" {
 		t.Errorf("a requested codex model gave %q", got)
+	}
+	// #520: an opencode model stays on opencode; a claude model name does not.
+	a.Cfg.Adapters = config.AdapterMap{agent.OpenCodeName: {Model: "opencode/big-pickle"}}
+	if got := a.modelFor(agent.OpenCodeName, "opencode/big-pickle"); got != "opencode/big-pickle" {
+		t.Errorf("opencode model gave %q", got)
+	}
+	if got := a.modelFor(agent.OpenCodeName, "opus"); got != "opencode/big-pickle" {
+		t.Errorf("a claude model on opencode gave %q", got)
+	}
+	if got := a.modelFor(usage.Claude, "opencode/big-pickle"); got != a.Cfg.Claude.Model {
+		t.Errorf("an opencode model on claude gave %q", got)
 	}
 }
 

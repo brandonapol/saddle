@@ -28,6 +28,9 @@ var (
 	// radioOption is Grok's approval option, "┃  1 (●) Yes, proceed". Grok
 	// draws no composer on that screen (#496).
 	radioOption = regexp.MustCompile(`^\d+ \([●○]\)\s`)
+	// openCodeAllow is opencode's permission row (#520). The panel has no
+	// composer glyph, so the buttons are what make it a prompt.
+	openCodeAllow = regexp.MustCompile(`Allow once\s+Allow always\s+Reject`)
 )
 
 // cell is one visible rune and whether it was drawn grey or faint.
@@ -40,14 +43,16 @@ type cell struct {
 // "› text", with or without a surrounding box border) of a captured pane. A capture with SGR
 // escapes (capture-pane -e) tells a faint or grey suggestion from typed
 // text; a plain capture can only spot the known placeholders, so any other
-// text counts as a draft. A numbered menu option on that line, or Grok's
-// radio options below it, make it InputPrompt.
+// text counts as a draft. A numbered menu option on that line, Grok's
+// radio options, or opencode's Allow once / Allow always / Reject row
+// make it InputPrompt.
 func ReadInput(pane string) Input {
 	styled := strings.Contains(pane, "\x1b[")
 	lines := strings.Split(pane, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		cells := trimCells(decode(lines[i]), "│┃")
-		if radioOption.MatchString(cellText(cells)) {
+		text := cellText(cells)
+		if radioOption.MatchString(text) || openCodeAllow.MatchString(text) {
 			return InputPrompt
 		}
 		if len(cells) == 0 || !promptGlyph(cells[0].r) {

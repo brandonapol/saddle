@@ -501,6 +501,8 @@ func modelFamily(model string) string {
 		return usage.Codex
 	case strings.HasPrefix(m, "gemini"):
 		return agent.GeminiName
+	case m == agent.OpenCodeName || strings.HasPrefix(m, agent.OpenCodeName+"/"):
+		return agent.OpenCodeName
 	}
 	return ""
 }

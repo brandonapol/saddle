@@ -370,8 +370,13 @@ func (m *AdapterMap) UnmarshalTOML(v any) error {
 	return nil
 }
 
+// AdapterOpenCode is the opencode adapter's config name (#520).
+const AdapterOpenCode = "opencode"
+
 // AdapterNames lists the adapters [adapters] order may name.
-func AdapterNames() []string { return []string{HarnessClaude, HarnessCodex, "gemini", HarnessGrok} }
+func AdapterNames() []string {
+	return []string{HarnessClaude, HarnessCodex, "gemini", HarnessGrok, AdapterOpenCode}
+}
 
 // ParseModelRef splits a [fallback] key or entry, "adapter" or
 // "adapter:model", checking the adapter is one saddle knows.
@@ -688,7 +693,7 @@ func Default() Config {
 		CloseOnLand:   true,
 		Issues:        Issues{AutoFile: true},
 		Harness:       HarnessClaude,
-		AdapterOrder:  []string{HarnessClaude, HarnessGrok, HarnessCodex},
+		AdapterOrder:  []string{HarnessClaude, HarnessGrok, HarnessCodex, AdapterOpenCode},
 		AdapterPolicy: AdapterPolicy{Pick: PickOrder, Failover: FailoverHandoff, HandoffWait: 15 * time.Minute},
 		Claude: Claude{
 			Cmd:               "claude",
@@ -1039,7 +1044,7 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # When an adapter hits its usage limit, new spawns rotate to the next one
 # in this order that has quota and can run here (#321).
 # [adapters]
-# order = ["claude", "grok", "codex"]
+# order = ["claude", "grok", "codex", "opencode"]
 # How a spawn without adapter= picks (#481): "order" (the session default,
 # then this order), "cost" (the lowest cost below) or "quota" (the most of
 # its budget below left). A spawn's kind= first narrows to adapters that list
@@ -1064,6 +1069,9 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # [adapters.grok]
 # cmd = "grok"
 # args = []
+# [adapters.opencode]
+# cmd = "opencode"
+# model = ""  # provider/model, e.g. "opencode/big-pickle"; empty is opencode's default
 
 # Fallback chains (#483): who takes over while an adapter, or one of its
 # models, is out of quota. A model with a chain is marked out on its own, so
