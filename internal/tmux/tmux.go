@@ -207,3 +207,46 @@ func (t Tmux) WindowName(id string) (string, error) {
 func (t Tmux) CaptureStyled(id string, lines int) (string, error) {
 	return run("capture-pane", "-e", "-p", "-t", id, "-S", fmt.Sprintf("-%d", lines))
 }
+
+// Batcher is a Driver that reads many panes in a fixed number of tmux
+// processes, like Tmux.
+type Batcher interface {
+	Windows() (map[string]bool, error)
+	CaptureMany(lines map[string]int) (map[string]string, error)
+}
+
+// CaptureLive captures the last lines[id] lines of each live window's pane,
+// keyed by window id; gone windows are left out. A Batcher does it in two
+// tmux processes however many windows there are (#272); any other driver
+// takes two per window.
+func CaptureLive(d Driver, lines map[string]int) map[string]string {
+	out := map[string]string{}
+	if len(lines) == 0 {
+		return out
+	}
+	if b, ok := d.(Batcher); ok {
+		alive, err := b.Windows()
+		if err != nil {
+			return out
+		}
+		live := map[string]int{}
+		for id, n := range lines {
+			if alive[id] {
+				live[id] = n
+			}
+		}
+		if caps, err := b.CaptureMany(live); err == nil {
+			return caps
+		}
+		return out // a window closed between the two calls; the next read tries again
+	}
+	for id, n := range lines {
+		if !d.Alive(id) {
+			continue
+		}
+		if s, err := d.Capture(id, n); err == nil {
+			out[id] = strings.TrimRight(s, "\n ")
+		}
+	}
+	return out
+}

@@ -16,6 +16,7 @@ import (
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/tmux"
 	"github.com/brandonapol/saddle/internal/usage"
 )
 
@@ -71,14 +72,19 @@ func (e *Engine) Tick() error {
 			ts = append(ts, t)
 		}
 	}
+	// Paused tasks are watched for a usage-limit banner clearing; the ones
+	// saddle down stopped have no live window and are left out.
+	lines := map[string]int{}
+	for _, t := range ts {
+		if t.Window != "" && (t.Status == store.Running || t.Status == store.Idle || t.Status == app.StatusPaused) {
+			lines[t.Window] = 25
+		}
+	}
+	caps := tmux.CaptureLive(e.a.Tmux, lines)
 	screens := map[string]string{}
 	for _, t := range ts {
-		// Paused tasks are watched for a usage-limit banner clearing; Peek
-		// fails for the ones saddle down stopped, whose window is gone.
-		if t.Window != "" && (t.Status == store.Running || t.Status == store.Idle || t.Status == app.StatusPaused) {
-			if s, err := e.a.Peek(t.ID, 25); err == nil {
-				screens[t.ID] = s
-			}
+		if s, ok := caps[t.Window]; ok && lines[t.Window] > 0 {
+			screens[t.ID] = s
 		}
 	}
 	e.watchScreens(ts, screens)
