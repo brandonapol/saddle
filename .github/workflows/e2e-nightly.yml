@@ -4,16 +4,68 @@ on:
     - cron: "17 6 * * *"
   workflow_dispatch:
 jobs:
+  # The race-enabled suite no longer fits one 60m job (#537), so the e2e
+  # tests are dealt round-robin across shards by scripts/e2e-nightly-shard.sh.
+  # Each shard's go test is held to 40m; the slowest-journeys list (E2E_REPORT)
+  # is printed by make test/e2e and copied to the job summary.
   e2e-race:
+    name: e2e-race (shard ${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - run: sudo apt-get update && sudo apt-get install -y tmux
-      - run: make test/e2e
+      - name: Run shard
         env:
           E2E_RACE: "1"
-          E2E_GO_TIMEOUT: 60m
+          E2E_GO_TIMEOUT: 40m
+          SHARD: ${{ matrix.shard }}
+        run: |
+          RUN="$(scripts/e2e-nightly-shard.sh "$SHARD" 6)"
+          echo "shard $SHARD/6 -run $RUN"
+          make test/e2e RUN="$RUN" 2>&1 | tee e2e.log
+      - name: Slowest journeys
+        if: always()
+        run: |
+          {
+            echo "### Shard ${{ matrix.shard }}/6: slowest journeys"
+            echo '```'
+            grep -ihE -A12 'slowest' e2e.log || echo "no report (the run died before printing one)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # A failing nightly opens one tracking issue and then comments on it, found
+  # by its fixed title and label, so repeated failures stay in one place.
+  report-failure:
+    needs: e2e-race
+    if: ${{ always() && needs.e2e-race.result == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TITLE: "e2e-nightly is failing"
+      LABEL: e2e-nightly
+    steps:
+      - name: Open or update the tracking issue
+        run: |
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="The nightly race e2e failed: $url ($(date -u +%F))"
+          gh label create "$LABEL" --description "Nightly race e2e failures" --color B60205 2>/dev/null || true
+          n="$(gh issue list --label "$LABEL" --state open --search "\"$TITLE\" in:title" --json number,title \
+            --jq "[.[] | select(.title == \"$TITLE\")][0].number // empty")"
+          if [ -n "$n" ]; then
+            gh issue comment "$n" --body "$body"
+          else
+            gh issue create --title "$TITLE" --label "$LABEL" --body "$body
+
+          Sharded by scripts/e2e-nightly-shard.sh (see .github/workflows/e2e-nightly.yml). The failing shard's slowest-journeys list is in its job summary. This issue is updated on each failing night; close it once the nightly is green."
+          fi
