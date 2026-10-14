@@ -15,10 +15,10 @@ Gemini is listed where it shares codex's hookless path.
 | `out_of_quota_until` | banner reset | banner reset, else 1h | banner reset, including "in 2 hours" (fixed) |
 | After the quota reset | continues on its own | saddle types a continue line (fixed) | saddle types a continue line (fixed) |
 | Out of quota mid-task (#481) | handed to the next adapter in its worktree, or parks (`[adapters] failover`) | same | same |
-| Orchestrator out of quota (#481) | TUI moves it to grok with a state summary | TUI moves it to claude | n/a: no headless session |
-| Orchestrator context meter | transcript | usage.json snapshot | n/a: `saddle up codex` runs the orchestrator on Claude Code |
+| Orchestrator out of quota (#481) | TUI moves it to the next of grok and codex with quota, with a state summary | TUI moves it to claude, then codex | codex bridge: one `codex exec` turn per message, resumed (#506) |
+| Orchestrator context meter | transcript | usage.json snapshot | newest rollout started in the repo root (#506); `saddle up codex` still starts the orchestrator on Claude Code |
 | Working indicator (hookless idle) | n/a: Stop hook | `Ctrl+c:cancel` footer (#488) | `esc to interrupt`, verified (#488) |
-| Auto-compact | `/compact <keep>` | `/compact`, also headless (#488) | `/compact` |
+| Auto-compact | `/compact <keep>` | `/compact`, also headless (#488) | `/compact`; headless: a summary turn, then a fresh session opened with it (#506) |
 | Hung gates, orphaned done | adapter-agnostic | same | same; the orphan nudge types notices in whole |
 | Model in spawn and status | `[claude] model` | `[grok] model` | `[adapters.codex] model` (fixed) |
 | Adapter in status | `adapter` on each task (fixed) | same | same |
@@ -132,6 +132,45 @@ CLIs' binaries, placed where each CLI prints a turn's error.
   `TestDoneRefusesHooklessBranchTouchingClaimedFile`,
   `TestDoneAllowClaimedOverridesAndTellsOrchestrator`,
   `TestPreCommitRunsOnlyForHooklessAgents`.
+
+## Codex headless orchestrator (#506)
+
+Codex has no persistent stdin protocol, so the TUI's orchestrator runs on
+codex through saddle's bridge, like grok's: the `grok-bridge` command runs
+whichever bridge the run dir recorded, and for codex each user message is
+one `codex exec --json` turn. The first turn starts a session; later turns
+run `codex exec resume <id>`, so context carries across turns. Codex's JSONL
+events become the stream-json the TUI parses: `thread.started` is the init
+line, agent messages are assistant text, commands, MCP calls, file changes
+and searches are tool calls, and `turn.completed` or `turn.failed` is the
+result, so a usage-limit message reaches failover. A session id that won't
+resume (another adapter's, a deleted rollout) is retried once fresh.
+
+- **MCP.** The saddle server is passed with `-c mcp_servers.saddle.*`
+  overrides on every turn, as interactive codex workers get it. Verified
+  with codex 0.154.0: `exec` and `exec resume` load it and call its tools.
+- **Brief.** Codex has no system-prompt flag, so the brief opens each new
+  session's first message.
+- **Sandbox.** `exec resume` takes no `--sandbox`, so the permission mode
+  maps to `-c sandbox_mode=…` (`acceptEdits` is workspace-write, `plan` and
+  `default` read-only) or, by default,
+  `--dangerously-bypass-approvals-and-sandbox`: the orchestrator runs saddle
+  and git in the main checkout. Of `[adapters.codex] args`, only `-c`,
+  `--enable` and `--disable` reach exec; interactive-only flags would fail
+  every turn.
+- **Compaction.** `exec` has no `/compact`. The bridge reads a `/compact`
+  line, asks the session for a summary, opens a fresh session with the brief
+  and that summary, and reports a `compact_boundary`.
+- **Limits.** Codex has no hooks and no tool deny list, so the orchestrator
+  deny list does not apply on codex. Interrupts end the bridge with SIGINT,
+  as grok's do.
+
+Tests: `TestCodexBridgeResumesAcrossTurns`,
+`TestCodexBridgeStartsFreshWhenResumeFails`,
+`TestCodexBridgeReportsQuotaError`,
+`TestCodexBridgeCompactStartsFreshSessionFromSummary`, `TestCodexExecArgs`,
+`TestHeadlessCodexWritesSpec`, `TestFailOverOrchestratorToCodex`,
+`TestFailOverOrchestrator`.
 
 ## Already at parity
 

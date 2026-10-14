@@ -159,9 +159,12 @@ func (a *App) orchestratorTranscript() (string, error) {
 		return "", err
 	}
 	var src agent.UsageSource
-	if a.orchestratorAgent() == usage.Grok {
+	switch a.orchestratorAgent() {
+	case usage.Grok:
 		src = agent.Grok{}.Usage()
-	} else {
+	case usage.Codex:
+		src = agent.Codex{}.Usage() // the newest rollout started in its directory
+	default:
 		dir := os.Getenv("CLAUDE_CONFIG_DIR")
 		src = agent.Claude{ConfigDir: dir}.Usage()
 		if t.SessionID == "" {

@@ -24,8 +24,9 @@ import (
 const EventOrchestratorFailover = "orchestrator_failover"
 
 // OrchestratorAdapters are the adapters the TUI's orchestrator can run on:
-// the ones with a headless session. Codex has none.
-var OrchestratorAdapters = []string{usage.Claude, usage.Grok}
+// the ones with a headless session. Grok and codex get theirs from saddle's
+// bridges, one headless turn per message (#506).
+var OrchestratorAdapters = []string{usage.Claude, usage.Grok, usage.Codex}
 
 func (a *App) orchOverridePath() string { return a.stateDir("orchestrator-adapter") }
 

@@ -532,13 +532,21 @@ func (a *App) newLaunch(t store.Task, dir, model, brief, prompt string, allow, d
 		RunDir: a.stateDir("run", t.ID), Brief: brief, Prompt: prompt, Allow: allow, Deny: deny,
 		ShimDir: a.WriteShims(),
 	}
-	if a.orchestratorAgent() == usage.Grok {
+	switch a.orchestratorAgent() {
+	case usage.Grok:
 		l.Kind = agent.KindGrok
 		l.Cmd, l.Args = a.adapterCmd(usage.Grok)
 		if l.Cmd == "" {
 			l.Cmd = a.Cfg.Grok.Cmd
 		}
 		l.Mode = a.Cfg.Grok.PermissionMode
+		return l
+	case usage.Codex:
+		// Only a failover puts the orchestrator on codex (#506); it runs
+		// headless through the codex bridge.
+		l.Kind = agent.KindCodex
+		l.Cmd, l.Args = a.adapterCmd(usage.Codex)
+		l.Mode = a.Cfg.Claude.PermissionMode
 		return l
 	}
 	l.Kind = agent.KindClaude
@@ -558,8 +566,11 @@ func (a *App) workerModel() string {
 }
 
 func (a *App) orchModel() string {
-	if a.orchestratorAgent() == usage.Grok {
+	switch a.orchestratorAgent() {
+	case usage.Grok:
 		return a.Cfg.Grok.OrchestratorModel
+	case usage.Codex:
+		return a.Cfg.Adapters[usage.Codex].Model // empty is codex's own default
 	}
 	return a.Cfg.Claude.OrchestratorModel
 }
