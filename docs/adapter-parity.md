@@ -2,7 +2,8 @@
 
 Saddle grew up on Claude Code. This page lists every feature that assumed
 it, how codex and grok behave there, and what was fixed or filed (#480).
-Gemini is listed where it shares codex's hookless path.
+Gemini is listed where it shares codex's hookless path. opencode, the
+fourth adapter (epic #508), has its own section below.
 
 | Feature | claude | grok | codex |
 |---|---|---|---|
@@ -171,6 +172,76 @@ Tests: `TestCodexBridgeResumesAcrossTurns`,
 `TestCodexBridgeCompactStartsFreshSessionFromSummary`, `TestCodexExecArgs`,
 `TestHeadlessCodexWritesSpec`, `TestFailOverOrchestratorToCodex`,
 `TestFailOverOrchestrator`.
+
+## opencode: spike and skeleton (#509)
+
+opencode 1.19.0 (`opencode` on PATH, `[adapters.opencode] cmd` to override)
+was run in tmux against a scratch repo. Findings:
+
+- **Launch.** `opencode [project]` is the TUI. `--prompt <text>` fills the
+  composer and submits it, so the first message needs no typing.
+  `-m/--model provider/model` picks the model; with none, opencode uses its
+  configured default. The adapter's launch.sh `cd`s into the worktree and
+  runs `opencode [--model M] [--auto] [args] --prompt "$(cat prompt.md)"`.
+  Typed text plus Enter submits, so hookless notices are typed in whole on
+  one line, as for codex.
+- **Permissions.** opencode allows edits and shell commands by default and
+  asks only for what its `permission` config marks `ask`. `--auto`
+  approves those too. The permission mode maps like codex's: `acceptEdits`
+  and `default` add nothing, `plan` is `--agent plan` (opencode's read-only
+  agent), anything else is `--auto`. The composer then reads `Build auto`.
+- **MCP.** `OPENCODE_CONFIG=<file>` is merged over the user's global and
+  project config, so the adapter writes `opencode.json` in the run dir with
+  `mcp.saddle = {type: "local", command: [saddle, "mcp"], environment:
+  {SADDLE_ROOT, SADDLE_TASK}}` and nothing lands in the repo.
+  `opencode mcp list` shows it connected, and the worker calls it as
+  `saddle_status` and so on. A user's own `OPENCODE_CONFIG` is replaced for
+  the worker. `OPENCODE_DISABLE_AUTOUPDATE=1` is set too.
+- **Brief.** It opens the first message, with the hookless claim rules, as
+  for codex and gemini. opencode's `instructions` config could carry it in
+  the system prompt instead.
+- **Hooks.** opencode has JS/TS plugins (`.opencode/plugin/`, or `plugin`
+  in config) with `tool.execute.before`/`after` and session events such as
+  `session.idle`. A plugin that throws in `tool.execute.before` blocks the
+  tool call, so claims could be enforced like claude's and grok's. Saddle
+  installs no plugin yet, so `Hooks()` is false: claims are checked at
+  commit and done (#489) and status shows `hooks: false`.
+- **Login.** Status shows opencode ok when it is on PATH and has a
+  credential: `auth.json` under `$XDG_DATA_HOME/opencode` (default
+  `~/.local/share/opencode`), written by `opencode providers login`, or a
+  provider key in the environment (`OPENCODE_API_KEY`, `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `OPENROUTER_API_KEY` and others). Otherwise the reason
+  is "opencode is not logged in: run opencode providers login". opencode's
+  free `opencode/*` models answer with no login at all. Saddle still asks
+  for one, because those models can't be metered or failed over from yet.
+- **Screens** (`internal/agent/testdata/opencode`). opencode runs in the
+  alternate screen, which `capture-pane` reads. Busy: `esc interrupt` in
+  the footer. Idle: the footer shows the cwd and context use
+  (`17.0K (8%)`). Approval: a `△ Permission required` panel with `Allow
+  once   Allow always   Reject` (Enter allows once). The composer is a `┃`
+  box with the agent and model under it, and no placeholder. Quota: the
+  binary's wordings are "Free usage exceeded, subscribe to Go", "<plan>
+  usage limit reached. It will reset in 2 hours 5 minutes…" and "Quota
+  exceeded. Check your plan and billing details.". Retries show
+  `[retrying in <n> attempt #<k>]`. The quota pane is assembled from those
+  strings, because a limit can't be hit on demand.
+- **Manual run.** The adapter's launch.sh, with `opencode/big-pickle`, wrote
+  a file, committed it through saddle's pre-commit hook, called
+  `saddle_status` and went idle.
+
+Not yet (later tickets in #508): screen detectors for these panes
+(`DetectPrompt`, `ReadInput`, working indicator, `DetectLimitBanner`), a
+claims plugin, usage metering (`opencode stats`, or its `opencode.db`
+sessions), and a headless orchestrator (`opencode run` or `opencode
+serve`). Until the detectors land, the hookless idle watcher's working indicator
+(`esc to interrupt`, `esc to cancel`, `Ctrl+c:cancel`) never matches
+opencode's `esc interrupt`; a busy opencode reads as running only while its
+animated footer keeps the screen changing.
+opencode is not in `config.AdapterNames`, so `[adapters] order` and
+`[fallback]` can't name it yet, and it is not in the orchestrator's
+rotation (`Providers`). Tests: `TestOpenCodeLaunchRunsFakeBinary`,
+`TestOpenCodeLaunchWithoutModel`, `TestOpenCodeApprovalFlags`,
+`TestOpenCodeAvailability`.
 
 ## Already at parity
 

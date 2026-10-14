@@ -1,0 +1,40 @@
+
+  ┃
+  ┃  Create a file hello.txt containing hi, using your write tool. Then reply DONE.
+  ┃
+
+     Free usage exceeded, subscribe to Go
+
+     Go usage limit reached. It will reset in 2 hours 5 minutes. To continue using this model now, enable usage from
+     your available balance - https://opencode.ai/workspace/wrk_123/go
+
+     Quota exceeded. Check your plan and billing details.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃  Build · Big Pickle OpenCode Zen
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /repo/wt                          16.3K (8%)  ctrl+p commands
+
