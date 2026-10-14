@@ -78,6 +78,8 @@ var ToolScopes = map[string]Scope{
 	"release":   ScopeLocal,
 	"ask_owner": ScopeLocal,
 	"done":      ScopeLocal,
+	// decisions can add [[preauth]] rules, so it stays off remote for now
+	"decisions": ScopeLocal,
 }
 
 // RemoteOnlyTools exist only on the remote server, not in mcpserver.

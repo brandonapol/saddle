@@ -526,6 +526,12 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, AskOut{Owner: owner, Message: "Asked " + owner + "; the answer will arrive as a [saddle] message. Keep working on what you can meanwhile."}, nil
 		})
 
+	mcp.AddTool(s, &mcp.Tool{Name: "decisions", Description: decisionsDesc},
+		func(_ context.Context, _ *mcp.CallToolRequest, in DecisionsIn) (*mcp.CallToolResult, DecisionsOut, error) {
+			out, err := decisionsTool(a, task, in)
+			return nil, out, err
+		})
+
 	mcp.AddTool(s, &mcp.Tool{Name: "done", Description: "Finish your task: requires a clean, committed worktree. Queues your branch in the merge train. When the repo's gate has to check your tree, it returns at once with a job id and checks in the background; you get a [saddle] notice when the job ends. Calling done again while it runs starts no second check."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in DoneIn) (*mcp.CallToolResult, OK, error) {
 			if err := self(); err != nil {

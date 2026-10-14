@@ -1018,6 +1018,24 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # "saddle notices --all" lists everything, digested and silenced included.
 # digest_every = "15m"
 
+# The decision queue (#464): owner-gated actions wait as decision cards while
+# other work runs. A reversible card runs its recommended option after
+# [stall.kinds] owner (default 30m); an irreversible one (a tag push, a
+# publish) waits for you. One digest a day, at digest_at local time, lists
+# what waits and what saddle decided meanwhile.
+# [decisions]
+# digest_at = "08:00"
+# Classes of action you allow up front, so they never wait overnight. match is
+# a glob over the decision's subject; leave it out to allow the whole class.
+# "saddle decisions allow <class> [match]" appends one.
+# [[preauth]]
+# class = "dependency"
+# match = "github.com/aws/*"
+# note = "SDK packages listed in ADR 7"
+# [[preauth]]
+# class = "release-tag"
+# match = "v*"
+
 # When an adapter hits its usage limit, new spawns rotate to the next one
 # in this order that has quota and can run here (#321).
 # [adapters]

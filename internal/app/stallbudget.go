@@ -169,13 +169,20 @@ func (a *App) stallBudget(kind string) (time.Duration, bool) {
 	return a.StallConfig().set(kind)
 }
 
-// StallTick runs the stall budget at now: the default of every card whose
-// budget ran out, then puts back layers held on a red layer that merged,
-// then the no-progress watchdog. The sentinel runs it every cycle, with the
-// stuck-stack alarm. It returns the cards it closed.
+// StallTick runs the stall budget at now: it closes the cards a
+// [[preauth]] rule allows, runs the default of every reversible card whose
+// budget ran out, puts back layers held on a red layer that merged, runs
+// the no-progress watchdog and sends the day's decisions digest once it is
+// due (#464). The sentinel runs it every cycle, with the stuck-stack alarm. It returns the cards it closed.
 func (a *App) StallTick(now time.Time) ([]DecisionCard, error) {
+	pre, err := a.ApplyPreauth(now)
+	errs := []error{err}
 	done, err := a.ExpireDecisions(now, a.runDefault)
-	errs := []error{err, a.releaseHeld()}
+	done = append(pre, done...)
+	errs = append(errs, err, a.releaseHeld())
+	if _, err := a.DecisionDigestTick(now); err != nil {
+		errs = append(errs, fmt.Errorf("decisions digest: %w", err))
+	}
 	if _, err := a.OrphanTick(now); err != nil {
 		errs = append(errs, fmt.Errorf("done-orphan watch: %w", err))
 	}
@@ -200,6 +207,8 @@ func (a *App) runDefault(c DecisionCard, o DecisionOption) error {
 			msg = strings.Trim(o.Action[i:], `"`)
 		}
 		return a.Notify(c.Task, store.NoticeAction, msg)
+	case DecisionOwner:
+		return a.applyOwnerDecision(c, c.Default, DecidedByTimeout, "")
 	}
 	return nil // the watchdog's card and unknown kinds: waiting is the default
 }
