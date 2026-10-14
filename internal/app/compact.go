@@ -101,6 +101,14 @@ func NewContextUse(model, configured string, tok usage.Tokens) ContextUse {
 	return u
 }
 
+// WorkerContext sizes a worker's estimated prompt (its usage buckets' tokens
+// per message) against model's window. Grok records total every model call in
+// a turn, so the estimate can exceed the window: Percent then shows "?" rather
+// than a cumulative figure like 999% (#510).
+func WorkerContext(model string, prompt int64) ContextUse {
+	return NewContextUse(model, "", usage.Tokens{Input: prompt})
+}
+
 // Fraction is Prompt/Window clamped to one, or zero when nothing has been
 // read. Trustworthy reports whether the unclamped reading fits its window.
 func (u ContextUse) Fraction() float64 {

@@ -440,3 +440,22 @@ func TestCompactUsesAppTarget(t *testing.T) {
 		t.Fatalf("report = %+v, sent %q; want the App-wide target used", rep, tgt.sent)
 	}
 }
+
+func TestWorkerContextGrok(t *testing.T) {
+	t.Parallel()
+	// A grok worker's usage record totals every model call in a turn, so its
+	// per-message average can be far past any real window (#510).
+	u := WorkerContext("grok-4.7-build", 10_700_000)
+	if u.Window != 256_000 {
+		t.Fatalf("grok window = %d, want 256K", u.Window)
+	}
+	if u.Trustworthy() || u.Percent() != "?" || u.Fraction() != 1 {
+		t.Fatalf("cumulative grok reading = %+v (%s), want untrustworthy ?", u, u.Percent())
+	}
+	if u := WorkerContext("grok-4.7-build", 196_000); u.Percent() != "77%" {
+		t.Fatalf("grok 196K = %s, want 77%%", u.Percent())
+	}
+	if u := WorkerContext("claude-opus-5-5", 500_000); u.Window != 1_000_000 || u.Percent() != "50%" {
+		t.Fatalf("claude past 200K = %+v, want the 1M window", u)
+	}
+}
