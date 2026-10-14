@@ -39,11 +39,11 @@ them against the repo:
 | a Go import path (`github.com/org/repo/internal/x`) | the longest suffix the repo has |
 | a glob (`internal/autopilot/**`) | the glob |
 
-URLs, prose like `and/or`, branch and ref names (`saddle/integration`),
-bare words (`docs`), `.git/` and `.saddle/` paths, and lockfiles (`go.mod`, `go.sum`, …) are ignored. A
-claim another one covers is dropped. If nothing matches, the ticket has no
-claims and runs alone, as before. The spawn event says `inferred claims` so
-you can tell the two apart.
+URLs, prose like `and/or`, branch and ref names (`saddle/integration`), bare
+words (`docs`), `.git/` and `.saddle/` paths, and lockfiles (`go.mod`,
+`go.sum`, …) are ignored. A claim another one covers is dropped. If nothing
+matches, the ticket has no claims and runs alone, as before. The spawn event
+says `inferred claims` so you can tell the two apart.
 
 Claims only reserve. A worker may still write a file nobody claimed; the
 claim hook claims it for the worker then. A narrow guess costs a later
