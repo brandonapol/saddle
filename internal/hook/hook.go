@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/app"
@@ -61,15 +62,12 @@ func Handle(a *app.App, task string, in Input) *Output {
 				return out
 			}
 		}
-		p := filePath(in.ToolInput)
-		if p == "" {
-			return nil
+		for _, p := range writePaths(in) {
+			if d := a.CheckWrite(task, p); !d.Allow {
+				return deny(in, RuleWriteGuard, d.Reason+ownerDiff(a, task, p))
+			}
 		}
-		d := a.CheckWrite(task, p)
-		if d.Allow {
-			return nil
-		}
-		return deny(in, RuleWriteGuard, d.Reason+ownerDiff(a, task, p))
+		return nil
 
 	case "PostToolUse":
 		markActive(st, task) // a tool ran, so any prompt it was waiting on was answered
@@ -178,6 +176,7 @@ type inputWire struct {
 	StopCamel      bool           `json:"stopHookActive"`
 	ModeSnake      string         `json:"permission_mode"`
 	ModeCamel      string         `json:"permissionMode"`
+	Cwd            string         `json:"cwd"`
 }
 
 func decodeInput(b []byte) (Input, error) {
@@ -193,6 +192,7 @@ func decodeInput(b []byte) (Input, error) {
 		Message:        w.Message,
 		StopHookActive: w.StopSnake || w.StopCamel,
 		PermissionMode: first(w.ModeSnake, w.ModeCamel),
+		Cwd:            w.Cwd,
 		Grok:           w.EventCamel != "" || w.SessionIDCamel != "" || w.ToolCamel != "",
 	}
 	if in.ToolInput == nil {
@@ -252,6 +252,41 @@ func filePath(in map[string]any) string {
 		}
 	}
 	return ""
+}
+
+// writePaths are the files a tool call writes: its file path argument, or
+// the files an apply_patch patch names (opencode, #532). A relative path is
+// resolved against the payload's cwd.
+func writePaths(in Input) []string {
+	var ps []string
+	if p := filePath(in.ToolInput); p != "" {
+		ps = append(ps, p)
+	}
+	if patch, _ := in.ToolInput["patchText"].(string); patch != "" {
+		ps = append(ps, patchPaths(patch)...)
+	}
+	for i, p := range ps {
+		if !filepath.IsAbs(p) && in.Cwd != "" {
+			ps[i] = filepath.Join(in.Cwd, p)
+		}
+	}
+	return ps
+}
+
+// patchPaths are the files an apply_patch patch adds, updates, deletes or
+// moves to.
+func patchPaths(patch string) []string {
+	var ps []string
+	for _, line := range strings.Split(patch, "\n") {
+		for _, h := range []string{"*** Add File:", "*** Update File:", "*** Delete File:", "*** Move to:"} {
+			if rest, ok := strings.CutPrefix(line, h); ok {
+				if p := strings.TrimSpace(rest); p != "" {
+					ps = append(ps, p)
+				}
+			}
+		}
+	}
+	return ps
 }
 
 func takeAll(st *store.Store, task string) string {
