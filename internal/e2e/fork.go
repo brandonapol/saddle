@@ -112,10 +112,10 @@ func runMain(m *testing.M, bins *Bins) int {
 		if budget, scale := budgetFor(load.stop(), took); budget > 0 {
 			if took > budget {
 				fmt.Fprintf(&out, "e2e: FAIL: the suite took %s, over its %s budget (%s quiet, x%.2f for load); "+
-					"speed up the slowest journeys above (#521)\n", took.Round(time.Second), budget.Round(time.Second), budgetBase(), scale)
+					"speed up the slowest journeys above (#521)\n", took.Round(100*time.Millisecond), budget.Round(100*time.Millisecond), budgetBase(), scale)
 				code = 1
 			} else {
-				fmt.Fprintf(&out, "e2e: the suite took %s of its %s budget\n", took.Round(time.Second), budget.Round(time.Second))
+				fmt.Fprintf(&out, "e2e: the suite took %s of its %s budget\n", took.Round(100*time.Millisecond), budget.Round(100*time.Millisecond))
 			}
 		}
 	}
