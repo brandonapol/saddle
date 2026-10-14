@@ -20,17 +20,27 @@ var (
 	// claimsLine is "claims: a, b", "**Claims:** a b" or "- claims: a".
 	claimsLine = regexp.MustCompile(`(?i)^\s*(?:[-*]\s+)?\**claims\**\s*:\s*\**\s*(.*)$`)
 	bulletLine = regexp.MustCompile(`^\s*[-*]\s+(.*)$`)
+	// claimsHead is the "### Claims" heading a GitHub issue form renders.
+	claimsHead = regexp.MustCompile(`(?i)^\s*#{1,6}\s+claims\s*$`)
+	heading    = regexp.MustCompile(`^\s*#{1,6}\s`)
 	afterLine  = regexp.MustCompile(`(?i)^\s*(?:[-*]\s+)?\**after\**\s*:?\s*\**\s*((?:#\d+[\s,]*)+)$`)
 	issueRef   = regexp.MustCompile(`#(\d+)`)
 	scopeLine  = regexp.MustCompile(`(?i)model scope\s*:\s*\**\s*(opus|sonnet|haiku|fable)`)
 )
 
 // ParseClaims reads the path globs an issue declares it will change: a
-// "claims:" line with the globs after it, or a bullet list under it. Nil
-// means none were declared.
+// "claims:" line with the globs after it, or a bullet list under it, or
+// the "### Claims" section an issue form renders. Nil means none were
+// declared.
 func ParseClaims(body string) []string {
-	lines := strings.Split(body, "\n")
+	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
 	for i, l := range lines {
+		if claimsHead.MatchString(l) {
+			if out := section(lines[i+1:]); out != nil {
+				return out
+			}
+			continue
+		}
 		m := claimsLine.FindStringSubmatch(l)
 		if m == nil {
 			continue
@@ -49,6 +59,25 @@ func ParseClaims(body string) []string {
 		return out
 	}
 	return nil
+}
+
+// section reads the globs under a heading, up to the next one. An issue
+// form's "_No response_" counts as none.
+func section(lines []string) []string {
+	var out []string
+	for _, l := range lines {
+		if heading.MatchString(l) {
+			break
+		}
+		if b := bulletLine.FindStringSubmatch(l); b != nil {
+			l = b[1]
+		}
+		if strings.Contains(l, "_No response_") {
+			continue
+		}
+		out = append(out, globs(l)...)
+	}
+	return out
 }
 
 func globs(s string) []string {
