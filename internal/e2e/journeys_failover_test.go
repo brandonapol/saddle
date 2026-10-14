@@ -32,7 +32,7 @@ if [ -n "$pf" ]; then
   echo '{"type":"result","subtype":"success","result":"grok orchestrator took over","session_id":"grok-orch-1"}'
   exit 0
 fi
-printf '%s\n' "$@" > ` + root + `/grok-args
+printf '%s\n' "$@" > ` + root + `/grok-args.tmp && mv ` + root + `/grok-args.tmp ` + root + `/grok-args
 mkdir -p finished
 echo "finished on grok" > finished/grok.txt
 ` + fa.IndexLockRetry(`git add -A && git commit -qm "finish on grok"`) + `
