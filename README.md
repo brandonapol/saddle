@@ -102,7 +102,7 @@ them) and offers stacked PRs that close the issues.
 | `tab` | switch between chat and the agent list |
 | `j` `k` | select an agent (peek follows) |
 | `enter` on an agent | open its real terminal; `ctrl-b d` comes back |
-| `x` / `L` | kill the agent / land queued branches |
+| `x` / `L` | kill the agent / land queued branches; `y` confirms, any other key cancels |
 | `ctrl+r` | restart the orchestrator (resumes the conversation) |
 | `ctrl+c` | quit. Agents keep running; `saddle up` reconnects |
 
