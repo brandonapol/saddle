@@ -420,7 +420,7 @@ func BlockerTitle(b Blocker) string {
 // BlockerBody is a new issue's body.
 func BlockerBody(b Blocker, summary string, count int) string {
 	var s strings.Builder
-	s.WriteString("**Model scope: Opus.** Saddle filed this for a blocker it escalated; a lasting fix needs design judgment.\n\n")
+	s.WriteString("**Difficulty: hard (design judgment).** Saddle filed this for a blocker it escalated; a lasting fix needs design judgment.\n\n")
 	s.WriteString("## Summary\n" + summary + "\n\n")
 	if b.Detail != "" {
 		s.WriteString("What saddle saw:\n> " + strings.ReplaceAll(strings.TrimSpace(b.Detail), "\n", "\n> ") + "\n\n")

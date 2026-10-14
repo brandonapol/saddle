@@ -70,6 +70,12 @@ func TestTicketDifficultyNeedsProvider(t *testing.T) {
 	if got := Needs("x\n**Needs:** Review, image-gen, hooks-required\n"); !slices.Equal(got, []string{"review", "image-gen", "hooks"}) {
 		t.Errorf("Needs = %q", got)
 	}
+	if got := Needs("### Needs\n\nimage-gen, web-research\n\n### Claims\n\n- a/**"); !slices.Equal(got, []string{"image-gen", "web-research"}) {
+		t.Errorf("Needs from a form = %q", got)
+	}
+	if got := Needs("### Needs\n\n_No response_\n\n### Claims"); got != nil {
+		t.Errorf("Needs from an empty form field = %q", got)
+	}
 	if got := Needs("no needs here"); got != nil {
 		t.Errorf("Needs without a line = %q", got)
 	}

@@ -60,4 +60,67 @@ claims waits until nothing else runs, and nothing else starts beside it.
 Other ticket lines autopilot reads:
 
 - `After: #12, #7`: wait until those issues' tasks are done, and build on them.
-- `Model scope: Sonnet`: the model the worker gets (Opus otherwise).
+- `Difficulty: hard | standard | mechanical` (or the form's **Difficulty**
+  field) and `Needs: review, image-gen`: what the work needs. Saddle picks
+  the provider and model from them; see below.
+- `Provider: codex`: run on this adapter, overriding the chooser. Use it only
+  when the ticket needs something one provider alone has, and say why.
+- `Model scope: Opus`: old tickets. It is a hint, not a pin: Sonnet reads as
+  standard, Haiku as mechanical, Opus as no preference (it was every ticket's
+  default), and the model applies only if the chooser picks claude.
+
+## How saddle picks the provider (#505)
+
+Tickets say what they need; the orchestrator and autopilot share one
+chooser that picks the provider. It ranks the adapters that can run here
+and have quota by, in order:
+
+1. **Needs**: adapters that declare every capability the ticket needs.
+   `hooks-required` is met by adapters that run saddle's hooks (claude, grok).
+2. **Difficulty**: adapters whose capability table suits it. By default
+   claude suits every difficulty and the others standard and mechanical, so
+   hard work prefers claude while it has quota.
+3. **Kind**: spawn's `kind=`, matched against `[adapters.<name>] kinds`.
+4. **Hooks** for a task whose claims share a directory with another live
+   task's, so claims are enforced on every write.
+5. **`[adapters] policy`**: `balanced` (the default) takes the adapter with
+   the most unused five-hour budget per running worker, so idle allowances
+   get used and one tick's spawns spread out. `order`, `cost` and `quota`
+   are still there.
+
+An adapter that is out of quota or can't run here is skipped. If nothing
+suited has quota, the best unsuited one runs it rather than nothing.
+
+The model is the one `[adapters.<name>] models` names for the difficulty
+(claude: hard = opus, mechanical = sonnet by default), else the adapter's
+default. Excluded models (`exclude_models`) are never used.
+
+`saddle status` prints, for each live task, where it went and why, e.g.
+`t12 on codex: suits mechanical, 90% of budget left, 0 running`. Autopilot's
+report names the provider for every ready ticket before it spawns
+(`routes`), and its spawn events say where each went.
+
+### The capability table
+
+```toml
+[adapters]
+policy = "balanced"
+
+[adapters.codex]
+budget = 2000000                        # tokens per five hours
+difficulties = ["standard", "mechanical"]
+capabilities = ["review"]
+models = { standard = "sol", mechanical = "luna" }
+
+[adapters.claude]
+budget = 3000000
+models = { hard = "opus", mechanical = "haiku" }
+```
+
+Capabilities are open words: a ticket's `Needs: image-gen` routes to an
+adapter that declares `image-gen`. This is the extension point for work
+beyond code. An adapter whose CLI drives another host (image generation
+from another account, ChatGPT plugins via `plugin-host`, web research)
+declares the capability, and tickets that need it go there. Saddle knows
+`review`, `long-context`, `image-gen`, `web-research`, `plugin-host` and
+`hooks-required`.

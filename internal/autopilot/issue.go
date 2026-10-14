@@ -33,6 +33,7 @@ var (
 	// "### Difficulty" section an issue form renders (#505).
 	difficultyLine = regexp.MustCompile(`(?i)\bdifficulty\**\s*:\s*\**\s*([a-z][a-z-]*)`)
 	difficultyHead = regexp.MustCompile(`(?i)^\s*#{1,6}\s+difficulty\s*$`)
+	needsHead      = regexp.MustCompile(`(?i)^\s*#{1,6}\s+needs\s*$`)
 	needsLine      = regexp.MustCompile(`(?im)^\s*(?:[-*]\s+)?\**needs\**\s*:\s*\**\s*(.*)$`)
 	providerLine   = regexp.MustCompile(`(?im)^\s*(?:[-*]\s+)?\**provider\**\s*:\s*\**\s*([a-z]+)`)
 )
@@ -149,19 +150,8 @@ func Difficulty(body string) string {
 			return d
 		}
 	}
-	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
-	for i, l := range lines {
-		if !difficultyHead.MatchString(l) {
-			continue
-		}
-		for _, n := range lines[i+1:] {
-			if heading.MatchString(n) {
-				break
-			}
-			if d := config.NormalizeDifficulty(n); d != "" {
-				return d
-			}
-		}
+	if d := config.NormalizeDifficulty(formSection(body, difficultyHead)); d != "" {
+		return d
 	}
 	switch ModelScope(body) {
 	case "sonnet":
@@ -175,17 +165,41 @@ func Difficulty(body string) string {
 // Needs are the capabilities a ticket's "Needs:" line asks for, e.g.
 // "Needs: review, image-gen" (#505).
 func Needs(body string) []string {
-	m := needsLine.FindStringSubmatch(body)
-	if m == nil {
-		return nil
+	var text string
+	if m := needsLine.FindStringSubmatch(body); m != nil {
+		text = m[1]
+	} else {
+		text = formSection(body, needsHead)
 	}
 	var out []string
-	for _, f := range strings.FieldsFunc(m[1], func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '*' }) {
+	for _, f := range strings.FieldsFunc(text, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '*' || r == '\n' }) {
 		if n := config.NormalizeNeed(f); n != "" && n != "none" && !slices.Contains(out, n) {
 			out = append(out, n)
 		}
 	}
 	return out
+}
+
+// formSection is the text under the issue-form heading head, up to the
+// next heading; "" when there is none or it says "_No response_".
+func formSection(body string, head *regexp.Regexp) string {
+	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
+	for i, l := range lines {
+		if !head.MatchString(l) {
+			continue
+		}
+		var out []string
+		for _, n := range lines[i+1:] {
+			if heading.MatchString(n) {
+				break
+			}
+			if !strings.Contains(n, "_No response_") {
+				out = append(out, n)
+			}
+		}
+		return strings.TrimSpace(strings.Join(out, "\n"))
+	}
+	return ""
 }
 
 // Provider is the adapter a ticket's "Provider:" line pins it to, lower

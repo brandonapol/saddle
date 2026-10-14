@@ -267,18 +267,26 @@ second opinion; codex for well-specified or mechanical edits whose claims no
 one else touches (it has no hooks). `status` shows each adapter's `provider`,
 `hooks` and, while it is out, `out_of_quota_until`.
 
-A spawn with no `adapter` is picked by `[adapters] policy` (#481,
-`internal/app/adapterpick.go`). Only adapters with quota that can run here
-count. A spawn's `kind` (docs, mechanical, design…) puts adapters whose
-`[adapters.<name>] kinds` list it first; a task with claims then prefers
-adapters that run hooks. Then the policy decides: `order` (the default) takes
+A spawn with no `adapter` is picked by one chooser (#481, #505,
+`internal/app/adapterpick.go`) that the orchestrator's spawns, autopilot and
+fallback rerouting share. Only adapters with quota that can run here count.
+A spawn's `needs` (capabilities from the ticket's `Needs:` line) puts
+adapters that declare them first, then its `difficulty` (hard, standard,
+mechanical) puts adapters whose capability table suits it
+(`[adapters.<name>] difficulties`, `capabilities`, `models`; defaults in
+`internal/config/routing.go`), then its `kind` puts adapters whose
+`[adapters.<name>] kinds` list it; a task with claims then prefers adapters
+that run hooks (under `balanced`, only when its claims share a directory
+with another live task's). Then the policy decides: `balanced` (the default)
+takes the most unused budget per running worker, so work spreads across
+providers; `order` takes
 the session's harness (`saddle up claude|grok|codex`, or `harness`) and then
 `[adapters] order`, and never trades the harness for the hooks preference;
 `cost` takes the lowest `[adapters.<name>] cost` (unset is 1); `quota` takes
 the most of its five-hour `budget` left, from the metered usage (no budget
 means no known limit). `status` shows `adapter_policy` and each adapter's
 `pick_rank` and `pick` (why), and `saddle status` prints the order as "next
-spawn:". That holds for every path saddle spawns on its own: CI fix and
+spawn:"; each task's `pick` in status says where it went and why. That holds for every path saddle spawns on its own: CI fix and
 CI-red repair tasks, stuck-task repairs, autopilot top-ups, and resumes of
 tasks whose run dir recorded no adapter. A model from another provider's
 family (a ticket's `opus`, a repair's `sonnet`) falls back to the chosen
