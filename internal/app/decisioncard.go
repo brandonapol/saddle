@@ -29,6 +29,7 @@ const (
 	DecisionCIRepairCap = "ci-repair-cap"
 	DecisionAskOwner    = "ask-owner"
 	DecisionRiskyPrompt = "risky-prompt"
+	DecisionOwner       = "owner" // filed through the decision queue (#464)
 )
 
 // Who closed a card.
@@ -36,6 +37,7 @@ const (
 	DecidedByOwner   = "owner"
 	DecidedByTimeout = "timeout"
 	DecidedResolved  = "resolved" // the situation cleared on its own
+	DecidedPreauth   = "preauth"  // a [[preauth]] rule allowed it (#464)
 )
 
 // Events logging a card's life. Their data starts with the card's ID.
@@ -45,6 +47,7 @@ const (
 	EventDecisionDefault       = "decision_default"
 	EventDecisionDefaultFailed = "decision_default_failed"
 	EventDecisionResolved      = "decision_resolved"
+	EventDecisionPreauth       = "decision_preauth"
 )
 
 // DefaultDecisionTimeout is how long a card waits for an answer before
@@ -70,11 +73,19 @@ type DecisionCard struct {
 	Blocking string           `json:"blocking"` // one plain line
 	Options  []DecisionOption `json:"options"`
 	Default  int              `json:"default"` // 1-based option run if ignored
-	Timeout  time.Duration    `json:"timeout"`
-	Opened   time.Time        `json:"opened"`
-	Closed   time.Time        `json:"closed,omitzero"`
-	Answer   int              `json:"answer,omitempty"` // the option taken
-	By       string           `json:"by,omitempty"`     // DecidedByOwner or DecidedByTimeout
+	// Class and Subject say what kind of action it gates and on what, e.g.
+	// "dependency" and "github.com/aws/aws-sdk-go-v2/service/s3", so a
+	// [[preauth]] rule can allow it (#464). Built-in cards leave them empty.
+	Class   string `json:"class,omitempty"`
+	Subject string `json:"subject,omitempty"`
+	// Irreversible cards (a tag push, a publish) never run their default on
+	// a timeout: they wait for the owner or a [[preauth]] rule.
+	Irreversible bool          `json:"irreversible,omitempty"`
+	Timeout      time.Duration `json:"timeout"`
+	Opened       time.Time     `json:"opened"`
+	Closed       time.Time     `json:"closed,omitzero"`
+	Answer       int           `json:"answer,omitempty"` // the option taken
+	By           string        `json:"by,omitempty"`     // DecidedByOwner or DecidedByTimeout
 }
 
 // Open reports whether nobody has answered the card and it hasn't timed out.
@@ -150,7 +161,9 @@ func (c DecisionCard) Render() string {
 		}
 		fmt.Fprintf(&b, ": `%s`\n", o.Action)
 	}
-	if c.Default >= 1 && c.Default <= len(c.Options) {
+	if c.Irreversible {
+		b.WriteString("If you ignore it: it can't be undone, so saddle never runs it without you; it waits in the decisions digest.\n")
+	} else if c.Default >= 1 && c.Default <= len(c.Options) {
 		fmt.Fprintf(&b, "If you ignore it: saddle runs option %d (%s) after %s.\n", c.Default, c.DefaultOption().Label, fmtDuration(c.Timeout))
 	}
 	fmt.Fprintf(&b, "Reply %s.", replyChoices(len(c.Options)))
@@ -168,6 +181,8 @@ func (c DecisionCard) Line() string {
 		how = "nobody answered, so saddle ran"
 	case DecidedResolved:
 		return "✓ " + c.Headline + ": it cleared on its own."
+	case DecidedPreauth:
+		how = "pre-authorized, so saddle ran"
 	}
 	label := ""
 	if c.Answer >= 1 && c.Answer <= len(c.Options) {
@@ -271,11 +286,18 @@ func (a *App) OpenDecisions() ([]DecisionCard, error) {
 // whose ID is already open is not saved or sent again: one card per
 // blocker, never a re-ping.
 func (a *App) OpenDecision(c DecisionCard) error {
-	if b, ok := a.stallBudget(c.Kind); ok {
-		c.Timeout = b // [stall] budget (#406)
+	_, err := a.openDecision(c, true)
+	return err
+}
+
+// openDecision is OpenDecision, sending the notice only when notify is set.
+// It reports whether the card is new.
+func (a *App) openDecision(c DecisionCard, notify bool) (bool, error) {
+	if b, ok := a.stallBudget(c.Kind); ok && c.Kind != DecisionOwner {
+		c.Timeout = b // [stall] budget (#406); FileDecision sets an owner card's itself
 	}
 	if err := c.Validate(); err != nil {
-		return err
+		return false, err
 	}
 	if c.Opened.IsZero() {
 		c.Opened = time.Now().UTC()
@@ -294,10 +316,13 @@ func (a *App) OpenDecision(c DecisionCard) error {
 		return nil
 	})
 	if err != nil || !fresh {
-		return err
+		return false, err
 	}
 	a.Store.Event(c.Task, EventDecisionOpen, c.ID)
-	return a.Notify(c.To, store.NoticeAction, c.Render())
+	if !notify {
+		return true, nil
+	}
+	return true, a.Notify(c.To, store.NoticeAction, c.Render())
 }
 
 // AnswerDecision takes text as the owner's answer to the oldest open card
@@ -362,7 +387,7 @@ func (a *App) ExpireDecisions(now time.Time, run func(DecisionCard, DecisionOpti
 		return nil, err
 	}
 	for _, c := range open {
-		if c.Due(now) {
+		if c.Due(now) && !c.Irreversible {
 			due = append(due, c)
 		}
 	}
