@@ -413,6 +413,40 @@ orchestrator gets a notice naming the biggest entries, and status shows a
 warning. The hold lifts once there is room, and spawn's `force` overrides it.
 Design: [scratch.md](scratch.md).
 
+## SRE mode (#547)
+
+`internal/sre` holds SRE mode; `internal/cli/sre*.go` and the hook are thin
+layers over it. Details: [sre.md](sre.md).
+
+- **Config** (`config.go`): `.saddle/sre.toml` parses into checks, endpoints
+  and credentials. Unknown keys are errors. Credentials must be an env var
+  name or a `scheme:value` ref; plaintext secrets fail validation. `saddle sre
+  check-config` runs it.
+- **Intake** (`intake.go`, `lanes.go`, `plan.go`): `saddle sre` parses the
+  pasted text into a summary and the source paths it names, runs each check's
+  `command` read-only through a `Runner` (a check whose credential env var is
+  unset is skipped; a `surface` is left for an investigator; output is
+  redacted), then plans lanes. `code` and `logs` always run; `infra` and
+  `deps` are added when the incident text or a failed check points there,
+  and `infra` is the third lane when nothing does. Only the code
+  lane claims paths (the named files that exist, capped at 20). `Launch`
+  refuses overlapping claims before spawning anything.
+- **Guard** (`guard.go`, `guard_store.go`, `internal/hook/sre.go`): intake
+  opens an incident in `.saddle/sre-incident.json` under the main checkout,
+  then reserves each investigator's task id in it before spawning, so the
+  guard holds it from its first tool call (#567). The PreToolUse rule
+  `sre-guard` lets read-only calls through and denies the rest with
+  `ErrLocked` until a root cause stated by one agent is verified by another.
+  After that a mutating call is filed in the decision queue (class
+  `sre-action`, irreversible, "Hold" recommended) and runs only if the owner
+  picks "Run it". An unreadable incident file denies mutating calls, and the
+  denial says how to clear it. `saddle sre close` lifts the guard.
+- **Postmortem** (`postmortem.go`): `WritePostmortem` renders a
+  `PostmortemRecord` to `docs/postmortems/<date>-<slug>.md` with `O_EXCL`,
+  adding `-2`, `-3`, ... rather than overwrite. Checks that found the cause
+  become proposed runbook additions in the file; no runbook is written. No
+  command calls it yet. Format: [postmortems/README.md](postmortems/README.md).
+
 ## Layout on disk
 
 ```
@@ -420,6 +454,8 @@ Design: [scratch.md](scratch.md).
   config.toml        per-repo config (merged over ~/.config/saddle/config.toml)
   runq.toml          heavy-run classes and mode (under ~/.config/saddle/runq.toml)
   state.db           sqlite: epics, tasks, deps, claims, events, usage, train, renames
+  sre.toml           SRE mode checks, endpoints and credential refs
+  sre-incident.json  the current (or last) SRE incident and its guard state
   worktrees/<task>/  one per agent, branch saddle/<task>
 ```
 
@@ -443,6 +479,7 @@ internal/narrator/   haiku narrator, usage
 internal/tui/        bubble tea views
 internal/engine/     headless watcher for the plugin orchestrator
 internal/runq/       heavy-run lease queue behind saddle run
+internal/sre/        SRE mode: sre.toml, intake and lanes, read-only guard, postmortems
 plugin/              Claude Code plugin (MCP, hooks, /saddle:* commands)
 ```
 
