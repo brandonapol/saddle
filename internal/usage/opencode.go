@@ -63,8 +63,10 @@ type openCodeMessage struct {
 	Error *struct {
 		Name string `json:"name"`
 		Data struct {
-			Message    string `json:"message"`
-			StatusCode int    `json:"statusCode"`
+			Message         string            `json:"message"`
+			StatusCode      int               `json:"statusCode"`
+			ResponseHeaders map[string]string `json:"responseHeaders"`
+			ResponseBody    string            `json:"responseBody"`
 		} `json:"data"`
 	} `json:"error"`
 }
@@ -186,7 +188,12 @@ type OpenCodeLimit struct {
 	Message  string        `json:"message"`
 	Resets   string        `json:"resets,omitempty"`   // "in 2 hours 5 minutes"; empty when the error names none
 	ResetIn  time.Duration `json:"reset_in,omitempty"` // Resets as a length of time
-	Time     time.Time     `json:"time,omitzero"`      // when the failing turn ended
+	// RetryIn is how long opencode waits before retrying, from its status
+	// line ("[retrying in 9h 29m attempt #1]"). opencode waits out a
+	// provider's retry-after, so for Zen's limits it is the reset; for other
+	// providers it is a backoff of seconds.
+	RetryIn time.Duration `json:"retry_in,omitempty"`
+	Time    time.Time     `json:"time,omitzero"` // when the failing turn ended
 }
 
 // Model is provider/model, or "" when the error does not say.
@@ -201,45 +208,108 @@ func (l OpenCodeLimit) Model() string {
 }
 
 var (
-	// The wordings in opencode 1.19.0: its free tier, a plan's usage limit,
-	// and a provider's quota or billing error.
-	openCodeLimitRe = regexp.MustCompile(`(?i)free usage exceeded|usage limit reached|\bquota exceeded|exceeded your current quota|insufficient_quota`)
-	openCodeResetRe = regexp.MustCompile(`(?i)\bwill reset (in (?:\d+\s*(?:days?|hours?|hrs?|minutes?|mins?|seconds?|secs?)\s*(?:and\s+)?)+)`)
-	openCodePartRe  = regexp.MustCompile(`(?i)(\d+)\s*(days?|hours?|hrs?|minutes?|mins?|seconds?|secs?)\b`)
+	// The wordings in opencode 1.19.0 and OpenCode Zen: opencode's own free
+	// tier status and dialog, Go's "5 hour usage limit reached" (opencode)
+	// and "5-hour usage limit reached" (Zen), Zen's subscription quota,
+	// balance and spending limits, and a provider's quota or billing error.
+	openCodeLimitRe = regexp.MustCompile(`(?i)free usage exceeded|free limit reached|usage limit reached|\bquota exceeded|exceeded your current quota|insufficient_quota|insufficient balance|monthly spending limit|credit balance is too low`)
+	// "It will reset in 2 hours 5 minutes" (opencode), "Resets in 2hr
+	// 5min" (Zen Go), "Retry in 45min" (Zen subscription).
+	openCodeResetRe = regexp.MustCompile(`(?i)\b(?:will reset|resets|retry) (in (?:~?\d+\s*` + openCodeUnit + `\s*(?:and\s+)?)+)`)
+	// opencode's retry status: " [retrying in 9h 29m attempt #1]".
+	openCodeRetryRe = regexp.MustCompile(`(?i)\[retrying (in (?:~?\d+\s*` + openCodeUnit + `\s*)+)attempt #\d+\]`)
+	openCodePartRe  = regexp.MustCompile(`(?i)(\d+)\s*` + openCodeUnit)
 )
 
-var openCodeUnits = map[byte]time.Duration{'d': 24 * time.Hour, 'h': time.Hour, 'm': time.Minute, 's': time.Second}
+// openCodeUnit is a unit of time as opencode and Zen write it, long or
+// short: "2 hours", "2hr", "2h", "~2 days", "1 week".
+const openCodeUnit = `(weeks?|w|days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b`
+
+var openCodeUnits = map[byte]time.Duration{'w': 7 * 24 * time.Hour, 'd': 24 * time.Hour, 'h': time.Hour, 'm': time.Minute, 's': time.Second}
+
+func openCodeDuration(s string) time.Duration {
+	var d time.Duration
+	for _, p := range openCodePartRe.FindAllStringSubmatch(s, -1) {
+		n, _ := strconv.Atoi(p[1])
+		d += time.Duration(n) * openCodeUnits[strings.ToLower(p[2])[0]]
+	}
+	return d
+}
 
 // ParseOpenCodeLimit reports whether text (an error message or screen
-// text) is one of opencode's limit wordings, and when it resets.
+// text) is one of opencode's limit wordings, when it resets, and how long
+// opencode's status line says it waits before retrying.
 func ParseOpenCodeLimit(text string) (OpenCodeLimit, bool) {
-	text = strings.Join(strings.Fields(text), " ") // a banner wraps mid-sentence
+	// opencode's spinner draws over the status line's leading spaces with
+	// ⬝, and a banner wraps mid-sentence.
+	text = strings.Join(strings.Fields(strings.ReplaceAll(text, "⬝", " ")), " ")
 	if !openCodeLimitRe.MatchString(text) {
 		return OpenCodeLimit{}, false
 	}
 	l := OpenCodeLimit{Message: text}
 	if m := openCodeResetRe.FindStringSubmatch(text); m != nil {
 		l.Resets = strings.TrimRight(strings.TrimSpace(m[1]), ".,")
-		for _, p := range openCodePartRe.FindAllStringSubmatch(l.Resets, -1) {
-			n, _ := strconv.Atoi(p[1])
-			l.ResetIn += time.Duration(n) * openCodeUnits[strings.ToLower(p[2])[0]]
-		}
+		l.ResetIn = openCodeDuration(l.Resets)
+	}
+	if m := openCodeRetryRe.FindStringSubmatch(text); m != nil {
+		l.RetryIn = openCodeDuration(m[1])
 	}
 	return l, true
 }
 
+// openCodeQuotaTypes are the error types and codes in a provider's
+// response body that mean quota, not a passing rate limit: OpenCode Zen's
+// (its free tier's message is a bare "Rate limit exceeded. Please try
+// again later.") and OpenAI's. opencode keys its own free tier and Go
+// notices on the same types.
+var openCodeQuotaTypes = []string{
+	"FreeUsageLimitError", "GoUsageLimitError", "BlackUsageLimitError",
+	"CreditsError", "MonthlyLimitError", "UserLimitError",
+	"insufficient_quota",
+}
+
+// openCodeQuotaBody reports whether a provider's response body names one of
+// openCodeQuotaTypes as its error's type or code.
+func openCodeQuotaBody(body string) bool {
+	var b struct {
+		Error struct {
+			Type string `json:"type"`
+			Code any    `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(body), &b) != nil {
+		return false
+	}
+	code, _ := b.Error.Code.(string)
+	return slices.Contains(openCodeQuotaTypes, b.Error.Type) || slices.Contains(openCodeQuotaTypes, code)
+}
+
 // ReadOpenCodeLimits returns the quota and limit errors that ended
 // opencode turns of the sessions run in dir (all when empty), after the
-// given time in ms, oldest first. Other errors are not limits.
+// given time in ms, oldest first. Other errors are not limits. A limit
+// with no reset in its message resets after the response's retry-after.
+//
+// opencode retries Zen's limits, waiting out their retry-after up to five
+// times, so a Zen limit lands here only once those retries run out.
 func ReadOpenCodeLimits(dbPath, dir string, afterMs int64) ([]OpenCodeLimit, error) {
 	var out []OpenCodeLimit
 	err := openCodeRows(dbPath, dir, afterMs, func(_ string, updated int64, m openCodeMessage) {
 		if updated <= afterMs || m.Role != "assistant" || m.Error == nil {
 			return
 		}
-		l, ok := ParseOpenCodeLimit(m.Error.Data.Message)
-		if !ok {
+		d := m.Error.Data
+		l, ok := ParseOpenCodeLimit(d.Message)
+		if !ok && !openCodeQuotaBody(d.ResponseBody) {
 			return
+		}
+		if !ok {
+			l = OpenCodeLimit{Message: d.Message}
+		}
+		if l.ResetIn == 0 {
+			if n, err := strconv.Atoi(strings.TrimSpace(d.ResponseHeaders["retry-after"])); err == nil && n > 0 {
+				l.Resets = fmt.Sprintf("in %ds", n)
+				l.ResetIn = time.Duration(n) * time.Second
+			}
 		}
 		l.Provider, l.ModelID = m.ProviderID, m.ModelID
 		l.Time = time.UnixMilli(updated)

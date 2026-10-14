@@ -2,6 +2,7 @@ package agent
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -120,3 +121,87 @@ func TestOpenCodeDBLimitNone(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// #573: panes captured from opencode 1.19.0 hitting a limit (see
+// testdata/opencode/README.md). Zen limits are retried, so the pane shows
+// opencode's retry status, not a final error; the reset comes from the
+// error's own wording, else from the retry wait when that is longer than
+// the default.
+func TestOpenCodeScreenLimitCaptured(t *testing.T) {
+	cases := []struct {
+		pane, model string
+		until       time.Duration
+	}{
+		// Free tier: "Free usage exceeded, subscribe to Go [retrying in 9h 29m attempt #1]".
+		{"limit-free-retry.txt", "opencode/big-pickle", 9*time.Hour + 29*time.Minute},
+		// Go: "5 hour usage limit reached. It will reset in 2 hours 5 minutes. …".
+		{"limit-go-retry.txt", "opencode/big-pickle", 2*time.Hour + 5*time.Minute},
+		// OpenAI insufficient_quota, retrying with backoff: the default hour.
+		{"limit-openai-retry.txt", "openai/gpt-4o-mini", OpenCodeExhaustFor},
+		// …and after the retries run out, the error in the conversation.
+		{"limit-openai-error.txt", "openai/gpt-4o-mini", OpenCodeExhaustFor},
+		// Zen out of credits (401, not retried).
+		{"limit-credits.txt", "opencode/big-pickle", OpenCodeExhaustFor},
+	}
+	for _, c := range cases {
+		out, ok := OpenCodeScreenLimit(ocScreen(t, c.pane), c.model, ocNow)
+		if !ok {
+			t.Errorf("%s: not detected", c.pane)
+			continue
+		}
+		if out.Adapter != "opencode" || out.Model != c.model {
+			t.Errorf("%s: %+v", c.pane, out)
+		}
+		if want := ocNow.Add(c.until); !out.Until.Equal(want) {
+			t.Errorf("%s: until %v want %v (%+v)", c.pane, out.Until, want, out)
+		}
+	}
+}
+
+// #573: against the rows opencode 1.19.0 really wrote, the newest limit
+// (Zen's monthly spending limit, no reset given) marks the provider/model
+// the turn ran on, as opencode names it in the row: opencode/big-pickle,
+// the same string a worker is configured with (`-m opencode/big-pickle`).
+func TestOpenCodeDBLimitCaptured(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		"CREATE TABLE session (id text PRIMARY KEY, directory text NOT NULL)",
+		"CREATE TABLE message (id text PRIMARY KEY, session_id text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL)",
+		"INSERT INTO session VALUES ('ses_a','/repo/wt')",
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := os.ReadFile(filepath.Join("..", "usage", "testdata", "opencode", "limits.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var m struct {
+			ID, Session      string
+			Created, Updated int64
+			Data             json.RawMessage
+		}
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec("INSERT INTO message VALUES (?,?,?,?,?)", m.ID, m.Session, m.Created, m.Updated, string(m.Data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+
+	failed := time.UnixMilli(1792014598303)
+	out, ok, err := OpenCodeDBLimit(path, "/repo/wt", 0, failed.Add(10*time.Minute))
+	if err != nil || !ok {
+		t.Fatalf("%v %v", ok, err)
+	}
+	if out.Adapter != "opencode" || out.Model != "opencode/big-pickle" || !out.Until.Equal(failed.Add(OpenCodeExhaustFor)) {
+		t.Fatalf("%+v", out)
+	}
+}

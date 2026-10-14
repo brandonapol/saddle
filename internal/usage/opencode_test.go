@@ -16,6 +16,11 @@ import (
 // sessions and messages in, filled from testdata/opencode/messages.jsonl:
 // messages of ses_a (cwd /repo/wt) and ses_b (cwd /repo/other).
 func openCodeDB(t *testing.T) string {
+	return openCodeDBFrom(t, "testdata/opencode/messages.jsonl")
+}
+
+// openCodeDBFrom is openCodeDB filled from the given JSONL file.
+func openCodeDBFrom(t *testing.T, rows string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "opencode.db")
 	db, err := sql.Open("sqlite", path)
@@ -32,7 +37,7 @@ func openCodeDB(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	f, err := os.Open("testdata/opencode/messages.jsonl")
+	f, err := os.Open(rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,6 +224,72 @@ func TestParseOpenCodeLimit(t *testing.T) {
 		l, ok := ParseOpenCodeLimit(c.in)
 		if ok != c.ok || l.Resets != c.resets || l.ResetIn != c.resetIn {
 			t.Errorf("%q: %+v %v", c.in, l, ok)
+		}
+	}
+}
+
+// #573: the wordings captured from opencode 1.19.0 and OpenCode Zen. Zen's
+// own messages say "Resets in 2hr 5min"; opencode's retry status ends in
+// "[retrying in 9h 29m attempt #1]", and its spinner can overwrite spaces
+// with ⬝.
+func TestParseOpenCodeLimitCaptured(t *testing.T) {
+	cases := []struct {
+		in      string
+		ok      bool
+		resetIn time.Duration
+		retryIn time.Duration
+	}{
+		{"⬝⬝⬝⬝⬝⬝⬝⬝ Free usage exceeded, subscribe to Go [retrying in 9h 29m attempt #1]", true, 0, 9*time.Hour + 29*time.Minute},
+		{"⬝⬝⬝⬝⬝⬝5⬝hour usage limit reached. It will reset in 2 hours 5 minutes. To continue usin… (click to expand) [retrying i\n attempt #1]", true, 125 * time.Minute, 0},
+		{"5-hour usage limit reached. Resets in 2hr 5min. To continue using this model now, enable usage from your available balance: https://opencode.ai/workspace/wrk_123/go", true, 125 * time.Minute, 0},
+		{"Weekly usage limit reached. Resets in 3 days. To continue", true, 72 * time.Hour, 0},
+		{"Subscription quota exceeded. Retry in 45min.", true, 45 * time.Minute, 0},
+		{"⬝You⬝exceeded your current quota, please check your plan and billing details. For… (click to expand) [retrying in 1s attempt #3]", true, 0, time.Second},
+		{"Free limit reached [retrying in ~2 days attempt #2]", true, 0, 48 * time.Hour},
+		{"Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_123/billing", true, 0, 0},
+		{"Your workspace has reached its monthly spending limit of $20. Manage your limits here: https://opencode.ai/workspace/wrk_123/billing", true, 0, 0},
+		{"You have reached your monthly spending limit of $20.", true, 0, 0},
+		// Zen's free tier message alone reads like a plain rate limit: only
+		// the database row's error type says it is the free limit.
+		{"Rate limit exceeded. Please try again later.", false, 0, 0},
+		{"Too Many Requests [retrying in 4s attempt #2]", false, 0, 0},
+	}
+	for _, c := range cases {
+		l, ok := ParseOpenCodeLimit(c.in)
+		if ok != c.ok || l.ResetIn != c.resetIn || l.RetryIn != c.retryIn {
+			t.Errorf("%q: %+v %v", c.in, l, ok)
+		}
+	}
+}
+
+// #573: rows opencode 1.19.0 wrote when OpenCode Zen and OpenAI refused it
+// for limits (testdata/opencode/limits.jsonl, see the README beside it).
+// Zen's free tier error reads as a plain rate limit, so the response body's
+// error type is what marks it; a reset comes from the message, else from
+// the response's retry-after. A turn still retrying has no error yet.
+func TestReadOpenCodeLimitsCaptured(t *testing.T) {
+	ls, err := ReadOpenCodeLimits(openCodeDBFrom(t, "testdata/opencode/limits.jsonl"), "/repo/wt", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		model   string
+		resetIn time.Duration
+		updated int64
+	}{
+		{"opencode/big-pickle", time.Second, 1792013424024},       // FreeUsageLimitError, retry-after 1 (shortened)
+		{"opencode/big-pickle", 0, 1792013458873},                 // CreditsError
+		{"openai/gpt-4o-mini", 0, 1792013526651},                  // insufficient_quota
+		{"opencode/big-pickle", 125 * time.Minute, 1792014576533}, // GoUsageLimitError, "Resets in 2hr 5min"
+		{"opencode/big-pickle", 0, 1792014598303},                 // MonthlyLimitError
+	}
+	if len(ls) != len(want) {
+		t.Fatalf("got %d limits: %+v", len(ls), ls)
+	}
+	for i, w := range want {
+		l := ls[i]
+		if l.Model() != w.model || l.ResetIn != w.resetIn || !l.Time.Equal(time.UnixMilli(w.updated)) {
+			t.Errorf("%d: %+v want %+v", i, l, w)
 		}
 	}
 }

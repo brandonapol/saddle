@@ -1,0 +1,40 @@
+
+  ┃
+  ┃  Create a file hello.txt containing hi, using your write tool. Then reply DONE.
+  ┃
+
+     ▣  Build · Big Pickle
+
+
+
+
+
+                                 Go limit reached                                   esc
+
+                                 5 hour usage limit reached. It will reset in 2 hours
+                                 5 minutes. To continue using this model now, enable
+                                 usage from your available balance
+
+                                        https://opencode.ai/workspace/wrk_123/go
+
+
+                                   don't show again                     open settings
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · Big Pickle OpenCode
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   ⬝⬝⬝⬝⬝⬝5⬝hour usage limit reached. It will reset in 2 hours 5 minutes. To continue usin… (click to expand) [retrying i
+         attempt #1]
+

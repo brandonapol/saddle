@@ -300,8 +300,56 @@ detectors):
   the footer's display name, so `[fallback]` and spawn failover skip it.
   `config.AdapterNames` already lists opencode.
 
-Caveat: the limit error shapes come from opencode's schema, not a captured
-real limit, so the detectors may miss the wording a provider really sends. The
-reader depends on the 1.19.0 database layout and skips rows it cannot parse.
-Tests: `TestCollectorReadsOpenCodeDB`, `TestUsageMeterReadsOpenCodeDB`,
+The reader depends on the 1.19.0 database layout and skips rows it cannot
+parse. Tests: `TestCollectorReadsOpenCodeDB`, `TestUsageMeterReadsOpenCodeDB`,
 `TestOpenCodeLimitScreenMarksConfiguredModelAndFailsOver`.
+
+## opencode limits, captured (#573)
+
+The detectors were checked against what opencode 1.19.0 really shows and
+stores when a provider refuses it for a limit. No account was run dry: a
+local stand-in (`internal/usage/testdata/opencode/limitmock.py`) answered
+opencode with the exact status, body and `retry-after` OpenCode Zen sends,
+taken from Zen's server source, and with OpenAI's `insufficient_quota` 429.
+What opencode did with each response is its own. Fixtures are in
+`internal/agent/testdata/opencode/limit-*.txt` (panes) and
+`internal/usage/testdata/opencode/limits.jsonl` (rows); their READMEs say how
+each was made.
+
+What differed from the synthetic fixtures, and is now handled:
+
+- **Zen limits are retried, not failed.** opencode treats Zen's 429
+  `FreeUsageLimitError`/`GoUsageLimitError` as retryable and waits out
+  `retry-after` (the time to the reset) up to five times. The turn stays
+  running, with a dialog and a status line:
+  `Free usage exceeded, subscribe to Go [retrying in 9h 29m attempt #1]` or
+  `5 hour usage limit reached. It will reset in 2 hours 5 minutes. …`.
+  Nothing reaches the database until the retries run out (it keeps no retry
+  state), so the screen is what catches these. With no reset in the words,
+  a `[retrying in …]` wait longer than `OpenCodeExhaustFor` is taken as the
+  reset; a shorter one may be a backoff and keeps the default hour.
+- **Zen's own wording.** The free tier's stored message is a bare
+  "Rate limit exceeded. Please try again later.", so the database reader
+  also checks the response body's error type (Zen's `*LimitError`,
+  `CreditsError`, `MonthlyLimitError`, `UserLimitError`, OpenAI's
+  `insufficient_quota`), as opencode does. Go's message says
+  "Resets in 2hr 5min", which is now parsed, and the reader falls back to
+  the stored `retry-after`.
+- **Billing limits.** Zen answers an empty balance or a spending limit with
+  a 401 that opencode does not retry: "Insufficient balance…", "…monthly
+  spending limit of $20…". These are now limits too.
+- opencode's spinner draws `⬝` over the status line's spaces; the screen
+  parser reads it as a space.
+
+**Model.** opencode stores the failing turn's `providerID`/`modelID`
+(`opencode`/`big-pickle`, `openai`/`gpt-4o-mini`), the same `provider/model`
+string a worker is launched with (`-m`). The screen shows a display name
+("Big Pickle OpenCode") instead, which is why the screen detector marks the
+worker's configured model.
+
+Still untested against a live account: whether Zen's production wording
+matches its source at the time of capture (the console source used was
+current on 2026-10-08), and other providers' limit shapes (Anthropic,
+Google) beyond OpenAI's. Tests: `TestOpenCodeScreenLimitCaptured`,
+`TestOpenCodeDBLimitCaptured`, `TestParseOpenCodeLimitCaptured`,
+`TestReadOpenCodeLimitsCaptured`.
