@@ -245,6 +245,34 @@ func TestReadInputApprovalTail(t *testing.T) {
 	}
 }
 
+// #520: opencode's permission panel has no composer glyph. The Allow once /
+// Allow always / Reject row, styled or plain, is a prompt, including in the
+// last 15 lines Deliver sees. A busy or idle footer is not.
+func TestReadInputOpenCodeApproval(t *testing.T) {
+	read := func(name string) string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join("..", "agent", "testdata", "opencode", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	for _, name := range []string{"approval.txt", "approval.ansi"} {
+		pane := read(name)
+		if got := ReadInput(pane); got != InputPrompt {
+			t.Errorf("ReadInput(%s) = %v, want prompt", name, got)
+		}
+		if got := ReadInput(tail(pane, 15)); got != InputPrompt {
+			t.Errorf("ReadInput(last 15 of %s) = %v, want prompt", name, got)
+		}
+	}
+	for _, name := range []string{"busy.txt", "idle.txt", "worker-idle.txt", "quota.txt"} {
+		if got := ReadInput(read(name)); got == InputPrompt {
+			t.Errorf("ReadInput(%s) = prompt", name)
+		}
+	}
+}
+
 // Nothing is typed into an approval screen, not even when forced (#496).
 func TestNotDeliveredIntoApproval(t *testing.T) {
 	for _, name := range []string{"grok_approval", "codex_approval"} {

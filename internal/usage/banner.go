@@ -20,13 +20,14 @@ type LimitBanner struct {
 const bannerTail = 12
 
 var (
-	limitRe = regexp.MustCompile(`(?i)usage limit reached|you(?:(?:'|’)ve)? hit your [\w-]+(?: usage)? limit|hit your spend cap|reached your (?:workspace credit|usage) limit|\b(?:session|weekly|5-hour|opus) limit reached|exceeded your current quota|\bout of credits\b|insufficient credits|used all available credits|reached its monthly spending limit`)
-	resetRe = regexp.MustCompile(`(?i)\b(?:resets(?:\s+at)?|reset\s+at|try\s+again\s+at|try\s+again\s+(in))\s+([^·∙\n]+)`)
+	limitRe = regexp.MustCompile(`(?i)usage limit reached|you(?:(?:'|’)ve)? hit your [\w-]+(?: usage)? limit|hit your spend cap|reached your (?:workspace credit|usage) limit|\b(?:session|weekly|5-hour|opus) limit reached|exceeded your current quota|\bquota exceeded\b|free usage exceeded|\bout of credits\b|insufficient credits|used all available credits|reached its monthly spending limit`)
+	// "reset in" is opencode's relative reset (#520): "It will reset in 2 hours 5 minutes."
+	resetRe = regexp.MustCompile(`(?i)\b(?:resets(?:\s+at)?|reset\s+at|try\s+again\s+at|(?:reset|try\s+again)\s+(in))\s+([^·∙\n]+)`)
 )
 
 // DetectLimitBanner reports whether a terminal screen shows Claude Code
-// parked on a usage limit (or Codex or Grok out of quota), and when the
-// banner says the limit resets.
+// parked on a usage limit (or Codex, Grok or opencode out of quota), and
+// when the banner says the limit resets.
 func DetectLimitBanner(screen string) (LimitBanner, bool) {
 	var tail []string
 	ls := strings.Split(screen, "\n")
@@ -43,9 +44,15 @@ func DetectLimitBanner(screen string) (LimitBanner, bool) {
 	// The fullest wording wins: "12:10pm (America/New_York)" over "12:10pm".
 	var b LimitBanner
 	for _, m := range resetRe.FindAllStringSubmatch(text, -1) {
-		r := strings.TrimRight(strings.TrimSpace(m[2]), ".│ ")
+		r := strings.TrimSpace(m[2])
 		if m[1] != "" {
-			r = "in " + r // codex's relative reset (#480)
+			// A relative reset can sit mid-sentence ("reset in 2 hours 5 minutes. To continue…").
+			if i := strings.IndexByte(r, '.'); i >= 0 {
+				r = strings.TrimSpace(r[:i])
+			}
+			r = "in " + strings.TrimRight(r, ".│ ") // codex and opencode (#480, #520)
+		} else {
+			r = strings.TrimRight(r, ".│ ")
 		}
 		if len(r) > len(b.Resets) {
 			b.Resets = r

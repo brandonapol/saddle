@@ -16,7 +16,7 @@ const (
 
 var (
 	trustRe  = regexp.MustCompile(`(?i)trust this folder|Is this a project you created or one you trust`)
-	promptRe = regexp.MustCompile(`(?m)Enter to confirm|Esc to cancel|Do you want to (proceed|make this edit|create|run)|^\s*❯\s*\d+\.\s|` + codexPrompt + `|` + grokPrompt)
+	promptRe = regexp.MustCompile(`(?m)Enter to confirm|Esc to cancel|Do you want to (proceed|make this edit|create|run)|^\s*❯\s*\d+\.\s|` + codexPrompt + `|` + grokPrompt + `|` + openCodePrompt)
 )
 
 // codexPrompt is Codex's approval and trust screens (#480): a "› 1." menu
@@ -27,6 +27,11 @@ const codexPrompt = `^\s*›\s*\d+\.\s|Press enter to (confirm|continue)|Would y
 // grokPrompt is the Grok CLI's approval screen (#488): radio options drawn
 // as "┃  1 (●) Yes, proceed" inside a bar, with no wording the others share.
 const grokPrompt = `^[\s┃]*\d+ \([●○]\)\s`
+
+// openCodePrompt is opencode's permission panel (#520): "△ Permission
+// required" and the Allow once / Allow always / Reject row. There is no
+// numbered menu.
+const openCodePrompt = `Permission required|Allow once\s+Allow always\s+Reject`
 
 // DetectPrompt reports whether a terminal screen is showing an interactive prompt.
 func DetectPrompt(screen string) string {

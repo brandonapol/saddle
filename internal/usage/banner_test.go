@@ -39,6 +39,11 @@ func TestDetectLimitBanner(t *testing.T) {
 		{"codex dated", "■ You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 14th, 2026 3:04 PM.\n› ", "Oct 14th, 2026 3:04 PM", true},
 		{"xai spend cap", "Error: Your team has either used all available credits or reached its monthly spending limit.\n> ", "", true},
 		{"working", "⏺ Editing engine.go\n  esc to interrupt", "", false},
+		// #520: opencode's own limit strings. The reset is relative and
+		// mid-sentence ("It will reset in 2 hours 5 minutes. To continue…").
+		{"opencode free", "Free usage exceeded, subscribe to Go\n┃ Build\n", "", true},
+		{"opencode go", "Go usage limit reached. It will reset in 2 hours 5 minutes. To continue using this model now.\n", "in 2 hours 5 minutes", true},
+		{"opencode provider", "Quota exceeded. Check your plan and billing details.\n┃\n", "", true},
 		{"prompt", "Do you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel", "", false},
 		// An agent quoting the banner further up its scrollback is not parked.
 		{"scrolled away", "You've hit your session limit · resets 12:10pm\n" + lines(20) + "> ", "", false},
@@ -115,5 +120,28 @@ func TestDetectLimitBannerCapturedPanes(t *testing.T) {
 				t.Fatalf("got %+v %v, want resets %q %v", b, on, c.resets, c.on)
 			}
 		})
+	}
+}
+
+// #520: opencode's quota pane is its own strings placed where a reply goes.
+// The busy, idle and approval captures are not limits. The Go-plan wording
+// names a relative reset mid-sentence.
+func TestDetectLimitBannerOpenCodeQuotaPane(t *testing.T) {
+	pane := func(name string) string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join("..", "agent", "testdata", "opencode", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	b, on := DetectLimitBanner(pane("quota.txt"))
+	if !on || b.Resets != "in 2 hours 5 minutes" {
+		t.Fatalf("quota pane: %+v %v", b, on)
+	}
+	for _, name := range []string{"busy.txt", "idle.txt", "approval.txt", "worker-idle.txt", "draft.txt"} {
+		if _, on := DetectLimitBanner(pane(name)); on {
+			t.Errorf("%s read as a usage limit", name)
+		}
 	}
 }
