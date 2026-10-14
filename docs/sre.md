@@ -42,8 +42,9 @@ expect = "HTTP 200"
 ## Read-only production guard
 
 While an incident is open (`.saddle/sre-incident.json`), its investigators are
-read-only on production. saddle's PreToolUse hook classifies every tool call
-of an investigator:
+read-only on production. Intake reserves each investigator's task id in the
+incident before spawning it, so the guard holds it from its first tool call.
+saddle's PreToolUse hook classifies every tool call of an investigator:
 
 - **Read-only** calls run: file reads and searches, shell lines whose every
   command is a known reader (`kubectl get/describe/logs`, `curl` GET/HEAD,
