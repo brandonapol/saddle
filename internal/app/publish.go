@@ -152,6 +152,9 @@ func (a *App) Publish(req PublishReq) (PublishResult, error) {
 	if err != nil {
 		return res, err
 	}
+	if isTask {
+		body = withTaskTrailer(body, t.ID) // a squash merge carries it into base (#331)
+	}
 	if _, err := trainGit(a.Root, "push", "origin", head+":refs/heads/"+branch); err != nil {
 		return res, err
 	}

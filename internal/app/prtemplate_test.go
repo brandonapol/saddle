@@ -267,7 +267,7 @@ func TestPRsWithoutTemplateSendSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := onlyCall(prCreate(ghLog(), tk.Branch))
-	if !strings.HasSuffix(strings.TrimSpace(call), "--body one summary") {
-		t.Fatalf("body isn't the summary: %q", call)
+	if !strings.HasSuffix(strings.TrimSpace(call), "--body one summary\n\nSaddle-Task: t1") {
+		t.Fatalf("body isn't the summary and the task's trailer: %q", call)
 	}
 }

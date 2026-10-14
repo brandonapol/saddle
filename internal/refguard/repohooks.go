@@ -17,7 +17,7 @@ import (
 // into the shared hooks directory, so every worktree runs the hook, and the
 // worktree's own copy of it. A hook already there that saddle didn't write
 // is left alone; the ones the ref guard owns (pre-push, pre-commit,
-// reference-transaction) take the wrapper in their chained slot.
+// reference-transaction, commit-msg) take the wrapper in their chained slot.
 //
 // Many agents committing at once would run many make checks at once and
 // collide (golangci-lint: "parallel golangci-lint is running"), so the
@@ -68,7 +68,7 @@ func RepoHooks(root string) ([]RepoHook, error) {
 // repoHookPath is where saddle installs the wrapper for hook name.
 func repoHookPath(hooks, name string) string {
 	p := filepath.Join(hooks, name)
-	if name == "pre-push" || name == "reference-transaction" || name == "pre-commit" {
+	if name == "pre-push" || name == "reference-transaction" || name == "pre-commit" || name == "commit-msg" {
 		p += lintgate.ChainSuffix
 	}
 	return p

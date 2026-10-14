@@ -886,7 +886,7 @@ func (a *App) publishMode(pushOnly bool) (published, error) {
 		}
 		prBase := a.prBase(landed, layout, i)
 		if t.PR == "" {
-			url, err := gh(a.Root, "pr", "create", "--base", prBase, "--head", t.Branch, "--title", t.Title, "--body", a.stackPRBody(l))
+			url, err := gh(a.Root, "pr", "create", "--base", prBase, "--head", t.Branch, "--title", t.Title, "--body", withTaskTrailer(a.stackPRBody(l), t.ID))
 			if err != nil {
 				return res, err
 			}

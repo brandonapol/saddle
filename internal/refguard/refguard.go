@@ -14,6 +14,9 @@
 // saddle hooks of their own (codex, gemini): their commits may not take files
 // another task claims (#489). The CLI answers that state with the app's
 // claims; Hook itself ignores it.
+//
+// A commit-msg hook adds a Saddle-Task trailer to every task commit, so the
+// train can tell a task merged by identity, not just by patch-id (#331).
 package refguard
 
 import (
@@ -88,20 +91,23 @@ func Install(root, bin string) error {
 	if err != nil {
 		return err
 	}
-	scripts := []struct{ name, why, guard, run string }{
+	// run is the saddle command a hook runs; own, when set, is shell that
+	// runs instead and needs no binary.
+	scripts := []struct{ name, why, guard, run, own string }{
 		{"reference-transaction", "only the merge train moves saddle's branches",
 			`[ "$1" = prepared ] && `,
-			`"$bin" refguard "$@"`},
+			`"$bin" refguard "$@"`, ""},
 		// The remote rides in the environment so the command keeps the
 		// `refguard <state>` shape that test binaries answer.
 		{"pre-push", "only the merge train pushes saddle's branches", "",
-			`SADDLE_PUSH_REMOTE="$1" "$bin" refguard pre-push`},
+			`SADDLE_PUSH_REMOTE="$1" "$bin" refguard pre-push`, ""},
 		// Codex and gemini run no saddle hooks, so a commit is where their
 		// claims are enforced (#489). Only hookless launches export
 		// SADDLE_HOOKLESS; claude and grok commits skip it.
 		{"pre-commit", "a hookless task commits only files no other task claims",
 			`[ -n "$SADDLE_HOOKLESS" ] && [ "$SADDLE_TRAIN" != 1 ] && `,
-			`"$bin" refguard pre-commit`},
+			`"$bin" refguard pre-commit`, ""},
+		{"commit-msg", "every task commit names its task in a Saddle-Task trailer", "", "", taskTrailerScript},
 	}
 	var chain []string
 	for _, sc := range scripts {
@@ -128,6 +134,19 @@ func Install(root, bin string) error {
 	}
 	for _, sc := range scripts {
 		path := filepath.Join(hooks, sc.name)
+		if sc.own != "" {
+			body := "#!/bin/sh\n" + marker + ": " + sc.why + ".\n" +
+				"# Written by saddle; reinstalling overwrites it. A repo hook that was\n" +
+				"# here lives at " + filepath.Base(path) + lintgate.ChainSuffix + " and runs after it.\n" +
+				"orig=" + shellQuote(path+lintgate.ChainSuffix) + "\n" +
+				sc.own +
+				"[ -x \"$orig\" ] || exit 0\n" +
+				"exec \"$orig\" \"$@\"\n"
+			if err := writeHook(path, body); err != nil {
+				return err
+			}
+			continue
+		}
 		body := "#!/bin/sh\n" + marker + ": " + sc.why + ".\n" +
 			"# Written by saddle; reinstalling overwrites it. A repo hook that was\n" +
 			"# here lives at " + filepath.Base(path) + lintgate.ChainSuffix + " and runs after saddle's check.\n" +
@@ -147,6 +166,26 @@ func Install(root, bin string) error {
 	_, err = InstallRepoHooks(root)
 	return err
 }
+
+// TaskTrailer is the commit trailer that names the task a commit is for.
+const TaskTrailer = "Saddle-Task"
+
+// taskTrailerScript adds "Saddle-Task: <task>" to the message in $1. Every
+// worktree shares the hook, so the task comes from the commit's worktree:
+// its saddle/<task>-<slug> branch, else SADDLE_TASK. The orchestrator (t0),
+// the merge train and plain checkouts add nothing, and neither does an empty
+// message, so aborting a commit still aborts it.
+const taskTrailerScript = `task=
+case $(git symbolic-ref --quiet --short HEAD 2>/dev/null) in
+saddle/t[0-9]*-*) b=$(git symbolic-ref --quiet --short HEAD); task=${b#saddle/}; task=${task%%-*} ;;
+esac
+[ -n "$task" ] || task=$SADDLE_TASK
+case "$task" in t0 | t*[!0-9]* | t) task= ;; t[0-9]*) ;; *) task= ;; esac
+[ "$SADDLE_TRAIN" = 1 ] && task=
+if [ -n "$task" ] && [ -f "$1" ] && grep -qv '^[[:space:]]*\(#.*\)\{0,1\}$' "$1"; then
+	git interpret-trailers --in-place --if-exists addIfDifferent --trailer "` + TaskTrailer + `: $task" "$1" || exit 1
+fi
+`
 
 // writeHook puts body at path, executable. saddle init runs on every spawn
 // and land while agents commit, so a hook git may be about to run is never

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -74,8 +75,15 @@ func (a *App) ReconcileStack(lookup PRLookup) (map[string]PRInfo, error) {
 	info := map[string]PRInfo{}
 	fetched := false
 	var errs []error
+	base := a.baseRef()
 	for _, l := range all {
 		if l.State != store.TrainOK {
+			continue
+		}
+		// Identity first: base names the task, however its PR merged, or
+		// whether it had one (#331).
+		if l.To != "" && a.taskTrailerOn(l.ID, base, l.To) {
+			errs = append(errs, a.leaveStack(l, TrainMerged, a.Cfg.Base+" has a commit with "+refguard.TaskTrailer+": "+l.ID))
 			continue
 		}
 		// Killing a landed task with no PR only closes its agent: its work
@@ -165,9 +173,14 @@ func (a *App) reland(l landedTask, into string) error {
 			"Run prs; nothing needs fixing by hand.", l.ID, l.PR, into, a.Cfg.Base, a.Cfg.Base, l.ID, into))
 }
 
-// inBase reports whether ref has all of l's landed work, by patch-id or, as
-// after a squash merge, by the content of every file it changed.
+// inBase reports whether ref has all of l's landed work: first by identity,
+// a commit there naming l's task in its Saddle-Task trailer (#331), then by
+// patch-id or, as after a squash merge, by the content of every file it
+// changed.
 func (a *App) inBase(l landedTask, ref string) bool {
+	if l.To != "" && a.taskTrailerOn(l.ID, ref, l.To) {
+		return true
+	}
 	if l.From == "" || l.From == l.To {
 		return false
 	}
@@ -321,6 +334,9 @@ func (a *App) Requeue(id string) error {
 		if _, err := trainGit(a.Root, "update-ref", "refs/heads/"+t.Branch, landed.To, ""); err != nil {
 			return err
 		}
+	}
+	if a.taskTrailerOn(id, a.Cfg.Integration, t.Branch) {
+		return fmt.Errorf("%s's work is already on %s (by its %s trailer); nothing to requeue", id, a.Cfg.Integration, refguard.TaskTrailer)
 	}
 	out, err := gitx.Run(a.Root, "cherry", a.Cfg.Integration, t.Branch)
 	if err != nil {
