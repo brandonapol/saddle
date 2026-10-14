@@ -167,7 +167,7 @@ func OpenCodeByModel(recs []Record) []OpenCodeUsage {
 			u = &OpenCodeUsage{Model: r.Model}
 			m[r.Model] = u
 		}
-		u.Tokens = u.Tokens.Add(r.Tokens)
+		u.Tokens = u.Add(r.Tokens)
 		u.Messages++
 		u.CostUSD += r.CostUSD
 	}
