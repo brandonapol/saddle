@@ -15,8 +15,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Commit and Date are stamped by release builds alongside Version
-// (.goreleaser.yaml, Makefile GO_LDFLAGS). Unset, buildInfo falls back to
+// Commit and Date are stamped by make install alongside Version
+// (Makefile GO_LDFLAGS). Unset, buildInfo falls back to
 // the VCS stamp go build records.
 var (
 	Commit = ""

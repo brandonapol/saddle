@@ -27,8 +27,8 @@ func runRoot(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	return out.String(), errb.String(), err
 }
 
-// The release build stamps version, commit and date with -ldflags, the way
-// .goreleaser.yaml and the Makefile do; saddle version reports all three.
+// make install stamps version, commit and date with -ldflags;
+// saddle version reports all three.
 func TestVersionStampedByLdflags(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go not installed")

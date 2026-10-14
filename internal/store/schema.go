@@ -11,7 +11,7 @@ import (
 
 // SchemaVersion is the state.db schema this binary writes: the number of
 // migrations, stored in PRAGMA user_version. A release that changes it is a
-// minor bump at least (docs/RELEASING.md).
+// minor bump at least (docs/VERSIONING.md).
 func SchemaVersion() int { return len(migrations) }
 
 // FileSchemaVersion reads the schema version of the database at path
