@@ -88,6 +88,14 @@ failed gate) and the agent must `saddle sync` and resolve it. As a train entry
 state it is the same event. Saddle tries the rename map, a structural merge and
 regenerating derived files before it hands the conflict to the agent.
 
+### decisions
+`saddle decisions [file|answer|allow|digest]`: the decision queue (#464).
+Owner-gated actions (a new dependency, a release tag) wait as decision cards
+while other work runs. A reversible card runs its recommended option after its
+budget; an irreversible one waits for you. `allow <class> [match]` adds a
+`[[preauth]]` rule so a class never waits, and one digest a day
+(`[decisions] digest_at`) lists what waits and what saddle decided.
+
 ### doctor
 `saddle doctor [--fix]`: preflight checks of the repo, `gh`, tools and hooks,
 grouped by who fixes each problem.
