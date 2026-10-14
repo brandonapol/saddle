@@ -43,15 +43,14 @@ func splitHeadline(text string) (head, details string) {
 }
 
 // foldText is what a chat line shows folded and what it folds away.
-// details is "" for a line that doesn't fold. Needs-you messages never
-// fold: the owner should see all of them.
+// details is "" for a line that doesn't fold. Orchestrator messages
+// never fold: the owner should see all of them.
 func foldText(c chatLine) (head, details string) {
 	switch c.role {
 	case store.ChatAssistant:
-		if _, urgent := urgentMark(c.text); urgent || c.attn == attnUrgent {
-			return c.text, ""
-		}
-		return splitHeadline(c.text)
+		// Orchestrator messages never fold (#465): everything after a list
+		// or blank line is real body, not details.
+		return c.text, ""
 	case store.ChatEvent:
 		if m := doneNoticeRe.FindStringSubmatch(c.text); m != nil {
 			return m[1] + " is done and queued to land.", m[2]
