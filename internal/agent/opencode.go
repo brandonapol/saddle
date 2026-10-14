@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/brandonapol/saddle/internal/usage"
 )
 
 // OpenCode is the opencode adapter (#509): its interactive TUI in the
@@ -16,7 +18,7 @@ import (
 // (#489), notices are typed in, and the screen watcher marks it idle.
 type OpenCode struct{}
 
-// OpenCodeName is the opencode adapter's name; usage has no opencode parser yet.
+// OpenCodeName is the opencode adapter's name.
 const OpenCodeName = "opencode"
 
 const openCodeConfig = "opencode.json"
@@ -76,7 +78,10 @@ func openCodeApproval(mode string) []string {
 	return []string{"--auto"}
 }
 
-// Usage has no opencode parser yet, so opencode work is not metered.
+// Usage reads opencode's session database, shared by all its sessions; the
+// collector picks the worktree's turns out of it (#533).
 func (OpenCode) Usage() UsageSource {
-	return UsageSource{Agent: OpenCodeName, Transcript: func(string, string, string) string { return "" }}
+	return UsageSource{Agent: usage.OpenCode, Transcript: func(string, string, string) string {
+		return usage.OpenCodeDBPath(os.Getenv("XDG_DATA_HOME"))
+	}}
 }

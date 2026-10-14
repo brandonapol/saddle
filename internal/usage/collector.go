@@ -12,7 +12,8 @@ type Session struct {
 	ID       string // agent session id, as given by hooks
 	Task     string // saddle task the usage is attributed to
 	Agent    string // Claude, Codex or Grok
-	Path     string // transcript file
+	Path     string // transcript file; opencode's session database
+	Dir      string // opencode: only sessions run in this directory count
 	Model    string // configured model when the transcript omits it
 	Snapshot bool   // Path is a rewritten usage snapshot, not append-only JSONL
 }
@@ -20,6 +21,7 @@ type Session struct {
 type tracked struct {
 	Session
 	cur      Cursor
+	ocCur    OpenCodeCursor // opencode's place in its database
 	parse    Parser
 	snapshot SnapshotParser
 	// rollout caches the model read from a Codex rollout at rolloutPath.
@@ -43,6 +45,9 @@ func NewCollector() *Collector {
 // false if the agent kind is unknown.
 func (c *Collector) Track(s Session) bool {
 	p := ParserFor(s.Agent)
+	if s.Agent == OpenCode {
+		p = func([]byte) (Record, bool, error) { return Record{}, false, nil } // read from the database, not tailed
+	}
 	var snap SnapshotParser
 	if s.Snapshot && s.Agent == Grok {
 		snap = ParseGrokSnapshot
@@ -75,7 +80,11 @@ func (c *Collector) Cursor(id string) (Cursor, bool) {
 	if !ok {
 		return Cursor{}, false
 	}
-	return t.cur, true
+	cur := t.cur
+	if t.Agent == OpenCode {
+		cur.Offset = t.ocCur.After // nonzero once a turn has been read
+	}
+	return cur, true
 }
 
 // Poll reads new transcript lines for every session and returns the usage
@@ -87,7 +96,9 @@ func (c *Collector) Poll() ([]Bucket, error) {
 	for _, t := range c.sessions {
 		var recs []Record
 		var err error
-		if t.snapshot != nil {
+		if t.Agent == OpenCode {
+			recs, t.ocCur, err = ReadOpenCode(t.Path, t.Dir, t.ocCur)
+		} else if t.snapshot != nil {
 			recs, err = ReadSnapshot(t.Path, &t.cur, t.snapshot)
 		} else {
 			recs, err = Tail(t.Path, &t.cur, t.parse)

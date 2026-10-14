@@ -235,9 +235,8 @@ serve`). Until the detectors land, the hookless idle watcher's working indicator
 (`esc to interrupt`, `esc to cancel`, `Ctrl+c:cancel`) never matches
 opencode's `esc interrupt`; a busy opencode reads as running only while its
 animated footer keeps the screen changing.
-opencode is not in `config.AdapterNames`, so `[adapters] order` and
-`[fallback]` can't name it yet, and it is not in the orchestrator's
-rotation (`Providers`). Tests: `TestOpenCodeLaunchRunsFakeBinary`,
+opencode is in `config.AdapterNames` (#520); it is not in the
+orchestrator's rotation (`Providers`). Tests: `TestOpenCodeLaunchRunsFakeBinary`,
 `TestOpenCodeLaunchWithoutModel`, `TestOpenCodeApprovalFlags`,
 `TestOpenCodeAvailability`.
 
@@ -285,3 +284,24 @@ when neither is installed), `TestOpenCodePluginPayloadEnforcesClaims`,
 - Spawn refuses an unavailable adapter by name and never substitutes one
   (#182). Rotation warns when claimed work moves to a hookless adapter
   (#321).
+
+## opencode usage and limits (#533)
+
+Usage and quota for opencode are wired in (#531 wrote the reader and
+detectors):
+
+- `OpenCode.Usage()` returns `usage.OpenCodeDBPath` (`$XDG_DATA_HOME`, default
+  `~/.local/share`). The usage meter's collector reads that database with
+  `usage.ReadOpenCode`, limited to sessions run in the task's worktree, so USAGE
+  shows opencode per provider/model.
+- The idle watcher (`ObserveHooklessScreen`) runs `OpenCodeScreenLimit` on the
+  worker's screen and, once the screen has sat still, `OpenCodeDBLimit`. A hit
+  calls `MarkModelExhausted` for the worker's *configured* provider/model, not
+  the footer's display name, so `[fallback]` and spawn failover skip it.
+  `config.AdapterNames` already lists opencode.
+
+Caveat: the limit error shapes come from opencode's schema, not a captured
+real limit, so the detectors may miss the wording a provider really sends. The
+reader depends on the 1.19.0 database layout and skips rows it cannot parse.
+Tests: `TestCollectorReadsOpenCodeDB`, `TestUsageMeterReadsOpenCodeDB`,
+`TestOpenCodeLimitScreenMarksConfiguredModelAndFailsOver`.

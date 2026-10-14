@@ -106,7 +106,7 @@ func (m *UsageMeter) Sync() error {
 		}
 		// Re-tracking keeps the cursor, and lets a transcript that appeared
 		// somewhere other than the expected path be found later.
-		s.col.Track(usage.Session{ID: key, Task: t.ID, Agent: src.Agent, Path: path, Model: t.Model, Snapshot: src.Snapshot})
+		s.col.Track(usage.Session{ID: key, Task: t.ID, Agent: src.Agent, Path: path, Dir: t.Worktree, Model: t.Model, Snapshot: src.Snapshot})
 	}
 	var errs []error
 	for id, s := range m.sessions {

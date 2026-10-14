@@ -3,7 +3,9 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/store"
@@ -78,4 +80,31 @@ func ocTask(t *testing.T, a *App, id string) store.Task {
 		t.Fatal(err)
 	}
 	return tk
+}
+
+// #533: an opencode worker's limit screen marks the worker's configured
+// provider/model out (not the footer's display name), and spawns that would
+// use it fail over while the worker's other models stay usable.
+func TestOpenCodeLimitScreenMarksConfiguredModelAndFailsOver(t *testing.T) {
+	a, _, _ := rotationApp(t)
+	a.Cfg.Fallback = map[string][]string{"opencode:openai/gpt-5": {"claude"}}
+	w, err := a.Spawn(SpawnReq{Title: "oc", Adapter: agent.OpenCodeName, Model: "openai/gpt-5"})
+	must(t, err)
+	a.ObserveHooklessScreen(w.ID, store.Running, HooklessIdleAfter, openCodePane(t, "quota.txt"))
+	ex := a.ExhaustedModels(time.Now())
+	e, ok := ex[exhaustKey(agent.OpenCodeName, "openai/gpt-5")]
+	if !ok || len(ex) != 1 {
+		t.Fatalf("exhausted models %+v", ex)
+	}
+	if d := time.Until(e.Until); d < 2*time.Hour || d > 2*time.Hour+6*time.Minute {
+		t.Fatalf("until in %v, want about 2h5m", d)
+	}
+	if _, err := a.Spawn(SpawnReq{Title: "next", Adapter: agent.OpenCodeName, Model: "openai/gpt-5"}); err == nil || !strings.Contains(err.Error(), "out of quota") {
+		t.Fatalf("spawn on the out model: %v, want an out-of-quota refusal", err)
+	}
+	o, err := a.Spawn(SpawnReq{Title: "other", Adapter: agent.OpenCodeName, Model: "anthropic/claude-sonnet-4-5"})
+	must(t, err)
+	if r := agent.Recorded(a.stateDir("run", o.ID)); r != agent.OpenCodeName {
+		t.Fatalf("another model ran %s, want opencode", r)
+	}
 }

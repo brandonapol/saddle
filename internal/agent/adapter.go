@@ -30,7 +30,7 @@ type Adapter interface {
 
 // UsageSource locates an agent's transcript for usage metering.
 type UsageSource struct {
-	Agent string // a usage agent kind: usage.Claude, usage.Codex or usage.Grok
+	Agent string // a usage agent kind: usage.Claude, usage.Codex, usage.Grok or usage.OpenCode
 	// Snapshot says the path is a whole usage document rewritten as turns
 	// finish, rather than an append-only JSONL transcript.
 	Snapshot bool
