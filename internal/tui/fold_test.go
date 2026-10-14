@@ -37,8 +37,7 @@ func TestRelayedDoneSummaryShowsHeadlineAndFoldsDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.deliver()
-	m.handleEvent(orch.Event{Kind: orch.Text, Text: "The risk-tier work is half in: one task finished and is queued to land. Nothing needs you.\n\n" +
-		"Worker notes: TestTierFloorDocsOnly and TestMaxTierGateHolds cover Watcher.Tiers."})
+	m.handleEvent(orch.Event{Kind: orch.Text, Text: "The risk-tier work is half in: one task finished and is queued to land. Nothing needs you."})
 
 	out := chatText(m)
 	for _, want := range []string{`t183 "Risk tier floor" is done and queued to land.`, "The risk-tier work is half in", "Nothing needs you.", foldHint} {
@@ -54,7 +53,7 @@ func TestRelayedDoneSummaryShowsHeadlineAndFoldsDetails(t *testing.T) {
 
 	m.Update(altKey('d'))
 	out = chatText(m)
-	for _, want := range []string{"TestTierFloorDocsOnly", "app.NewAutomerge", "Worker notes"} {
+	for _, want := range []string{"TestTierFloorDocsOnly", "app.NewAutomerge"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("open details lack %q:\n%s", want, out)
 		}
@@ -132,7 +131,7 @@ func TestSplitHeadline(t *testing.T) {
 func TestFoldedMessageWrapsInNarrowSidebar(t *testing.T) {
 	const w = 30
 	head := "The risk-tier work is half in: two PRs merged and four follow-ups are queued as issues."
-	out := renderFolded(chatLine{role: store.ChatAssistant, text: head + "\n\nTestA TestB"}, w, lipgloss.NewStyle().Width(w-2), false)
+	out := renderFolded(chatLine{role: store.ChatEvent, text: `t1 "x" is done and queued in the merge train: ` + head}, w, lipgloss.NewStyle().Width(w-2), false)
 	for _, l := range strings.Split(out, "\n") {
 		if lipgloss.Width(l) > w {
 			t.Errorf("line wider than %d: %q", w, l)
@@ -141,9 +140,28 @@ func TestFoldedMessageWrapsInNarrowSidebar(t *testing.T) {
 	if strings.Contains(out, "…") {
 		t.Errorf("truncated:\n%s", out)
 	}
-	for _, word := range strings.Fields(head) {
+	for _, word := range strings.Fields("is done and queued to land.") {
 		if !strings.Contains(out, word) {
 			t.Errorf("headline lost %q:\n%s", word, out)
+		}
+	}
+}
+
+// #465: a plain orchestrator message (lead paragraph, bullet list, trailing
+// paragraphs) is never folded or dimmed; only the "‼" form is special.
+func TestPlainMessageAfterBulletListNotFolded(t *testing.T) {
+	text := "Here is where things stand.\n\n- **Landed:** t1 and t2\n- **Running:** t3\n- **Blocked:** t4\n\nFirst trailing paragraph.\n\nSecond trailing paragraph."
+	c := chatLine{role: store.ChatAssistant, text: text}
+	if head, d := foldText(c); d != "" || head != text {
+		t.Fatalf("foldText folded a plain message: %q, %q", head, d)
+	}
+	out := renderFolded(c, 70, lipgloss.NewStyle().Width(68), false)
+	if strings.Contains(out, foldHint) {
+		t.Errorf("fold hint shown:\n%s", out)
+	}
+	for _, w := range []string{"First trailing paragraph.", "Second trailing paragraph."} {
+		if !strings.Contains(out, w) {
+			t.Errorf("lost %q:\n%s", w, out)
 		}
 	}
 }
