@@ -9,20 +9,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/brandonapol/saddle/internal/usage"
 )
 
 // RunGrokBridge reads Claude-style stream-json user lines from r and, for each
 // one, runs a headless `grok --prompt-file` turn. Stdout is grok's
 // streaming-messages-json, which the orchestrator already understands.
 // Sessions resume across turns. The process stays up until r hits EOF, the
-// same shape as a long-lived Claude stream-json session. A run dir launched
-// as codex runs the codex bridge instead (#506).
+// same shape as a long-lived Claude stream-json session.
 func RunGrokBridge(runDir string, r io.Reader, w io.Writer) error {
-	if n, _ := RecordedName(runDir); n == usage.Codex {
-		return RunCodexBridge(runDir, r, w)
-	}
 	b, err := os.ReadFile(filepath.Join(runDir, "grok.json"))
 	if err != nil {
 		return err

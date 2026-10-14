@@ -115,8 +115,7 @@ func wireLines(t *testing.T, out string) []wireLine {
 func TestCodexBridgeResumesAcrossTurns(t *testing.T) {
 	dir := codexBridgeDir(t, codexSpec{Brief: "BRIEF", Args: []string{"-c", "x=1"}, Model: "gpt-x"})
 	var out bytes.Buffer
-	// Reached through the grok-bridge command: the run dir recorded codex.
-	if err := RunGrokBridge(dir, userLines("first", "second", "third"), &out); err != nil {
+	if err := RunCodexBridge(dir, userLines("first", "second", "third"), &out); err != nil {
 		t.Fatal(err)
 	}
 	calls := readCalls(t, dir)
@@ -270,7 +269,7 @@ func TestHeadlessCodexWritesSpec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(cmd.Args, []string{"/bin/saddle", "grok-bridge", run}) {
+	if !slices.Equal(cmd.Args, []string{"/bin/saddle", "codex-bridge", run}) {
 		t.Errorf("args = %q", cmd.Args)
 	}
 	if Recorded(run) != usage.Codex {
