@@ -112,7 +112,7 @@ func TestFailOverOrchestratorToCodex(t *testing.T) {
 	}
 	cmd, err := l.Headless("")
 	must(t, err)
-	if len(cmd.Args) < 2 || cmd.Args[1] != "grok-bridge" || agent.Recorded(l.RunDir) != usage.Codex {
+	if len(cmd.Args) < 2 || cmd.Args[1] != "codex-bridge" || agent.Recorded(l.RunDir) != usage.Codex {
 		t.Fatalf("headless codex runs %q, recorded %s", cmd.Args, agent.Recorded(l.RunDir))
 	}
 	// A restart keeps codex until claude has quota again.
