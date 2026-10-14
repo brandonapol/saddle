@@ -20,8 +20,7 @@ import (
 // runs on its backoff schedule, with no wait.
 func (w *World) CIRedTick() sentinel.CIRedReport {
 	w.T.Helper()
-	a, err := app.Open(w.Repo)
-	must(w.T, err)
+	a := w.open()
 	defer func() { _ = a.Close() }()
 	rep, err := sentinel.NewCIRed(a).Check(context.Background())
 	must(w.T, err)

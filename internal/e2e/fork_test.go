@@ -113,3 +113,17 @@ func TestHarnessReportListsSlowest(t *testing.T) {
 		}
 	}
 }
+
+// TestHarnessInProcessAppRunsSaddle: an App opened in the test process
+// took the test binary for saddle (os.Executable), so agents it spawned ran
+// `e2e.test hook` as their hooks: each started the whole suite and was
+// killed at the hook timeout.
+func TestHarnessInProcessAppRunsSaddle(t *testing.T) {
+	if Fork(t) {
+		return
+	}
+	w := world(t, Options{})
+	if a := w.App(); a.Bin != w.Bins.Saddle {
+		t.Fatalf("World.App's saddle binary is %s, want %s", a.Bin, w.Bins.Saddle)
+	}
+}

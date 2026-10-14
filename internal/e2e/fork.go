@@ -48,6 +48,13 @@ func Main(m *testing.M, bins *Bins) {
 }
 
 func runMain(m *testing.M, bins *Bins) int {
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
+		// Code that took this binary for saddle (os.Executable in an
+		// in-process App) ran `e2e.test hook` or the like: never start the
+		// suite for it.
+		fmt.Fprintf(os.Stderr, "e2e: the test binary was run as saddle: %q\n", os.Args[1:])
+		return 2
+	}
 	// The train runs this from inside a saddle repo: temp dirs under it
 	// would put every World's repo inside the real one.
 	base, err := isolatedTemp()
