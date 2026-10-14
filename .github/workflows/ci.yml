@@ -3,19 +3,84 @@ on:
   push:
     branches: [main]
   pull_request:
+# A newer push to a PR branch supersedes the older run (#540). Pushes to main
+# always run to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
 jobs:
-  test:
+  # Fast feedback, in parallel with the tests (#539). golangci-lint is built
+  # by make setup/golangci-lint at the version the Makefile pins, with the
+  # Makefile's build tags, so CI and `make check/lint` agree (#541).
+  lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: make check/format check/tidy check/vet
-      - run: make test/race
-      - uses: golangci/golangci-lint-action@v8
+      - run: make setup/golangci-lint
+      - run: make check/format check/tidy check/vet check/lint
+  # internal/app, the slowest package, gets shard 1 to itself; the other
+  # packages are dealt across the remaining shards (scripts/ci-race-shard.sh).
+  test:
+    name: test (race shard ${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          version: latest
+          go-version-file: go.mod
+      - name: Race tests
+        shell: bash # adds pipefail, so tee does not hide a failure
+        run: make test/race/shard SHARD=${{ matrix.shard }} TOTAL=3 2>&1 | tee race.log
+      - name: Slowest packages
+        if: always()
+        run: |
+          {
+            echo "### Race shard ${{ matrix.shard }}/3: slowest packages"
+            echo '```'
+            grep -E '^(ok|FAIL)[[:space:]]' race.log | grep -oE '^(ok|FAIL)[[:space:]]+[^[:space:]]+[[:space:]]+[0-9.]+s' | awk '{print $NF, $2}' | sort -rn | head -10
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+  scripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make test/scripts check/templeak
+  # The plugin's TypeScript tests run inside the claude engine (they import
+  # claude-code/testing), so install the CLI at the minimum version that loads
+  # mods. make test/plugin fails, rather than skips, if claude is missing.
+  plugin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g @anthropic-ai/claude-code@2.1.287
+      - run: make test/plugin
+      - name: plugin_test.go must not skip
+        shell: bash
+        run: |
+          go test -v -count=1 ./plugin/ | tee plugin.log
+          if grep -q -- '--- SKIP' plugin.log; then echo "plugin tests skipped"; exit 1; fi
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 10
