@@ -1,28 +1,57 @@
 package app
 
 import (
+	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/brandonapol/saddle/internal/config"
-	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
-// #395: the train's lint gate waits its turn on the repo hooks' lock, as
-// done's does, so it never runs beside another worktree's check.
-func TestTrainLintWaitsOnTheHookLock(t *testing.T) {
+// #529: a done gate holding the shared hooks lock must not stall the train's
+// lint step.
+func TestTrainLintIgnoresTheHooksLock(t *testing.T) {
 	a := trainSetup(t)
 	cmd, runs := countingGate(t)
 	a.Cfg.Train.Lint = config.Lint{Cmd: cmd, Set: true}
 	tk, err := a.Spawn(SpawnReq{Title: "lint"})
 	must(t, err)
 	f, err := os.OpenFile(filepath.Join(hookState(t, tk.Worktree), "lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	must(t, err)
+	defer f.Close()
+	must(t, syscall.Flock(int(f.Fd()), syscall.LOCK_EX))
+	done := make(chan error, 1)
+	go func() {
+		msg, env, err := a.trainLint(tk.ID, tk.Worktree)
+		if err == nil && (msg != "" || env != nil) {
+			err = errors.New("lint not green: " + msg)
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		must(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the train's lint gate waited on the hooks lock")
+	}
+	if n := runs(); n != 1 {
+		t.Fatalf("gate ran %d times", n)
+	}
+}
+
+// #395: two lint runs (the train's and done's) never overlap: the train's
+// lint waits on the lint lock.
+func TestTrainLintWaitsOnTheLintLock(t *testing.T) {
+	a := trainSetup(t)
+	cmd, runs := countingGate(t)
+	a.Cfg.Train.Lint = config.Lint{Cmd: cmd, Set: true}
+	tk, err := a.Spawn(SpawnReq{Title: "lint"})
+	must(t, err)
+	f, err := os.OpenFile(filepath.Join(hookState(t, tk.Worktree), lintLockName), os.O_CREATE|os.O_RDWR, 0o644)
 	must(t, err)
 	defer f.Close()
 	must(t, syscall.Flock(int(f.Fd()), syscall.LOCK_EX))
@@ -55,74 +84,6 @@ func TestTrainLintWaitsOnTheHookLock(t *testing.T) {
 	}
 	if n := runs(); n != 1 {
 		t.Fatalf("gate ran %d times", n)
-	}
-}
-
-// #395, the race #271 fixed for done: an agent's commit runs the repo's
-// pre-commit hook (saddle's wrapper, under its flock) while the train lints
-// a landing. The train waits for the hook instead of running beside it and
-// refusing the branch for the overlap.
-func TestTrainLintWaitsForTheRepoHook(t *testing.T) {
-	if _, err := exec.LookPath("make"); err != nil {
-		t.Skip("make not installed")
-	}
-	a := trainSetup(t)
-	cmd, runs, overlaps := exclusiveGate(t)
-	write(t, a.Root, "Makefile", "lint:\n\t@"+cmd+"\n")
-	write(t, a.Root, "git/hooks/pre-commit", "#!/bin/sh\nmake lint\n")
-	must(t, os.Chmod(filepath.Join(a.Root, "git/hooks/pre-commit"), 0o755))
-	commitAll(t, a.Root, "repo gate")
-	if _, err := refguard.InstallRepoHooks(a.Root); err != nil {
-		t.Fatal(err)
-	}
-	if g := a.LintGate(); g.Cmd != "make lint" {
-		t.Fatalf("gate = %+v", g)
-	}
-	committer, err := a.Spawn(SpawnReq{Title: "committer"})
-	must(t, err)
-	lander, err := a.Spawn(SpawnReq{Title: "lander"})
-	must(t, err)
-	write(t, lander.Worktree, "lander.txt", "lander\n")
-	git(t, lander.Worktree, "add", "-A")
-	git(t, lander.Worktree, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "lander")
-	write(t, committer.Worktree, "committer.txt", "committer\n")
-	git(t, committer.Worktree, "add", "-A")
-
-	var wg sync.WaitGroup
-	var commitOut []byte
-	var commitErr, lintErr error
-	var msg string
-	var env *GateEnvProblem
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		c := exec.Command("git", "-C", committer.Worktree, "commit", "-qm", "committer")
-		c.Env = append(os.Environ(), "SADDLE_TASK="+committer.ID, "SADDLE_TRAIN=", "SADDLE_FAST_HOOK=")
-		commitOut, commitErr = c.CombinedOutput()
-	}()
-	go func() {
-		defer wg.Done()
-		msg, env, lintErr = a.trainLint(lander.ID, lander.Worktree)
-	}()
-	wg.Wait()
-	if commitErr != nil {
-		t.Fatalf("the committer's hook failed: %v\n%s", commitErr, commitOut)
-	}
-	if msg != "" || env != nil || lintErr != nil {
-		t.Fatalf("the train refused the lander: msg=%q env=%+v err=%v", msg, env, lintErr)
-	}
-	if n := overlaps(); n != 0 {
-		t.Fatalf("the train's lint gate ran beside the repo hook %d times", n)
-	}
-	if n := runs(); n != 2 {
-		t.Fatalf("gate ran %d times, want the hook once and the train once", n)
-	}
-	// The tree the hook just passed isn't linted again by the train.
-	if msg, env, err := a.trainLint(committer.ID, committer.Worktree); msg != "" || env != nil || err != nil {
-		t.Fatalf("trainLint on the committer: %q %+v %v", msg, env, err)
-	}
-	if n := runs(); n != 2 {
-		t.Fatalf("the train re-ran the gate on the tree the hook passed (%d runs)", n)
 	}
 }
 

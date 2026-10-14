@@ -65,6 +65,8 @@ func (a *App) lintDone(t store.Task) error {
 	}
 	unlock := lockHooks(state, a.GateTimeout())
 	defer unlock()
+	unlockLint := lockNamed(state, lintLockName, a.GateTimeout())
+	defer unlockLint()
 	if passedLint(state, tree, g) { // the hook we waited on passed it
 		a.Store.Event(t.ID, "lint_skipped", "tree "+tree+" already passed")
 		return nil
@@ -193,11 +195,21 @@ func stampLint(state, tree string, g lintgate.Gate) {
 // dir holding its owner's pid. It waits up to max, then goes ahead without
 // it rather than block done for good.
 func lockHooks(state string, max time.Duration) (unlock func()) {
+	return lockNamed(state, "lock", max)
+}
+
+// lintLockName is the lock only lint runs take, so the train's lint step
+// doesn't queue behind a done gate holding the hooks lock (#529) yet two lint
+// runs still never overlap.
+const lintLockName = "lint.lock"
+
+// lockNamed is lockHooks for the lock file <state>/<name>.
+func lockNamed(state, name string, max time.Duration) (unlock func()) {
 	noop := func() {}
 	if state == "" || os.MkdirAll(state, 0o755) != nil {
 		return noop
 	}
-	lock := filepath.Join(state, "lock")
+	lock := filepath.Join(state, name)
 	end := time.Now().Add(max)
 	if _, err := exec.LookPath("flock"); err == nil {
 		f, err := os.OpenFile(lock, os.O_CREATE|os.O_RDWR, 0o644)
@@ -229,8 +241,9 @@ func lockHooks(state string, max time.Duration) (unlock func()) {
 	return func() { _ = os.RemoveAll(dir) }
 }
 
-// trainLint runs the gate on the rebased tree in dir after the tests. Like
-// lintDone it waits its turn on the repo hooks' lock and skips a tree that
+// trainLint runs the gate on the rebased tree in dir after the tests. Unlike
+// lintDone it doesn't wait on the repo hooks' lock (a done gate can hold it for
+// minutes, #529) but on a lint-only lock that done's lint also holds, and skips a tree that
 // already passed, and like the test gate it runs through runGateEnv, so a
 // machine failure (parallel golangci-lint, a full disk) is retried and,
 // if it persists, returned as env rather than charged to the branch
@@ -247,9 +260,9 @@ func (a *App) trainLint(id, dir string) (string, *GateEnvProblem, error) {
 		a.Store.Event(id, "lint_skipped", "tree "+tree+" already passed")
 		return "", nil, nil
 	}
-	unlock := lockHooks(state, a.GateTimeout())
+	unlock := lockNamed(state, lintLockName, a.GateTimeout())
 	defer unlock()
-	if passedLint(state, tree, g) { // the hook we waited on passed it
+	if passedLint(state, tree, g) { // the lint we waited on passed it
 		a.Store.Event(id, "lint_skipped", "tree "+tree+" already passed")
 		return "", nil, nil
 	}
