@@ -757,7 +757,7 @@ func TestAdapterPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p := cfg.AdapterPolicy; p.Pick != PickOrder || p.Failover != FailoverHandoff || p.HandoffWait != 15*time.Minute {
+	if p := cfg.AdapterPolicy; p.Pick != PickBalanced || p.Failover != FailoverHandoff || p.HandoffWait != 15*time.Minute {
 		t.Fatalf("default policy = %+v", p)
 	}
 	root := t.TempDir()

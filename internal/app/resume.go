@@ -114,7 +114,7 @@ func (a *App) resume(t store.Task) (Resumed, error) {
 	// An adapter or model out of quota would only park it again: relaunch
 	// it on the next one with quota (#321, #483). Its session can't move
 	// across adapters or models.
-	if next, e, out, err := a.reroute(ad.Name(), t.Model, pickReq{claims: len(all[t.ID]) > 0}, time.Now()); out && err == nil {
+	if next, e, out, err := a.reroute(ad.Name(), t.Model, pickReq{claims: len(all[t.ID]) > 0, crowded: claimsCrowded(all[t.ID], all, t.ID)}, time.Now()); out && err == nil {
 		if nad, err := agent.ByName(next.Adapter); err == nil {
 			t.Model, t.Adapter = next.Model, next.Adapter
 			if err := a.Store.SetField(t.ID, "model", t.Model); err != nil {

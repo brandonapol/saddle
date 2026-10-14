@@ -69,7 +69,7 @@ func (a *App) HandOff(task string, now time.Time) (string, error) {
 	}
 	// Its adapter, or its model when [fallback] tracks that on its own
 	// (#483), is out: the chain, else the policy, picks the finisher.
-	c, e, out, rerr := a.reroute(from, t.Model, pickReq{claims: len(all[t.ID]) > 0}, now)
+	c, e, out, rerr := a.reroute(from, t.Model, pickReq{claims: len(all[t.ID]) > 0, crowded: claimsCrowded(all[t.ID], all, t.ID)}, now)
 	if !out {
 		return "", nil
 	}
@@ -111,6 +111,7 @@ func (a *App) HandOff(task string, now time.Time) (string, error) {
 	}
 	a.ForgetResumed(task)
 	a.Store.Event(task, EventAdapterHandoff, fmt.Sprintf("%s -> %s (%s) window %s", e.Label(), c.Label(), c.Why, win))
+	a.Store.Event(task, EventAdapterPick, pickLine(c.Adapter, c.Model, "handed off: "+c.Why, e.Label()))
 	text := fmt.Sprintf("%s %q ran out of quota on %s (resets %s), so saddle handed it to %s: a new %s agent finishes it in the same worktree and branch. Nothing needs doing.",
 		t.ID, t.Title, e.Label(), e.when(), c.Label(), c.Adapter)
 	if cl := all[t.ID]; len(cl) > 0 && !ad.Hooks() {

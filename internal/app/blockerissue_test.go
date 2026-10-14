@@ -118,7 +118,7 @@ func TestFileBlockerCreatesThenComments(t *testing.T) {
 	if !strings.HasPrefix(is.Title, "History check: ") {
 		t.Errorf("title = %q", is.Title)
 	}
-	for _, want := range []string{"**Model scope: Opus.**", "## Timeline", "## Design a fix so this never needs a human", "historyscan.go", "PR: #380"} {
+	for _, want := range []string{"**Difficulty: hard (design judgment).**", "## Timeline", "## Design a fix so this never needs a human", "historyscan.go", "PR: #380"} {
 		if !strings.Contains(is.Body, want) {
 			t.Errorf("body lacks %q:\n%s", want, is.Body)
 		}

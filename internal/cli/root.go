@@ -350,7 +350,11 @@ func spawnCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&r.ID, "id", "", "task id (default: next tN)")
 	f.StringSliceVarP(&r.Claims, "claim", "c", nil, "path glob this task owns (repeatable)")
-	f.StringVarP(&r.Model, "model", "m", "", "claude model (default from config)")
+	f.StringVarP(&r.Model, "model", "m", "", "model for the adapter (default: the difficulty's model, else config)")
+	f.StringVar(&r.Adapter, "adapter", "", "agent to run (claude, codex, grok…); default: the chooser picks")
+	f.StringVar(&r.Kind, "kind", "", "task kind, e.g. docs or design; steers the adapter pick")
+	f.StringVar(&r.Difficulty, "difficulty", "", "hard, standard or mechanical; steers the adapter and model pick")
+	f.StringSliceVar(&r.Needs, "need", nil, "capability the task needs, e.g. review or image-gen (repeatable)")
 	f.StringVar(&r.Parent, "parent", "", "parent task id")
 	f.StringVar(&r.Base, "base", "", "base ref (default: integration branch)")
 	f.StringVarP(&promptFile, "prompt-file", "f", "", "read the prompt from a file (- for stdin)")
@@ -413,6 +417,7 @@ func statusCmd() *cobra.Command {
 			if err := w.Flush(); err != nil {
 				return err
 			}
+			writeTaskPicks(cmd.OutOrStdout(), st.Tasks)
 			writeAdapters(cmd.OutOrStdout(), st.Adapters)
 			writeAdapterPicks(cmd.OutOrStdout(), st.Adapters, st.AdapterPolicy)
 			for _, f := range st.Fallback {
@@ -451,6 +456,17 @@ func writeAdapters(out io.Writer, ss []agent.Status) {
 		}
 	}
 	fmt.Fprintln(out, line)
+}
+
+// writeTaskPicks prints, for each live task, the adapter the chooser put it
+// on and why (#505).
+func writeTaskPicks(out io.Writer, ts []mcpserver.TaskView) {
+	for _, t := range ts {
+		if t.Pick == "" || t.Status == store.Landed || t.Status == store.Killed || t.Status == store.NoChange {
+			continue
+		}
+		fmt.Fprintf(out, "%s on %s\n", t.ID, t.Pick)
+	}
 }
 
 // writeAdapterPicks prints the order the next spawn without adapter= tries

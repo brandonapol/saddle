@@ -7,23 +7,29 @@ body:
   - type: markdown
     attributes:
       value: |
-        An epic is a track of issues, not the work itself. Slice it into bugs, features, and chores that each name a model scope. This issue stays open until those land.
+        An epic is a track of issues, not the work itself. Slice it into bugs, features, and chores that each state a difficulty. This issue stays open until those land.
 
-        Sonnet if the breakdown is already decided. Opus if the cut between issues is still a design call.
+        Standard if the breakdown is already decided. Hard if the cut between issues is still a design call.
   - type: dropdown
-    id: model-scope
+    id: difficulty
     attributes:
-      label: Model scope
-      description: Which model should break this down, or land the first slice.
+      label: Difficulty
+      description: How hard the breakdown, or the first slice, is.
       options:
-        - Sonnet
-        - Opus
+        - hard
+        - standard
+        - mechanical
     validations:
       required: true
-  - type: textarea
-    id: why-model
+  - type: input
+    id: needs
     attributes:
-      label: Why this model
+      label: Needs
+      description: Optional capabilities the work needs beyond code, comma-separated (review, long-context, image-gen, web-research, plugin-host, hooks-required). Leave empty for none.
+  - type: textarea
+    id: why-difficulty
+    attributes:
+      label: Why this difficulty
     validations:
       required: true
   - type: dropdown

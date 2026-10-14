@@ -158,7 +158,7 @@ func TestInferredDisjointTicketsSpawnTogether(t *testing.T) {
 	if c := r.env.spawns[1].Claims; !slices.Equal(c, []string{"internal/claims/**"}) {
 		t.Errorf("#2 spawned with claims %q", c)
 	}
-	if !r.env.hasEvent(EventSpawn + ": t1 for #1 \"a\" (opus, inferred claims internal/autopilot/**)") {
+	if !r.env.hasEvent(EventSpawn + ": t1 for #1 \"a\" (difficulty unset; inferred claims internal/autopilot/**)") {
 		t.Errorf("spawn event doesn't say the claims were inferred: %q", r.env.events)
 	}
 }

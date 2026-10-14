@@ -90,7 +90,7 @@ func trainState(train string) string {
 
 func compactTask(v TaskView) TaskView {
 	return TaskView{ID: v.ID, Title: v.Title, Status: v.Status, Reason: clip(v.Reason), Parent: v.Parent,
-		Train: clip(v.Train), Notices: v.Notices, PR: v.PR}
+		Train: clip(v.Train), Notices: v.Notices, PR: v.PR, Pick: clip(v.Pick)}
 }
 
 func clip(s string) string {

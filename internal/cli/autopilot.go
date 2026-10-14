@@ -37,8 +37,11 @@ is queued and publishes PRs, and tops up to the concurrency cap with open
 issues labelled ready (oldest first), skipping ones with an open PR or a
 task, waiting on 'after: #N' lines, and starting only issues whose
 'claims:' globs are disjoint from everything running (an issue that
-declares none runs alone). The model comes from the ticket's
-'Model scope:' line, Opus unless it says Sonnet. Under plan-limit pressure
+declares none runs alone). The provider and model come from the same
+chooser as the orchestrator's spawns: the ticket's 'Difficulty:' and
+'Needs:' lines, then [adapters] policy (balanced by default, so work
+spreads by remaining quota); a 'Provider:' line overrides it, and an old
+'Model scope:' line is only a hint. Under plan-limit pressure
 it stops spawning and sleeps until the reset. When ready work can't start
 or notices go unread, it nudges an idle orchestrator once.
 
@@ -179,7 +182,11 @@ func writeAutopilot(out io.Writer, st autopilot.State) {
 	if len(st.Spawned) > 0 {
 		var ids []string
 		for _, s := range st.Spawned {
-			ids = append(ids, fmt.Sprintf("%s (#%d)", s.Task, s.Issue))
+			on := ""
+			if ad, _, _ := strings.Cut(s.Route, ":"); ad != "" && !strings.HasPrefix(s.Route, "no provider") {
+				on = " on " + ad
+			}
+			ids = append(ids, fmt.Sprintf("%s (#%d%s)", s.Task, s.Issue, on))
 		}
 		fmt.Fprintf(out, "spawned %d: %s\n", len(ids), strings.Join(ids, ", "))
 	}

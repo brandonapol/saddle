@@ -9,7 +9,7 @@ body:
       value: |
         For a decision or a "is this intentional?" check. If you already know what to build, use Feature or Epic. If something is broken, use Bug.
 
-        Model scope is optional here. Set it when the answer should be turned into an implementation issue by that model.
+        Difficulty is optional here. Set it when the answer should be turned into an implementation issue.
   - type: dropdown
     id: kind
     attributes:
@@ -60,13 +60,14 @@ body:
       label: Options
       description: If this is a design decision, the approaches and what each gives up.
   - type: dropdown
-    id: model-scope
+    id: difficulty
     attributes:
-      label: Model scope
+      label: Difficulty
       description: Only if a worker should turn the answer into a change.
       options:
         - Not an implementation issue
-        - Sonnet
-        - Opus
+        - hard
+        - standard
+        - mechanical
     validations:
       required: true

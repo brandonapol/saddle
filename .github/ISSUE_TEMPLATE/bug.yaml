@@ -7,24 +7,30 @@ body:
   - type: markdown
     attributes:
       value: |
-        The orchestrator reads **Model scope** before it spawns. Sonnet when the fix below is mechanical and the spec is complete. Opus when finding the cause needs diagnosis.
+        The orchestrator reads **Difficulty** before it spawns and picks the provider and model from it. Mechanical when the fix below is fully specified. Hard when finding the cause needs diagnosis.
 
         Add the matching `area:*` label if you can. If a real saddle run went wrong, also add `incident`.
   - type: dropdown
-    id: model-scope
+    id: difficulty
     attributes:
-      label: Model scope
-      description: Which model should implement the fix.
+      label: Difficulty
+      description: hard when finding the cause needs diagnosis, standard for a well-scoped fix, mechanical when the fix is fully specified. The orchestrator picks the provider and model from it.
       options:
-        - Sonnet
-        - Opus
+        - hard
+        - standard
+        - mechanical
     validations:
       required: true
-  - type: textarea
-    id: why-model
+  - type: input
+    id: needs
     attributes:
-      label: Why this model
-      description: One or two sentences. This is the line after "Model scope" the orchestrator reads.
+      label: Needs
+      description: Optional capabilities the work needs beyond code, comma-separated (review, long-context, image-gen, web-research, plugin-host, hooks-required). Leave empty for none.
+  - type: textarea
+    id: why-difficulty
+    attributes:
+      label: Why this difficulty
+      description: One or two sentences. This is the line after "Difficulty" the orchestrator reads.
       placeholder: The repro is known and the fix is local to the tmux session-name sanitizer.
     validations:
       required: true

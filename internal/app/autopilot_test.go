@@ -52,8 +52,13 @@ func TestAutopilotSpawnsReadyIssues(t *testing.T) {
 	if t1.ID == "" || t2.ID == "" || byIssue[3].ID != "" {
 		t.Fatalf("tasks by issue: %+v", byIssue)
 	}
-	if t1.Model != "opus" || t2.Model != "sonnet" {
-		t.Errorf("models %q, %q; want opus and sonnet", t1.Model, t2.Model)
+	// #505: the balanced chooser spreads the two across adapters; #2's
+	// Model scope: Sonnet is a hint that applies only on claude.
+	if t1.Adapter == t2.Adapter {
+		t.Errorf("both on %s; want them spread", t1.Adapter)
+	}
+	if t1.Adapter == "claude" && t1.Model != "opus" || t2.Adapter == "claude" && t2.Model != "sonnet" {
+		t.Errorf("models %s:%q, %s:%q", t1.Adapter, t1.Model, t2.Adapter, t2.Model)
 	}
 	if !slices.Equal(all[t1.ID], []string{"alpha/**"}) {
 		t.Errorf("claims of %s = %v", t1.ID, all[t1.ID])

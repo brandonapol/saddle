@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/agent"
+	"github.com/brandonapol/saddle/internal/mcpserver"
 )
 
 // #150: saddle up [agent] [epic-file|-].
@@ -94,5 +95,19 @@ func TestWriteAdaptersShowsExcludedModels(t *testing.T) {
 	writeAdapters(&b, []agent.Status{{Name: "claude", OK: true}, {Name: "codex", OK: true, ExcludedModels: []string{"astra"}}})
 	if got := b.String(); got != "adapters: claude, codex; codex excluded models: astra\n" {
 		t.Errorf("got %q", got)
+	}
+}
+
+// #505: status names, for each live task, the adapter the chooser put it
+// on and why; finished tasks are left out.
+func TestWriteTaskPicks(t *testing.T) {
+	var b strings.Builder
+	writeTaskPicks(&b, []mcpserver.TaskView{
+		{ID: "t1", Status: "running", Pick: "codex: suits mechanical, 90% of budget left, 0 running"},
+		{ID: "t2", Status: "landed", Pick: "claude (opus): suits hard"},
+		{ID: "t3", Status: "running"},
+	})
+	if got := b.String(); got != "t1 on codex: suits mechanical, 90% of budget left, 0 running\n" {
+		t.Fatalf("got %q", got)
 	}
 }

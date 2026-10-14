@@ -144,9 +144,13 @@ type SpawnReq struct {
 	Prompt string
 	Claims []string
 	Model  string
-	Parent string
-	Base   string // defaults to the integration branch
-	Issue  int    // GitHub issue the task implements; its PR will close it
+	// ModelHint is a model a ticket mentions (an old "Model scope:" line):
+	// used only when the chosen adapter runs it, and it never steers the
+	// pick, unlike Model (#505).
+	ModelHint string
+	Parent    string
+	Base      string // defaults to the integration branch
+	Issue     int    // GitHub issue the task implements; its PR will close it
 	// After lists tasks whose unmerged work this one builds on. Its PR
 	// stacks on theirs even when their files don't overlap (#193).
 	After []string
@@ -154,7 +158,15 @@ type SpawnReq struct {
 	Adapter string
 	// Kind is the task's kind (docs, mechanical, design…). Without Adapter
 	// it picks an adapter whose [adapters.<name>] kinds list it (#481).
-	Kind  string
+	Kind string
+	// Difficulty is the ticket's difficulty (hard, standard, mechanical).
+	// Without Adapter it prefers adapters whose capability table suits it,
+	// and picks the model [adapters.<name>] models names for it (#505).
+	Difficulty string
+	// Needs are capabilities the task needs (review, image-gen,
+	// hooks-required…). Without Adapter it goes to an adapter that has them
+	// when one has quota (#505).
+	Needs []string
 	Force bool // ignore claim conflicts, the concurrency cap and paused launches
 	// Confirm goes ahead when every claim covers work landed or queued tasks
 	// already changed. Without it such a spawn returns ErrNeedsConfirm.
@@ -223,7 +235,7 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	}
 	// No adapter means the session default (#150), rotated past adapters out
 	// of quota (#321).
-	pick, err := a.spawnAdapter(r.Adapter, r.Model, r.Kind, len(r.Claims) > 0, r.Force)
+	pick, err := a.spawnAdapter(r.Adapter, r.Model, a.spawnPickReq(r), r.Force)
 	if err != nil {
 		return t, err
 	}
@@ -296,12 +308,7 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if base == "" {
 		base = a.Cfg.Integration
 	}
-	// A model from another adapter's family (a ticket's "opus", a repair's
-	// "sonnet") falls back to this adapter's default.
-	model := a.modelFor(ad.Name(), r.Model)
-	if pick.ModelSet {
-		model = pick.Model // a [fallback] entry's model (#483)
-	}
+	model := a.spawnModel(pick, r)
 	hint := a.retryHint(r.Title)
 	t = store.Task{
 		ID: id, Title: r.Title, Prompt: r.Prompt, Parent: r.Parent, Role: store.RoleWorker, Model: model, Adapter: ad.Name(),
@@ -335,6 +342,7 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	}
 	t.Window = win
 	a.Store.Event(id, "spawn", fmt.Sprintf("parent=%s adapter=%s (%s) model=%s claims=%s%s", r.Parent, ad.Name(), why, model, strings.Join(r.Claims, ","), hint))
+	a.Store.Event(id, EventAdapterPick, pickLine(ad.Name(), model, why, rotated))
 	if rotated != "" {
 		if err := a.rotatedTask(t, rotated, ad, r.Claims); err != nil {
 			return t, err

@@ -34,6 +34,9 @@ const (
 	EventAdapterExhausted = "adapter_exhausted"
 	EventAdapterRestored  = "adapter_restored"
 	EventAdapterRotated   = "adapter_rotated"
+	// EventAdapterPick records the adapter a task runs on and why, for
+	// status (#505).
+	EventAdapterPick = "adapter_pick"
 )
 
 // ExhaustFor is how long an adapter stays exhausted when its banner names
@@ -336,7 +339,7 @@ type spawnPick struct {
 // best one by [adapters] policy for the task's kind and claims, rotated past
 // adapters out of quota (#481). A model out on its own, or an adapter out
 // with a [fallback] chain, goes to the chain's first entry with quota (#483).
-func (a *App) spawnAdapter(requested, model, kind string, claims, force bool) (spawnPick, error) {
+func (a *App) spawnAdapter(requested, model string, r pickReq, force bool) (spawnPick, error) {
 	now := time.Now()
 	ex := a.ExhaustedAdapters(now)
 	if requested != "" {
@@ -346,7 +349,7 @@ func (a *App) spawnAdapter(requested, model, kind string, claims, force bool) (s
 		m := a.modelFor(requested, model)
 		if e, out := quotaOut(ex, a.ExhaustedModels(now), requested, m); out {
 			hint := "no other adapter has quota"
-			if p, _, _, err := a.reroute(requested, model, pickReq{claims: claims}, now); err == nil {
+			if p, _, _, err := a.reroute(requested, model, r, now); err == nil {
 				hint = "spawn without adapter (or adapter=" + p.Adapter + ") to use " + p.Label()
 			}
 			what := "adapter " + requested
@@ -358,7 +361,7 @@ func (a *App) spawnAdapter(requested, model, kind string, claims, force bool) (s
 		return spawnPick{Name: requested, Why: "requested"}, nil
 	}
 	def := a.Cfg.Harness
-	r := pickReq{def: def, kind: strings.ToLower(strings.TrimSpace(kind)), claims: claims}
+	r.def = def
 	c, err := a.bestAdapter(r, ex, now)
 	if err != nil {
 		first := firstReset(ex)
