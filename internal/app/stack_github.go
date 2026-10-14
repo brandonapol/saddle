@@ -135,6 +135,9 @@ func (a *App) leaveStack(l landedTask, state, why string) error {
 	if state == TrainSuperseded {
 		msg += " The next restack drops its commits from " + a.Cfg.Integration + "."
 	}
+	if state == TrainMerged {
+		msg += a.closeMergedIssue(l.Task, why)
+	}
 	if deps := a.dependents(l.ID); state == TrainMerged && len(deps) > 0 {
 		msg += fmt.Sprintf(" %s built on it; the next restack moves them onto %s (#358).", strings.Join(deps, ", "), a.Cfg.Base)
 		a.Store.Event(l.ID, "dependents_unblocked", strings.Join(deps, ","))
