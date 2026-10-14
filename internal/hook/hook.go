@@ -53,6 +53,9 @@ func Handle(a *app.App, task string, in Input) *Output {
 		return context(in.Event, takeAll(st, task))
 
 	case "PreToolUse":
+		if out := sreGuard(a, task, in); out != nil {
+			return out
+		}
 		if cmd, _ := in.ToolInput["command"].(string); cmd != "" {
 			if why := BypassesHooks(cmd); why != "" {
 				st.Event(task, "no_verify_denied", cmd)
@@ -106,6 +109,7 @@ func Handle(a *app.App, task string, in Input) *Output {
 const (
 	RuleWriteGuard = "write-guard" // claims, serial files, other worktrees
 	RuleNoVerify   = "no-verify"   // skipping the repo's commit hooks
+	// RuleSREGuard (sre.go) holds incident investigators read-only.
 )
 
 // deny refuses a tool call under rule with reason.
