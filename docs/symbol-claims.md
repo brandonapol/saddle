@@ -1,7 +1,7 @@
 # Symbol-level claims
 
 Status: **Proposed** (#329). Nothing here is implemented yet. The work is
-split into sub-issues S1–S6 (see [Sub-issues](#sub-issues)).
+split into sub-issues S1–S6, #587–#592 (see [Sub-issues](#sub-issues)).
 
 ## Problem
 
@@ -54,7 +54,8 @@ This design does **not** depend on the watcher; see
   hunks, and the margin also covers small context drift). Lines outside any
   symbol (imports, package clause) count through the range test only.
 
-The conflict test is the heart of rules 1 and 2. It is deliberately textual
+The change set and the conflict test live in `internal/gitx` (S1), so rules
+1 and 2 share one implementation. The conflict test is the heart of both. It is deliberately textual
 first: if git's three-way merge of the two edits could conflict, the test
 says so.
 
@@ -129,8 +130,9 @@ proposed content is hashed without a subprocess. Entries live at
 `<git common dir>/saddle-symbols/v<N>/<lang>/<blob id>.json` (written to a
 temp file and renamed), shared by every worktree and every hook process.
 `N` is the extractor version: bump it whenever extraction or signature
-rules change, so a stale cache can never feed a verdict. The existing daemon
-GC prunes entries untouched for 7 days.
+rules change, so a stale cache can never feed a verdict. The cache prunes
+itself: a write that finds the directory over 64 MiB removes the least
+recently modified entries until it is under 48 MiB, so no daemon is needed.
 
 **LineDiff.** `gitx.LineDiff(old, new []byte) []Hunk` is an in-process
 Myers line diff (no new module dependency: `go.mod` is serial), returning
@@ -316,11 +318,11 @@ False positives (deny or warn needlessly) cost throughput only; the
 
 ## Sub-issues
 
-| | Issue | Difficulty | Ready | After |
+| | Issue | Difficulty | `saddle:ready` | After |
 | --- | --- | --- | --- | --- |
-| S1 | gitx: signature hashes, (lang, blob) span cache, in-process LineDiff | standard | yes | — |
-| S2 | Edit seam: proposed content in the hook, `CheckEdit`/`EditNotes`, `[claims] granularity` | standard | yes | — |
-| S3 | Rule 2: deny stale overwrites | hard | yes | S1, S2 |
-| S4 | Rule 1: share a file by symbols, symbol-claim table | hard | no (Q1) | S1, S2 |
-| S5 | Rule 3: warn on stale assumptions | standard | no (Q2) | S1, S2 |
-| S6 | Forecast feed in status/brief; disjoint symbols score low | standard | yes | — |
+| S1 | #587 gitx: signature hashes, (lang, blob) span cache, in-process LineDiff | standard | yes | — |
+| S2 | #588 Edit seam: proposed content in the hook, `CheckEdit`/`EditNotes`, `[claims] granularity` | standard | yes | — |
+| S3 | #590 Rule 2: deny stale overwrites | hard | yes | S1, S2 |
+| S4 | #591 Rule 1: share a file by symbols, symbol-claim table | hard | no (Q1) | S1, S2 |
+| S5 | #592 Rule 3: warn on stale assumptions | standard | no (Q2) | S1, S2 |
+| S6 | #589 Forecast feed in status/brief; disjoint symbols score low | standard | yes | — |
