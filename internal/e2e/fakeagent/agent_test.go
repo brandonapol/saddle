@@ -140,6 +140,64 @@ func (r *rig) hookEvents() []string {
 	return evs
 }
 
+// TestCommitWaitsOutIndexLock (#502): TestJourneyModelFallbackChain's
+// `git add && git commit` sometimes loses the worktree index.lock to the
+// engine's checkpoint watcher, whose `git status` refreshes that index.
+// Git 2.55 fails at once (core.filesLockTimeout is gone); the commit has
+// to wait the lock out. A real git error still fails without retrying.
+func TestCommitWaitsOutIndexLock(t *testing.T) {
+	work := t.TempDir()
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@e")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@e")
+	sh(t, work, "git init -q -b main && git commit -q --allow-empty -m init")
+	if err := os.WriteFile(filepath.Join(work, "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lock := sh(t, work, "git rev-parse --git-path index.lock")
+	if !filepath.IsAbs(lock) {
+		lock = filepath.Join(work, lock)
+	}
+	if err := os.WriteFile(lock, []byte("held\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{Work: work, Out: io.Discard}
+	errc := make(chan error, 1)
+	go func() { errc <- a.step(Commit("opus's half")) }()
+	select {
+	case err := <-errc:
+		t.Fatalf("commit finished while index.lock was held: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("commit did not finish after index.lock was released")
+	}
+	if got := sh(t, work, "git log -1 --format=%s"); got != "opus's half" {
+		t.Fatalf("HEAD = %q", got)
+	}
+	if got := sh(t, work, "git show HEAD:a.txt"); got != "a" {
+		t.Fatalf("a.txt = %q", got)
+	}
+
+	start := time.Now()
+	err := a.step(Commit("nothing to commit"))
+	if err == nil {
+		t.Fatal("commit of a clean tree succeeded")
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("a real git error retried for %s: %v", time.Since(start), err)
+	}
+}
+
 func TestWritesCommitsAndCallsDone(t *testing.T) {
 	r := newRig(t, Script{Steps: []Step{
 		Write("a.txt", "hello\n"), Commit("add a"), Done("added a"),

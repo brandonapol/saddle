@@ -35,7 +35,7 @@ fi
 printf '%s\n' "$@" > ` + root + `/grok-args
 mkdir -p finished
 echo "finished on grok" > finished/grok.txt
-git add -A && git commit -qm "finish on grok"
+` + fa.IndexLockRetry(`git add -A && git commit -qm "finish on grok"`) + `
 ` + shq(w.Bins.Saddle) + ` done -s "finished on grok after claude ran out" > ` + root + `/grok-done.out 2>&1
 exec sleep 600
 `
