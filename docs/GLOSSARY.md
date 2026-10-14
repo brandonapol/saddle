@@ -56,7 +56,7 @@ children. Also the orchestrator's instructions (`saddle plugin brief`).
 
 ### changelog
 `saddle changelog --version vX.Y.Z [--write]`: release notes from the PRs
-merged since the last tag. See [RELEASING.md](RELEASING.md).
+merged since the last tag. See [VERSIONING.md](VERSIONING.md).
 
 ### checkpoint
 A snapshot of a live worker's uncommitted tree, taken every few minutes into
@@ -374,10 +374,6 @@ See *trust*.
 `saddle up [claude|grok|codex] [epic]`: opens the TUI (chat with the
 orchestrator, agent list, live peek) and hosts the watchers. Agents keep
 running when it exits.
-
-### upgrade
-`saddle upgrade`: installs the latest release, verifies its checksum and backs
-up `state.db`.
 
 ### version
 `saddle version [--long]`: prints the saddle version.

@@ -22,7 +22,7 @@ type Section struct {
 }
 
 // Header opens CHANGELOG.md.
-const Header = "# Changelog\n\nAll notable changes to saddle, newest first. Each section is generated from the\npull requests merged since the previous tag by `saddle changelog`; see\ndocs/RELEASING.md.\n"
+const Header = "# Changelog\n\nAll notable changes to saddle, newest first. Each section is generated from the\npull requests merged since the previous tag by `saddle changelog`; see\ndocs/VERSIONING.md.\n"
 
 // sectionOrder is the order sections appear in; empty ones are left out.
 var sectionOrder = []string{"Breaking changes", "Features", "Fixes", "Performance", "Documentation", "Build and CI", "Other changes"}
