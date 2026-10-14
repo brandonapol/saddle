@@ -48,8 +48,7 @@ func (l Launch) headlessCodex(resume string) (*exec.Cmd, error) {
 	if err := os.WriteFile(filepath.Join(l.RunDir, "codex.json"), b, 0o644); err != nil {
 		return nil, err
 	}
-	// The grok-bridge command runs whichever bridge the run dir recorded.
-	cmd := exec.Command(l.Bin, "grok-bridge", l.RunDir)
+	cmd := exec.Command(l.Bin, "codex-bridge", l.RunDir)
 	cmd.Dir = l.Dir
 	cmd.Env = append(os.Environ(), spec.Env...)
 	cmd.Env = append(cmd.Env, "PATH="+l.envPath())
