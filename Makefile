@@ -76,6 +76,11 @@ CLI_PKG    := github.com/brandonapol/saddle/internal/cli
 GO_LDFLAGS := -ldflags "-X $(CLI_PKG).Version=$(VERSION) -X $(CLI_PKG).Commit=$(COMMIT) -X $(CLI_PKG).Date=$(BUILD_DATE)"
 
 GOLANGCI_LINT_VERSION ?= v2.14.0
+GOVULNCHECK_VERSION   ?= v1.8.0
+
+# Set COVERPROFILE=file to have test/race also write a coverage profile (CI
+# does, per shard; scripts/cover-report.sh merges them).
+COVERPROFILE ?=
 
 # gotreesitter embeds every grammar (~30MB of blobs) unless built with
 # grammar_subset plus one grammar_subset_<lang> tag per language we use. Measured
@@ -85,12 +90,14 @@ GOLANGCI_LINT_VERSION ?= v2.14.0
 # TestSupportedLanguagesLoad fails under `make test` if one is missing.
 # Used by every target that compiles, so vet/lint/test see the same build.
 GO_TAGS    := grammar_subset grammar_subset_go grammar_subset_python
+comma := ,
+space := $(subst ,, )
 GO_TAGFLAG := -tags '$(GO_TAGS)'
 
 ##@ Setup
 
 .PHONY: setup
-setup: setup/golangci-lint setup/tokens ## Install dev tools and set up missing credentials
+setup: setup/golangci-lint setup/govulncheck setup/tokens ## Install dev tools and set up missing credentials
 	echo "✅ Setup done. Next: make install"
 
 .PHONY: setup/tokens
@@ -104,6 +111,10 @@ setup/golangci-lint: ## Install golangci-lint (pinned via GOLANGCI_LINT_VERSION)
 	# Built with your local Go. A prebuilt binary compiled with an older Go refuses
 	# to lint a module whose go.mod targets a newer one.
 	$(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+.PHONY: setup/govulncheck
+setup/govulncheck: ## Install govulncheck (pinned via GOVULNCHECK_VERSION)
+	$(GO) install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 
 ##@ Development
 
@@ -159,6 +170,7 @@ test/scripts: ## Test the shell scripts (upgrade, templeak, CI sharding)
 	bash scripts/templeak_test.sh
 	bash scripts/e2e-nightly-shard_test.sh
 	bash scripts/ci-race-shard_test.sh
+	bash scripts/cover-report_test.sh
 
 .PHONY: test/plugin
 test/plugin: ## Run the plugin's TypeScript tests (needs the claude CLI, 2.1.287+)
@@ -170,7 +182,7 @@ test/plugin: ## Run the plugin's TypeScript tests (needs the claude CLI, 2.1.287
 test/race: ## Run tests with the race detector (PKGS="./internal/app" to pick some)
 	# The hook, MCP server and CLI share one SQLite file from separate processes,
 	# so races here are real bugs.
-	$(call go_test,$(GO_TAGFLAG) -race -timeout $(TEST_TIMEOUT) $(or $(PKGS),./...))
+	$(call go_test,$(GO_TAGFLAG) -race $(if $(COVERPROFILE),-coverprofile=$(COVERPROFILE) -covermode=atomic) -timeout $(TEST_TIMEOUT) $(or $(PKGS),./...))
 
 .PHONY: test/race/shard
 test/race/shard: ## Run one CI shard of the race suite (SHARD=1 TOTAL=3; shard 1 is internal/app)
@@ -231,6 +243,17 @@ check/lint: ## Run golangci-lint
 	    exit 1
 	fi
 	golangci-lint run --build-tags "$(GO_TAGS)" ./...
+
+.PHONY: check/vuln
+check/vuln: ## Fail on reachable known vulnerabilities (govulncheck; needs network, so NOT part of make check)
+	# govulncheck fetches the vulnerability database, so a flaky network would
+	# make `make check` flaky. CI runs this target instead. Run it by hand
+	# after `make setup/govulncheck`.
+	if ! command -v govulncheck >/dev/null 2>&1; then
+	    echo "govulncheck is not installed. Run 'make setup/govulncheck' first."
+	    exit 1
+	fi
+	govulncheck -tags "$(subst $(space),$(comma),$(GO_TAGS))" ./...
 
 .PHONY: format
 format: ## Format Go code

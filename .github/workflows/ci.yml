@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - run: make setup/golangci-lint
@@ -35,13 +35,17 @@ jobs:
       matrix:
         shard: [1, 2, 3]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Race tests
         shell: bash # adds pipefail, so tee does not hide a failure
-        run: make test/race/shard SHARD=${{ matrix.shard }} TOTAL=3 2>&1 | tee race.log
+        run: make test/race/shard SHARD=${{ matrix.shard }} TOTAL=3 COVERPROFILE=cover-${{ matrix.shard }}.out 2>&1 | tee race.log
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cover-${{ matrix.shard }}
+          path: cover-${{ matrix.shard }}.out
       - name: Slowest packages
         if: always()
         run: |
@@ -51,12 +55,56 @@ jobs:
             grep -E '^(ok|FAIL)[[:space:]]' race.log | grep -oE '^(ok|FAIL)[[:space:]]+[^[:space:]]+[[:space:]]+[0-9.]+s' | awk '{print $NF, $2}' | sort -rn | head -10
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+  # Merges the shards' profiles, publishes total and per-package coverage to
+  # the job summary, and fails a PR whose total drops more than 1 point below
+  # main's last recorded total (#543). Pushes to main record the baseline. With
+  # no baseline yet (first run, expired artifact) the gate is skipped.
+  coverage:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: cover-*
+          merge-multiple: true
+      - name: Fetch main's baseline
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          id="$(gh run list --workflow ci --branch main --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          [ -n "$id" ] && gh run download "$id" --name coverage-baseline --dir baseline || echo "no baseline available"
+      - name: Report and gate
+        shell: bash
+        run: |
+          set -o pipefail
+          BASELINE_FILE=baseline/total.txt TOTAL_FILE=total.txt scripts/cover-report.sh cover-*.out | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: github.event_name == 'push'
+        with:
+          name: coverage-baseline
+          path: total.txt
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make setup/govulncheck check/vuln
   scripts:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - run: make test/scripts check/templeak
@@ -67,11 +115,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: npm install -g @anthropic-ai/claude-code@2.1.287
@@ -85,8 +133,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - run: sudo apt-get update && sudo apt-get install -y tmux

@@ -17,8 +17,8 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - run: sudo apt-get update && sudo apt-get install -y tmux
@@ -41,11 +41,23 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Reachable vulnerabilities in dependencies or the Go toolchain are found
+  # as new advisories land, not only when we change code (#542).
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make setup/govulncheck check/vuln
+
   # A failing nightly opens one tracking issue and then comments on it, found
   # by its fixed title and label, so repeated failures stay in one place.
   report-failure:
-    needs: e2e-race
-    if: ${{ always() && needs.e2e-race.result == 'failure' }}
+    needs: [e2e-race, govulncheck]
+    if: ${{ always() && (needs.e2e-race.result == 'failure' || needs.govulncheck.result == 'failure') }}
     runs-on: ubuntu-latest
     permissions:
       issues: write
