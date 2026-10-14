@@ -49,6 +49,9 @@ func TestHarnessGrokSpawnsGrokOnEveryDefaultPath(t *testing.T) {
 	a, ft := setup(t)
 	a.Cfg.Harness = config.HarnessGrok
 	a.Cfg.Grok = config.Grok{Cmd: "grok", Model: "grok-4.5", PermissionMode: "bypassPermissions"}
+	// Under "order" the harness is every default path's pick; "balanced"
+	// (the default since #505) spreads them instead.
+	a.Cfg.AdapterPolicy.Pick = config.PickOrder
 
 	var ids []string
 	plain, err := a.Spawn(SpawnReq{Title: "plain spawn"})
@@ -56,7 +59,7 @@ func TestHarnessGrokSpawnsGrokOnEveryDefaultPath(t *testing.T) {
 	ids = append(ids, plain.ID)
 	// The CI-red repair asks for sonnet; the CI fix and the stuck-task repair
 	// name nothing.
-	cired, err := a.Spawn(SpawnReq{Title: "ci repair", Model: "sonnet", Parent: OrchestratorID, Confirm: true})
+	cired, err := a.Spawn(SpawnReq{Title: "ci repair", ModelHint: "sonnet", Parent: OrchestratorID, Confirm: true})
 	must(t, err)
 	ids = append(ids, cired.ID)
 	env := &autopilotEnv{a: a}

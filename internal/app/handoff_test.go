@@ -35,6 +35,7 @@ func runDirHas(t *testing.T, a *App, task, s string) bool {
 func TestLimitHitHandsWorkerToNextAdapter(t *testing.T) {
 	a, ft, _ := rotationApp(t)
 	a.Cfg.AdapterOrder = []string{"claude", "codex", "grok"}
+	a.Cfg.AdapterPolicy.Pick = config.PickOrder
 	tk, err := a.Spawn(SpawnReq{Title: "meter", Prompt: "build the meter", Claims: []string{"meter/**"}})
 	must(t, err)
 	must(t, a.Store.SetStatus(tk.ID, StatusPaused))

@@ -184,3 +184,19 @@ func TestAutopilotUsesChooser(t *testing.T) {
 		}
 	}
 }
+
+// #505: an explicit model= is the orchestrator's choice and prefers its
+// provider; a ticket's model is only a hint the chooser never follows.
+func TestExplicitModelSteersHintDoesNot(t *testing.T) {
+	a := routingRig(t)
+	tk, err := a.Spawn(SpawnReq{Title: "explicit", Model: "opus"})
+	must(t, err)
+	if got := a.AdapterOf(tk); got != "claude" || tk.Model != "opus" {
+		t.Fatalf("model=opus ran %s:%s, want claude:opus", got, tk.Model)
+	}
+	tk, err = a.Spawn(SpawnReq{Title: "hinted", ModelHint: "opus"})
+	must(t, err)
+	if got := a.AdapterOf(tk); got != "codex" || tk.Model == "opus" {
+		t.Fatalf("hint opus ran %s:%s, want codex on its own model", got, tk.Model)
+	}
+}

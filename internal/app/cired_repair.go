@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -141,13 +142,16 @@ func (a *App) CIRedRepair(task string, fails []CIRedFailure) (string, error) {
 		fixer, fixCommit = a.ciRunFixer(owner, task)
 	}
 	req := SpawnReq{
-		Title:   ciFixTitle(owner),
-		Prompt:  a.ciRepairPrompt(owner, *l, fails, fixer, fixCommit, n+1),
-		Model:   "sonnet",
-		Parent:  OrchestratorID,
-		Issue:   owner.Issue,
-		Claims:  a.layerFiles(task),
-		Confirm: true,
+		Title:  ciFixTitle(owner),
+		Prompt: a.ciRepairPrompt(owner, *l, fails, fixer, fixCommit, n+1),
+		// Saddle's default for a repair, not a pin: the chooser picks the
+		// adapter, and sonnet applies only on claude (#505).
+		ModelHint:  "sonnet",
+		Difficulty: config.DifficultyStandard,
+		Parent:     OrchestratorID,
+		Issue:      owner.Issue,
+		Claims:     a.layerFiles(task),
+		Confirm:    true,
 	}
 	r, err := a.Spawn(req)
 	if err != nil && len(req.Claims) > 0 {

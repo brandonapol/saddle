@@ -69,7 +69,7 @@ func (a *App) HandOff(task string, now time.Time) (string, error) {
 	}
 	// Its adapter, or its model when [fallback] tracks that on its own
 	// (#483), is out: the chain, else the policy, picks the finisher.
-	c, e, out, rerr := a.reroute(from, t.Model, pickReq{claims: len(all[t.ID]) > 0}, now)
+	c, e, out, rerr := a.reroute(from, t.Model, pickReq{claims: len(all[t.ID]) > 0, crowded: claimsCrowded(all[t.ID], all, t.ID)}, now)
 	if !out {
 		return "", nil
 	}

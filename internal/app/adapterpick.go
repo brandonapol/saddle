@@ -39,6 +39,9 @@ type pickReq struct {
 	difficulty string   // hard, standard or mechanical; "" for unknown (#505)
 	needs      []string // capabilities the task needs (#505)
 	claims     bool     // the task claims paths
+	// family is the adapter an explicit model= belongs to (opus: claude);
+	// the orchestrator naming a model prefers its provider.
+	family string
 	// crowded is set when the task's claims share a directory with another
 	// live task's, so claim enforcement on every write matters most. Under
 	// balanced only a crowded task prefers hooked adapters (#505).
@@ -171,6 +174,9 @@ func (a *App) rankAdapters(r pickReq, ex map[string]Exhaustion, now time.Time) [
 		if len(x.lacks) != len(y.lacks) {
 			return len(x.lacks) < len(y.lacks)
 		}
+		if xf, yf := x.Name == r.family, y.Name == r.family; xf != yf {
+			return xf
+		}
 		if x.suits != y.suits {
 			return x.suits
 		}
@@ -214,6 +220,9 @@ func (a *App) rankAdapters(r pickReq, ex map[string]Exhaustion, now time.Time) [
 			why = append(why, "lacks "+strings.Join(c.lacks, ", "))
 		} else if len(r.needs) > 0 {
 			why = append(why, "has "+strings.Join(r.needs, ", "))
+		}
+		if r.family != "" && c.Name == r.family {
+			why = append(why, "runs the requested model")
 		}
 		if r.difficulty != "" {
 			if c.suits {
@@ -333,7 +342,9 @@ func (a *App) spawnPickReq(r SpawnReq) pickReq {
 			crowded = claimsCrowded(r.Claims, all, r.ID)
 		}
 	}
-	return newPickReq(a.Cfg.Harness, r.Kind, r.Difficulty, r.Needs, len(r.Claims) > 0, crowded)
+	p := newPickReq(a.Cfg.Harness, r.Kind, r.Difficulty, r.Needs, len(r.Claims) > 0, crowded)
+	p.family = modelFamily(r.Model)
+	return p
 }
 
 // pickLine is how status explains a task's adapter: "codex (luna): suits
@@ -376,17 +387,26 @@ func (a *App) RoutePreview(r SpawnReq) (adapter, model, why string, err error) {
 	return pick.Name, a.spawnModel(pick, r), pick.Why, nil
 }
 
-// spawnModel is the model spawn r runs on pick's adapter. A model from
-// another adapter's family (a ticket's "opus", a repair's "sonnet") is a
-// hint: it falls back to the difficulty's model (#505), else the adapter's
-// default. A [fallback] entry's model wins (#483).
+// spawnModel is the model spawn r runs on pick's adapter: a [fallback]
+// entry's model (#483), else the requested model or the ticket's hint when
+// the adapter runs it (a ticket's "opus" only on claude), else the
+// difficulty's model (#505), else the adapter's default.
 func (a *App) spawnModel(pick spawnPick, r SpawnReq) string {
 	if pick.ModelSet {
 		return pick.Model
 	}
-	model := a.modelFor(pick.Name, r.Model)
-	if m := a.Cfg.DifficultyModel(pick.Name, r.Difficulty); m != "" && (r.Model == "" || model != r.Model) {
-		model = m
+	if r.Model != "" {
+		if m := a.modelFor(pick.Name, r.Model); m == r.Model {
+			return m
+		}
 	}
-	return model
+	if r.ModelHint != "" {
+		if m := a.modelFor(pick.Name, r.ModelHint); m == r.ModelHint {
+			return m
+		}
+	}
+	if m := a.Cfg.DifficultyModel(pick.Name, r.Difficulty); m != "" {
+		return m
+	}
+	return a.modelFor(pick.Name, "")
 }

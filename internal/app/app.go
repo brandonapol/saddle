@@ -144,9 +144,13 @@ type SpawnReq struct {
 	Prompt string
 	Claims []string
 	Model  string
-	Parent string
-	Base   string // defaults to the integration branch
-	Issue  int    // GitHub issue the task implements; its PR will close it
+	// ModelHint is a model a ticket mentions (an old "Model scope:" line):
+	// used only when the chosen adapter runs it, and it never steers the
+	// pick, unlike Model (#505).
+	ModelHint string
+	Parent    string
+	Base      string // defaults to the integration branch
+	Issue     int    // GitHub issue the task implements; its PR will close it
 	// After lists tasks whose unmerged work this one builds on. Its PR
 	// stacks on theirs even when their files don't overlap (#193).
 	After []string

@@ -25,6 +25,7 @@ func picked(rs []AdapterChoice) string {
 // a task with claims prefers hooked fallbacks, but never over the default.
 func TestRankAdaptersByOrderKindAndClaims(t *testing.T) {
 	a, _ := setup(t)
+	a.Cfg.AdapterPolicy.Pick = config.PickOrder
 	a.Cfg.AdapterOrder = []string{"claude", "codex", "grok"}
 	now := time.Now()
 	if got := picked(a.rankAdapters(pickReq{def: "claude"}, nil, now)); got != "claude,codex,grok" {
