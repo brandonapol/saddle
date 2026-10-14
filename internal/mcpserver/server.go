@@ -28,11 +28,14 @@ type SpawnIn struct {
 	Claims []string `json:"claims,omitempty" jsonschema:"repo-relative path globs this task owns, e.g. internal/meter/**; must not overlap other live tasks"`
 	Model  string   `json:"model,omitempty" jsonschema:"model for the adapter, e.g. claude's opus, sonnet or haiku; defaults to config for claude and to the CLI's default otherwise. Models in status' excluded_models (codex's astra by default) are refused"`
 	// Adapter picks the agent CLI; see agent.ByName.
-	Adapter string `json:"adapter,omitempty" jsonschema:"agent to run: claude, codex, gemini or grok, any one listed as available in the brief or status. Omitted means the session default (saddle up <agent>, else harness in config). Claude and grok run saddle hooks; codex and gemini claims are checked when they commit and call done. An unavailable adapter fails with the reason, never a substitute"`
+	Adapter string `json:"adapter,omitempty" jsonschema:"agent to run: claude, codex, gemini or grok, any one listed as available in the brief or status. Omitted, the chooser picks from difficulty, needs, kind and [adapters] policy (balanced by default: the most unused quota per running worker); pass it only to override, e.g. for a ticket's Provider: line. Claude and grok run saddle hooks; codex and gemini claims are checked when they commit and call done. An unavailable adapter fails with the reason, never a substitute"`
 	// Kind steers the adapter pick; see app.SpawnReq.Kind.
-	Kind  string `json:"kind,omitempty" jsonschema:"task kind, e.g. docs, mechanical, design, review; without adapter it picks an adapter whose [adapters.<name>] kinds list it, else [adapters] policy picks (status shows adapter_policy and each adapter's pick rank)"`
-	ID    string `json:"id,omitempty" jsonschema:"optional task id; defaults to the next tN"`
-	Issue int    `json:"issue,omitempty" jsonschema:"GitHub issue number this task implements; its PR will close it. Set it whenever the task implements a ticket: without it no PR closes the issue"`
+	Kind string `json:"kind,omitempty" jsonschema:"task kind, e.g. docs, mechanical, design, review; without adapter it picks an adapter whose [adapters.<name>] kinds list it, else [adapters] policy picks (status shows adapter_policy and each adapter's pick rank)"`
+	// Difficulty and Needs steer the adapter pick; see app.SpawnReq (#505).
+	Difficulty string   `json:"difficulty,omitempty" jsonschema:"the ticket's difficulty: hard (design judgment, cross-package refactors, careful review), standard (a well-scoped feature or fix) or mechanical (a well-specified change); without adapter the chooser prefers adapters suited to it and runs the model [adapters.<name>] models names for it"`
+	Needs      []string `json:"needs,omitempty" jsonschema:"capabilities the task needs, from the ticket's Needs: line, e.g. review, long-context, image-gen, web-research, plugin-host, hooks-required; without adapter it goes to an adapter that declares them"`
+	ID         string   `json:"id,omitempty" jsonschema:"optional task id; defaults to the next tN"`
+	Issue      int      `json:"issue,omitempty" jsonschema:"GitHub issue number this task implements; its PR will close it. Set it whenever the task implements a ticket: without it no PR closes the issue"`
 	// After becomes explicit stack edges; see app.SpawnReq.After.
 	After []string `json:"after,omitempty" jsonschema:"ids of unmerged tasks this one builds on, e.g. [\"t61\"] when it uses a make target or API t61 adds; its PR stacks on theirs even when their files don't overlap"`
 	// Confirm overrides app.ErrNeedsConfirm.
@@ -126,12 +129,14 @@ type MessageIn struct {
 }
 
 type TaskView struct {
-	ID       string    `json:"id"`
-	Title    string    `json:"title"`
-	Status   string    `json:"status"`
-	Reason   string    `json:"reason,omitempty"` // why a spawn failed
-	Model    string    `json:"model,omitempty"`
-	Adapter  string    `json:"adapter,omitempty"` // claude, codex, gemini or grok (#480)
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason,omitempty"` // why a spawn failed
+	Model   string `json:"model,omitempty"`
+	Adapter string `json:"adapter,omitempty"` // claude, codex, gemini or grok (#480)
+	// Pick is the adapter the chooser put it on and why (#505).
+	Pick     string    `json:"pick,omitempty" jsonschema:"the adapter (and model) the chooser put this task on and why: needs, difficulty, kind, hooks, quota left and running workers, or requested"`
 	Parent   string    `json:"parent,omitempty"`
 	Branch   string    `json:"branch,omitempty"`
 	Claims   []string  `json:"claims,omitempty"`
@@ -163,7 +168,7 @@ type StatusOut struct {
 	// Adapters says which coding CLIs a worker can run on here (#182).
 	Adapters []agent.Status `json:"adapters" jsonschema:"each adapter (claude, codex, gemini, grok) and whether it can run here: CLI on PATH and logged in; reason when not. pick_rank orders them for the next spawn without adapter= (1 first, absent when it can't be picked) and pick says why. excluded_models are models the owner excluded: spawn refuses them, so never pass one as model="`
 	// AdapterPolicy is [adapters] policy and failover in words (#481).
-	AdapterPolicy string `json:"adapter_policy,omitempty" jsonschema:"how spawns without adapter= pick (order, cost or quota) and what a worker does when its adapter runs out mid-task (handoff to the next adapter, or park until the reset)"`
+	AdapterPolicy string `json:"adapter_policy,omitempty" jsonschema:"how spawns without adapter= pick (balanced, order, cost or quota) and what a worker does when its adapter runs out mid-task (handoff to the next adapter, or park until the reset)"`
 	// Fallback is the [fallback] chains (#483).
 	Fallback []app.FallbackStatus `json:"fallback,omitempty" jsonschema:"[fallback] chains: from (adapter or adapter:model), the chain that takes over while it is out of quota, out_of_quota_until while it is, now (the entry new spawns and handed-off workers go to) and skipped (entries passed over: out, excluded or unable to run here)"`
 	Tasks    []TaskView           `json:"tasks"`
@@ -442,6 +447,7 @@ func Tasks(a *app.App) ([]TaskView, error) {
 	if err != nil {
 		return nil, err
 	}
+	picks := a.TaskPicks()
 	out := make([]TaskView, 0, len(ts))
 	for _, t := range ts {
 		reason := ""
@@ -452,7 +458,7 @@ func Tasks(a *app.App) ([]TaskView, error) {
 			t.Status, reason = app.StatusOrphaned, app.OrphanHint(t.ID)
 		}
 		out = append(out, TaskView{Reason: reason,
-			ID: t.ID, Title: t.Title, Status: t.Status, Model: t.Model, Adapter: a.AdapterOf(t), Parent: t.Parent, Branch: t.Branch,
+			ID: t.ID, Title: t.Title, Status: t.Status, Model: t.Model, Adapter: a.AdapterOf(t), Pick: picks[t.ID], Parent: t.Parent, Branch: t.Branch,
 			Claims: cl[t.ID], Train: tr[t.ID], Notices: pending[t.ID], PR: t.PR, Window: t.Window, Worktree: t.Worktree,
 			created: t.CreatedAt,
 		})
@@ -496,7 +502,7 @@ func New(a *app.App, task string) *mcp.Server {
 			if err := self(); err != nil {
 				return nil, SpawnOut{}, err
 			}
-			t, err := a.Spawn(app.SpawnReq{ID: in.ID, Title: in.Title, Prompt: in.Prompt, Claims: in.Claims, Model: in.Model, Adapter: in.Adapter, Kind: in.Kind, Parent: task, Issue: in.Issue, After: in.After, Confirm: in.Confirm})
+			t, err := a.Spawn(app.SpawnReq{ID: in.ID, Title: in.Title, Prompt: in.Prompt, Claims: in.Claims, Model: in.Model, Adapter: in.Adapter, Kind: in.Kind, Difficulty: in.Difficulty, Needs: in.Needs, Parent: task, Issue: in.Issue, After: in.After, Confirm: in.Confirm})
 			if err != nil {
 				return nil, SpawnOut{}, err
 			}

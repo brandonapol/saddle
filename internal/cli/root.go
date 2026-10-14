@@ -413,6 +413,7 @@ func statusCmd() *cobra.Command {
 			if err := w.Flush(); err != nil {
 				return err
 			}
+			writeTaskPicks(cmd.OutOrStdout(), st.Tasks)
 			writeAdapters(cmd.OutOrStdout(), st.Adapters)
 			writeAdapterPicks(cmd.OutOrStdout(), st.Adapters, st.AdapterPolicy)
 			for _, f := range st.Fallback {
@@ -451,6 +452,17 @@ func writeAdapters(out io.Writer, ss []agent.Status) {
 		}
 	}
 	fmt.Fprintln(out, line)
+}
+
+// writeTaskPicks prints, for each live task, the adapter the chooser put it
+// on and why (#505).
+func writeTaskPicks(out io.Writer, ts []mcpserver.TaskView) {
+	for _, t := range ts {
+		if t.Pick == "" || t.Status == store.Landed || t.Status == store.Killed || t.Status == store.NoChange {
+			continue
+		}
+		fmt.Fprintf(out, "%s on %s\n", t.ID, t.Pick)
+	}
 }
 
 // writeAdapterPicks prints the order the next spawn without adapter= tries

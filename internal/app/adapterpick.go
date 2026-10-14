@@ -20,8 +20,8 @@ import (
 // the task's needs (capabilities it must have), then its difficulty (the
 // adapters whose capability table suits it), then its kind ([adapters.<name>]
 // kinds), then hooks for a task whose claims need enforcing, and then
-// [adapters] policy decides: "balanced" (the default: the most unused
-// quota, then the fewest running workers, then the lowest cost), "order"
+// [adapters] policy decides: "balanced" (the default: the most unused quota
+// per running worker, then the lowest cost), "order"
 // (the session default, then [adapters] order), "cost" (the lowest cost) or
 // "quota" (the most of its five-hour budget left).
 
@@ -195,11 +195,11 @@ func (a *App) rankAdapters(r pickReq, ex map[string]Exhaustion, now time.Time) [
 				return x.room > y.room
 			}
 		case config.PickBalanced:
-			if x.room != y.room {
-				return x.room > y.room
-			}
-			if x.running != y.running {
-				return x.running < y.running
+			// The share of its unused quota each worker would get, so
+			// spawns in one tick spread instead of piling onto the adapter
+			// with the most left. Without budgets it is fewest running.
+			if xs, ys := x.room/float64(1+x.running), y.room/float64(1+y.running); xs != ys {
+				return xs > ys
 			}
 			if x.cost != y.cost {
 				return x.cost < y.cost

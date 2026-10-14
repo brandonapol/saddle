@@ -253,7 +253,7 @@ const (
 	PickCost  = "cost"  // the cheapest [adapters.<name>] cost
 	PickQuota = "quota" // the most of [adapters.<name>] budget left
 	// PickBalanced spreads work: among adapters suited to the task, the one
-	// with the most unused quota, then the fewest running workers (#505).
+	// with the most unused quota per running worker (#505).
 	PickBalanced = "balanced"
 )
 
@@ -1116,8 +1116,7 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # [adapters]
 # order = ["claude", "grok", "codex", "opencode"]
 # How a spawn without adapter= picks (#481, #505): "balanced" (the most
-# unused quota, then the fewest running workers, so idle allowances get
-# used), "order" (the session default, then this order), "cost" (the lowest
+# unused quota per running worker, so idle allowances get used), "order" (the session default, then this order), "cost" (the lowest
 # cost below) or "quota" (the most of its budget below left). Before the
 # policy, the task's needs (capabilities), difficulty and kind narrow the
 # choice, and a task with claims prefers adapters that run hooks (under
