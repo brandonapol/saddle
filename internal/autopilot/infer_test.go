@@ -59,6 +59,74 @@ func TestInferClaimsWithoutARepo(t *testing.T) {
 	}
 }
 
+// issue506Body is the GitHub #506 issue body. The Claims line names the
+// paths; "Builds on #481." and the prose above it do not.
+const issue506Body = `**Difficulty: standard** (mirrors the existing grok bridge).
+
+## Problem
+The TUI orchestrator needs a headless chat process. Claude speaks stream-json; grok uses saddle's grok-bridge (internal/agent/grok_bridge.go), which runs one headless grok turn per user message. Codex has no equivalent, so OrchestratorAdapters is only claude and grok, and orchestrator failover (#481) cannot move to codex. docs/adapter-parity.md lists codex as 'n/a: no headless session'.
+
+## Design
+- Add a codex bridge modeled on the grok one: one codex exec turn per user message, resuming the same session (codex exec resume) so context carries across turns, output translated into the TUI's chat stream.
+- Add Launch.headlessCodex, include codex in OrchestratorAdapters, and let orchestrator failover (internal/app/orchfailover.go) pick it.
+- The orchestrator must still get saddle's MCP tools in the codex session; verify how codex loads MCP servers and wire it, or document the limit.
+- Compaction: a codex equivalent for a headless session, or a fresh turn with a state summary.
+- Update docs/adapter-parity.md.
+
+## Done when
+Tests (with a fake codex binary, like the grok bridge tests) show: a multi-turn chat keeps context via resume; failover lands the orchestrator on codex when claude and grok are both out; the parity doc row is updated.
+
+Claims: internal/agent/**, internal/app/orchfailover.go, docs/adapter-parity.md. Builds on #481.
+`
+
+// The #506 body infers the Claims line and nothing else: no issue ref, no
+// bare words, no trailing period, and the Go file stays a file.
+func TestIssue506BodyClaims(t *testing.T) {
+	repo := repoFS()
+	for _, p := range []string{
+		"internal/agent/grok_bridge.go",
+		"internal/app/orchfailover.go",
+		"docs/adapter-parity.md",
+	} {
+		repo[p] = &fstest.MapFile{Data: []byte("x")}
+	}
+	want := []string{"internal/agent/**", "internal/app/orchfailover.go", "docs/adapter-parity.md"}
+	if got := InferClaims(issue506Body, repo); !slices.Equal(got, want) {
+		t.Errorf("InferClaims = %q, want %q", got, want)
+	}
+	got, inferred := TicketClaims(issue506Body, repo)
+	if inferred || !slices.Equal(got, want) {
+		t.Errorf("TicketClaims = %q inferred=%v, want declared %q", got, inferred, want)
+	}
+}
+
+func TestExplicitClaimLineDropsJunk(t *testing.T) {
+	repo := repoFS()
+	cases := []struct {
+		name, body string
+		want       []string
+	}{
+		{"literal files, prose and junk dropped",
+			"Rewrite internal/claims.\n\nClaims: internal/app/app.go, missing/nope.go. Builds on #12.",
+			[]string{"internal/app/app.go", "missing/nope.go"}},
+		{"url bare word and issue ref",
+			"Claims: https://github.com/x/y/blob/main/internal/app/app.go docs/runq.md, Builds, #9.",
+			[]string{"docs/runq.md"}},
+		{"trailing punctuation",
+			"Claims: docs/runq.md.; internal/app/app.go:",
+			[]string{"docs/runq.md", "internal/app/app.go"}},
+	}
+	for _, c := range cases {
+		if got := InferClaims(c.body, repo); !slices.Equal(got, c.want) {
+			t.Errorf("%s: InferClaims = %q, want %q", c.name, got, c.want)
+		}
+		got, inferred := TicketClaims(c.body, repo)
+		if inferred || !slices.Equal(got, c.want) {
+			t.Errorf("%s: TicketClaims = %q inferred=%v, want %q", c.name, got, inferred, c.want)
+		}
+	}
+}
+
 func TestDeclaredClaimsBeatInference(t *testing.T) {
 	body := "Claims: internal/claims/**\n\nAlso mentions internal/app/app.go."
 	got, inferred := TicketClaims(body, repoFS())

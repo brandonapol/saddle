@@ -30,14 +30,27 @@ var (
 
 // ParseClaims reads the path globs an issue declares it will change: a
 // "claims:" line with the globs after it, or a bullet list under it, or
-// the "### Claims" section an issue form renders. Nil means none were
-// declared.
+// the "### Claims" section an issue form renders. Issue refs, bare words
+// and URLs are dropped, and trailing punctuation is stripped. Nil means
+// none were declared.
 func ParseClaims(body string) []string {
+	c, ok := scanClaims(body)
+	if !ok || len(c) == 0 {
+		return nil
+	}
+	return c
+}
+
+// scanClaims reads a Claims line or section. ok is false when the body
+// declares none, so a declared empty list is not "no list".
+func scanClaims(body string) ([]string, bool) {
 	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
+	found := false
 	for i, l := range lines {
 		if claimsHead.MatchString(l) {
-			if out := section(lines[i+1:]); out != nil {
-				return out
+			found = true
+			if out := section(lines[i+1:]); len(out) > 0 {
+				return out, true
 			}
 			continue
 		}
@@ -47,18 +60,18 @@ func ParseClaims(body string) []string {
 		}
 		out := globs(m[1])
 		if len(out) > 0 {
-			return out
+			return out, true
 		}
-		for _, l := range lines[i+1:] {
-			b := bulletLine.FindStringSubmatch(l)
+		for _, bl := range lines[i+1:] {
+			b := bulletLine.FindStringSubmatch(bl)
 			if b == nil {
 				break
 			}
 			out = append(out, globs(b[1])...)
 		}
-		return out
+		return out, true
 	}
-	return nil
+	return nil, found
 }
 
 // section reads the globs under a heading, up to the next one. An issue
@@ -83,7 +96,7 @@ func section(lines []string) []string {
 func globs(s string) []string {
 	var out []string
 	for _, f := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
-		if f = strings.Trim(f, "`\"'"); f != "" {
+		if f, ok := cleanClaimToken(f); ok {
 			out = append(out, f)
 		}
 	}
