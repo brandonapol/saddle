@@ -57,3 +57,30 @@ printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ok\",\"
 		t.Fatalf("second turn did not resume:\n%s", text)
 	}
 }
+
+// #263: grok can write an error result with no text, then exit non-zero with
+// the reason on stderr. The bridge must pass that reason on, not a blank error.
+func TestGrokBridgeKeepsStderrOnBlankErrorResult(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "grok")
+	script := `#!/bin/sh
+printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"","session_id":""}'
+echo "Not signed in. Run grok login." >&2
+exit 1
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(grokSpec{Cmd: fake, Dir: dir})
+	if err := os.WriteFile(filepath.Join(dir, "grok.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := strings.NewReader(`{"type":"user","message":{"role":"user","content":"hi"}}` + "\n")
+	var out bytes.Buffer
+	if err := RunGrokBridge(dir, in, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Not signed in. Run grok login.") {
+		t.Fatalf("stderr reason lost:\n%s", out.String())
+	}
+}

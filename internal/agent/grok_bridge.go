@@ -90,22 +90,36 @@ func runGrokTurn(spec grokSpec, runDir, text, resume string, w io.Writer) (strin
 	sawResult := false
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 1<<20), 64<<20)
+	// A blank error result is held until grok exits, so its stderr can
+	// stand in for the missing text (#263). Each turn still gets one result.
+	var held []byte
 	for sc.Scan() {
 		line := sc.Bytes()
-		if _, err := w.Write(append(append([]byte{}, line...), '\n')); err != nil {
-			_ = cmd.Process.Kill()
-			return session, err
-		}
 		if id := sessionFromLine(line); id != "" {
 			session = id
 		}
 		if isResult(line) {
 			sawResult = true
+			if blankError(line) {
+				held = append([]byte{}, line...)
+				continue
+			}
+		}
+		if _, err := w.Write(append(append([]byte{}, line...), '\n')); err != nil {
+			_ = cmd.Process.Kill()
+			return session, err
 		}
 	}
 	scanErr := sc.Err()
 	waitErr := cmd.Wait()
 	tail := <-errCh
+	if held != nil {
+		if tail != "" {
+			writeResult(w, true, tail, session)
+		} else if _, err := w.Write(append(held, '\n')); err != nil {
+			return session, err
+		}
+	}
 	if scanErr != nil {
 		return session, scanErr
 	}
@@ -167,6 +181,25 @@ func isResult(line []byte) bool {
 		Type string `json:"type"`
 	}
 	return json.Unmarshal(line, &v) == nil && v.Type == "result"
+}
+
+// blankError reports whether a result line is an error with no text in
+// "result" or "errors".
+func blankError(line []byte) bool {
+	var v struct {
+		IsError bool     `json:"is_error"`
+		Result  string   `json:"result"`
+		Errors  []string `json:"errors"`
+	}
+	if json.Unmarshal(line, &v) != nil || !v.IsError || strings.TrimSpace(v.Result) != "" {
+		return false
+	}
+	for _, e := range v.Errors {
+		if strings.TrimSpace(e) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func writeResult(w io.Writer, isErr bool, text, session string) {
