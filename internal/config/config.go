@@ -212,6 +212,15 @@ type Adapter struct {
 	// on, e.g. codex's ["astra"]. Nil (unset) is the adapter's default
 	// exclusions; an empty list excludes nothing (#482).
 	ExcludeModels []string `toml:"exclude_models"`
+	// Difficulties are the ticket difficulties (hard, standard, mechanical)
+	// it suits; nil is DefaultRouting's (#505).
+	Difficulties []string `toml:"difficulties"`
+	// Capabilities are what it can do beyond code, matched against a
+	// ticket's Needs:, e.g. ["review", "image-gen"]; nil is DefaultRouting's.
+	Capabilities []string `toml:"capabilities"`
+	// Models is the model per difficulty, e.g. {hard = "opus"}; an entry
+	// replaces DefaultRouting's for that difficulty.
+	Models map[string]string `toml:"models"`
 }
 
 // DefaultExcludeModels are the models excluded when [adapters.<name>]
@@ -243,7 +252,13 @@ const (
 	PickOrder = "order" // the session default, then [adapters] order
 	PickCost  = "cost"  // the cheapest [adapters.<name>] cost
 	PickQuota = "quota" // the most of [adapters.<name>] budget left
+	// PickBalanced spreads work: among adapters suited to the task, the one
+	// with the most unused quota, then the fewest running workers (#505).
+	PickBalanced = "balanced"
 )
+
+// Picks lists the [adapters] policy values.
+func Picks() []string { return []string{PickBalanced, PickOrder, PickCost, PickQuota} }
 
 // Failover modes for a worker whose adapter runs out of quota (#481).
 const (
@@ -253,8 +268,8 @@ const (
 
 // AdapterPolicy is [adapters] policy, failover and handoff_wait (#481).
 type AdapterPolicy struct {
-	// Pick is how a spawn without adapter= chooses: PickOrder, PickCost or
-	// PickQuota. A task kind or claims narrow the choice first.
+	// Pick is how a spawn without adapter= chooses: PickBalanced (the
+	// default), PickOrder, PickCost or PickQuota. A task kind or claims narrow the choice first.
 	Pick string `toml:"policy"`
 	// Failover is what a running worker does when its adapter runs out:
 	// FailoverHandoff or FailoverPark.
@@ -349,6 +364,44 @@ func (m *AdapterMap) UnmarshalTOML(v any) error {
 						ad.ExcludeModels = append(ad.ExcludeModels, s)
 					}
 				}
+			case "difficulties":
+				l, err := stringList(name, k, v)
+				if err != nil {
+					return err
+				}
+				ad.Difficulties = []string{}
+				for _, d := range l {
+					n := NormalizeDifficulty(d)
+					if n == "" {
+						return fmt.Errorf("adapters.%s.difficulties: %q: want %s", name, d, strings.Join(Difficulties(), ", "))
+					}
+					ad.Difficulties = append(ad.Difficulties, n)
+				}
+			case "capabilities":
+				l, err := stringList(name, k, v)
+				if err != nil {
+					return err
+				}
+				ad.Capabilities = []string{}
+				for _, c := range l {
+					if c = NormalizeNeed(c); c != "" {
+						ad.Capabilities = append(ad.Capabilities, c)
+					}
+				}
+			case "models":
+				t, ok := v.(map[string]any)
+				if !ok {
+					return fmt.Errorf("adapters.%s.models: want a table of difficulty = \"model\"", name)
+				}
+				ad.Models = map[string]string{}
+				for d, mv := range t {
+					n := NormalizeDifficulty(d)
+					m, ok := mv.(string)
+					if n == "" || !ok {
+						return fmt.Errorf("adapters.%s.models.%s: want difficulty (%s) = \"model\"", name, d, strings.Join(Difficulties(), ", "))
+					}
+					ad.Models[n] = strings.TrimSpace(m)
+				}
 			case "args":
 				l, ok := v.([]any)
 				if !ok {
@@ -368,6 +421,23 @@ func (m *AdapterMap) UnmarshalTOML(v any) error {
 		(*m)[name] = ad
 	}
 	return nil
+}
+
+// stringList reads adapters.<name>.<key> as an array of strings.
+func stringList(name, key string, v any) ([]string, error) {
+	l, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("adapters.%s.%s: want an array of strings", name, key)
+	}
+	out := make([]string, 0, len(l))
+	for _, x := range l {
+		s, ok := x.(string)
+		if !ok {
+			return nil, fmt.Errorf("adapters.%s.%s: want an array of strings", name, key)
+		}
+		out = append(out, s)
+	}
+	return out, nil
 }
 
 // AdapterOpenCode is the opencode adapter's config name (#520).
@@ -694,7 +764,7 @@ func Default() Config {
 		Issues:        Issues{AutoFile: true},
 		Harness:       HarnessClaude,
 		AdapterOrder:  []string{HarnessClaude, HarnessGrok, HarnessCodex, AdapterOpenCode},
-		AdapterPolicy: AdapterPolicy{Pick: PickOrder, Failover: FailoverHandoff, HandoffWait: 15 * time.Minute},
+		AdapterPolicy: AdapterPolicy{Pick: PickBalanced, Failover: FailoverHandoff, HandoffWait: 15 * time.Minute},
 		Claude: Claude{
 			Cmd:               "claude",
 			Model:             "opus",
@@ -817,8 +887,8 @@ func Load(root string) (Config, error) {
 	if len(cfg.AdapterOrder) == 0 {
 		cfg.AdapterOrder = Default().AdapterOrder
 	}
-	if p := cfg.AdapterPolicy.Pick; !slices.Contains([]string{PickOrder, PickCost, PickQuota}, p) {
-		return cfg, fmt.Errorf("adapters.policy %q: want order, cost or quota", p)
+	if p := cfg.AdapterPolicy.Pick; !slices.Contains(Picks(), p) {
+		return cfg, fmt.Errorf("adapters.policy %q: want one of %s", p, strings.Join(Picks(), ", "))
 	}
 	if f := cfg.AdapterPolicy.Failover; f != FailoverHandoff && f != FailoverPark {
 		return cfg, fmt.Errorf("adapters.failover %q: want handoff or park", f)
@@ -1045,11 +1115,14 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # in this order that has quota and can run here (#321).
 # [adapters]
 # order = ["claude", "grok", "codex", "opencode"]
-# How a spawn without adapter= picks (#481): "order" (the session default,
-# then this order), "cost" (the lowest cost below) or "quota" (the most of
-# its budget below left). A spawn's kind= first narrows to adapters that list
-# it in kinds, and a task with claims prefers adapters that run hooks.
-# policy = "order"
+# How a spawn without adapter= picks (#481, #505): "balanced" (the most
+# unused quota, then the fewest running workers, so idle allowances get
+# used), "order" (the session default, then this order), "cost" (the lowest
+# cost below) or "quota" (the most of its budget below left). Before the
+# policy, the task's needs (capabilities), difficulty and kind narrow the
+# choice, and a task with claims prefers adapters that run hooks (under
+# balanced only when its claims share a directory with another live task's).
+# policy = "balanced"
 # A worker whose adapter runs out mid-task is relaunched on the next adapter
 # with quota, in the same worktree ("handoff"), or waits for the reset
 # ("park"). It parks anyway when the reset is at most handoff_wait away.
@@ -1063,6 +1136,12 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # cost = 1        # relative cost, for policy = "cost"
 # budget = 0      # tokens per five hours, for policy = "quota"; 0 is unknown
 # kinds = []      # task kinds it is preferred for, e.g. ["docs", "mechanical"]
+# Capability table (#505). Unset keys take saddle's defaults: claude suits
+# every difficulty, the others standard and mechanical.
+# difficulties = ["standard", "mechanical"]   # ticket difficulties it suits
+# capabilities = ["review"]   # matched against a ticket's Needs:, e.g.
+#                             # image-gen, web-research, long-context, plugin-host
+# models = { standard = "sol", mechanical = "luna" }   # model per difficulty
 # Models saddle never spawns workers on; a spawn naming one is refused.
 # Unset excludes astra, which burns too many tokens; [] excludes nothing.
 # exclude_models = ["astra"]
