@@ -2,15 +2,19 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/usage"
+
+	_ "modernc.org/sqlite"
 )
 
 // meterApp is an App with just a store and config: enough for the meter.
@@ -148,5 +152,44 @@ func TestUsageWindowsAgainstCaps(t *testing.T) {
 	a.Cfg.Usage.CountCacheReads = true
 	if u, err = a.Usage(now); err != nil || u.Windows[0].Used != 250+9999 {
 		t.Fatalf("with cache reads: %+v, %v", u.Windows, err)
+	}
+}
+
+// #533: the meter reads an opencode worker's turns from opencode's database,
+// so opencode shows in USAGE per provider/model, and a restart doesn't count
+// them twice.
+func TestUsageMeterReadsOpenCodeDB(t *testing.T) {
+	a, m := meterApp(t)
+	a.Cfg.Harness = agent.OpenCodeName
+	data := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", data)
+	wt := filepath.Join(a.Root, ".saddle", "worktrees", "t1-oc")
+	must(t, os.MkdirAll(filepath.Dir(usage.OpenCodeDBPath(data)), 0o755))
+	db, err := sql.Open("sqlite", usage.OpenCodeDBPath(data))
+	must(t, err)
+	defer db.Close()
+	ms := time.Now().Add(-time.Minute).UnixMilli()
+	msg := fmt.Sprintf(`{"role":"assistant","modelID":"gpt-5","providerID":"openai","cost":0.5,"tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":10,"write":0}},"time":{"created":%d,"completed":%d}}`, ms, ms)
+	for _, q := range []string{
+		"CREATE TABLE session (id text PRIMARY KEY, directory text NOT NULL)",
+		"CREATE TABLE message (id text PRIMARY KEY, session_id text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL)",
+		"INSERT INTO session VALUES ('ses_a','" + wt + "'),('ses_b','/elsewhere')",
+		fmt.Sprintf("INSERT INTO message VALUES ('m1','ses_a',%d,%d,'%s')", ms, ms, msg),
+		fmt.Sprintf("INSERT INTO message VALUES ('m2','ses_b',%d,%d,'%s')", ms, ms, msg),
+	} {
+		_, err := db.Exec(q)
+		must(t, err)
+	}
+	must(t, a.Store.CreateTask(store.Task{ID: "t1", Title: "oc", Role: store.RoleWorker, Model: "openai/gpt-5", Worktree: wt, Status: store.Running}))
+	must(t, m.Sync())
+	must(t, m.Sync())
+	want := usage.Tokens{Input: 100, Output: 25, CacheRead: 10}
+	if got := modelTotals(t, a); len(got) != 1 || got["openai/gpt-5"] != want {
+		t.Fatalf("model totals = %+v, want openai/gpt-5 %+v", got, want)
+	}
+	m2 := a.NewUsageMeter()
+	must(t, m2.Sync())
+	if got := modelTotals(t, a); got["openai/gpt-5"] != want {
+		t.Fatalf("after restart: %+v", got)
 	}
 }
