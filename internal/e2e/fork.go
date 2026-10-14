@@ -106,21 +106,25 @@ func runMain(m *testing.M, bins *Bins) int {
 	start := time.Now()
 	code := m.Run()
 	took := time.Since(start)
-	journeys.report(os.Stdout)
-	if p := os.Getenv(envRept); p != "" {
-		if f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
-			journeys.report(f)
-			_ = f.Close()
+	var out strings.Builder
+	journeys.report(&out)
+	if code == 0 && fullRun() {
+		if budget, scale := budgetFor(load.stop(), took); budget > 0 {
+			if took > budget {
+				fmt.Fprintf(&out, "e2e: FAIL: the suite took %s, over its %s budget (%s quiet, x%.2f for load); "+
+					"speed up the slowest journeys above (#521)\n", took.Round(time.Second), budget.Round(time.Second), budgetBase(), scale)
+				code = 1
+			} else {
+				fmt.Fprintf(&out, "e2e: the suite took %s of its %s budget\n", took.Round(time.Second), budget.Round(time.Second))
+			}
 		}
 	}
-	if code == 0 && fullRun() {
-		budget, scale := budgetFor(load.stop(), took)
-		if budget > 0 && took > budget {
-			fmt.Printf("e2e: FAIL: the suite took %s, over its %s budget (%s quiet, x%.2f for load); "+
-				"speed up the slowest journeys above (#521)\n", took.Round(time.Second), budget.Round(time.Second), budgetBase(), scale)
-			return 1
+	fmt.Print(out.String())
+	if p := os.Getenv(envRept); p != "" {
+		if f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+			_, _ = f.WriteString(out.String())
+			_ = f.Close()
 		}
-		fmt.Printf("e2e: the suite took %s of its %s budget\n", took.Round(time.Second), budget.Round(time.Second))
 	}
 	return code
 }
