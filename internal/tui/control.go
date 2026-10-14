@@ -18,6 +18,7 @@ type agentStats struct {
 	Tokens   int64  // every token the task has used, cache included
 	Ctx      int64  // estimated context size at its latest message
 	CtxMax   int64  // its model's context window
+	Model    string // model Ctx was sized against
 	Activity string // what it is doing now, from its latest hook event
 }
 
@@ -46,8 +47,11 @@ func readStats(a *app.App, now time.Time) map[string]agentStats {
 				continue
 			}
 			s := out[b.Task]
-			s.Ctx = (b.Input + b.CacheRead + b.CacheCreation) / b.Messages
-			s.CtxMax = ctxLimit(b.Model)
+			prompt := (b.Input + b.CacheRead + b.CacheCreation) / b.Messages
+			u := app.WorkerContext(b.Model, prompt)
+			s.Ctx = prompt
+			s.CtxMax = u.Window
+			s.Model = b.Model
 			out[b.Task] = s
 		}
 	}
@@ -94,14 +98,6 @@ func notification(s string) string {
 	return "waiting: " + s
 }
 
-// ctxLimit is a model's context window in tokens.
-func ctxLimit(model string) int64 {
-	if strings.Contains(strings.ToLower(model), "1m") {
-		return 1_000_000
-	}
-	return 200_000
-}
-
 // Agent row column widths.
 const (
 	idW     = 5
@@ -114,20 +110,28 @@ const (
 	titleMn = 10
 )
 
-// ctxCell is a 5-cell bar and percent of the context window, red past 80%.
+// ctxCell is a 5-cell bar and percent of the model's context window, red past
+// 80%. app.WorkerContext clamps a real reading at 100 and renders "?" when the
+// prompt is larger than the window (#522).
 func ctxCell(s agentStats) string {
-	if s.CtxMax <= 0 || s.Ctx <= 0 {
+	if s.Ctx <= 0 {
 		return sFaint.Render(fmt.Sprintf("%-*s", ctxW, " ctx —"))
 	}
-	frac := float64(s.Ctx) / float64(s.CtxMax)
-	c := cRun
-	switch {
-	case frac >= 0.8:
-		c = cAlert
-	case frac >= 0.6:
-		c = cAccent
+	u := app.WorkerContext(s.Model, s.Ctx)
+	frac := 0.0
+	style := sFaint
+	if u.Trustworthy() {
+		frac = u.Fraction()
+		c := cRun
+		switch {
+		case frac >= 0.8:
+			c = cAlert
+		case frac >= 0.6:
+			c = cAccent
+		}
+		style = lipgloss.NewStyle().Foreground(c)
 	}
-	return lipgloss.NewStyle().Foreground(c).Render(bar(frac, 5) + fmt.Sprintf(" %3.0f%%", min(frac, 9.99)*100))
+	return style.Render(bar(frac, 5) + fmt.Sprintf(" %4s", u.Percent()))
 }
 
 // agentCols decides which optional columns fit a row of inner width iw, and

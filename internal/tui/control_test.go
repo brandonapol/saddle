@@ -131,6 +131,41 @@ func TestReadStats(t *testing.T) {
 	}
 }
 
+// A grok worker's context cell uses app.WorkerContext: 196K of grok's 256K
+// window renders about 77%, and a prompt past the window renders "?" (#522).
+func TestCtxCellUsesWorkerContext(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	now := time.Now().UTC().Truncate(time.Minute)
+	b := func(task string, input int64) usage.Bucket {
+		return usage.Bucket{
+			Key:      usage.Key{Minute: now, Task: task, Model: "grok-4.7-build"},
+			Tokens:   usage.Tokens{Input: input},
+			Messages: 1,
+		}
+	}
+	if err := st.AddUsage("s1", false, []usage.Bucket{
+		b("t9", 196_000),
+		b("t8", 10_700_000),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := readStats(&app.App{Store: st, Cfg: config.Default()}, now)
+	if got := ctxCell(s["t9"]); !strings.Contains(got, "77%") {
+		t.Errorf("grok 196K renders %q, want about 77%%", got)
+	}
+	over := ctxCell(s["t8"])
+	if !strings.Contains(over, "?") || strings.Contains(over, "999") {
+		t.Errorf("over-window reading renders %q, want ?", over)
+	}
+	if w, ow := lipgloss.Width(ctxCell(s["t9"])), lipgloss.Width(over); w != ctxW || ow != ctxW {
+		t.Errorf("context cells are %d and %d wide, want %d", w, ow, ctxW)
+	}
+}
+
 // s opens the spawn prompt; p interrupts the selected agent.
 func TestSpawnAndPauseKeys(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
