@@ -444,8 +444,9 @@ layers over it. Details: [sre.md](sre.md).
 - **Postmortem** (`postmortem.go`): `WritePostmortem` renders a
   `PostmortemRecord` to `docs/postmortems/<date>-<slug>.md` with `O_EXCL`,
   adding `-2`, `-3`, ... rather than overwrite. Checks that found the cause
-  become proposed runbook additions in the file; no runbook is written. No
-  command calls it yet. Format: [postmortems/README.md](postmortems/README.md).
+  become proposed runbook additions in the file; no runbook is written.
+  `saddle sre close` builds the record from the incident
+  (`PostmortemFromIncident`) and writes it. Format: [postmortems/README.md](postmortems/README.md).
 
 ## Layout on disk
 

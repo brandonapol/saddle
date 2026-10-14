@@ -71,4 +71,8 @@ queue (`saddle decisions`, class `sre-action`, irreversible) naming the root
 cause and both agents, with "Hold" recommended. If the owner picks "Run it",
 the proposing investigator may run that exact command. A `[[preauth]]` rule
 for `sre-action` takes the recommended option, which holds. `saddle sre
-close` (owner or orchestrator) ends the incident and lifts the guard.
+close` (owner or orchestrator) ends the incident, lifts the guard and writes
+the postmortem to `docs/postmortems/<date>-<slug>.md`, printing its path. With
+a verified root cause the postmortem names it and its verifier; without one it
+is written as unresolved ("Unknown: no root cause was confirmed"). Existing
+postmortems are never overwritten.
