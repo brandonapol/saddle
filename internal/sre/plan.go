@@ -12,9 +12,9 @@ import (
 // to investigate.
 type Plan struct {
 	Intake Intake
-	Config   *Config
-	Checks   []CheckResult
-	Lanes    []Lane
+	Config *Config
+	Checks []CheckResult
+	Lanes  []Lane
 }
 
 // Build runs cfg's preemptive checks read-only in dir, then plans the lanes.
