@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,12 @@ type sreFakeSpawner struct{ specs []sre.SpawnSpec }
 func (f *sreFakeSpawner) Spawn(s sre.SpawnSpec) (string, error) {
 	f.specs = append(f.specs, s)
 	return "t" + string(s.Lane), nil
+}
+
+func fakeBackend(sp sre.Spawner, guardRoot string) func() (sreBackend, error) {
+	return func() (sreBackend, error) {
+		return sreBackend{spawner: sp, guardRoot: guardRoot, close: func() {}}, nil
+	}
 }
 
 func sreRepo(t *testing.T, cfg string) string {
@@ -50,10 +57,7 @@ func TestSREIntakeSpawnsLanes(t *testing.T) {
 	r, sp := &sreFakeRunner{}, &sreFakeSpawner{}
 	var out bytes.Buffer
 	in := strings.NewReader("500s after deploy\n/app/internal/billing/invoice.go:42\n")
-	err := runSRE(context.Background(), &out, in, nil, sreOpts{
-		root: dir, runner: r,
-		spawner: func() (sre.Spawner, func(), error) { return sp, func() {}, nil },
-	})
+	err := runSRE(context.Background(), &out, in, nil, sreOpts{root: dir, runner: r, backend: fakeBackend(sp, dir)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,5 +107,56 @@ func TestSRECommandKeepsCheckConfig(t *testing.T) {
 	}
 	if cmd.Flags().Lookup("dry-run") == nil {
 		t.Fatal("sre has no --dry-run")
+	}
+}
+
+func TestSREIntakeOpensGuardIncident(t *testing.T) {
+	dir := sreRepo(t, "[[check]]\nname=\"pods\"\ncommand=[\"kubectl\",\"get\",\"pods\"]\nexpect=\"Running\"\n")
+	guard := t.TempDir()
+	sp := &sreFakeSpawner{}
+	var out bytes.Buffer
+	err := runSRE(context.Background(), &out, strings.NewReader("checkout 500s"), nil,
+		sreOpts{root: dir, runner: &sreFakeRunner{}, backend: fakeBackend(sp, guard)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inc, err := sre.LoadIncident(guard)
+	if err != nil || !inc.Open() {
+		t.Fatalf("incident = %+v, %v; want an open incident", inc, err)
+	}
+	if len(inc.Investigators) != len(sp.specs) {
+		t.Fatalf("investigators = %q, spawned %d", inc.Investigators, len(sp.specs))
+	}
+	for _, s := range sp.specs {
+		if !inc.Guarded("t" + string(s.Lane)) {
+			t.Errorf("lane %s's task is not guarded", s.Lane)
+		}
+	}
+	if len(inc.ReadOnly) != 1 || inc.ReadOnly[0][0] != "kubectl" {
+		t.Fatalf("read-only argvs = %q, want the check commands", inc.ReadOnly)
+	}
+
+	// A second intake while the incident is open spawns nothing.
+	sp2 := &sreFakeSpawner{}
+	err = runSRE(context.Background(), &out, strings.NewReader("again"), nil,
+		sreOpts{root: dir, runner: &sreFakeRunner{}, backend: fakeBackend(sp2, guard)})
+	if err == nil || len(sp2.specs) != 0 {
+		t.Fatalf("err = %v, spawned %d; want refusal while an incident is open", err, len(sp2.specs))
+	}
+}
+
+type sreFailSpawner struct{}
+
+func (sreFailSpawner) Spawn(sre.SpawnSpec) (string, error) { return "", errors.New("cap reached") }
+
+func TestSREIntakeClosesIncidentWhenNothingSpawns(t *testing.T) {
+	dir, guard := sreRepo(t, ""), t.TempDir()
+	err := runSRE(context.Background(), io.Discard, strings.NewReader("db down"), nil,
+		sreOpts{root: dir, runner: &sreFakeRunner{}, backend: fakeBackend(sreFailSpawner{}, guard)})
+	if err == nil {
+		t.Fatal("want the spawn errors")
+	}
+	if inc, _ := sre.LoadIncident(guard); inc.Open() {
+		t.Fatal("an incident with no investigators stays open and blocks the next intake")
 	}
 }

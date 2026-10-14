@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/gitx"
@@ -19,8 +20,16 @@ type sreOpts struct {
 	root   string
 	dryRun bool
 	runner sre.Runner
-	// spawner opens the spawn backend; nil with dryRun.
-	spawner func() (sre.Spawner, func(), error)
+	// backend opens the spawn backend; nil with dryRun.
+	backend func() (sreBackend, error)
+}
+
+// sreBackend spawns investigators and holds the guard's incident (#550)
+// under guardRoot, saddle's main checkout.
+type sreBackend struct {
+	spawner   sre.Spawner
+	guardRoot string
+	close     func()
 }
 
 // addSREIntake makes the sre command itself the incident intake.
@@ -32,13 +41,14 @@ func addSREIntake(cmd *cobra.Command) {
 preemptive checks from .saddle/sre.toml read-only, then plans 3-4 disjoint
 lanes (code diffs and deploys, logs and errors, infrastructure, dependencies)
 and spawns one read-only investigator per lane. Only the code lane claims
-paths: the files the incident names. --dry-run prints the plan without
+paths: the files the incident names. The investigators are held read-only
+by the guard (saddle sre incident). --dry-run prints the plan without
 spawning. See docs/sre.md.`
 	cmd.Args = cobra.ArbitraryArgs
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		o.runner = sre.ExecRunner{}
 		if !o.dryRun {
-			o.spawner = openSpawner
+			o.backend = openSREBackend
 		}
 		return runSRE(cmd.Context(), cmd.OutOrStdout(), cmd.InOrStdin(), args, o)
 	}
@@ -47,15 +57,19 @@ spawning. See docs/sre.md.`
 	f.BoolVar(&o.dryRun, "dry-run", false, "run the checks and print the plan; spawn nothing")
 }
 
-func openSpawner() (sre.Spawner, func(), error) {
+func openSREBackend() (sreBackend, error) {
 	a, err := open()
 	if err != nil {
-		return nil, nil, err
+		return sreBackend{}, err
 	}
 	if err := a.UseScratch(); err != nil {
 		fmt.Fprintln(os.Stderr, "warning: scratch root: "+err.Error())
 	}
-	return appSpawner{a: a, parent: os.Getenv("SADDLE_TASK")}, func() { a.Close() }, nil
+	return sreBackend{
+		spawner:   appSpawner{a: a, parent: os.Getenv("SADDLE_TASK")},
+		guardRoot: a.Root,
+		close:     func() { a.Close() },
+	}, nil
 }
 
 // appSpawner starts investigators through saddle's normal spawn.
@@ -124,18 +138,53 @@ func runSRE(ctx context.Context, w io.Writer, in io.Reader, args []string, o sre
 		}
 		fmt.Fprintln(w, line)
 	}
-	if o.spawner == nil {
+	if o.backend == nil {
 		fmt.Fprintln(w, "dry run: no investigators spawned")
 		return nil
 	}
-	sp, closeFn, err := o.spawner()
+	b, err := o.backend()
 	if err != nil {
 		return err
 	}
-	defer closeFn()
-	got, err := sre.Launch(p, sp)
+	defer b.close()
+	// The guard holds the investigators read-only (#550). The incident opens
+	// first, so an open one refuses this intake before anything spawns.
+	now := time.Now()
+	inc := &sre.Incident{ID: "inc-" + now.UTC().Format("20060102-150405"), Summary: p.Intake.Summary, Opened: now.UTC()}
+	inc.AllowChecks(p.Config)
+	if err := sre.OpenIncident(b.guardRoot, inc); err != nil {
+		return err
+	}
+	got, err := sre.Launch(p, guardedSpawner{b.spawner, b.guardRoot})
 	for _, l := range got {
 		fmt.Fprintf(w, "spawned %s for lane %s\n", l.Task, l.Lane)
 	}
+	if len(got) == 0 {
+		// No investigators: an open incident would only block the next intake.
+		_ = sre.UpdateIncident(b.guardRoot, func(i *sre.Incident) error { i.Close(time.Now()); return nil })
+	} else {
+		fmt.Fprintf(w, "incident %s open: production is read-only for the investigators (saddle sre incident)\n", inc.ID)
+	}
 	return err
+}
+
+// guardedSpawner adds each investigator to the open incident as it starts.
+type guardedSpawner struct {
+	sre.Spawner
+	root string
+}
+
+func (g guardedSpawner) Spawn(s sre.SpawnSpec) (string, error) {
+	id, err := g.Spawner.Spawn(s)
+	if err != nil {
+		return "", err
+	}
+	err = sre.UpdateIncident(g.root, func(i *sre.Incident) error {
+		i.Investigators = append(i.Investigators, id)
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("%s started but is not guarded read-only (kill it): %w", id, err)
+	}
+	return id, nil
 }
