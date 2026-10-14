@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -166,6 +167,35 @@ func (s segment) render(color bool, width int) string {
 		}
 	}
 	return strings.Join(out, sep)
+}
+
+// formatJev is the saddle status line for the triage log: call count, error
+// count (and rate, once any call exists) and approximate list-price spend.
+func formatJev(j mcpserver.JevStatus) string {
+	spend := formatSpend(j.SpendUSD)
+	if j.Calls == 0 {
+		return "jev: 0 calls, 0 errors, " + spend
+	}
+	callWord, errWord := "calls", "errors"
+	if j.Calls == 1 {
+		callWord = "call"
+	}
+	if j.Errors == 1 {
+		errWord = "error"
+	}
+	rate := float64(j.Errors) / float64(j.Calls) * 100
+	return fmt.Sprintf("jev: %d %s, %d %s (%.0f%%), %s", j.Calls, callWord, j.Errors, errWord, rate, spend)
+}
+
+// formatSpend prints an approximate USD amount. Sub-dollar figures keep
+// enough digits that a handful of Jev calls does not round to $0.
+func formatSpend(v float64) string {
+	if v == 0 {
+		return "~$0"
+	}
+	s := strconv.FormatFloat(v, 'f', 6, 64)
+	s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
+	return "~$" + s
 }
 
 // writeHeavyRuns prints the machine's heavy-run queue under saddle status

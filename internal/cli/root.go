@@ -375,6 +375,7 @@ func statusCmd() *cobra.Command {
 				return enc.Encode(st)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), st.Headline.Text)
+			fmt.Fprintln(cmd.OutOrStdout(), formatJev(st.Jev))
 			for _, warn := range st.Warnings {
 				fmt.Fprintln(cmd.OutOrStdout(), "warning: "+warn)
 			}

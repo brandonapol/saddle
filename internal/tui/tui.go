@@ -150,7 +150,8 @@ type model struct {
 	pending   []string // events waiting for the orchestrator to be idle
 	held      []string // info notices that ride along with the next message
 	jev       *triage.Client
-	eventTurn bool // the current orchestrator turn answers saddle events
+	jevErr    string // last Jev error shown in the chat; the same text is not repeated
+	eventTurn bool   // the current orchestrator turn answers saddle events
 	cost      float64
 	limits    *usage.LimitEstimate                         // plan-limit estimate from the last refresh
 	graph     *usageGraph                                  // the last hour of usage by model
@@ -249,6 +250,7 @@ type (
 	salienceMsg struct {
 		idx   int
 		needs bool
+		err   error
 	}
 )
 
@@ -260,7 +262,7 @@ func Run(a *app.App, first string) error { return runTUI(a, first, nil) }
 func runTUI(a *app.App, first string, rc *orchrc.Session) error {
 	m := &model{app: a, prev: map[string]string{}, screens: map[string]*screenState{}, follow: true, keys: newKeyMap(), prefix: tmuxPrefix(), scrub: mouseScrub{wait: escWait, pending: ttyPending()}}
 	if !a.Cfg.Triage.Disabled {
-		m.jev = triage.FromEnv()
+		m.attachJev(triage.FromEnv())
 	}
 	if rc != nil {
 		m.useRC(*rc)
@@ -734,13 +736,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.answered(msg)
 
 	case salienceMsg:
-		if msg.idx < len(m.chat) {
-			if msg.needs {
-				m.setAttn(msg.idx, attnUrgent)
-				bell()
-			} else {
-				m.setAttn(msg.idx, attnQuiet)
-			}
+		// A failed judge is shown once and leaves the line unmarked. Marking
+		// it quiet would treat "Jev is down" as "this was only a status update".
+		m.surfaceJevError(msg.err)
+		if msg.err != nil || msg.idx >= len(m.chat) {
+			break
+		}
+		if msg.needs {
+			m.setAttn(msg.idx, attnUrgent)
+			bell()
+		} else {
+			m.setAttn(msg.idx, attnQuiet)
 		}
 
 	case termOutMsg, termExitMsg:
@@ -1135,12 +1141,12 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 		}
 		if m.eventTurn && m.jev != nil {
 			// Was this reply to a saddle event worth interrupting the user for?
-			idx, text, c := len(m.chat)-1, e.Text, m.jev
+			idx, text, c := len(m.chat)-1, e.Text, m.jev.About(app.OrchestratorID)
 			return func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 				defer cancel()
-				needs, _ := triage.NeedsUser(ctx, c, text)
-				return salienceMsg{idx: idx, needs: needs}
+				needs, err := triage.NeedsUser(ctx, c, text)
+				return salienceMsg{idx: idx, needs: needs, err: err}
 			}
 		}
 	case orch.Tool:
@@ -1316,7 +1322,7 @@ func (m *model) raise(att attention) tea.Cmd {
 		m.escalate(att, false)
 		return nil
 	}
-	c := m.jev
+	c := m.jev.About(att.task)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
@@ -1325,7 +1331,46 @@ func (m *model) raise(att attention) tea.Cmd {
 	}
 }
 
+// attachJev keeps c and records every call it makes into the state store.
+func (m *model) attachJev(c *triage.Client) {
+	if c != nil {
+		c.OnCall = m.recordJev
+	}
+	m.jev = c
+}
+
+// recordJev stores one Jev call. It runs on the triage goroutine, so it
+// only touches the store.
+func (m *model) recordJev(c triage.Call) {
+	if m.app == nil || m.app.Store == nil {
+		return
+	}
+	_ = m.app.Store.RecordTriageCall(store.TriageCall{
+		Time: c.Time, Purpose: c.Purpose, Task: c.Task, Verdict: c.Verdict,
+		Confidence: c.Confidence, Route: c.Route, Latency: c.Latency,
+		Error: c.Error, InputTokens: c.InputTokens,
+	})
+}
+
+// surfaceJevError shows a Jev failure in the chat the first time that text
+// appears. The same failure on a later call is already in the triage log,
+// so the chat is not told again. A nil error clears that memory, and the
+// next distinct failure is shown.
+func (m *model) surfaceJevError(err error) {
+	if err == nil {
+		m.jevErr = ""
+		return
+	}
+	text := err.Error()
+	if text == m.jevErr {
+		return
+	}
+	m.jevErr = text
+	m.addChat(store.ChatEvent, "Jev error: "+text)
+}
+
 func (m *model) applyTriage(msg triagedMsg) {
+	m.surfaceJevError(msg.err)
 	att, d := msg.att, msg.d
 	tag := fmt.Sprintf("jev: %s %.2f", d.Verdict, d.Confidence)
 	if msg.err != nil {

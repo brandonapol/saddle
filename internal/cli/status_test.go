@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/triage"
 	"github.com/brandonapol/saddle/internal/usage"
 )
 
@@ -72,6 +75,33 @@ func TestTmuxSegmentFormat(t *testing.T) {
 	}
 	if got := (segment{}).render(true, 0); strings.Contains(got, "#[") {
 		t.Errorf("nothing to flag should stay plain: %q", got)
+	}
+}
+
+func TestStatusShowsJev(t *testing.T) {
+	a := storeApp(t)
+	if out := runStatus(t, a); !strings.Contains(out, "jev: 0 calls, 0 errors, ~$0") {
+		t.Fatalf("empty status missing the jev line:\n%s", out)
+	}
+	if err := a.Store.RecordTriageCall(store.TriageCall{Purpose: triage.PurposeScreen, Task: "t3", InputTokens: 1_000_000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Store.RecordTriageCall(store.TriageCall{Purpose: triage.PurposeNeedsUser, Task: "t0", Error: "jev: 401 Unauthorized"}); err != nil {
+		t.Fatal(err)
+	}
+	out := runStatus(t, a)
+	want := "jev: 2 calls, 1 error (50%), ~$0.042"
+	if !strings.Contains(out, want) {
+		t.Fatalf("status lacks %q:\n%s", want, out)
+	}
+	var js struct {
+		Jev mcpserver.JevStatus `json:"jev"`
+	}
+	if err := json.Unmarshal([]byte(runStatus(t, a, "--json")), &js); err != nil {
+		t.Fatal(err)
+	}
+	if js.Jev.Calls != 2 || js.Jev.Errors != 1 || js.Jev.SpendUSD != triage.ApproxSpendUSD(1_000_000) {
+		t.Fatalf("json jev = %+v", js.Jev)
 	}
 }
 

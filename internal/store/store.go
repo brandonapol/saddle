@@ -148,6 +148,19 @@ UPDATE usage SET adapter = CASE
   WHEN model LIKE 'gpt%' OR model LIKE '%codex%' THEN 'codex'
   ELSE 'claude'
 END;
+`, `
+CREATE TABLE triage_calls(
+  id INTEGER PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  purpose TEXT NOT NULL,
+  task TEXT NOT NULL DEFAULT '',
+  verdict TEXT NOT NULL DEFAULT '',
+  confidence REAL NOT NULL DEFAULT 0,
+  route TEXT NOT NULL DEFAULT '',
+  latency_ms INTEGER NOT NULL DEFAULT 0,
+  error TEXT NOT NULL DEFAULT '',
+  input_tokens INTEGER NOT NULL DEFAULT 0
+);
 `}
 
 // Open opens (creating if needed) the database at path and applies migrations,
@@ -689,7 +702,7 @@ func (s *Store) PendingActionNotices(task string) (int, error) {
 }
 
 // Tables lists the tables RowCounts reports, in schema order.
-var Tables = []string{"tasks", "claims", "events", "train", "notices", "renames", "chat", "usage", "narrator_spend"}
+var Tables = []string{"tasks", "claims", "events", "train", "notices", "renames", "chat", "usage", "narrator_spend", "triage_calls"}
 
 // RowCounts returns how many rows each table in Tables holds.
 func (s *Store) RowCounts() (map[string]int, error) {
