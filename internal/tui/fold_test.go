@@ -37,8 +37,7 @@ func TestRelayedDoneSummaryShowsHeadlineAndFoldsDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.deliver()
-	m.handleEvent(orch.Event{Kind: orch.Text, Text: "The risk-tier work is half in: one task finished and is queued to land. Nothing needs you.\n\n" +
-		"Worker notes: TestTierFloorDocsOnly and TestMaxTierGateHolds cover Watcher.Tiers."})
+	m.handleEvent(orch.Event{Kind: orch.Text, Text: "The risk-tier work is half in: one task finished and is queued to land. Nothing needs you."})
 
 	out := chatText(m)
 	for _, want := range []string{`t183 "Risk tier floor" is done and queued to land.`, "The risk-tier work is half in", "Nothing needs you.", foldHint} {
