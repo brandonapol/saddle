@@ -14,6 +14,7 @@ func sreCmd() *cobra.Command {
 		Use:   "sre",
 		Short: "SRE mode: production checks from .saddle/sre.toml",
 	}
+	addSREIntake(cmd)
 	cmd.AddCommand(sreCheckConfigCmd())
 	cmd.AddCommand(sreGuardCmds()...)
 	return cmd
