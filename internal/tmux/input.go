@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -10,14 +11,24 @@ import (
 type Input int
 
 const (
-	InputEmpty Input = iota // nothing typed
-	InputGhost              // only grey text Claude Code draws itself: a next-prompt suggestion or a placeholder (#183)
-	InputDraft              // text the user typed
+	InputEmpty  Input = iota // nothing typed
+	InputGhost               // only grey text Claude Code draws itself: a next-prompt suggestion or a placeholder (#183)
+	InputDraft               // text the user typed
+	InputPrompt              // an approval or trust menu, not a composer: never type into it (#496)
 )
 
 func (i Input) String() string {
-	return [...]string{"empty", "ghost", "draft"}[i]
+	return [...]string{"empty", "ghost", "draft", "prompt"}[i]
 }
+
+var (
+	// menuOption is a numbered option behind a prompt glyph: Claude Code's
+	// "❯ 1. Yes" or Codex's "› 1. Yes, proceed".
+	menuOption = regexp.MustCompile(`^\d+\.\s`)
+	// radioOption is Grok's approval option, "┃  1 (●) Yes, proceed". Grok
+	// draws no composer on that screen (#496).
+	radioOption = regexp.MustCompile(`^\d+ \([●○]\)\s`)
+)
 
 // cell is one visible rune and whether it was drawn grey or faint.
 type cell struct {
@@ -29,18 +40,25 @@ type cell struct {
 // "› text", with or without a surrounding box border) of a captured pane. A capture with SGR
 // escapes (capture-pane -e) tells a faint or grey suggestion from typed
 // text; a plain capture can only spot the known placeholders, so any other
-// text counts as a draft.
+// text counts as a draft. A numbered menu option on that line, or Grok's
+// radio options below it, make it InputPrompt.
 func ReadInput(pane string) Input {
 	styled := strings.Contains(pane, "\x1b[")
 	lines := strings.Split(pane, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
-		cells := trimCells(decode(lines[i]), "│")
+		cells := trimCells(decode(lines[i]), "│┃")
+		if radioOption.MatchString(cellText(cells)) {
+			return InputPrompt
+		}
 		if len(cells) == 0 || !promptGlyph(cells[0].r) {
 			continue
 		}
 		rest := trimCells(cells[1:], "")
 		if len(rest) == 0 {
 			return InputEmpty
+		}
+		if menuOption.MatchString(cellText(rest)) {
+			return InputPrompt
 		}
 		if !styled {
 			if placeholder(cellText(rest)) {

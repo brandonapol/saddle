@@ -243,7 +243,11 @@ func (p PaneTarget) Busy() bool {
 
 func (p PaneTarget) Drafting() bool {
 	pane, err := p.Tmux.Capture(p.Window, 15)
-	return err != nil || tmux.HasDraft(pane)
+	if err != nil {
+		return true
+	}
+	in := tmux.ReadInput(pane)
+	return in == tmux.InputDraft || in == tmux.InputPrompt
 }
 
 func (p PaneTarget) Send(s string) error {

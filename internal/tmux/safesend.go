@@ -55,6 +55,10 @@ type Delivery struct {
 	// Force types even over what looks like a draft, clearing it first. For
 	// waking an agent that has sat idle with notices for too long.
 	Force bool
+	// Blocked, if non-nil, is shown each capture; while it returns true the
+	// screen holds a prompt the input box doesn't show, and nothing is
+	// typed. An approval menu ReadInput sees blocks even without it (#496).
+	Blocked func(pane string) bool
 }
 
 // SendWhenIdle types text into the window only while its prompt is empty or
@@ -95,7 +99,8 @@ func capture(d Driver, id string) (string, error) {
 }
 
 // trySend returns true when the attempt is finished (sent, failed, or no
-// longer needed) and false when a draft is in the way.
+// longer needed) and false when a draft or a prompt is in the way. A pane
+// that can't be read is typed into, as before.
 func trySend(d Driver, id, text string, o Delivery) bool {
 	if o.Needed != nil && !o.Needed() {
 		return true
@@ -105,6 +110,9 @@ func trySend(d Driver, id, text string, o Delivery) bool {
 	}
 	pane, err := capture(d, id)
 	in := ReadInput(pane)
+	if err == nil && (in == InputPrompt || o.Blocked != nil && o.Blocked(pane)) {
+		return false // typing would answer the prompt
+	}
 	if err == nil && in == InputDraft && !o.Force {
 		return false
 	}

@@ -233,3 +233,29 @@ func orphanEvents(t *testing.T, a *App, task string) []string {
 	}
 	return out
 }
+
+// #496: the nudge never types into an approval screen. Grok's has no
+// composer, so its input read as empty and the nudge answered the prompt.
+// The task is surfaced as needs-you instead.
+func TestDoneOrphanNudgeLeavesApprovalScreen(t *testing.T) {
+	a, ft, tk := orphanedWorker(t)
+	write(t, tk.Worktree, "stray.txt", "left over\n")
+	ft.setScreen(tk.Window, screenFixture(t, "grok_approval"))
+	now := time.Now().UTC()
+	window := a.StallConfig().DoneOrphan
+	_, err := a.OrphanTick(now)
+	must(t, err)
+	_, err = a.OrphanTick(now.Add(window + time.Minute))
+	must(t, err)
+	if sent := ft.sentTo(tk.Window); len(sent) != 0 {
+		t.Fatalf("nudge typed %q into an approval screen", sent)
+	}
+	got, err := a.Store.Task(tk.ID)
+	must(t, err)
+	if got.Status != store.NeedsYou {
+		t.Fatalf("status = %s, want needs-you", got.Status)
+	}
+	if ev := orphanEvents(t, a, tk.ID); !strings.Contains(strings.Join(ev, "\n"), "prompt") {
+		t.Fatalf("nudge event doesn't name the prompt: %v", ev)
+	}
+}

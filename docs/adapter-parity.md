@@ -106,10 +106,16 @@ CLIs' binaries, placed where each CLI prints a turn's error.
   compacts a headless `--prompt-file` turn, which is how the TUI runs a grok
   orchestrator. `CompactCommand` sends it. Tests:
   `TestCompactCommandPerHarness`, `TestCompactInjectsHarnessCommand`.
-- **Still open.** On grok's approval screen there is no `❯` composer, so
-  `ReadInput` reads empty. The notice wake checks `DetectPrompt` first;
-  `Deliver` and the orphan nudge don't. Workers run `bypassPermissions`,
-  so the screen is rare.
+- **Grok approval input (#496).** On grok's approval screen there is no
+  `❯` composer, so `ReadInput` read empty and `Deliver` and the done-orphan
+  nudge would type into the menu. `ReadInput` now returns `prompt` for
+  grok's radio options and for a numbered menu behind `❯` or `›`, and
+  `Deliver` never types into it, even forced. Notice delivery also holds
+  back while `DetectPrompt` sees a prompt; the orphan nudge accepts a
+  trusted checkout's trust prompt or marks the task needs-you instead of
+  typing. Tests: `TestReadInputApprovalTail`, `TestNotDeliveredIntoApproval`,
+  `TestDeliverWaitsWhileBlocked`, `TestNotifyNotTypedIntoPromptScreen`,
+  `TestDoneOrphanNudgeLeavesApprovalScreen`.
 
 ## Fixed in #489
 

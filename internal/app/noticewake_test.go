@@ -141,3 +141,23 @@ func fastRetry(ft *fakeTmux) {
 		ConfirmEvery: 5 * time.Millisecond, ConfirmFor: 200 * time.Millisecond,
 	}
 }
+
+// #496: a notice is never typed into an approval or trust screen, whether
+// the input box shows it (grok's radio menu, with no composer) or only the
+// screen's wording does.
+func TestNotifyNotTypedIntoPromptScreen(t *testing.T) {
+	t.Parallel()
+	for name, screen := range map[string]string{
+		"grok approval": screenFixture(t, "grok_approval"),
+		"trust":         "Is this a project you created or one you trust?\n\n Enter to confirm · Esc to cancel",
+	} {
+		a, ft := setup(t)
+		fastRetry(ft)
+		c := idleWorker(t, a, ft, screen)
+		must(t, a.Notify(c.ID, store.NoticeAction, "tests failed on the train"))
+		time.Sleep(60 * time.Millisecond)
+		if s := ft.sentTo(c.Window); len(s) != 0 {
+			t.Errorf("%s: typed %q into a prompt", name, s)
+		}
+	}
+}

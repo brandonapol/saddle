@@ -3,6 +3,7 @@ package tmux
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -190,19 +191,21 @@ func TestReadInputCodexComposer(t *testing.T) {
 
 // Real codex 0.154 and grok 1.0.50 panes (#488), read both styled and as a
 // plain capture. Codex's dim placeholder must stay a ghost without SGR
-// escapes too, or Deliver waits on it. A numbered approval menu behind a
-// composer glyph reads as a draft, so nothing is typed into it.
+// escapes too, or Deliver waits on it. An approval menu, codex's behind a
+// composer glyph and grok's with no composer at all (#496), reads as a
+// prompt, so nothing is typed into it.
 func TestReadInputCodexGrokFixtures(t *testing.T) {
 	for name, want := range map[string]Input{
 		"codex_placeholder": InputGhost,
 		"codex_idle":        InputGhost,
 		"codex_working":     InputGhost,
 		"codex_draft":       InputDraft,
-		"codex_approval":    InputDraft,
+		"codex_approval":    InputPrompt,
 		"grok_empty":        InputEmpty,
 		"grok_idle":         InputEmpty,
 		"grok_working":      InputEmpty,
 		"grok_draft":        InputDraft,
+		"grok_approval":     InputPrompt,
 	} {
 		pane := fixture(t, name)
 		if got := ReadInput(pane); got != want {
@@ -211,5 +214,66 @@ func TestReadInputCodexGrokFixtures(t *testing.T) {
 		if got := ReadInput(StripANSI(pane)); got != want {
 			t.Errorf("ReadInput(plain %s) = %v, want %v", name, got, want)
 		}
+	}
+}
+
+// tail is the last n lines of pane: what Deliver's 15-line capture sees.
+func tail(pane string, n int) string {
+	ls := strings.Split(strings.TrimRight(pane, "\n"), "\n")
+	return strings.Join(ls[max(0, len(ls)-n):], "\n")
+}
+
+// Grok's approval screen has no composer in its last 15 lines (#496): read
+// as empty input, Deliver typed into the radio menu.
+func TestReadInputApprovalTail(t *testing.T) {
+	for _, name := range []string{"grok_approval", "codex_approval"} {
+		pane := tail(fixture(t, name), 15)
+		if got := ReadInput(pane); got != InputPrompt {
+			t.Errorf("ReadInput(last 15 lines of %s) = %v, want prompt", name, got)
+		}
+	}
+	for line, want := range map[string]Input{
+		"❯ 1. Yes":            InputPrompt,
+		"│ ❯ 2. No, exit   │": InputPrompt,
+		"› 1. Yes, proceed":   InputPrompt,
+		"┃  2 (○) Yes":        InputPrompt,
+		"❯ 1.5 is the bound":  InputDraft,
+	} {
+		if got := ReadInput("out\n" + line); got != want {
+			t.Errorf("ReadInput(%q) = %v, want %v", line, got, want)
+		}
+	}
+}
+
+// Nothing is typed into an approval screen, not even when forced (#496).
+func TestNotDeliveredIntoApproval(t *testing.T) {
+	for _, name := range []string{"grok_approval", "codex_approval"} {
+		f := newStyled(t, name)
+		f.styled = tail(f.styled, 15)
+		f.setPane(tail(f.pane, 15))
+		Deliver(f, "@1", "hi", Delivery{Force: true})
+		time.Sleep(150 * time.Millisecond)
+		if f.count() != 0 || len(f.keysSent()) != 0 {
+			t.Fatalf("%s: typed into an approval screen (sent %d, keys %v)", name, f.count(), f.keysSent())
+		}
+	}
+}
+
+// Blocked holds a delivery back while the caller sees a prompt the input
+// box doesn't show, and the text goes in once it clears.
+func TestDeliverWaitsWhileBlocked(t *testing.T) {
+	f := newStyled(t, "claude_empty")
+	var mu sync.Mutex
+	blocked := true
+	Deliver(f, "@1", "hi", Delivery{Blocked: func(string) bool { mu.Lock(); defer mu.Unlock(); return blocked }})
+	time.Sleep(30 * time.Millisecond)
+	if f.count() != 0 {
+		t.Fatalf("sent %d while blocked", f.count())
+	}
+	mu.Lock()
+	blocked = false
+	mu.Unlock()
+	if !waitFor(func() bool { return f.count() == 1 }) {
+		t.Fatal("never sent once the prompt cleared")
 	}
 }

@@ -647,6 +647,12 @@ func (a *App) onPrompt(t store.Task) bool {
 	return err != nil || DetectPrompt(screen) != PromptNone
 }
 
+// promptShown reports whether a captured pane, styled or plain, shows a
+// permission prompt or question, so nothing may be typed into it (#496).
+func promptShown(pane string) bool {
+	return tmux.ReadInput(pane) == tmux.InputPrompt || DetectPrompt(tmux.StripANSI(pane)) != PromptNone
+}
+
 // Kill stops a task's window and releases its claims. Unless keep is set it
 // removes the worktree, and the branch too when it has no commits beyond
 // integration. A branch with commits, or a worktree with uncommitted
