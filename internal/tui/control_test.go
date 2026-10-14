@@ -27,7 +27,7 @@ func withStats(m *model) *model {
 // context bar, tokens and what it is doing now.
 func TestAgentRowsShowCtxTokensActivity(t *testing.T) {
 	m := withStats(newViewModel(160, 40))
-	out := m.viewLeft(110, 30)
+	out := m.viewLeft(120, 30)
 	row := linesWith(out, "t1")[0]
 	for _, want := range []string{"@1", "opus", "running", "42%", "1.3M", "Edit internal/tui/control.go"} {
 		if !strings.Contains(row, want) {
