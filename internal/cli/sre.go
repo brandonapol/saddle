@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,7 +28,10 @@ type sreOpts struct {
 // sreBackend spawns investigators and holds the guard's incident (#550)
 // under guardRoot, saddle's main checkout.
 type sreBackend struct {
-	spawner   sre.Spawner
+	spawner sre.Spawner
+	// nextID picks the id the next investigator spawns under, so intake can
+	// guard it before it starts (#567).
+	nextID    func() (string, error)
 	guardRoot string
 	close     func()
 }
@@ -67,6 +71,7 @@ func openSREBackend() (sreBackend, error) {
 	}
 	return sreBackend{
 		spawner:   appSpawner{a: a, parent: os.Getenv("SADDLE_TASK")},
+		nextID:    a.Store.NextID,
 		guardRoot: a.Root,
 		close:     func() { a.Close() },
 	}, nil
@@ -81,7 +86,7 @@ type appSpawner struct {
 func (s appSpawner) Spawn(sp sre.SpawnSpec) (string, error) {
 	// Confirm: a suspect file has usually just landed, and investigating it
 	// is new work, not a stack repair.
-	t, err := s.a.Spawn(app.SpawnReq{Title: sp.Title, Prompt: sp.Prompt, Claims: sp.Claims, Parent: s.parent, Confirm: true})
+	t, err := s.a.Spawn(app.SpawnReq{ID: sp.ID, Title: sp.Title, Prompt: sp.Prompt, Claims: sp.Claims, Parent: s.parent, Confirm: true})
 	return t.ID, err
 }
 
@@ -155,7 +160,7 @@ func runSRE(ctx context.Context, w io.Writer, in io.Reader, args []string, o sre
 	if err := sre.OpenIncident(b.guardRoot, inc); err != nil {
 		return err
 	}
-	got, err := sre.Launch(p, guardedSpawner{b.spawner, b.guardRoot})
+	got, err := sre.Launch(p, guardedSpawner{b.spawner, b.nextID, b.guardRoot})
 	for _, l := range got {
 		fmt.Fprintf(w, "spawned %s for lane %s\n", l.Task, l.Lane)
 	}
@@ -168,23 +173,53 @@ func runSRE(ctx context.Context, w io.Writer, in io.Reader, args []string, o sre
 	return err
 }
 
-// guardedSpawner adds each investigator to the open incident as it starts.
+// guardedSpawner adds each investigator to the open incident before it
+// starts: it reserves the task id, guards it, then spawns under that id, so
+// the investigator's first tool call is already read-only (#567). A spawn
+// that fails gives the reservation back.
 type guardedSpawner struct {
 	sre.Spawner
-	root string
+	nextID func() (string, error)
+	root   string
 }
 
 func (g guardedSpawner) Spawn(s sre.SpawnSpec) (string, error) {
-	id, err := g.Spawner.Spawn(s)
+	id, err := g.nextID()
 	if err != nil {
 		return "", err
 	}
-	err = sre.UpdateIncident(g.root, func(i *sre.Incident) error {
-		i.Investigators = append(i.Investigators, id)
+	if err := g.guard(id); err != nil {
+		return "", fmt.Errorf("can't guard %s read-only, so it was not started: %w", id, err)
+	}
+	s.ID = id
+	got, err := g.Spawner.Spawn(s)
+	if err != nil {
+		g.unguard(id)
+		return "", err
+	}
+	if got != id {
+		// The spawner ignored the reserved id: guard what it started and
+		// free the reservation, which a later, unrelated task may take.
+		if err := g.guard(got); err != nil {
+			return "", fmt.Errorf("%s started but is not guarded read-only (kill it): %w", got, err)
+		}
+		g.unguard(id)
+	}
+	return got, nil
+}
+
+func (g guardedSpawner) unguard(id string) {
+	_ = sre.UpdateIncident(g.root, func(i *sre.Incident) error {
+		i.Investigators = slices.DeleteFunc(i.Investigators, func(t string) bool { return t == id })
 		return nil
 	})
-	if err != nil {
-		return "", fmt.Errorf("%s started but is not guarded read-only (kill it): %w", id, err)
-	}
-	return id, nil
+}
+
+func (g guardedSpawner) guard(id string) error {
+	return sre.UpdateIncident(g.root, func(i *sre.Incident) error {
+		if !slices.Contains(i.Investigators, id) {
+			i.Investigators = append(i.Investigators, id)
+		}
+		return nil
+	})
 }

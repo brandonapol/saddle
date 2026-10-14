@@ -34,6 +34,10 @@ func Build(ctx context.Context, text string, cfg *Config, dir string, repo fs.FS
 
 // SpawnSpec is one investigator to start.
 type SpawnSpec struct {
+	// ID is the task id to spawn under. Intake reserves it in the guard's
+	// incident first, so the investigator is read-only from its first tool
+	// call (#567). "" lets the spawner pick one.
+	ID     string
 	Lane   LaneKind
 	Title  string
 	Prompt string

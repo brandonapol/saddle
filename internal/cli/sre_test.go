@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -29,7 +30,9 @@ func (f *sreFakeSpawner) Spawn(s sre.SpawnSpec) (string, error) {
 
 func fakeBackend(sp sre.Spawner, guardRoot string) func() (sreBackend, error) {
 	return func() (sreBackend, error) {
-		return sreBackend{spawner: sp, guardRoot: guardRoot, close: func() {}}, nil
+		n := 0
+		next := func() (string, error) { n++; return fmt.Sprintf("t%d", n), nil }
+		return sreBackend{spawner: sp, nextID: next, guardRoot: guardRoot, close: func() {}}, nil
 	}
 }
 
@@ -158,5 +161,55 @@ func TestSREIntakeClosesIncidentWhenNothingSpawns(t *testing.T) {
 	}
 	if inc, _ := sre.LoadIncident(guard); inc.Open() {
 		t.Fatal("an incident with no investigators stays open and blocks the next intake")
+	}
+}
+
+// sreProbeSpawner plays an investigator whose first tool call lands before
+// Spawn returns: it asks the guard, as the hook would, whether the new task
+// is read-only yet.
+type sreProbeSpawner struct {
+	guard     string
+	unguarded []string
+	fail      bool
+}
+
+func (p *sreProbeSpawner) Spawn(s sre.SpawnSpec) (string, error) {
+	inc, err := sre.LoadIncident(p.guard)
+	if err != nil || !inc.Guarded(s.ID) {
+		p.unguarded = append(p.unguarded, s.ID)
+	}
+	if p.fail {
+		return "", errors.New("launch failed")
+	}
+	return s.ID, nil
+}
+
+func TestSREIntakeGuardsInvestigatorBeforeItStarts(t *testing.T) {
+	dir, guard := sreRepo(t, ""), t.TempDir()
+	sp := &sreProbeSpawner{guard: guard}
+	err := runSRE(context.Background(), io.Discard, strings.NewReader("checkout 500s"), nil,
+		sreOpts{root: dir, runner: &sreFakeRunner{}, backend: fakeBackend(sp, guard)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sp.unguarded) > 0 {
+		t.Fatalf("investigators %q could mutate production before they were guarded", sp.unguarded)
+	}
+	inc, _ := sre.LoadIncident(guard)
+	if len(inc.Investigators) < 3 {
+		t.Fatalf("investigators = %q", inc.Investigators)
+	}
+}
+
+func TestSREIntakeDropsReservationWhenSpawnFails(t *testing.T) {
+	dir, guard := sreRepo(t, ""), t.TempDir()
+	sp := &sreProbeSpawner{guard: guard, fail: true}
+	if err := runSRE(context.Background(), io.Discard, strings.NewReader("db down"), nil,
+		sreOpts{root: dir, runner: &sreFakeRunner{}, backend: fakeBackend(sp, guard)}); err == nil {
+		t.Fatal("want the spawn errors")
+	}
+	inc, _ := sre.LoadIncident(guard)
+	if len(inc.Investigators) != 0 {
+		t.Fatalf("failed spawns stay guarded: %q", inc.Investigators)
 	}
 }
