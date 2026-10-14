@@ -65,7 +65,7 @@ var signals = map[LaneKind]*regexp.Regexp{
 // PlanLanes picks 3 or 4 disjoint lanes for inc. results are the preemptive
 // checks' outcomes; a failed check counts toward its lane. repo resolves the
 // incident's paths into the code lane's claims.
-func PlanLanes(inc Incident, cfg *Config, results []CheckResult, repo fs.FS) []Lane {
+func PlanLanes(inc Intake, cfg *Config, results []CheckResult, repo fs.FS) []Lane {
 	if cfg == nil {
 		cfg = &Config{}
 	}

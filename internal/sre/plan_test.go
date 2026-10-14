@@ -106,7 +106,7 @@ func TestLaunchSpawnsReadOnlyInvestigators(t *testing.T) {
 }
 
 func TestLaunchRefusesOverlappingClaims(t *testing.T) {
-	p := &Plan{Incident: ParseIncident("x"), Lanes: []Lane{
+	p := &Plan{Intake: ParseIncident("x"), Lanes: []Lane{
 		{Kind: LaneCode, Claims: []string{"a"}},
 		{Kind: LaneDeps, Claims: []string{"a/b.go"}},
 		{Kind: LaneLogs},

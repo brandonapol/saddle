@@ -13,8 +13,8 @@ import (
 	"github.com/brandonapol/saddle/internal/secretscan"
 )
 
-// Incident is pasted incident text and what intake pulled out of it.
-type Incident struct {
+// Intake is pasted incident text and what intake pulled out of it.
+type Intake struct {
 	Text    string
 	Summary string   // the first non-empty line, shortened
 	Paths   []string // source paths as written (stack frames, file:line), not yet resolved
@@ -26,8 +26,8 @@ type Incident struct {
 var pathRe = regexp.MustCompile(`(?:[\w.@-]*/)*[\w.-]+\.(?:go|py|js|mjs|ts|tsx|jsx|rb|java|kt|rs|c|h|cc|cpp|cs|php|swift|scala|sql|ya?ml|toml|json|tf|sh|proto)\b`)
 
 // ParseIncident pulls the summary and the mentioned source paths out of text.
-func ParseIncident(text string) Incident {
-	inc := Incident{Text: strings.TrimSpace(text)}
+func ParseIncident(text string) Intake {
+	inc := Intake{Text: strings.TrimSpace(text)}
 	for _, l := range strings.Split(inc.Text, "\n") {
 		if l = strings.TrimSpace(l); l != "" {
 			inc.Summary = shorten(l, 60)

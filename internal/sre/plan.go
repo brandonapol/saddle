@@ -11,7 +11,7 @@ import (
 // Plan is one incident's intake: the preemptive check results and the lanes
 // to investigate.
 type Plan struct {
-	Incident Incident
+	Intake Intake
 	Config   *Config
 	Checks   []CheckResult
 	Lanes    []Lane
@@ -27,7 +27,7 @@ func Build(ctx context.Context, text string, cfg *Config, dir string, repo fs.FS
 	if cfg == nil {
 		cfg = &Config{}
 	}
-	p := &Plan{Incident: inc, Config: cfg, Checks: RunChecks(ctx, cfg, dir, r)}
+	p := &Plan{Intake: inc, Config: cfg, Checks: RunChecks(ctx, cfg, dir, r)}
 	p.Lanes = PlanLanes(inc, cfg, p.Checks, repo)
 	return p, nil
 }
@@ -56,7 +56,7 @@ type Launched struct {
 func (p *Plan) Spec(l Lane) SpawnSpec {
 	return SpawnSpec{
 		Lane:   l.Kind,
-		Title:  fmt.Sprintf("sre %s: %s", l.Kind, p.Incident.Summary),
+		Title:  fmt.Sprintf("sre %s: %s", l.Kind, p.Intake.Summary),
 		Prompt: p.Prompt(l),
 		Claims: l.Claims,
 	}
@@ -127,7 +127,7 @@ func (p *Plan) Prompt(l Lane) string {
 	} else {
 		b.WriteString("\nNo preemptive checks are configured (.saddle/sre.toml); propose some.\n")
 	}
-	fmt.Fprintf(&b, "\nIncident as reported:\n\n%s\n", p.Incident.Text)
+	fmt.Fprintf(&b, "\nIncident as reported:\n\n%s\n", p.Intake.Text)
 	return b.String()
 }
 
