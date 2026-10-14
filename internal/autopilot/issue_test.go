@@ -35,17 +35,49 @@ func TestParseAfter(t *testing.T) {
 	}
 }
 
+// #505: Model scope is read as a hint; Difficulty, Needs and Provider are
+// what route a ticket.
 func TestModelScope(t *testing.T) {
 	for body, want := range map[string]string{
-		"":                                    "opus",
+		"":                                    "",
 		"**Model scope: Opus.** big":          "opus",
 		"**Model scope: Sonnet.** small edit": "sonnet",
 		"model scope: sonnet":                 "sonnet",
-		"Mentions Sonnet but no scope line":   "opus",
+		"Mentions Sonnet but no scope line":   "",
 	} {
 		if got := ModelScope(body); got != want {
 			t.Errorf("ModelScope(%q) = %q, want %q", body, got, want)
 		}
+	}
+}
+
+func TestTicketDifficultyNeedsProvider(t *testing.T) {
+	for body, want := range map[string]string{
+		"": "",
+		"**Difficulty: hard (design judgment).**":             "hard",
+		"Difficulty: hard-design":                             "hard",
+		"**Difficulty: mechanical.** rename":                  "mechanical",
+		"### Difficulty\n\nstandard\n\n### Claims":            "standard",
+		"**Model scope: Opus.** old ticket":                   "",
+		"**Model scope: Sonnet.** old ticket":                 "standard",
+		"Model scope: Haiku":                                  "mechanical",
+		"**Model scope: Opus.**\n**Difficulty: mechanical.**": "mechanical",
+	} {
+		if got := Difficulty(body); got != want {
+			t.Errorf("Difficulty(%q) = %q, want %q", body, got, want)
+		}
+	}
+	if got := Needs("x\n**Needs:** Review, image-gen, hooks-required\n"); !slices.Equal(got, []string{"review", "image-gen", "hooks"}) {
+		t.Errorf("Needs = %q", got)
+	}
+	if got := Needs("no needs here"); got != nil {
+		t.Errorf("Needs without a line = %q", got)
+	}
+	if got := Provider("- Provider: codex (needs its plugin)"); got != "codex" {
+		t.Errorf("Provider = %q", got)
+	}
+	if got := Provider("Provider: nobody"); got != "" {
+		t.Errorf("unknown provider = %q", got)
 	}
 }
 
@@ -57,7 +89,7 @@ func TestPrompt(t *testing.T) {
 			t.Errorf("prompt lacks %q:\n%s", want, p)
 		}
 	}
-	if p := Prompt(Issue{Number: 1, Title: "t"}, "", ""); !strings.Contains(p, "**Model scope: Opus.**") {
-		t.Errorf("a ticket without a scope line gets none in the prompt:\n%s", p)
+	if p := Prompt(Issue{Number: 1, Title: "t"}, "", ""); strings.Contains(p, "Model scope") {
+		t.Errorf("a ticket without a scope line gets one in the prompt:\n%s", p)
 	}
 }

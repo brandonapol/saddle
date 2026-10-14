@@ -56,6 +56,8 @@ type Spawned struct {
 	Issue int       `json:"issue"`
 	Task  string    `json:"task"`
 	At    time.Time `json:"at"`
+	// Route is the provider the chooser put it on and why (#505).
+	Route string `json:"route,omitempty"`
 }
 
 // State is .saddle/autopilot.json. The owner's controls (On, Paused, Stop,

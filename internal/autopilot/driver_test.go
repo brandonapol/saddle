@@ -199,7 +199,7 @@ func TestTopUpToCapWithDisjointClaims(t *testing.T) {
 	if got := r.env.spawned(); !slices.Equal(got, []int{1, 3, 2}) {
 		t.Fatalf("after #1 finished, spawned %v; want #2 next (oldest first)", got)
 	}
-	if sp := r.env.spawns[0]; sp.Model != "opus" || !slices.Equal(sp.Claims, []string{"a/**"}) || !strings.Contains(sp.Prompt, "rules") || !strings.Contains(sp.Prompt, "done when") {
+	if sp := r.env.spawns[0]; sp.Model != "" || !slices.Equal(sp.Claims, []string{"a/**"}) || !strings.Contains(sp.Prompt, "rules") || !strings.Contains(sp.Prompt, "done when") {
 		t.Errorf("spawn request = %+v", sp)
 	}
 	if st := r.state(); len(st.Spawned) != 3 || st.LastTick.IsZero() || st.LastDecision == "" {
@@ -265,12 +265,18 @@ func TestAfterLinesWaitForTheirDependency(t *testing.T) {
 	}
 }
 
+// #505: an old Model scope line is passed on as a hint with the difficulty
+// it implies; a Difficulty:, Needs: or Provider: line feeds the chooser.
 func TestModelScopeFromTicket(t *testing.T) {
-	r := newRig(t, 4, Issue{Number: 1, Title: "small", Body: "**Model scope: Sonnet.** rename\nclaims: a/**"})
+	r := newRig(t, 4, Issue{Number: 1, Title: "small", Body: "**Model scope: Sonnet.** rename\nclaims: a/**"},
+		Issue{Number: 2, Title: "art", Body: "**Difficulty: hard (design judgment).**\nNeeds: image-gen, review\nProvider: Grok\nclaims: b/**"})
 	r.on(Options{})
 	r.tick()
-	if m := r.env.spawns[0].Model; m != "sonnet" {
-		t.Fatalf("model = %q", m)
+	if sp := r.env.spawns[0]; sp.Model != "sonnet" || sp.Difficulty != "standard" || sp.Adapter != "" {
+		t.Fatalf("old ticket spawn = %+v", sp)
+	}
+	if sp := r.env.spawns[1]; sp.Model != "" || sp.Difficulty != "hard" || !slices.Equal(sp.Needs, []string{"image-gen", "review"}) || sp.Adapter != "grok" {
+		t.Fatalf("new ticket spawn = %+v", sp)
 	}
 }
 
@@ -522,5 +528,35 @@ func TestDisjointTicketsSpawnAtOnceAndOverlappingRunInSequence(t *testing.T) {
 	r.tick()
 	if got := r.env.spawned(); !slices.Equal(got, []int{1, 2}) {
 		t.Fatalf("spawned %v, want #2 once #1 is done", got)
+	}
+}
+
+// routingEnv is a fakeEnv that can preview where a spawn goes.
+type routingEnv struct{ *fakeEnv }
+
+func (routingEnv) Route(r SpawnReq) (string, string, string, error) {
+	if r.Difficulty == "hard" {
+		return "claude", "opus", "suits hard", nil
+	}
+	return "codex", "", "suits " + r.Difficulty, nil
+}
+
+// #505: with a Router, the report names the provider for every ready
+// ticket (the plan before spawning), even one that waits, and the spawn
+// record and event say where it went.
+func TestReportNamesProviderPerTicket(t *testing.T) {
+	r := newRig(t, 1, Issue{Number: 1, Title: "hard", Body: "Difficulty: hard\nclaims: a/**"},
+		Issue{Number: 2, Title: "easy", Body: "Difficulty: mechanical\nclaims: b/**"})
+	r.d.Env = routingEnv{r.env}
+	r.on(Options{})
+	rep := r.tick()
+	if rep.Routes[1] != "claude (opus): suits hard" || rep.Routes[2] != "codex: suits mechanical" {
+		t.Fatalf("routes = %v", rep.Routes)
+	}
+	if len(rep.Spawned) != 1 || rep.Spawned[0].Route != "claude (opus): suits hard" {
+		t.Fatalf("spawned = %+v", rep.Spawned)
+	}
+	if !r.env.hasEvent(EventSpawn + ": t1 for #1 \"hard\" (claude (opus): suits hard; claims a/**)") {
+		t.Errorf("spawn event doesn't name the provider: %q", r.env.events)
 	}
 }

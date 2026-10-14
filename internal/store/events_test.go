@@ -119,3 +119,20 @@ func TestLastEventTimes(t *testing.T) {
 		t.Fatal("t2 has a heartbeat without events")
 	}
 }
+
+// #505: LatestEventData is each task's newest event of a kind.
+func TestLatestEventData(t *testing.T) {
+	s := openTest(t)
+	s.Event("t1", "adapter-pick", "claude: first")
+	s.Event("t1", "spawn", "x")
+	s.Event("t1", "adapter-pick", "codex: second")
+	s.Event("t2", "adapter-pick", "grok: only")
+	s.Event("", "adapter-pick", "no task")
+	got, err := s.LatestEventData("adapter-pick")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got["t1"] != "codex: second" || got["t2"] != "grok: only" {
+		t.Fatalf("got %v", got)
+	}
+}

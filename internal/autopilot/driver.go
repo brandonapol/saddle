@@ -72,10 +72,26 @@ type Usage struct {
 
 // SpawnReq is a task the driver starts for an issue.
 type SpawnReq struct {
-	Title, Prompt, Model string
-	Issue                int
-	Claims               []string
-	After                []string // tasks whose work this one builds on
+	Title, Prompt string
+	// Model is the ticket's old "Model scope:" model: a hint used only when
+	// the chosen adapter runs that model's family (#505).
+	Model string
+	// Difficulty and Needs are what the ticket says it needs; the chooser
+	// picks the adapter from them (#505).
+	Difficulty string
+	Needs      []string
+	// Adapter is a ticket's "Provider:" override; "" lets the chooser pick.
+	Adapter string
+	Issue   int
+	Claims  []string
+	After   []string // tasks whose work this one builds on
+}
+
+// Router previews where a spawn would go, without spawning: the adapter,
+// the model and why. An Env that implements it lets the report name the
+// provider for each ticket before it spawns (#505).
+type Router interface {
+	Route(SpawnReq) (adapter, model, why string, err error)
 }
 
 // Env is everything the driver touches.
@@ -159,6 +175,9 @@ type Report struct {
 	Landed   int
 	Spawned  []Spawned
 	Skipped  map[int]string // why each ready issue didn't start
+	// Routes is the provider each ready issue goes (or went) to and why,
+	// when Env is a Router: the plan before spawning (#505).
+	Routes   map[int]string
 	Sleeping bool
 	Nudged   string // the nudge sent, if any
 	Stopped  string // why the run ended this tick
@@ -170,6 +189,35 @@ type Options struct {
 	Stop       Stop
 	ReadyLabel string
 	Infinite   bool // see State.Infinite; Stop is ignored
+}
+
+// ticketReq is the spawn for issue is: its brief, claims and what it says
+// it needs. Provider:, Difficulty: and Needs: lines feed the chooser; an old
+// Model scope: line is only a hint (#505).
+func ticketReq(is Issue, rules, doneWhen string, claims, after []string) SpawnReq {
+	return SpawnReq{Title: is.Title, Prompt: Prompt(is, rules, doneWhen), Model: ModelScope(is.Body),
+		Difficulty: Difficulty(is.Body), Needs: Needs(is.Body), Adapter: Provider(is.Body),
+		Issue: is.Number, Claims: claims, After: after}
+}
+
+// route is where req would go, "adapter (model): why", when env can say.
+func (d *Driver) route(env Env, req SpawnReq) string {
+	r, ok := env.(Router)
+	if !ok {
+		return ""
+	}
+	ad, model, why, err := r.Route(req)
+	if err != nil {
+		return "no provider: " + err.Error()
+	}
+	s := ad
+	if model != "" {
+		s += " (" + model + ")"
+	}
+	if why != "" {
+		s += ": " + why
+	}
+	return s
 }
 
 // Status reads the state file.
@@ -410,6 +458,14 @@ func (d *Driver) Tick() (Report, error) {
 			continue
 		}
 		ready++
+		req := ticketReq(is, d.Rules, d.DoneWhen, want, after)
+		route := d.route(env, req)
+		if route != "" {
+			if rep.Routes == nil {
+				rep.Routes = map[int]string{}
+			}
+			rep.Routes[is.Number] = route
+		}
 		switch {
 		case why != "":
 		case st.Draining != "":
@@ -426,8 +482,6 @@ func (d *Driver) Tick() (Report, error) {
 			}
 			continue
 		}
-		req := SpawnReq{Title: is.Title, Prompt: Prompt(is, d.Rules, d.DoneWhen), Model: ModelScope(is.Body),
-			Issue: is.Number, Claims: want, After: after}
 		id, err := env.Spawn(req)
 		switch {
 		case errors.Is(err, ErrPaused):
@@ -446,7 +500,7 @@ func (d *Driver) Tick() (Report, error) {
 			continue
 		}
 		ready--
-		sp := Spawned{Issue: is.Number, Task: id, At: now}
+		sp := Spawned{Issue: is.Number, Task: id, At: now, Route: route}
 		st.Spawned = append(st.Spawned, sp)
 		rep.Spawned = append(rep.Spawned, sp)
 		mine[id], busy = true, true
@@ -459,7 +513,17 @@ func (d *Driver) Tick() (Report, error) {
 		if inferred {
 			how = "inferred claims"
 		}
-		env.Event(EventSpawn, fmt.Sprintf("%s for #%d %q (%s, %s %s)", id, is.Number, is.Title, req.Model, how, orNone(want)))
+		on := route
+		switch {
+		case on != "":
+		case req.Adapter != "":
+			on = req.Adapter + ": Provider: line"
+		case req.Difficulty != "":
+			on = req.Difficulty
+		default:
+			on = "difficulty unset"
+		}
+		env.Event(EventSpawn, fmt.Sprintf("%s for #%d %q (%s; %s %s)", id, is.Number, is.Title, on, how, orNone(want)))
 		if st.Draining == "" {
 			st.Draining = stopReason(st, now, use)
 		}

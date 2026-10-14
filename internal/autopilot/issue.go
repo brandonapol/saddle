@@ -2,9 +2,12 @@ package autopilot
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/brandonapol/saddle/internal/config"
 )
 
 // Issue is one open issue in the ready queue.
@@ -26,6 +29,12 @@ var (
 	afterLine  = regexp.MustCompile(`(?i)^\s*(?:[-*]\s+)?\**after\**\s*:?\s*\**\s*((?:#\d+[\s,]*)+)$`)
 	issueRef   = regexp.MustCompile(`#(\d+)`)
 	scopeLine  = regexp.MustCompile(`(?i)model scope\s*:\s*\**\s*(opus|sonnet|haiku|fable)`)
+	// difficultyLine is "**Difficulty: hard (design judgment).**" or the
+	// "### Difficulty" section an issue form renders (#505).
+	difficultyLine = regexp.MustCompile(`(?i)\bdifficulty\**\s*:\s*\**\s*([a-z][a-z-]*)`)
+	difficultyHead = regexp.MustCompile(`(?i)^\s*#{1,6}\s+difficulty\s*$`)
+	needsLine      = regexp.MustCompile(`(?im)^\s*(?:[-*]\s+)?\**needs\**\s*:\s*\**\s*(.*)$`)
+	providerLine   = regexp.MustCompile(`(?im)^\s*(?:[-*]\s+)?\**provider\**\s*:\s*\**\s*([a-z]+)`)
 )
 
 // ParseClaims reads the path globs an issue declares it will change: a
@@ -119,13 +128,73 @@ func ParseAfter(body string) []int {
 	return out
 }
 
-// ModelScope is the model a ticket is scoped for: sonnet only when its
-// "Model scope:" line says so, opus otherwise.
+// ModelScope is the model an old-style ticket's "Model scope:" line names,
+// lower case, or "" without one. It is a hint, not a pin (#505): the
+// chooser picks the provider, and the model applies only when the pick
+// runs that model's family.
 func ModelScope(body string) string {
-	if m := scopeLine.FindStringSubmatch(body); m != nil && strings.EqualFold(m[1], "sonnet") {
-		return "sonnet"
+	if m := scopeLine.FindStringSubmatch(body); m != nil {
+		return strings.ToLower(m[1])
 	}
-	return "opus"
+	return ""
+}
+
+// Difficulty is a ticket's difficulty: hard, standard or mechanical, from
+// its "Difficulty:" line or section (#505). Without one, an old "Model
+// scope:" line hints at it: Sonnet is standard and Haiku mechanical. Opus
+// was every ticket's default, so it says nothing and gives "".
+func Difficulty(body string) string {
+	if m := difficultyLine.FindStringSubmatch(body); m != nil {
+		if d := config.NormalizeDifficulty(m[1]); d != "" {
+			return d
+		}
+	}
+	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
+	for i, l := range lines {
+		if !difficultyHead.MatchString(l) {
+			continue
+		}
+		for _, n := range lines[i+1:] {
+			if heading.MatchString(n) {
+				break
+			}
+			if d := config.NormalizeDifficulty(n); d != "" {
+				return d
+			}
+		}
+	}
+	switch ModelScope(body) {
+	case "sonnet":
+		return config.DifficultyStandard
+	case "haiku":
+		return config.DifficultyMechanical
+	}
+	return ""
+}
+
+// Needs are the capabilities a ticket's "Needs:" line asks for, e.g.
+// "Needs: review, image-gen" (#505).
+func Needs(body string) []string {
+	m := needsLine.FindStringSubmatch(body)
+	if m == nil {
+		return nil
+	}
+	var out []string
+	for _, f := range strings.FieldsFunc(m[1], func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '*' }) {
+		if n := config.NormalizeNeed(f); n != "" && n != "none" && !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// Provider is the adapter a ticket's "Provider:" line pins it to, lower
+// case, or "" to let the chooser pick (#505).
+func Provider(body string) string {
+	if m := providerLine.FindStringSubmatch(body); m != nil && slices.Contains(config.AdapterNames(), strings.ToLower(m[1])) {
+		return strings.ToLower(m[1])
+	}
+	return ""
 }
 
 // Prompt is the brief for an agent working on is: the issue, the repo's
@@ -133,9 +202,6 @@ func ModelScope(body string) string {
 func Prompt(is Issue, rules, doneWhen string) string {
 	var b strings.Builder
 	b.WriteString("Implement GitHub issue #" + strconv.Itoa(is.Number) + ": " + is.Title + "\n\n")
-	if !scopeLine.MatchString(is.Body) {
-		b.WriteString("**Model scope: Opus.**\n\n")
-	}
 	if body := strings.TrimSpace(is.Body); body != "" {
 		b.WriteString(body + "\n\n")
 	}

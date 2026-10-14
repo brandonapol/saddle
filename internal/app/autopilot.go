@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -162,9 +163,22 @@ func (e *autopilotEnv) Land() (int, error) {
 	return n, nil
 }
 
+// spawnReq is autopilot's spawn as the app's: the same chooser as the
+// orchestrator's spawns picks the adapter from the ticket's difficulty and
+// needs, unless its Provider: line names one (#505). An old Model scope
+// names a Claude model; it is a hint Spawn drops on other adapters.
+func (e *autopilotEnv) spawnReq(r autopilot.SpawnReq) SpawnReq {
+	return SpawnReq{Title: r.Title, Prompt: r.Prompt, Claims: slices.Clone(r.Claims), Model: r.Model, Issue: r.Issue, After: r.After,
+		Adapter: r.Adapter, Difficulty: r.Difficulty, Needs: r.Needs}
+}
+
+// Route is where a ticket would go now, for autopilot's plan (#505).
+func (e *autopilotEnv) Route(r autopilot.SpawnReq) (string, string, string, error) {
+	return e.a.RoutePreview(e.spawnReq(r))
+}
+
 func (e *autopilotEnv) Spawn(r autopilot.SpawnReq) (string, error) {
-	// Model scope names Claude models; Spawn drops them on other adapters.
-	t, err := e.a.Spawn(SpawnReq{Title: r.Title, Prompt: r.Prompt, Claims: r.Claims, Model: r.Model, Issue: r.Issue, After: r.After})
+	t, err := e.a.Spawn(e.spawnReq(r))
 	switch {
 	case errors.Is(err, ErrLaunchesPaused):
 		return "", fmt.Errorf("%w: %v", autopilot.ErrPaused, err)
