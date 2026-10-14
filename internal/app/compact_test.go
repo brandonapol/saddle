@@ -24,6 +24,7 @@ func TestContextWindowTable(t *testing.T) {
 		{"claude-sonnet-5-5[1m]", 1_000_000},
 		{"grok-4", 256_000},
 		{"grok-code-fast-1", 256_000},
+		{"grok", 256_000},
 		{"gpt-5-codex", 272_000},
 		{"", DefaultContextWindow},
 		{"something-new", DefaultContextWindow},
@@ -56,6 +57,20 @@ func TestContextFraction(t *testing.T) {
 	if (ContextUse{}).Fraction() != 0 {
 		t.Fatal("no data must read as 0")
 	}
+	// A bad reading must never produce an impossible displayed percentage.
+	if u := NewContextUse("something-new", "", usage.Tokens{Input: 300_000}); u.Fraction() != 1 {
+		t.Fatalf("unknown over-window fraction = %v, want clamped 1", u.Fraction())
+	}
+}
+
+func TestContextPercentMarksUntrustworthyReadings(t *testing.T) {
+	t.Parallel()
+	if got := ContextPercent(140_000, 200_000); got != "70%" {
+		t.Fatalf("known percentage = %q, want 70%%", got)
+	}
+	if got := ContextPercent(300_000, 200_000); got != "?" {
+		t.Fatalf("over-window percentage = %q, want ?", got)
+	}
 }
 
 func TestContextReaderKeepsLatestPrompt(t *testing.T) {
@@ -83,6 +98,26 @@ func TestContextReaderKeepsLatestPrompt(t *testing.T) {
 	}
 	if u, err = r.Read(p); err != nil || u.Prompt != 20_001 {
 		t.Fatalf("an unchanged transcript must keep the last reading, got %d (%v)", u.Prompt, err)
+	}
+}
+
+func TestContextReaderGrokUsesLatestPrompt(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	b, err := os.ReadFile(filepath.Join("..", "usage", "testdata", "grok-updates.jsonl"))
+	must(t, err)
+	must(t, os.WriteFile(filepath.Join(dir, "updates.jsonl"), b, 0o644))
+	// ContextReader is given Grok's usage ledger path by the adapter. The
+	// neighboring updates file carries each model call's actual prompt size.
+	must(t, os.WriteFile(filepath.Join(dir, "usage.json"), []byte(`{"session":{"inputTokens":10700000}}`), 0o644))
+	r := &ContextReader{Agent: usage.Grok}
+	u, err := r.Read(filepath.Join(dir, "usage.json"))
+	must(t, err)
+	if u.Prompt != 196_000 || u.Window != 256_000 {
+		t.Fatalf("grok context = %+v, want latest 196K prompt in a 256K window", u)
+	}
+	if f := u.Fraction(); f < 0.765 || f > 0.767 {
+		t.Fatalf("grok fraction = %v, want about 77%%", f)
 	}
 }
 
@@ -230,6 +265,24 @@ func TestCompactNoticeOncePerCrossing(t *testing.T) {
 	}
 	if es := r.events(t, EventCompactThreshold); len(es) != 2 {
 		t.Fatalf("%d threshold events, want 2", len(es))
+	}
+}
+
+func TestCompactIgnoresUntrustworthyContext(t *testing.T) {
+	t.Parallel()
+	r := newCompactRig(t, usage.Grok)
+	rep := r.step(t, 9.99)
+	if rep.Fraction != 1 || rep.Crossed || rep.Injected {
+		t.Fatalf("report = %+v, want a clamped reading with no action", rep)
+	}
+	if ns := r.notices(t); len(ns) != 0 {
+		t.Fatalf("bad reading created notices: %+v", ns)
+	}
+	if es := r.events(t, EventCompactThreshold); len(es) != 0 {
+		t.Fatalf("bad reading created threshold events: %+v", es)
+	}
+	if len(r.tgt.sent) != 0 {
+		t.Fatalf("bad reading sent %q", r.tgt.sent)
 	}
 }
 
@@ -385,5 +438,24 @@ func TestCompactUsesAppTarget(t *testing.T) {
 	t.Cleanup(func() { r.a.SetCompactTarget(nil) })
 	if rep := r.step(t, 0.8); !rep.Injected || len(tgt.sent) != 1 {
 		t.Fatalf("report = %+v, sent %q; want the App-wide target used", rep, tgt.sent)
+	}
+}
+
+func TestWorkerContextGrok(t *testing.T) {
+	t.Parallel()
+	// A grok worker's usage record totals every model call in a turn, so its
+	// per-message average can be far past any real window (#510).
+	u := WorkerContext("grok-4.7-build", 10_700_000)
+	if u.Window != 256_000 {
+		t.Fatalf("grok window = %d, want 256K", u.Window)
+	}
+	if u.Trustworthy() || u.Percent() != "?" || u.Fraction() != 1 {
+		t.Fatalf("cumulative grok reading = %+v (%s), want untrustworthy ?", u, u.Percent())
+	}
+	if u := WorkerContext("grok-4.7-build", 196_000); u.Percent() != "77%" {
+		t.Fatalf("grok 196K = %s, want 77%%", u.Percent())
+	}
+	if u := WorkerContext("claude-opus-5-5", 500_000); u.Window != 1_000_000 || u.Percent() != "50%" {
+		t.Fatalf("claude past 200K = %+v, want the 1M window", u)
 	}
 }

@@ -1,0 +1,4 @@
+{"timestamp":1791947000,"method":"session/update","params":{"sessionId":"01a0fixture","update":{"sessionUpdate":"agent_message_chunk"},"_meta":{"totalTokens":120000,"eventId":"event-1","promptId":"turn-1","updateType":"AgentMessageChunk"}}}
+{"timestamp":1791947100,"method":"session/update","params":{"sessionId":"01a0fixture","update":{"sessionUpdate":"tool_call_update"},"_meta":{"totalTokens":180000,"eventId":"event-2","promptId":"turn-2","updateType":"ToolCallUpdate"}}}
+{"timestamp":1791947200,"method":"session/update","params":{"sessionId":"01a0fixture","update":{"sessionUpdate":"agent_message_chunk"},"_meta":{"totalTokens":196000,"eventId":"event-3","promptId":"turn-2","updateType":"AgentMessageChunk"}}}
+{"timestamp":1791947210,"method":"_x.ai/session/update","params":{"sessionId":"01a0fixture","update":{"sessionUpdate":"turn_completed","usage":{"inputTokens":10700000,"modelCalls":81,"modelUsage":{"grok-4.7-build":{"inputTokens":10700000}}}}}}

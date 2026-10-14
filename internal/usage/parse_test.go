@@ -63,6 +63,17 @@ func TestParseGrokOutput(t *testing.T) {
 	}
 }
 
+func TestParseGrokContextUpdates(t *testing.T) {
+	recs, c := tailFixture(t, "grok-updates.jsonl", ParseGrokContext)
+	if c.Malformed != 0 || len(recs) != 3 {
+		t.Fatalf("records = %+v, malformed = %d", recs, c.Malformed)
+	}
+	last := recs[len(recs)-1]
+	if last.Model != Grok || last.Tokens.Input != 196_000 || last.ID != "event-3" {
+		t.Fatalf("latest context = %+v, want the last model call's 196K prompt", last)
+	}
+}
+
 func TestParseGrokUsageSnapshot(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("testdata", "grok-usage.json"))
 	if err != nil {

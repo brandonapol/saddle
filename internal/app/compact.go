@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,7 @@ var contextWindows = []struct {
 	{"grok-code-fast", 256_000},
 	{"grok-4", 256_000},
 	{"grok-3", 131_072},
+	{"grok", 256_000},
 	{"gpt-5", 272_000},
 	{"codex", 272_000},
 	{"claude-", 200_000},
@@ -99,12 +101,49 @@ func NewContextUse(model, configured string, tok usage.Tokens) ContextUse {
 	return u
 }
 
-// Fraction is Prompt/Window, 0 when nothing has been read.
+// WorkerContext sizes a worker's estimated prompt (its usage buckets' tokens
+// per message) against model's window. Grok records total every model call in
+// a turn, so the estimate can exceed the window: Percent then shows "?" rather
+// than a cumulative figure like 999% (#510).
+func WorkerContext(model string, prompt int64) ContextUse {
+	return NewContextUse(model, "", usage.Tokens{Input: prompt})
+}
+
+// Fraction is Prompt/Window clamped to one, or zero when nothing has been
+// read. Trustworthy reports whether the unclamped reading fits its window.
 func (u ContextUse) Fraction() float64 {
 	if u.Window <= 0 {
 		return 0
 	}
-	return float64(u.Prompt) / float64(u.Window)
+	f := float64(u.Prompt) / float64(u.Window)
+	if f < 0 {
+		return 0
+	}
+	if f > 1 {
+		return 1
+	}
+	return f
+}
+
+// Trustworthy reports whether the reading can safely drive context actions.
+// A prompt beyond its declared window is usually a cumulative provider total.
+func (u ContextUse) Trustworthy() bool {
+	return u.Window > 0 && u.Prompt >= 0 && u.Prompt <= u.Window
+}
+
+// ContextPercent formats a context reading for display. Impossible readings
+// are unknown rather than an alarming percentage above 100.
+func ContextPercent(prompt, window int64) string {
+	u := ContextUse{Prompt: prompt, Window: window}
+	if !u.Trustworthy() {
+		return "?"
+	}
+	return fmt.Sprintf("%.0f%%", u.Fraction()*100)
+}
+
+// Percent is this reading formatted for display.
+func (u ContextUse) Percent() string {
+	return ContextPercent(u.Prompt, u.Window)
 }
 
 // ContextReader tails one transcript and keeps its latest usage record, so
@@ -124,11 +163,18 @@ func (r *ContextReader) Read(path string) (ContextUse, error) {
 		r.path, r.cur, r.last = path, usage.Cursor{}, nil
 	}
 	parse := usage.ParserFor(r.Agent)
+	readPath := path
+	if r.Agent == usage.Grok && filepath.Base(path) == "usage.json" {
+		// Grok's adapter points at the cumulative usage ledger. The sibling
+		// updates stream has the latest model call's actual prompt size.
+		readPath = filepath.Join(filepath.Dir(path), "updates.jsonl")
+		parse = usage.ParseGrokContext
+	}
 	if parse == nil {
 		return ContextUse{}, fmt.Errorf("no transcript parser for %q", r.Agent)
 	}
 	if path != "" {
-		recs, err := usage.Tail(path, &r.cur, parse)
+		recs, err := usage.Tail(readPath, &r.cur, parse)
 		if err != nil {
 			return ContextUse{}, err
 		}
@@ -354,12 +400,18 @@ func (w *CompactWatcher) Check() (CompactReport, error) {
 	}
 	frac := use.Fraction()
 	rep := CompactReport{Fraction: frac}
+	if use.Prompt != 0 && !use.Trustworthy() {
+		// A cumulative or otherwise impossible reading must neither create a
+		// threshold notice nor send a compact command.
+		w.armed, w.pending = true, false
+		return rep, nil
+	}
 	if frac < w.Threshold {
 		w.armed, w.pending = true, false
 		return rep, nil
 	}
 	a := w.App
-	pct := fmt.Sprintf("%.0f%%", frac*100)
+	pct := use.Percent()
 	cmd, ok := CompactCommand(w.Harness)
 	if w.armed {
 		w.armed, rep.Crossed = false, true
