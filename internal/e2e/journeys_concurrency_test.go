@@ -14,6 +14,9 @@ import (
 // nothing that runs; spawn (CLI and MCP) refuses until a task lands and frees
 // a slot, then works again.
 func TestJourneyConcurrencyCap(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	w.Spawn("t1", "Alpha work", []string{"alpha/**"}, append([]fa.Step{fa.Wait("proceed-now")}, finished("alpha", "alpha\n")...)...)
 	w.Spawn("t2", "Beta work", []string{"beta/**"}, fa.Wait("never-comes"))

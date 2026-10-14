@@ -23,6 +23,9 @@ const buildCmd = `set -e; for f in app/*.sh; do [ -e "$f" ] || continue; sh -eu 
 // the fix the kill made t1 "superseded", so restack dropped its commit and
 // left integration with t2's caller but no event bus.
 func TestJourneyRestackKeepsUnpublishedLanded(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n", TestCmd: buildCmd})
 	w.Spawn("t1", "Event bus", []string{"lib/**"},
 		fa.Write("lib/eventbus.sh", "EVENT_RESYNC=resync\n"), fa.Commit("event bus"), fa.Done("Adds the event bus."))

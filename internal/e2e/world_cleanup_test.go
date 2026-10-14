@@ -15,6 +15,9 @@ import (
 // "permission denied". Go writes to the real shared caches, made writable,
 // and the World makes its tree writable before it is removed.
 func TestWorldCleansUpReadOnlyTrees(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	var w *World
 	ok := t.Run("world", func(t *testing.T) {
 		w = world(t, Options{NoInit: true})

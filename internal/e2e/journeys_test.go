@@ -15,6 +15,9 @@ import (
 // TestJourneyInitDoctorFreshRepo: a fresh repo fails doctor only on what
 // init fixes, and passes after saddle init with no hand edits.
 func TestJourneyInitDoctorFreshRepo(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{NoInit: true})
 
 	r := w.Saddle("doctor", "--json")
@@ -129,6 +132,9 @@ func prNumber(t *testing.T, s *fakegh.State, url string) *fakegh.PR {
 // auto-merge waits for CI, then merges it bottom-up into main, restacking
 // and retargeting the top PR after the bottom one merges.
 func TestJourneyParallelLandPRsAutomerge(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	must(t, w.GH.Update(func(s *fakegh.State) error {
 		s.DefaultChecks = []fakegh.Check{{Name: "ci", Workflow: "CI", State: fakegh.Pending}}
@@ -224,6 +230,9 @@ func conflictSetup(t *testing.T, w *World, t2 ...fa.Step) {
 // is woken, its hook delivers the conflict, and it syncs, resolves, calls
 // done again and lands.
 func TestJourneyConflictReturnedToProducer(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\nno_auto_rebase = true\n"})
 	conflictSetup(t, w,
 		fa.Wait("could not land"),
@@ -253,6 +262,9 @@ func TestJourneyConflictReturnedToProducer(t *testing.T) {
 // handing back the same conflict is escalated to the owner after
 // train.max_attempts, and told to stop instead of being handed it again.
 func TestJourneyConflictEscalatesAfterMaxAttempts(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\nno_auto_rebase = true\nmax_attempts = 2\n"})
 	conflictSetup(t, w,
 		fa.Wait("could not land"),
@@ -283,6 +295,9 @@ func TestJourneyConflictEscalatesAfterMaxAttempts(t *testing.T) {
 // TestJourneyMessageReachesEscalatedTask: after an escalation the owner is
 // told to "tell t2 what to do"; that message must wake t2.
 func TestJourneyMessageReachesEscalatedTask(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\nno_auto_rebase = true\nmax_attempts = 1\n"})
 	conflictSetup(t, w, fa.Wait("Message from the user: fix it like this"))
 	if r := w.Saddle("land"); !strings.Contains(r.Stdout, "escalated") {
@@ -305,6 +320,9 @@ func TestJourneyMessageReachesEscalatedTask(t *testing.T) {
 // the rest of the stack on the new main and retargets the next PR to main,
 // and prs never reopens the merged one.
 func TestJourneyRestackAfterHumanSquashMerge(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	urls := landTwo(t, w)
 	low := prNumber(t, w.GHState(), urls["t1"])
@@ -340,6 +358,9 @@ func TestJourneyRestackAfterHumanSquashMerge(t *testing.T) {
 // integration and prs stops publishing it. requeue puts it back in the
 // train, and it lands and gets a PR again.
 func TestJourneyUnstackAndRequeue(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	urls := landTwo(t, w)
 
@@ -389,6 +410,9 @@ func TestJourneyUnstackAndRequeue(t *testing.T) {
 // their commits"; once restack has, prs must work without waiting for the
 // next sentinel cycle.
 func TestJourneyPRsRightAfterUnstackRestack(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	landTwo(t, w)
 	w.MustSaddle("unstack", "t1")

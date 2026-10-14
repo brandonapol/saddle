@@ -23,6 +23,9 @@ import (
 // interrupted with SIGTERM mid-gate takes its gate down too, and the next
 // land goes through.
 func TestJourneyGateHangTimesOut(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	scratch := t.TempDir()
 	hang, child := filepath.Join(scratch, "hang"), filepath.Join(scratch, "child")
 	// A timed-out gate is retried once (#430), so the first phase hangs

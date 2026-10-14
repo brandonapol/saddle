@@ -51,6 +51,9 @@ exec sleep 600
 // work and calls done, and the task queues in the train. Status names grok
 // as the task's adapter and ranks grok first for new spawns.
 func TestJourneyHandoffWhenWorkerRunsOutOfQuota(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	fakeGrok(t, w)
 	banner := "You've hit your session limit · resets in 3 hours\n\n● Usage limit reached · esc to cancel\n"
@@ -102,6 +105,9 @@ func TestJourneyHandoffWhenWorkerRunsOutOfQuota(t *testing.T) {
 // the chat says what happened and the header names grok. The owner's next
 // message reaches grok.
 func TestJourneyOrchestratorSurvivesItsAdapterRunningOut(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	fakeGrok(t, w)
 	w.Spawn("t1", "Steady work", []string{"steady/**"}, fa.Wait("never-comes"))

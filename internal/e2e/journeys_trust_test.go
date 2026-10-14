@@ -18,6 +18,9 @@ import (
 // remembered; a changed origin asks again; agents in worktrees are never
 // asked, even after the user untrusts the repo.
 func TestJourneyTrustPrompt(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	t.Setenv("SADDLE_TRUST", "")
 	w := world(t, Options{NoInit: true})
 	saddleDir := filepath.Join(w.Repo, ".saddle")

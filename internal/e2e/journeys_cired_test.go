@@ -42,6 +42,9 @@ func hasLabel(p *fakegh.PR, l string) bool { return slices.Contains(p.Labels, l)
 // is held by land; auto-merge merges nothing. Once t1 is green the hold
 // lifts by itself: t4 lands and prs opens t3's and t4's PRs.
 func TestJourneyCIRedHoldsAboveAndClearsWhenGreen(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	urls := landTwo(t, w)
 	s := w.GHState()
@@ -174,6 +177,9 @@ func repairTasks(w *World, orig string) []mcpserver.TaskView {
 // PR gets the fix, the repair gets no PR of its own, and once the checks
 // pass the hold lifts.
 func TestJourneyCIRedLintRepairFoldsIntoRedLayer(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	w.WriteFile("Makefile", "fix:\n\tsed -i 's/ *$$//' alpha/work.txt\n")
 	w.Git(w.Repo, "add", "Makefile")
@@ -244,6 +250,9 @@ func TestJourneyCIRedLintRepairFoldsIntoRedLayer(t *testing.T) {
 // layer; after [ci] repair_attempts (2) the orchestrator gets one action
 // notice and no third repair is spawned.
 func TestJourneyCIRedEscalatesAfterRepairAttempts(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	urls := landTwo(t, w)
 	low := prNumber(t, w.GHState(), urls["t1"])
@@ -296,6 +305,9 @@ func TestJourneyCIRedEscalatesAfterRepairAttempts(t *testing.T) {
 // task's claim, lands and folds into t1's layer, and once t1 is green the
 // hold on t3 lifts.
 func TestJourneyCIRedRespawnsKilledRepair(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	urls := landTwo(t, w)
 	low := prNumber(t, w.GHState(), urls["t1"])

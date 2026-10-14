@@ -52,6 +52,9 @@ func (s runqShells) runLoaded(t *testing.T, proc, task, script string) *contende
 // waiting on load, starts by itself once the load drops, and runs the
 // command at nice 10.
 func TestJourneySaddleRunWaitsOnLoad(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	s, proc := loadShells(t, "max_load_per_cpu = 1.0\nmax_cpu_pressure = 60\ngate_max_wait = \"5m\"\n")
 	loadavg := filepath.Join(proc, "proc", "loadavg")
 	must(t, os.WriteFile(loadavg, []byte("999.00 1.00 1.00 2/300 1\n"), 0o644))
@@ -94,6 +97,9 @@ func TestJourneySaddleRunWaitsOnLoad(t *testing.T) {
 // TestJourneySaddleRunGateGivesUp: a box that stays busy holds the run at
 // most gate_max_wait; a box whose probes can't be read never holds it.
 func TestJourneySaddleRunGateGivesUp(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	s, proc := loadShells(t, "gate_max_wait = \"2s\"\n")
 	must(t, os.WriteFile(filepath.Join(proc, "proc", "loadavg"), []byte("999.00 1.00 1.00 2/300 1\n"), 0o644))
 	start := time.Now()

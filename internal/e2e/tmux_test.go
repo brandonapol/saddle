@@ -13,6 +13,9 @@ import (
 // server is killed (an agent finishing a hook) is waited for, so stopTmux
 // returns only once its last write has happened.
 func TestHarnessStopTmuxAwaitsPanes(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	x := NewTmux(t)
 	dir := t.TempDir()
 	late, ready := filepath.Join(dir, "late"), filepath.Join(dir, "ready")
@@ -38,6 +41,9 @@ func TestHarnessStopTmuxAwaitsPanes(t *testing.T) {
 // would pass the kernel's sun_path limit and tmux would fail with "File
 // name too long". NewTmux falls back to a shorter dir.
 func TestHarnessTmuxSocketFitsUnderLongTempDir(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	long := filepath.Join(t.TempDir(), strings.Repeat("d", 90))
 	must(t, os.MkdirAll(long, 0o755))
 	t.Setenv("TMPDIR", long)

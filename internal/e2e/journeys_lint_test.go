@@ -20,6 +20,9 @@ const gofmtMakefile = "lint:\n\t@out=\"$$(gofmt -l .)\"; if [ -n \"$$out\" ]; th
 // Makefile) and refuses with gofmt's output; the agent runs the repo's
 // fixer, commits and calls done again; the branch lands formatted.
 func TestJourneyLintDoneRefusedThenLands(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	if _, err := exec.LookPath("gofmt"); err != nil {
 		t.Skip("gofmt not installed")
 	}
@@ -55,6 +58,9 @@ func TestJourneyLintDoneRefusedThenLands(t *testing.T) {
 // train runs lint.cmd after the tests on the rebased tree and hands the
 // failure back to t2 with the output, like red tests; t2 fixes it and lands.
 func TestJourneyLintFailureReturnedToProducer(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	lint := `if [ -e STRICT ] && grep -rlq --exclude-dir=.git LOOSE .; then echo "lint: LOOSE is not allowed under STRICT"; exit 1; fi`
 	w := world(t, Options{Tables: "[train]\nno_auto_rebase = true\nlint.cmd = " + strqt(lint) + "\n"})
 	w.Spawn("t1", "Strict", []string{"STRICT"}, fa.Write("STRICT", "on\n"), fa.Commit("strict"), fa.Done("Strict mode."))

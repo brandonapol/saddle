@@ -15,6 +15,9 @@ import (
 // going up on main, where it would fail CI until t1 merged. t3, unrelated,
 // still gets its own PR on main.
 func TestJourneyExplicitDependencyStacks(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	w.Spawn("t1", "e2e harness", []string{"Makefile"},
 		fa.Write("Makefile", "test/e2e:\n\tgo test ./e2e\n"), fa.Commit("make test/e2e"), fa.Done("Adds make test/e2e."))

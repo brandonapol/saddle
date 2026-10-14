@@ -65,6 +65,9 @@ func (w *World) waitPrompt(target string) {
 // is not the user drafting: the wake line must still reach the agent, so a
 // notice (here a message) doesn't sit undelivered while it idles.
 func TestJourneyWakeIdleAgentWithPromptSuggestion(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	w.Spawn("t1", "Alpha work", []string{"alpha/**"}, fa.Wait("carry on with alpha"))
 	v := w.WaitStatus("t1", "idle")
@@ -85,6 +88,9 @@ func TestJourneyWakeIdleAgentWithPromptSuggestion(t *testing.T) {
 // as a notice instead, until saddle up gives the task a window of its own
 // again (#254).
 func TestJourneyWakeLineNeverTypedIntoForeignWindow(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	w.Spawn("t1", "Alpha work", []string{"alpha/**"}, fa.Wait("never-comes"))
 	v := w.WaitStatus("t1", "idle")
@@ -129,6 +135,9 @@ func TestJourneyWakeLineNeverTypedIntoForeignWindow(t *testing.T) {
 // idle agent's branch. The failure goes back to that agent, which is woken
 // at its prompt, fixes the branch, calls done again and lands.
 func TestJourneyTestFailureWakesIdleProducer(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	w.Spawn("t1", "Alpha work", []string{"alpha/**"},
 		fa.Write("alpha/work.txt", "alpha\n"), fa.Write("FAIL_TESTS", "x\n"), fa.Commit("alpha, tests red"), fa.Done("Adds alpha."),

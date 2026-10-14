@@ -84,6 +84,9 @@ func liveOrchestrators(pids string) int {
 //   - #262: API retries show in place of "thinking…";
 //   - #264: x and L ask first, and any key but y keeps things as they are.
 func TestJourneyTUIFixes2(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	idleAgent(w, "t1", "Keep me alive", "keep/**")
 	pids := lazyOrchestrator(t, w)

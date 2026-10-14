@@ -18,6 +18,9 @@ import (
 // repo-hook lock instead of running beside the other: no false refusal, both
 // branches reach the train and land.
 func TestJourneyTwoAgentsDoneTogether(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	busy := filepath.Join(t.TempDir(), "gate-busy")
 	runs := filepath.Join(filepath.Dir(busy), "gate-runs")
 	gate := "lint:\n\t@if ! mkdir " + shq(busy) + " 2>/dev/null; then echo 'gate: another run is active'; exit 1; fi; " +

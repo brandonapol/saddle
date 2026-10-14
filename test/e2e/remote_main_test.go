@@ -31,67 +31,9 @@ import (
 
 var bins harness.Bins
 
-func TestMain(m *testing.M) {
-	// Temp dirs under a saddle repo would put every World's repo inside it.
-	base, err := isolatedTemp()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "e2e:", err)
-		os.Exit(1)
-	}
-	_ = os.Setenv("TMPDIR", base)
-	_ = os.Setenv("GOTMPDIR", base)
-	dir, err := os.MkdirTemp("", "e2ebin")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	if bins, err = harness.Build(dir); err != nil {
-		_ = os.RemoveAll(dir)
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	_ = os.Setenv("PATH", bins.Dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	for _, k := range []string{"TMUX", "SADDLE_ROOT", "SADDLE_TASK", "SADDLE_REMOTE_DIR", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"} {
-		_ = os.Unsetenv(k)
-	}
-	code := m.Run()
-	_ = os.RemoveAll(dir)
-	_ = os.RemoveAll(base)
-	os.Exit(code)
-}
-
-// isolatedTemp makes a temp dir with no saddle repo above it.
-func isolatedTemp() (string, error) {
-	parents := []string{os.TempDir(), "/tmp"}
-	if c, err := os.UserCacheDir(); err == nil {
-		parents = append(parents, filepath.Join(c, "saddle"))
-	}
-	for _, p := range parents {
-		if os.MkdirAll(p, 0o755) != nil {
-			continue
-		}
-		d, err := os.MkdirTemp(p, "e2e-remote-")
-		if err != nil {
-			continue
-		}
-		if d, err = filepath.EvalSymlinks(d); err == nil && !underSaddleRepo(d) {
-			return d, nil
-		}
-		_ = os.RemoveAll(d)
-	}
-	return "", fmt.Errorf("no temp dir outside a saddle repo under %v", parents)
-}
-
-func underSaddleRepo(dir string) bool {
-	for d := dir; ; d = filepath.Dir(d) {
-		if _, err := os.Stat(filepath.Join(d, ".saddle", "config.toml")); err == nil {
-			return true
-		}
-		if filepath.Dir(d) == d {
-			return false
-		}
-	}
-}
+// TestMain builds the binaries once and runs each journey in its own
+// process, in parallel (see harness.Main and harness.Fork).
+func TestMain(m *testing.M) { harness.Main(m, &bins) }
 
 // host is a World with remote control on and `saddle remote serve`
 // listening on a kernel-chosen loopback port.

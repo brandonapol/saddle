@@ -30,6 +30,9 @@ func (h *host) concurrencyLimit() int {
 // Exactly one wins; the other is refused with the moved version instead of
 // undoing it, and both calls are audited.
 func TestRemoteTwoControllersRace(t *testing.T) {
+	if harness.Fork(t) {
+		return
+	}
 	h := newHost(t)
 	phone := h.mustConnect(h.token("phone", "admin"))
 	laptop := h.mustConnect(h.token("laptop", "admin"))
@@ -100,6 +103,9 @@ func TestRemoteTwoControllersRace(t *testing.T) {
 // connection is refused, and a confirm code held before the revoke can't
 // be used. The other token keeps working, and the refusals are audited.
 func TestRemoteRevokedToken(t *testing.T) {
+	if harness.Fork(t) {
+		return
+	}
 	h := newHost(t)
 	phoneSecret := h.token("phone", "admin")
 	phone := h.mustConnect(phoneSecret)
@@ -153,6 +159,9 @@ func countDenied(es []remote.AuditEntry) int {
 // working, and no remote tool can lift it. `saddle remote resume` on the
 // host restores auto-merge and actions.
 func TestRemotePanicPause(t *testing.T) {
+	if harness.Fork(t) {
+		return
+	}
 	h := newHost(t)
 	h.MustMCP("t0", "automerge", map[string]any{"action": "on"})
 	automergeOn := func() bool {
@@ -230,6 +239,9 @@ func TestRemotePanicPause(t *testing.T) {
 // shown land, and calling it by name anyway is refused before anything
 // runs and audited with the scope reason. Reads still work.
 func TestRemoteReadTokenDeniedLand(t *testing.T) {
+	if harness.Fork(t) {
+		return
+	}
 	h := newHost(t)
 	cs := h.mustConnect(h.token("viewer", "read"))
 	res, err := cs.ListTools(t.Context(), nil)

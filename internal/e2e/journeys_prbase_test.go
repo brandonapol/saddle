@@ -16,6 +16,9 @@ import (
 // restack puts it back on main and says so in a pr_base event naming both
 // bases.
 func TestJourneyManualRetargetSurvivesRestack(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	urls := landThree(t, w)
 	s := w.GHState()

@@ -94,6 +94,9 @@ func (u *TUI) clearInput(text string) {
 // next, the shell survives hiding, and the TUI carries on after the shell
 // exits.
 func TestJourneyTerminalPane(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	u := w.StartTUI(120, 36)
 
@@ -155,6 +158,9 @@ func TestJourneyTerminalPane(t *testing.T) {
 // shell or the chat input. (ESC and backtick arriving in separate reads
 // still split: #200.)
 func TestJourneyTerminalToggleEncodings(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	u := w.StartTUI(120, 36)
 

@@ -8,6 +8,9 @@ import (
 )
 
 func TestHarnessTUIDriver(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	u := w.StartTUI(120, 40)
 	u.WaitScreen("1 control", "2 plan", "3 merge", "AGENTS", "ORCHESTRATOR")

@@ -109,6 +109,9 @@ func stepCopyCursor(u *TUI, before []string, key string) {
 // header, y copies; then a mouse drag over the same rows copies them again.
 // Both land in the fake wl-copy and in tmux's paste buffer, as plain text.
 func TestJourneyCopyToClipboard(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{})
 	clip := fakeWlCopy(w)
 	u := w.startTUIWayland(120, 36)

@@ -16,6 +16,9 @@ import (
 // and doctor's leftovers warning clears. A killed task's unmerged branch is
 // kept, with the reason.
 func TestJourneyGCAfterSquashMerges(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	urls := landTwo(t, w)
 	w.Spawn("t3", "Gamma work", []string{"gamma/**"},

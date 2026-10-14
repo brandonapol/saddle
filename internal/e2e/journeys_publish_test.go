@@ -16,6 +16,9 @@ import (
 // template filled in; the saddle process pushes, past the ref guard, and no
 // task's stack branch moves.
 func TestJourneyPublishWithBrokenStack(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	w.WriteFile(".github/pull_request_template.md", "## Summary\n<!-- what changed and why -->\n\n## Test plan\n- [ ] make check\n")
 	w.Git(w.Repo, "add", ".github")

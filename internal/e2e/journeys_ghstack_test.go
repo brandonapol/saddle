@@ -33,6 +33,9 @@ func ghStackCalls(s *fakegh.State) []string {
 // t2 stays on main, and the stack is linked on GitHub with gh stack link by
 // PR URL. Saddle never runs a gh stack command that pushes.
 func TestJourneyCustomStackCreate(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := ghStackWorld(t)
 	urls := landThree(t, w)
 
@@ -82,6 +85,9 @@ func TestJourneyCustomStackCreate(t *testing.T) {
 // still records the stack and publishes it the saddle way, says so, and
 // logs one fallback event however many times prs runs.
 func TestJourneyCustomStackFallback(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := ghStackWorld(t)
 	must(t, w.GH.Update(func(s *fakegh.State) error { s.StacksDisabled = true; return nil }))
 	urls := landThree(t, w)
@@ -110,6 +116,9 @@ func TestJourneyCustomStackFallback(t *testing.T) {
 // in one gh stack merge call, all or nothing; saddle then restacks, so both
 // tasks leave the PR stack as merged and the unrelated PR stays open.
 func TestJourneyGhStackAtomicMerge(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := ghStackWorld(t)
 	urls := landThree(t, w)
 	w.MustSaddle("stack", "create", "ui", "t3", "t1")

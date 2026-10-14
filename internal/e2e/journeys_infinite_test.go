@@ -22,6 +22,9 @@ import (
 // still knows what it parked and resumes it after the reset; the task then
 // finishes and lands, and `infinite off` ends the run with a summary.
 func TestJourneyInfiniteModeRunsToTheLimit(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Top: "concurrency = 2\n"})
 	issues := []autopilot.Issue{
 		{Number: 1, Title: "Area one", Body: "Work in area1.\nclaims: area1/**"},

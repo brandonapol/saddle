@@ -20,6 +20,9 @@ const spellCheck = `test ! -f gamma/uses-word.txt || test -f delta/allow-word.tx
 // pass. prs publishes layers 1 and 2, holds 3 and 4, and the failure names
 // layer 3, the check and its output. With the gate off, all four go out.
 func TestJourneyPrepublishGateHoldsRedLayer(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\nprepublish.cmd = \"" + strings.ReplaceAll(spellCheck, `"`, `\"`) + "\"\n"})
 	layers := []struct {
 		id, title, dir, file string

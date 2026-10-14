@@ -23,6 +23,9 @@ import (
 // status shows the chain and opus's out_of_quota_until. Once the reset
 // passes, opus spawns run on claude again.
 func TestJourneyModelFallbackChain(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[fallback]\n\"claude:opus\" = [\"grok\"]\n"})
 	fakeGrok(t, w)
 	banner := "You've hit your session limit · resets in 3 hours\n\n● Usage limit reached · esc to cancel\n"

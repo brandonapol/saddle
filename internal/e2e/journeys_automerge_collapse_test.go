@@ -16,6 +16,9 @@ import (
 // on t1 forever. Now status says a collapse is next, and one watcher tick
 // merges t2's PR into main carrying t1, with no human edit.
 func TestJourneyAutomergeCollapsesRedBottom(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	low, high := redBottomStack(t, w)
 	url := w.Task("t2").PR
@@ -45,6 +48,9 @@ func TestJourneyAutomergeCollapsesRedBottom(t *testing.T) {
 // red, auto-merge merges neither t1 nor t2 above it, not even by collapsing
 // into green t2; status names the red layer and promises no collapse.
 func TestJourneyAutomergeNeverMergesCIRed(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
 	low, high := redBottomStack(t, w)
 	if rep := w.CIRedTick(); len(rep.Red) != 1 || rep.Red[0].Task != "t1" {

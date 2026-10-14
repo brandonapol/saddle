@@ -36,6 +36,9 @@ func (g *usageGate) Usage(now time.Time) (autopilot.Usage, error) {
 // plan-limit pause until the reset, lands everything and stops with a
 // summary that interrupts the orchestrator. The clock is the test's.
 func TestJourneyAutopilotDrainsReadyQueue(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	w := world(t, Options{Top: "concurrency = 2\n"})
 	old := app.OrphanAfter
 	app.OrphanAfter = 0
