@@ -16,6 +16,11 @@ import (
 // sessions and messages in, filled from testdata/opencode/messages.jsonl:
 // messages of ses_a (cwd /repo/wt) and ses_b (cwd /repo/other).
 func openCodeDB(t *testing.T) string {
+	return openCodeDBFrom(t, "testdata/opencode/messages.jsonl")
+}
+
+// openCodeDBFrom is openCodeDB filled from the given JSONL file.
+func openCodeDBFrom(t *testing.T, rows string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "opencode.db")
 	db, err := sql.Open("sqlite", path)
@@ -32,7 +37,7 @@ func openCodeDB(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	f, err := os.Open("testdata/opencode/messages.jsonl")
+	f, err := os.Open(rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,6 +258,38 @@ func TestParseOpenCodeLimitCaptured(t *testing.T) {
 		l, ok := ParseOpenCodeLimit(c.in)
 		if ok != c.ok || l.ResetIn != c.resetIn || l.RetryIn != c.retryIn {
 			t.Errorf("%q: %+v %v", c.in, l, ok)
+		}
+	}
+}
+
+// #573: rows opencode 1.19.0 wrote when OpenCode Zen and OpenAI refused it
+// for limits (testdata/opencode/limits.jsonl, see the README beside it).
+// Zen's free tier error reads as a plain rate limit, so the response body's
+// error type is what marks it; a reset comes from the message, else from
+// the response's retry-after. A turn still retrying has no error yet.
+func TestReadOpenCodeLimitsCaptured(t *testing.T) {
+	ls, err := ReadOpenCodeLimits(openCodeDBFrom(t, "testdata/opencode/limits.jsonl"), "/repo/wt", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		model   string
+		resetIn time.Duration
+		updated int64
+	}{
+		{"opencode/big-pickle", time.Second, 1792013424024},       // FreeUsageLimitError, retry-after 1 (shortened)
+		{"opencode/big-pickle", 0, 1792013458873},                 // CreditsError
+		{"openai/gpt-4o-mini", 0, 1792013526651},                  // insufficient_quota
+		{"opencode/big-pickle", 125 * time.Minute, 1792014576533}, // GoUsageLimitError, "Resets in 2hr 5min"
+		{"opencode/big-pickle", 0, 1792014598303},                 // MonthlyLimitError
+	}
+	if len(ls) != len(want) {
+		t.Fatalf("got %d limits: %+v", len(ls), ls)
+	}
+	for i, w := range want {
+		l := ls[i]
+		if l.Model() != w.model || l.ResetIn != w.resetIn || !l.Time.Equal(time.UnixMilli(w.updated)) {
+			t.Errorf("%d: %+v want %+v", i, l, w)
 		}
 	}
 }

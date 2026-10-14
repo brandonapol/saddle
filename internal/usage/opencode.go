@@ -63,8 +63,10 @@ type openCodeMessage struct {
 	Error *struct {
 		Name string `json:"name"`
 		Data struct {
-			Message    string `json:"message"`
-			StatusCode int    `json:"statusCode"`
+			Message         string            `json:"message"`
+			StatusCode      int               `json:"statusCode"`
+			ResponseHeaders map[string]string `json:"responseHeaders"`
+			ResponseBody    string            `json:"responseBody"`
 		} `json:"data"`
 	} `json:"error"`
 }
@@ -255,18 +257,59 @@ func ParseOpenCodeLimit(text string) (OpenCodeLimit, bool) {
 	return l, true
 }
 
+// openCodeQuotaTypes are the error types and codes in a provider's
+// response body that mean quota, not a passing rate limit: OpenCode Zen's
+// (its free tier's message is a bare "Rate limit exceeded. Please try
+// again later.") and OpenAI's. opencode keys its own free tier and Go
+// notices on the same types.
+var openCodeQuotaTypes = []string{
+	"FreeUsageLimitError", "GoUsageLimitError", "BlackUsageLimitError",
+	"CreditsError", "MonthlyLimitError", "UserLimitError",
+	"insufficient_quota",
+}
+
+// openCodeQuotaBody reports whether a provider's response body names one of
+// openCodeQuotaTypes as its error's type or code.
+func openCodeQuotaBody(body string) bool {
+	var b struct {
+		Error struct {
+			Type string `json:"type"`
+			Code any    `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(body), &b) != nil {
+		return false
+	}
+	code, _ := b.Error.Code.(string)
+	return slices.Contains(openCodeQuotaTypes, b.Error.Type) || slices.Contains(openCodeQuotaTypes, code)
+}
+
 // ReadOpenCodeLimits returns the quota and limit errors that ended
 // opencode turns of the sessions run in dir (all when empty), after the
-// given time in ms, oldest first. Other errors are not limits.
+// given time in ms, oldest first. Other errors are not limits. A limit
+// with no reset in its message resets after the response's retry-after.
+//
+// opencode retries Zen's limits, waiting out their retry-after up to five
+// times, so a Zen limit lands here only once those retries run out.
 func ReadOpenCodeLimits(dbPath, dir string, afterMs int64) ([]OpenCodeLimit, error) {
 	var out []OpenCodeLimit
 	err := openCodeRows(dbPath, dir, afterMs, func(_ string, updated int64, m openCodeMessage) {
 		if updated <= afterMs || m.Role != "assistant" || m.Error == nil {
 			return
 		}
-		l, ok := ParseOpenCodeLimit(m.Error.Data.Message)
-		if !ok {
+		d := m.Error.Data
+		l, ok := ParseOpenCodeLimit(d.Message)
+		if !ok && !openCodeQuotaBody(d.ResponseBody) {
 			return
+		}
+		if !ok {
+			l = OpenCodeLimit{Message: d.Message}
+		}
+		if l.ResetIn == 0 {
+			if n, err := strconv.Atoi(strings.TrimSpace(d.ResponseHeaders["retry-after"])); err == nil && n > 0 {
+				l.Resets = fmt.Sprintf("in %ds", n)
+				l.ResetIn = time.Duration(n) * time.Second
+			}
 		}
 		l.Provider, l.ModelID = m.ProviderID, m.ModelID
 		l.Time = time.UnixMilli(updated)
