@@ -51,8 +51,8 @@ type World struct {
 // New builds a World: a temp HOME with a git identity, a bare origin on
 // main with a fake GitHub, a clone with one commit, a private tmux server
 // and, unless opts.NoInit, `saddle init` with the harness config. Worlds
-// set process env (HOME, TMUX_TMPDIR) for in-process saddle calls, so tests
-// using them can't run in parallel.
+// set process env (HOME, TMUX_TMPDIR, and the heavy-run queue's XDG dirs)
+// for in-process saddle calls, so tests using them can't run in parallel.
 func New(t testing.TB, bins Bins, opts Options) *World {
 	t.Helper()
 	root := t.TempDir()
@@ -97,6 +97,9 @@ func New(t testing.TB, bins Bins, opts Options) *World {
 		t.Setenv(k, "")
 		_ = os.Unsetenv(k)
 	}
+	// In-process calls read os.Getenv, which still has the host's run queue
+	// until this runs. open repeats it: a later Setenv must not leak back.
+	w.isolateRunq()
 
 	w.Git(root, "init", "-q", "--bare", "-b", "main", w.Origin)
 	var err error

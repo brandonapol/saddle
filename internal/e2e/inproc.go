@@ -27,9 +27,11 @@ func (w *World) AutomergeTick() automerge.Status {
 
 // open opens the World's repo in this process. The App runs the World's
 // saddle binary, not this test binary (its os.Executable), wherever it
-// starts saddle: agents' hooks, gates, the MCP server.
+// starts saddle: agents' hooks, gates, the MCP server. Its heavy-run queue
+// is the world's, not the host's.
 func (w *World) open() *app.App {
 	w.T.Helper()
+	w.isolateRunq()
 	a, err := app.Open(w.Repo)
 	must(w.T, err)
 	a.Bin = w.Bins.Saddle
