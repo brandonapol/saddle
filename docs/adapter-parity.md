@@ -137,9 +137,9 @@ CLIs' binaries, placed where each CLI prints a turn's error.
 ## Codex headless orchestrator (#506)
 
 Codex has no persistent stdin protocol, so the TUI's orchestrator runs on
-codex through saddle's bridge, like grok's: the `grok-bridge` command runs
-whichever bridge the run dir recorded, and for codex each user message is
-one `codex exec --json` turn. The first turn starts a session; later turns
+codex through saddle's `codex-bridge`, parallel to grok's `grok-bridge`.
+For codex each user message is one `codex exec --json` turn. The first turn
+starts a session; later turns
 run `codex exec resume <id>`, so context carries across turns. Codex's JSONL
 events become the stream-json the TUI parses: `thread.started` is the init
 line, agent messages are assistant text, commands, MCP calls, file changes

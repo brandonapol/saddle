@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/brandonapol/saddle/internal/usage"
 )
 
 func TestGrokBridgeResumes(t *testing.T) {
@@ -32,6 +34,11 @@ printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ok\",\"
 	spec := grokSpec{Cmd: fake, Args: []string{"--no-auto-update"}, Dir: dir}
 	b, _ := json.Marshal(spec)
 	if err := os.WriteFile(filepath.Join(dir, "grok.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The command chooses the bridge explicitly; stale run metadata must not
+	// turn grok-bridge into codex-bridge.
+	if err := (Launch{RunDir: dir}).record(usage.Codex); err != nil {
 		t.Fatal(err)
 	}
 	in := strings.NewReader(strings.Join([]string{
