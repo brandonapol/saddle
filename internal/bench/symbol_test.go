@@ -147,7 +147,7 @@ func TestCompareTable(t *testing.T) {
 func TestSymbolGateHidesBenchClaims(t *testing.T) {
 	tasks := []autopilot.Task{
 		{ID: "t1", Issue: 1, Claims: []string{"shapes/shapes.go"}, Live: true},
-		{ID: "t2", Issue: 2, Live: true}, // spawned with its shared claims dropped
+		{ID: "t2", Issue: 2, Live: true},                              // spawned with its shared claims dropped
 		{ID: "t9", Issue: 9, Claims: []string{"docs/**"}, Live: true}, // not a bench ticket
 	}
 	got := openGate(tasks, map[int]bool{1: true, 2: true})
