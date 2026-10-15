@@ -162,7 +162,14 @@ func TestSymbolShareFallsBackForHooklessOwnerAndUnknownEdit(t *testing.T) {
 	if d := a.CheckEdit(unknown); d.Allow || d.Owner != owner.ID {
 		t.Fatalf("unknown content: %+v, want the path-claim deny", d)
 	}
-	if ev := taskEvents(t, a, b.ID, "symbol_fallback"); len(ev) != 1 || !strings.Contains(ev[0], "unknown proposed content") {
+	// Rule 3 logs its own fallback for the same unknown edit.
+	var ev []string
+	for _, e := range taskEvents(t, a, b.ID, "symbol_fallback") {
+		if strings.Contains(e, "symbol-share") {
+			ev = append(ev, e)
+		}
+	}
+	if len(ev) != 1 || !strings.Contains(ev[0], "unknown proposed content") {
 		t.Errorf("symbol_fallback events = %q", ev)
 	}
 }
