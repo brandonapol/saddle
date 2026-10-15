@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/e2e/fakeagent"
 	"github.com/brandonapol/saddle/internal/e2e/fakegh"
 	"github.com/brandonapol/saddle/internal/mcpserver"
@@ -83,6 +84,9 @@ func New(t testing.TB, bins Bins, opts Options) *World {
 		"LANG=C.UTF-8",
 		"SHELL=/bin/sh",
 		"USER=e2e",
+		// The symbol rules' 250ms budget falls back to a path deny under
+		// load, which flaked symbol-mode journeys (#568).
+		app.SymbolBudgetEnv + "=1m",
 	}
 	w.env = append(w.env, goEnv(t)...)
 	w.Tmux.Env = w.env

@@ -90,6 +90,7 @@ func (a *App) CheckEdit(e Edit) Decision {
 	if !a.SymbolMode() || len(editRules) == 0 {
 		return d
 	}
+	symbolBudgetFromEnv()
 	if e = a.withRel(e); e.Rel == "" {
 		return d
 	}
@@ -105,6 +106,7 @@ func (a *App) EditNotes(e Edit) string {
 	if !a.SymbolMode() || len(noteRules) == 0 {
 		return ""
 	}
+	symbolBudgetFromEnv()
 	if e = a.withRel(e); e.Rel == "" {
 		return ""
 	}
