@@ -476,7 +476,7 @@ Saddle reaches its git host through `internal/forge` and nowhere else
 - **Still GitHub-shaped.** `ciwatch`, `sweeper`, `automerge.GH`, `sentinel`,
   `planner.Push` and `ghstack` take an injected gh runner and read GitHub's
   JSON themselves. Their runner comes from `forge`, but they move onto
-  `forge.Forge` before GitLab lands; until then they ignore `[forge]`.
+  `forge.Forge` before GitLab lands (#647); until then they ignore `[forge]`.
 - **Tests.** `internal/e2e/fakegh` is a fake `gh` binary on `PATH`, so e2e
   journeys exercise `forge.GitHub` end to end.
 

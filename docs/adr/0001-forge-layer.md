@@ -117,7 +117,7 @@ This change is a refactor barrier with no behaviour change for GitHub users:
   themselves (`ciwatch`, `sweeper`, `automerge.GH`, `sentinel.GH` and
   `CIRed`, `planner.Push`, `ghstack`) keep that seam for now. Their real
   runner now comes through `internal/forge`. Each moves onto typed `Forge`
-  operations in a follow-up issue that must land before #645 turns GitLab on;
+  operations in #647, which must land before #645 turns GitLab on;
   until then they always use `gh`, whatever `[forge]` says.
 - `internal/e2e/fakegh` stays as is: it is a fake `gh` binary on `PATH`, so it
   fakes the GitHub implementation end to end. #645 adds a fake `glab` the
