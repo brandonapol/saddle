@@ -1,5 +1,5 @@
 description = "A ticket's claim is too narrow: it also writes mathx/mean.go, which a live task holds. The write guard denies it and the ticket can't build."
-overlap = "low"
+overlap = "medium"
 safe_parallelism = 2
 
 [[ticket]]

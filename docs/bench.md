@@ -95,7 +95,7 @@ Edits are applied in order to an in-memory copy of the base:
 
 | Edit | Effect |
 | --- | --- |
-| `old` + `new` | replace the first `old` with `new`. When `old` isn't in `path` (or `path` is gone), any `.go` file in the same directory that holds `old` is edited instead: the agent follows a move. When no file holds it the edit is stale: logged as a `bench_stale` event and skipped. |
+| `old` + `new` | replace the first `old` with `new`. When `old` isn't in `path` (or `path` is gone), any file in the same directory that holds `old` is edited instead: the agent follows a move. When no file holds it the edit is stale: logged as a `bench_stale` event and skipped. |
 | `new` alone | write `new` as the whole file |
 | `append` | append `new` to the file |
 | `from` | move `from` to `path` (a rename) |
@@ -120,7 +120,7 @@ task still holds the claim).
 | `same-function` | two changes to `Rect.Area` | the same function | critical | 1 |
 | `rename` | move `textutil/util.go`; edit `Reverse` in it | a rename under an edit | critical | 1 |
 | `registry` | two new routes in `server.Routes` | a shared registry | critical | 1 |
-| `narrow-claim` | `mathx.Clamp`; `report` writes `mathx/mean.go` outside its claim | a write outside the claim | low | 2 |
+| `narrow-claim` | `mathx.Clamp`; `report` writes `mathx/mean.go` outside its claim | a write outside the claim | medium | 2 |
 
 *Expected overlap* is the worst pair's level from `internal/forecast`, given
 each ticket's claims and the files, symbols and imports its edits touch
