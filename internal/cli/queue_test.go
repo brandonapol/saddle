@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/runq"
 )
 
 func runQueue(t *testing.T, args ...string) string {
@@ -31,6 +33,8 @@ func queueRepo(t *testing.T) *app.App {
 		t.Skip("git not installed")
 	}
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv(runq.EnvPath, filepath.Join(t.TempDir(), "runq.db")) // never the machine's queue
+	t.Setenv(runq.EnvLease, "")
 	t.Setenv("SADDLE_ROOT", "")
 	t.Setenv("SADDLE_TRAIN", "")
 	t.Setenv("GIT_AUTHOR_NAME", "t")
@@ -133,5 +137,40 @@ func TestQueueJSONEmpty(t *testing.T) {
 func TestQueueRegistered(t *testing.T) {
 	if c, _, err := Root().Find([]string{"queue", "hold"}); err != nil || c.Name() != "hold" {
 		t.Fatalf("saddle queue hold not registered: %v", err)
+	}
+}
+
+// TestQueueShowsForeignRuns: a heavy run no saddle agent took (a hook in
+// another repo) shows under the train, in text and JSON; an agent's run
+// doesn't.
+func TestQueueShowsForeignRuns(t *testing.T) {
+	queueRepo(t)
+	q, err := runq.Open(runq.Options{Path: os.Getenv(runq.EnvPath), Mode: runq.ModeObserve, Getenv: func(string) string { return "" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = q.Close() })
+	for _, r := range []runq.Request{
+		{Class: "flutter-test", Label: "pid 42", Repo: "quark", Cmd: "flutter test", Foreign: true},
+		{Class: "go-test", Label: "t7", Cmd: "go test ./..."},
+	} {
+		l, err := q.Acquire(context.Background(), r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = l.Release() })
+	}
+	out := runQueue(t)
+	if !strings.Contains(out, "2. t2 queued\nforeign heavy runs") ||
+		!strings.Contains(out, "running flutter-test  quark/pid 42") || !strings.Contains(out, "weight 3  flutter test") ||
+		strings.Contains(out, "t7") {
+		t.Fatalf("queue:\n%s", out)
+	}
+	var got queueJSON
+	if err := json.Unmarshal([]byte(runQueue(t, "--json")), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.ForeignRuns) != 1 || got.ForeignRuns[0].Class != "flutter-test" || got.ForeignRuns[0].State != "running" {
+		t.Fatalf("foreign_runs %+v", got.ForeignRuns)
 	}
 }
