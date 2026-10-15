@@ -26,6 +26,8 @@ import (
 //	default_slots = 1        # for classes named nowhere
 //	max_load_per_cpu = 1.0   # load gate: hold while load1/cores is over this (0 off)
 //	max_cpu_pressure = 60    # ... or CPU PSI "some avg10" is over this % (0 off)
+//	min_free_ram_pct = 10    # ... or MemAvailable is under this % of MemTotal (0 off)
+//	budget = 4               # units all classes' runs share (default cores/2, >= 3; 0 off)
 //	nice = 10                # heavy children run at this nice increment (0 off)
 //	ionice = true            # ... and idle I/O class, on Linux
 //	scope = "systemd"        # run them in a user systemd scope (off by default)
@@ -35,6 +37,7 @@ import (
 //	target_util = 0.75       # share of the cores adaptive slots aim to fill
 //	[classes.go-test]
 //	slots = 2
+//	weight = 1               # budget units one run uses (flutter-test 3, others 1)
 //	match = ["go test*", "make check"]
 //	max_run = "45m"          # this class's own max_run
 type Config struct {
@@ -55,6 +58,11 @@ type Config struct {
 	// check off.
 	MaxLoadPerCPU  *float64 `toml:"max_load_per_cpu"`
 	MaxCPUPressure *float64 `toml:"max_cpu_pressure"`
+	MinFreeRAMPct  *float64 `toml:"min_free_ram_pct"`
+
+	// Budget is the machine's units (docs/resource-queue.md). Nil means
+	// DefaultBudget; a negative value turns the budget off.
+	Budget *int `toml:"budget"`
 
 	// How heavy children run. Nil means the default (nice 10, idle I/O).
 	Nice   *int   `toml:"nice"`
@@ -74,6 +82,7 @@ type Config struct {
 const (
 	DefaultMaxLoadPerCPU  = 1.0
 	DefaultMaxCPUPressure = 60
+	DefaultMinFreeRAMPct  = 10 // the TUI gauge's busy_ram_pct: "Overloaded"
 	DefaultNice           = 10
 	DefaultCPUWeight      = 20
 	DefaultTargetUtil     = 0.75
@@ -83,6 +92,7 @@ const (
 // the hook and shims (#240) route to the class; the core doesn't read them.
 type ClassConfig struct {
 	Slots  int      `toml:"slots"`
+	Weight int      `toml:"weight"`
 	Match  []string `toml:"match"`
 	MaxRun Duration `toml:"max_run"`
 }
@@ -178,6 +188,9 @@ func LoadConfig(paths ...string) (Config, error) {
 			if fc.Slots > 0 {
 				cc.Slots = fc.Slots
 			}
+			if fc.Weight > 0 {
+				cc.Weight = fc.Weight
+			}
 			if fc.Match != nil {
 				cc.Match = fc.Match
 			}
@@ -195,9 +208,17 @@ func (f Config) validate() error {
 	for _, v := range []struct {
 		key string
 		p   *float64
-	}{{"max_load_per_cpu", f.MaxLoadPerCPU}, {"max_cpu_pressure", f.MaxCPUPressure}} {
+	}{{"max_load_per_cpu", f.MaxLoadPerCPU}, {"max_cpu_pressure", f.MaxCPUPressure}, {"min_free_ram_pct", f.MinFreeRAMPct}} {
 		if v.p != nil && *v.p < 0 {
 			return fmt.Errorf("%s = %v: want >= 0 (0 turns the check off)", v.key, *v.p)
+		}
+	}
+	if f.MinFreeRAMPct != nil && *f.MinFreeRAMPct > 100 {
+		return fmt.Errorf("min_free_ram_pct = %v: want 0 to 100", *f.MinFreeRAMPct)
+	}
+	for name, cc := range f.Classes {
+		if cc.Weight < 0 {
+			return fmt.Errorf("classes.%s.weight = %d: want >= 1", name, cc.Weight)
 		}
 	}
 	if f.Nice != nil && (*f.Nice < 0 || *f.Nice > 19) {
@@ -224,6 +245,12 @@ func (c *Config) merge(f Config) {
 	}
 	if f.MaxCPUPressure != nil {
 		c.MaxCPUPressure = f.MaxCPUPressure
+	}
+	if f.MinFreeRAMPct != nil {
+		c.MinFreeRAMPct = f.MinFreeRAMPct
+	}
+	if f.Budget != nil {
+		c.Budget = f.Budget
 	}
 	if f.Nice != nil {
 		c.Nice = f.Nice
@@ -275,8 +302,9 @@ func (c Config) Apply(o Options) Options {
 		o.Slots = maps.Clone(DefaultClasses)
 	}
 	g := LoadGate{MaxLoadPerCPU: orDefault(c.MaxLoadPerCPU, DefaultMaxLoadPerCPU),
-		MaxPSISomeAvg10: orDefault(c.MaxCPUPressure, DefaultMaxCPUPressure)}
-	if g.MaxLoadPerCPU > 0 || g.MaxPSISomeAvg10 > 0 {
+		MaxPSISomeAvg10: orDefault(c.MaxCPUPressure, DefaultMaxCPUPressure),
+		MinFreeRAMPct:   orDefault(c.MinFreeRAMPct, DefaultMinFreeRAMPct)}
+	if g.MaxLoadPerCPU > 0 || g.MaxPSISomeAvg10 > 0 || g.MinFreeRAMPct > 0 {
 		root := ""
 		if o.Getenv != nil {
 			root = o.Getenv(EnvProcRoot)
@@ -298,9 +326,21 @@ func (c Config) Apply(o Options) Options {
 			o.TargetUtil = DefaultTargetUtil
 		}
 	}
+	if c.Budget != nil {
+		o.Budget = *c.Budget
+		if o.Budget == 0 {
+			o.Budget = -1 // budget = 0 reads as "none", like the other zero limits
+		}
+	}
+	if o.Weights == nil {
+		o.Weights = maps.Clone(DefaultWeights)
+	}
 	for name, cc := range c.Classes {
 		if cc.Slots > 0 {
 			o.Slots[name] = cc.Slots
+		}
+		if cc.Weight > 0 {
+			o.Weights[name] = cc.Weight
 		}
 	}
 	return o

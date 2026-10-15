@@ -52,7 +52,7 @@ func TestConfigLoadGateDefaults(t *testing.T) {
 	if !ok {
 		t.Fatalf("gate %#v, want a LoadGate", o.Gate)
 	}
-	if g.MaxLoadPerCPU != 1.0 || g.MaxPSISomeAvg10 != 60 {
+	if g.MaxLoadPerCPU != 1.0 || g.MaxPSISomeAvg10 != 60 || g.MinFreeRAMPct != 10 {
 		t.Fatalf("gate %+v", g)
 	}
 	if _, ok := g.Source.(ProcLoad); !ok {
@@ -64,10 +64,10 @@ func TestConfigLoadGateDefaults(t *testing.T) {
 }
 
 // TestConfigLoadGateKeys: the three [runq] keys reach the gate; the user
-// file wins over the repo's; 0 turns a check off, and both off removes the
-// gate.
+// file wins over the repo's; 0 turns a check off, and all three off
+// removes the gate.
 func TestConfigLoadGateKeys(t *testing.T) {
-	repo := writeConfig(t, "max_load_per_cpu = 2.5\nmax_cpu_pressure = 40\ngate_max_wait = \"3m\"\n")
+	repo := writeConfig(t, "max_load_per_cpu = 2.5\nmax_cpu_pressure = 40\nmin_free_ram_pct = 15\ngate_max_wait = \"3m\"\n")
 	user := writeConfig(t, "max_cpu_pressure = 30\n")
 	c, err := LoadConfig(repo, user)
 	if err != nil {
@@ -75,15 +75,15 @@ func TestConfigLoadGateKeys(t *testing.T) {
 	}
 	o := c.Apply(Options{})
 	g := o.Gate.(LoadGate)
-	if g.MaxLoadPerCPU != 2.5 || g.MaxPSISomeAvg10 != 30 || o.GateMaxWait != 3*time.Minute {
+	if g.MaxLoadPerCPU != 2.5 || g.MaxPSISomeAvg10 != 30 || g.MinFreeRAMPct != 15 || o.GateMaxWait != 3*time.Minute {
 		t.Fatalf("gate %+v wait %s", g, o.GateMaxWait)
 	}
-	off := writeConfig(t, "max_load_per_cpu = 0\nmax_cpu_pressure = 0\n")
+	off := writeConfig(t, "max_load_per_cpu = 0\nmax_cpu_pressure = 0\nmin_free_ram_pct = 0\n")
 	if c, err = LoadConfig(repo, off); err != nil {
 		t.Fatal(err)
 	}
 	if o := c.Apply(Options{}); o.Gate != nil {
-		t.Fatalf("both checks off still gates: %#v", o.Gate)
+		t.Fatalf("every check off still gates: %#v", o.Gate)
 	}
 	if _, err := LoadConfig(writeConfig(t, "max_load_per_cpu = -1\n")); err == nil {
 		t.Fatal("a negative ceiling should be rejected")
