@@ -49,24 +49,28 @@ type Input struct {
 type Kind string
 
 const (
-	KindSymbol      Kind = "symbol"       // both tasks touch the same symbol
-	KindRename      Kind = "rename"       // one task moves a path the other references
-	KindFile        Kind = "file"         // both tasks changed the same file
-	KindClaimedFile Kind = "claimed-file" // one task edits a file under the other's claim
-	KindImport      Kind = "import"       // one task imports a package the other changes
-	KindClaims      Kind = "claims"       // the tasks' claims overlap
-	KindCoChange    Kind = "co-change"    // the tasks' files often land together
+	KindSymbol Kind = "symbol" // both tasks touch the same symbol
+	KindRename Kind = "rename" // one task moves a path the other references
+	KindFile   Kind = "file"   // both tasks changed the same file
+	// KindFileDisjoint is a shared file where both tasks touched symbols but
+	// none in common: it usually merges cleanly.
+	KindFileDisjoint Kind = "file-disjoint"
+	KindClaimedFile  Kind = "claimed-file" // one task edits a file under the other's claim
+	KindImport       Kind = "import"       // one task imports a package the other changes
+	KindClaims       Kind = "claims"       // the tasks' claims overlap
+	KindCoChange     Kind = "co-change"    // the tasks' files often land together
 )
 
 // DefaultWeights is the score each kind of evidence carries.
 var DefaultWeights = map[Kind]int{
-	KindSymbol:      100,
-	KindRename:      100,
-	KindFile:        70,
-	KindClaimedFile: 50,
-	KindImport:      40,
-	KindClaims:      30,
-	KindCoChange:    20,
+	KindSymbol:       100,
+	KindRename:       100,
+	KindFile:         70,
+	KindFileDisjoint: 20,
+	KindClaimedFile:  50,
+	KindImport:       40,
+	KindClaims:       30,
+	KindCoChange:     20,
 }
 
 // Level buckets a score.
@@ -194,6 +198,7 @@ type task struct {
 	fileSet map[string]bool
 	dirs    map[string][]string // directory -> changed files directly in it, sorted
 	symbols map[Symbol]bool
+	symPath map[string]bool // files with at least one touched symbol
 	renames []Rename
 	imports []imp
 }
@@ -201,7 +206,7 @@ type task struct {
 type imp struct{ file, pkg string }
 
 func normalize(t Task) task {
-	n := task{id: t.ID, fileSet: map[string]bool{}, dirs: map[string][]string{}, symbols: map[Symbol]bool{}}
+	n := task{id: t.ID, fileSet: map[string]bool{}, dirs: map[string][]string{}, symbols: map[Symbol]bool{}, symPath: map[string]bool{}}
 	n.claims = uniq(t.Claims)
 	n.files = uniq(t.Files)
 	for _, f := range n.files {
@@ -212,6 +217,7 @@ func normalize(t Task) task {
 	for _, s := range t.Symbols {
 		s.Path = claims.Clean(s.Path)
 		n.symbols[s] = true
+		n.symPath[s.Path] = true
 	}
 	seen := map[Rename]bool{}
 	for _, r := range t.Renames {
@@ -269,13 +275,20 @@ func score(a, b *task, co map[[2]string]int, coMin int, cfg Config) (Forecast, b
 		ev = append(ev, Evidence{Kind: k, Score: cfg.weight(k), Text: fmt.Sprintf(format, args...)})
 	}
 
+	shared := map[string]bool{} // files where the tasks share a symbol
 	for s := range a.symbols {
 		if b.symbols[s] {
 			add(KindSymbol, "same symbol: %s %s (%s)", s.Path, s.Name, s.Kind)
+			shared[s.Path] = true
 		}
 	}
 	for _, f := range a.files {
-		if b.fileSet[f] {
+		if !b.fileSet[f] {
+			continue
+		}
+		if a.symPath[f] && b.symPath[f] && !shared[f] {
+			add(KindFileDisjoint, "same file, disjoint symbols: %s", f)
+		} else {
 			add(KindFile, "same file: %s", f)
 		}
 	}

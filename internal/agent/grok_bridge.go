@@ -111,8 +111,9 @@ func runGrokTurn(spec grokSpec, runDir, text, resume string, w io.Writer) (strin
 		}
 	}
 	scanErr := sc.Err()
-	waitErr := cmd.Wait()
+	// Drain stderr before Wait: Wait closes the pipe and would drop the tail.
 	tail := <-errCh
+	waitErr := cmd.Wait()
 	if held != nil {
 		if tail != "" {
 			writeResult(w, true, tail, session)

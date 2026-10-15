@@ -25,6 +25,9 @@ type Brief struct {
 	DoNotTouch        []string // serial files and other live tasks' claims, as "glob (owner)"
 	DoneWhen          []Check
 	Children          []Child
+	// Collisions are the forecast's pairs that involve this task, riskiest
+	// first. Load fills them; Build, which reads no git, leaves them empty.
+	Collisions []app.ForecastPair
 }
 
 // Check is one done-when item; Checked when the prompt ticked it.
@@ -39,8 +42,9 @@ type Child struct{ ID, Title, Status string }
 // maxHandsOff caps the do-not-touch list; the rest collapse to "+N more".
 const maxHandsOff = 8
 
-// Load builds the brief for task id from the store alone: it asks neither
-// git nor GitHub, so it is cheap enough to poll.
+// Load builds the brief for task id from the store, plus the collision
+// forecast, which reads live worktrees within app.ForecastBudget. It never
+// asks GitHub.
 func Load(a *app.App, id string) (Brief, error) {
 	t, err := a.Store.Task(id)
 	if err != nil {
@@ -50,7 +54,14 @@ func Load(a *app.App, id string) (Brief, error) {
 	if err != nil {
 		return Brief{}, err
 	}
-	return Build(t.ID, t.Prompt, ts, a.Cfg.Serial)
+	b, err := Build(t.ID, t.Prompt, ts, a.Cfg.Serial)
+	if err != nil {
+		return b, err
+	}
+	if f, err := a.Forecast(); err == nil {
+		b.Collisions = f.Involving(id)
+	}
+	return b, nil
 }
 
 // Build assembles the brief for task id from its prompt, every task and the
@@ -236,6 +247,17 @@ func (b Brief) Lines(w int) []string {
 			items = append(items, box+c.Text)
 		}
 		section("Done when", items)
+	}
+	if len(b.Collisions) > 0 {
+		var items []string
+		for _, c := range b.Collisions {
+			other := c.A
+			if other == b.ID {
+				other = c.B
+			}
+			items = append(items, c.Level+" with "+other+": "+c.Reason)
+		}
+		section("Collisions", items)
 	}
 	if len(b.Children) > 0 {
 		var items []string
