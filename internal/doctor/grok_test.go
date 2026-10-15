@@ -14,6 +14,9 @@ func grokEnv(t *testing.T) *fakeEnv {
 	f.cfg.Grok.Cmd = "grok"
 	f.paths["grok"] = true
 	f.exec["grok --version"] = res{out: "grok 0.9.3\nextra"}
+	signedIn := grokLogin
+	grokLogin = func(string) error { return nil }
+	t.Cleanup(func() { grokLogin = signedIn })
 	return f
 }
 
@@ -28,6 +31,11 @@ func TestGrokCheck(t *testing.T) {
 		{"missing", func(f *fakeEnv) { f.paths["grok"] = false }, Fail, "not on PATH"},
 		{"not runnable", func(f *fakeEnv) { f.exec["grok --version"] = res{err: errors.New("exit status 127")} }, Fail, "does not run"},
 		{"no version", func(f *fakeEnv) { f.exec["grok --version"] = res{} }, Warn, "prints no version"},
+		// #263: an install that is not signed in looked healthy, then the
+		// chat hung on a blank error.
+		{"not signed in", func(*fakeEnv) {
+			grokLogin = func(string) error { return errors.New("grok is not logged in: run grok login") }
+		}, Fail, "not logged in"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -42,6 +50,9 @@ func TestGrokCheck(t *testing.T) {
 			}
 			if c.status != OK && r.Fix == "" {
 				t.Error("no fix")
+			}
+			if c.name == "not signed in" && !strings.Contains(r.Fix, "grok login") {
+				t.Errorf("fix %q does not say grok login", r.Fix)
 			}
 		})
 	}

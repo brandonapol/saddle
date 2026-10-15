@@ -3,6 +3,7 @@ package doctor
 import (
 	"strings"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/config"
 )
 
@@ -11,7 +12,12 @@ const CheckGrok = "grok"
 
 const grokAbout = "the Grok CLI the agents run in when the harness is grok"
 
-// grok checks the grok CLI is installed and runs, and reports its version.
+// grokLogin reports why grok cmd is not signed in, or nil: an API key in the
+// environment or grok's credentials file. Tests replace it.
+var grokLogin = func(cmd string) error { return agent.Check("grok", cmd) }
+
+// grok checks the grok CLI is installed, runs and is signed in, and reports
+// its version.
 func (r *run) grok() Result {
 	cmd := r.cfg.Grok.Cmd
 	if cmd == "" {
@@ -26,6 +32,8 @@ func (r *run) grok() Result {
 		res = fail(CheckGrok, prog+" is installed but does not run: "+err.Error(), "run `"+prog+" --version` yourself and fix what it reports, or "+fix)
 	} else if ver, _, _ = strings.Cut(ver, "\n"); ver == "" {
 		res = warn(CheckGrok, prog+" runs but prints no version", "update the Grok CLI so `"+prog+" --version` prints a version")
+	} else if err := grokLogin(prog); err != nil {
+		res = fail(CheckGrok, ver+": "+err.Error(), "run `grok login`, or set XAI_API_KEY")
 	} else {
 		res = ok(CheckGrok, ver)
 	}
