@@ -56,10 +56,14 @@ saddle land | prs | sync | …         ─┘   CI watcher
   `saddle init` or inside saddle's own agents (`SADDLE_TASK` set).
 
 Concurrent processes coordinate through SQLite transactions, not a socket.
-The reactor, git watcher and dispatcher described below are the target design;
-today their decisions are made inline in `internal/app`.
+Scheduling decisions are made in-process, inline in `internal/app`. The
+reactor (#45) is descoped and closed, because the daemon it was designed for
+was dropped (#5). The decision record is `docs/backlog-audit.md`. The git
+watcher and dispatcher described below are the target design.
 
 ## The reactor (event loop)
+
+Descoped and closed (#45). See `docs/backlog-audit.md`.
 
 One goroutine makes every scheduling decision. That makes decisions totally
 ordered, logged and replayable.
@@ -495,7 +499,10 @@ plugin/              Claude Code plugin (MCP, hooks, /saddle:* commands)
    manual rebasing and the moved-directory failure.
 5. Planner (#7–#9) and the control TUI (#33 #34). From here you hand Saddle an
    epic and let it run.
-6. Reactor and git watcher (#45 #46), then the forecaster and dispatcher.
+6. Decisions are made in-process. The reactor (#45) is descoped and closed,
+   because the daemon it was designed for was dropped (#5). See
+   `docs/backlog-audit.md`. Git watcher (#46), then the forecaster and
+   dispatcher.
 
 ### Operator recovery of guarded refs
 
