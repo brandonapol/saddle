@@ -1,13 +1,14 @@
 package app
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/release"
 	"github.com/brandonapol/saddle/internal/store"
@@ -125,20 +126,15 @@ func (a *App) ciRepairWhy(task, pr, head string, fails []CIRedFailure) string {
 func (a *App) fixPRMeta(task, pr string, fails []CIRedFailure) string {
 	what := []string{}
 	if pr != "" {
-		if out, err := gh(a.Root, "pr", "view", pr, "--json", "body"); err != nil {
-			a.Store.Event(task, EventCIError, err.Error())
-		} else {
-			var v struct {
-				Body string `json:"body"`
+		if v, err := a.Forge().PR(context.Background(), pr, forge.PRBody); err != nil {
+			if !isParseErr(err) {
+				a.Store.Event(task, EventCIError, err.Error())
 			}
-			if json.Unmarshal([]byte(out), &v) == nil {
-				if body := stripPRFooter(v.Body); body != strings.TrimSpace(v.Body) {
-					if _, err := gh(a.Root, "pr", "edit", pr, "--body", body); err != nil {
-						a.Store.Event(task, EventCIError, err.Error())
-					} else {
-						what = append(what, "stripped the attribution footer from its body")
-					}
-				}
+		} else if body := stripPRFooter(v.Body); body != strings.TrimSpace(v.Body) {
+			if err := a.Forge().SetPRBody(context.Background(), pr, body); err != nil {
+				a.Store.Event(task, EventCIError, err.Error())
+			} else {
+				what = append(what, "stripped the attribution footer from its body")
 			}
 		}
 	}
@@ -146,7 +142,7 @@ func (a *App) fixPRMeta(task, pr string, fails []CIRedFailure) string {
 	for _, f := range fails {
 		if id := ciRunID(f.RunURL); id != "" && !slices.Contains(runs, id) {
 			runs = append(runs, id)
-			if _, err := gh(a.Root, "run", "rerun", id, "--failed"); err != nil {
+			if err := a.Forge().RerunFailed(context.Background(), id); err != nil {
 				a.Store.Event(task, EventCIError, err.Error())
 			} else {
 				what = append(what, "reran run "+id)

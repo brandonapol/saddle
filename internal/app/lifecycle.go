@@ -1,7 +1,7 @@
 package app
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/tmux"
@@ -198,17 +199,13 @@ type PRHead struct {
 	HeadRefOid  string `json:"headRefOid"`  // the commit it merged
 }
 
-// prHead asks GitHub about the PR at url through gh, run in dir. Tests replace it.
-var prHead = func(dir, url string) (PRHead, error) {
-	var pr PRHead
-	out, err := gh(dir, "pr", "view", url, "--json", "state,baseRefName,headRefOid")
+// prHead asks the forge about the PR at url. Tests replace it.
+var prHead = func(f forge.Forge, url string) (PRHead, error) {
+	pr, err := f.PR(context.Background(), url, forge.PRState|forge.PRBase|forge.PRHead)
 	if err != nil {
-		return pr, err
+		return PRHead{}, err
 	}
-	if err := json.Unmarshal([]byte(out), &pr); err != nil {
-		return pr, fmt.Errorf("gh pr view %s: %w", url, err)
-	}
-	return pr, nil
+	return PRHead{State: pr.State, BaseRefName: pr.Base, HeadRefOid: pr.HeadSHA}, nil
 }
 
 // unmerged says why tip holds work gc must keep, or "" when all of it has
@@ -256,7 +253,7 @@ func (a *App) prMerged(t store.Task, tip string) bool {
 	if t.PR == "" {
 		return false
 	}
-	pr, err := prHead(a.Root, t.PR)
+	pr, err := prHead(a.Forge(), t.PR)
 	if err != nil || pr.State != "MERGED" || (pr.BaseRefName != "" && pr.BaseRefName != a.Cfg.Base) {
 		return false
 	}

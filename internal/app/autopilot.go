@@ -1,7 +1,7 @@
 package app
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/autopilot"
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/usage"
 )
@@ -319,37 +320,24 @@ var closesRef = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd
 // ghReadyIssues asks gh for the open issues with label and the open PRs
 // that close any of them.
 func (a *App) ghReadyIssues(label string) ([]autopilot.Issue, error) {
-	out, err := gh(a.Root, "issue", "list", "--state", "open", "--label", label, "--limit", "200",
-		"--json", "number,title,body,createdAt")
+	ctx, f := context.Background(), a.Forge()
+	raw, err := f.ListIssues(ctx, forge.IssueQuery{Label: label, State: "open", Limit: 200},
+		forge.IssueNumber|forge.IssueTitle|forge.IssueBody|forge.IssueCreated)
 	if err != nil {
 		return nil, err
 	}
-	var raw []struct {
-		Number    int       `json:"number"`
-		Title     string    `json:"title"`
-		Body      string    `json:"body"`
-		CreatedAt time.Time `json:"createdAt"`
-	}
-	if err := json.Unmarshal([]byte(out), &raw); err != nil {
-		return nil, fmt.Errorf("parse gh issue list: %w", err)
-	}
 	closed := map[int]bool{}
-	if out, err := gh(a.Root, "pr", "list", "--state", "open", "--limit", "200", "--json", "body"); err == nil {
-		var prs []struct {
-			Body string `json:"body"`
-		}
-		if json.Unmarshal([]byte(out), &prs) == nil {
-			for _, p := range prs {
-				for _, m := range closesRef.FindAllStringSubmatch(p.Body, -1) {
-					n, _ := strconv.Atoi(m[1])
-					closed[n] = true
-				}
+	if prs, err := f.ListPRs(ctx, forge.PRQuery{State: "open", Limit: 200}, forge.PRBody); err == nil {
+		for _, p := range prs {
+			for _, m := range closesRef.FindAllStringSubmatch(p.Body, -1) {
+				n, _ := strconv.Atoi(m[1])
+				closed[n] = true
 			}
 		}
 	}
 	is := make([]autopilot.Issue, len(raw))
 	for i, r := range raw {
-		is[i] = autopilot.Issue{Number: r.Number, Title: r.Title, Body: r.Body, Created: r.CreatedAt, HasPR: closed[r.Number]}
+		is[i] = autopilot.Issue{Number: r.Number, Title: r.Title, Body: r.Body, Created: r.Created, HasPR: closed[r.Number]}
 	}
 	return is, nil
 }

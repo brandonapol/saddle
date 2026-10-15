@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -157,14 +158,14 @@ func (a *App) collapse(layers []collapseLayer, k int, hub automerge.GitHub) (Col
 
 	was := top.PR.Base
 	if was != a.Cfg.Base {
-		if _, err := gh(a.Root, "pr", "edit", top.Task.PR, "--base", a.Cfg.Base); err != nil {
+		if err := a.Forge().SetPRBase(context.Background(), top.Task.PR, a.Cfg.Base); err != nil {
 			return res, err
 		}
 		a.Store.Event(top.Task.ID, "collapse_retarget", top.Task.PR+" → "+a.Cfg.Base)
 	}
 	restore := func(why string) error {
 		if was != a.Cfg.Base {
-			_, _ = gh(a.Root, "pr", "edit", top.Task.PR, "--base", was)
+			_ = a.Forge().SetPRBase(context.Background(), top.Task.PR, was)
 		}
 		return fmt.Errorf("collapse of stack %s stopped: %s; %s targets %s again and nothing merged", res.Stack, why, top.Task.PR, was)
 	}
@@ -183,8 +184,8 @@ func (a *App) collapse(layers []collapseLayer, k int, hub automerge.GitHub) (Col
 	for _, l := range layers[:k] {
 		body := fmt.Sprintf("Merged into %s as part of %s (saddle stack collapse): its CI was red and the fix lived in a PR above it, so the stack merged as one.",
 			a.Cfg.Base, top.Task.PR)
-		_, _ = gh(a.Root, "pr", "comment", l.Task.PR, "--body", body)
-		if _, err := gh(a.Root, "pr", "close", l.Task.PR); err == nil {
+		_ = a.Forge().AddComment(context.Background(), l.Task.PR, body)
+		if err := a.Forge().ClosePR(context.Background(), l.Task.PR); err == nil {
 			res.Closed = append(res.Closed, l.Task.PR)
 		}
 	}

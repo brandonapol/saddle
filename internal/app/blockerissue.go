@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/narrator"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/trust"
@@ -155,51 +156,45 @@ type BlockerGitHub interface {
 	Reopen(number int) error
 }
 
-// GHBlockers is BlockerGitHub through the gh CLI in Dir.
-type GHBlockers struct{ Dir string }
+// GHBlockers is BlockerGitHub through the repo's forge.
+type GHBlockers struct{ Forge forge.Forge }
 
 func (g GHBlockers) Issues(state string) ([]BlockerIssue, error) {
-	out, err := gh(g.Dir, "issue", "list", "--label", BlockerLabel, "--state", state, "--limit", "500",
-		"--json", "number,title,body,state,url")
+	raw, err := g.Forge.ListIssues(context.Background(), forge.IssueQuery{Label: BlockerLabel, State: state, Limit: 500},
+		forge.IssueNumber|forge.IssueTitle|forge.IssueBody|forge.IssueState|forge.IssueURL)
 	if err != nil {
 		return nil, err
 	}
 	var is []BlockerIssue
-	if err := json.Unmarshal([]byte(out), &is); err != nil {
-		return nil, fmt.Errorf("parse gh issue list: %w", err)
+	for _, r := range raw {
+		is = append(is, BlockerIssue{Number: r.Number, Title: r.Title, Body: r.Body, State: r.State, URL: r.URL})
 	}
 	return is, nil
 }
 
 func (g GHBlockers) Create(title, body string, labels []string) (BlockerIssue, error) {
-	args := []string{"issue", "create", "--title", title, "--body", body}
+	ctx := context.Background()
 	for _, l := range labels {
 		// gh refuses an unknown label, so make sure each exists first.
-		_, _ = gh(g.Dir, "label", "create", l, "--force", "--description", "Filed by saddle for a blocker (#407)")
-		args = append(args, "--label", l)
+		_ = g.Forge.EnsureLabel(ctx, forge.Label{Name: l, Description: "Filed by saddle for a blocker (#407)"})
 	}
-	out, err := gh(g.Dir, args...)
+	is, err := g.Forge.CreateIssue(ctx, forge.NewIssue{Title: title, Body: body, Labels: labels})
 	if err != nil {
 		return BlockerIssue{}, err
 	}
-	url := strings.TrimSpace(out[strings.LastIndex(out, "\n")+1:])
-	n, _ := strconv.Atoi(url[strings.LastIndex(url, "/")+1:])
-	return BlockerIssue{Number: n, Title: title, Body: body, State: "OPEN", URL: url}, nil
+	return BlockerIssue{Number: is.Number, Title: title, Body: body, State: is.State, URL: is.URL}, nil
 }
 
 func (g GHBlockers) Comment(number int, body string) error {
-	_, err := gh(g.Dir, "issue", "comment", strconv.Itoa(number), "--body", body)
-	return err
+	return g.Forge.CommentIssue(context.Background(), number, body)
 }
 
 func (g GHBlockers) EditBody(number int, body string) error {
-	_, err := gh(g.Dir, "issue", "edit", strconv.Itoa(number), "--body", body)
-	return err
+	return g.Forge.EditIssueBody(context.Background(), number, body)
 }
 
 func (g GHBlockers) Reopen(number int) error {
-	_, err := gh(g.Dir, "issue", "reopen", strconv.Itoa(number))
-	return err
+	return g.Forge.ReopenIssue(context.Background(), number)
 }
 
 // BlockerDrafter words a blocker's one-sentence summary. An error, or a nil
@@ -237,7 +232,7 @@ func (a *App) NewBlockerFiler() *BlockerFiler {
 		}
 		return n.Draft(ctx, blockerDraftPrompt, blockerFacts(b), 200)
 	}
-	return &BlockerFiler{App: a, GH: GHBlockers{Dir: a.Root}, Draft: draft, Enabled: a.blockerFilingOn}
+	return &BlockerFiler{App: a, GH: GHBlockers{Forge: a.Forge()}, Draft: draft, Enabled: a.blockerFilingOn}
 }
 
 func (a *App) blockerFilingOn() bool {

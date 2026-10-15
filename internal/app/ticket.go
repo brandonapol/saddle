@@ -2,9 +2,8 @@ package app
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"strconv"
+
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 // Ticket is a GitHub issue the orchestrator can turn into tasks.
@@ -31,37 +30,17 @@ func (a *App) Ticket(n int) (Ticket, error) { return a.TicketIn("", n) }
 // TicketIn fetches an issue and its sub-issues from repo ("owner/name"), or
 // from the current repo when repo is empty.
 func (a *App) TicketIn(repo string, n int) (Ticket, error) {
-	var raw struct {
-		Number int    `json:"number"`
-		Title  string `json:"title"`
-		State  string `json:"state"`
-		Body   string `json:"body"`
-		URL    string `json:"url"`
-		Labels []struct {
-			Name string `json:"name"`
-		} `json:"labels"`
-	}
-	args := []string{"issue", "view", strconv.Itoa(n), "--json", "number,title,state,body,url,labels"}
-	api := "repos/{owner}/{repo}"
-	if repo != "" {
-		args = append(args[:3], append([]string{"-R", repo}, args[3:]...)...)
-		api = "repos/" + repo
-	}
-	out, err := gh(a.Root, args...)
+	ctx, f := context.Background(), a.Forge()
+	is, err := f.Issue(ctx, repo, n, forge.IssueNumber|forge.IssueTitle|forge.IssueState|forge.IssueBody|forge.IssueURL|forge.IssueLabels)
 	if err != nil {
 		return Ticket{}, err
 	}
-	if err := json.Unmarshal([]byte(out), &raw); err != nil {
-		return Ticket{}, fmt.Errorf("parse issue #%d: %w", n, err)
-	}
-	t := Ticket{Number: raw.Number, Title: raw.Title, State: raw.State, Body: raw.Body, URL: raw.URL}
-	for _, l := range raw.Labels {
-		t.Labels = append(t.Labels, l.Name)
-	}
-	// Sub-issues aren't in `gh issue view`; ask the REST API. Missing support is not an error.
-	if out, err := gh(a.Root, "api", api+"/issues/"+strconv.Itoa(n)+"/sub_issues",
-		"--jq", "[.[] | {number, title, state, body}]"); err == nil && out != "" {
-		_ = json.Unmarshal([]byte(out), &t.SubIssues)
+	t := Ticket{Number: is.Number, Title: is.Title, State: is.State, Body: is.Body, URL: is.URL, Labels: is.Labels}
+	// Missing sub-issue support is not an error.
+	if subs, err := f.SubIssues(ctx, repo, n); err == nil {
+		for _, s := range subs {
+			t.SubIssues = append(t.SubIssues, SubTicket{Number: s.Number, Title: s.Title, State: s.State, Body: s.Body})
+		}
 	}
 	return t, nil
 }

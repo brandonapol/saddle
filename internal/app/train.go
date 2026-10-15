@@ -18,6 +18,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/claims"
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -886,7 +887,7 @@ func (a *App) publishMode(pushOnly bool) (published, error) {
 		}
 		prBase := a.prBase(landed, layout, i)
 		if t.PR == "" {
-			url, err := gh(a.Root, "pr", "create", "--base", prBase, "--head", t.Branch, "--title", t.Title, "--body", withTaskTrailer(a.stackPRBody(l), t.ID))
+			url, err := a.Forge().CreatePR(context.Background(), forge.NewPR{Base: prBase, Head: t.Branch, Title: t.Title, Body: withTaskTrailer(a.stackPRBody(l), t.ID)})
 			if err != nil {
 				return res, err
 			}
@@ -1410,17 +1411,6 @@ func allRegen(regen []config.Regen, files []string) bool {
 		}
 	}
 	return true
-}
-
-func gh(dir string, args ...string) (string, error) {
-	cmd := exec.Command("gh", args...)
-	cmd.Dir = dir
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("gh %s: %w: %s", strings.Join(args[:2], " "), err, strings.TrimSpace(errb.String()))
-	}
-	return strings.TrimSpace(out.String()), nil
 }
 
 func runShell(dir, cmd string) (string, error) {

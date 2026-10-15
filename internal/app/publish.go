@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -169,11 +171,7 @@ func (a *App) Publish(req PublishReq) (PublishResult, error) {
 	if _, err := trainGit(a.Root, "push", "origin", head+":refs/heads/"+branch); err != nil {
 		return res, err
 	}
-	args := []string{"pr", "create", "--base", req.Base, "--head", branch, "--title", title, "--body", body}
-	if req.Draft {
-		args = append(args, "--draft")
-	}
-	out, err := gh(a.Root, args...)
+	out, err := a.Forge().CreatePR(context.Background(), forge.NewPR{Base: req.Base, Head: branch, Title: title, Body: body, Draft: req.Draft})
 	if err != nil {
 		url := prURLRe.FindString(err.Error())
 		if url == "" || !strings.Contains(err.Error(), "already exists") {

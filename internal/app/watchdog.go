@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -180,7 +181,7 @@ func (a *App) WatchdogTick(now time.Time) (RootCause, bool, error) {
 	}
 	if stalled(st, now, a.StallConfig().IdleAlarm) {
 		st.Adapters = a.Adapters()
-		if _, err := gh(a.Root, "auth", "status"); err != nil {
+		if err := a.Forge().AuthStatus(context.Background()); err != nil {
 			st.GHAuth = err
 		}
 		if ts, err := a.Store.Tasks(); err == nil {

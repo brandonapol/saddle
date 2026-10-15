@@ -1,13 +1,14 @@
 package app
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"slices"
 	"strings"
 
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/store"
@@ -45,20 +46,16 @@ type PRInfo struct {
 // PRLookup asks GitHub about the PR at url.
 type PRLookup func(url string) (PRInfo, error)
 
-// prView asks GitHub about a PR through gh, run in dir. Tests replace it.
-var prView = func(dir, url string) (PRInfo, error) {
-	var pr PRInfo
-	out, err := gh(dir, "pr", "view", url, "--json", "state,mergeable,baseRefName")
+// prView asks the forge about a PR. Tests replace it.
+var prView = func(f forge.Forge, url string) (PRInfo, error) {
+	pr, err := f.PR(context.Background(), url, forge.PRState|forge.PRMergeable|forge.PRBase)
 	if err != nil {
-		return pr, err
+		return PRInfo{}, err
 	}
-	if err := json.Unmarshal([]byte(out), &pr); err != nil {
-		return pr, fmt.Errorf("gh pr view %s: %w", url, err)
-	}
-	return pr, nil
+	return PRInfo{State: pr.State, Mergeable: pr.Mergeable, BaseRefName: pr.Base}, nil
 }
 
-func (a *App) ghLookup(url string) (PRInfo, error) { return prView(a.Root, url) }
+func (a *App) ghLookup(url string) (PRInfo, error) { return prView(a.Forge(), url) }
 
 // ReconcileStack takes the landed tasks that are done with out of the PR
 // stack, for good: killed tasks with a PR, closed PRs, and PRs merged into base (by

@@ -1,12 +1,14 @@
 package app
 
 import (
-	"github.com/brandonapol/saddle/internal/gitx"
-	"github.com/brandonapol/saddle/internal/store"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/brandonapol/saddle/internal/forge"
+	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/store"
 )
 
 // withOrigin gives a's repo a bare origin and returns a second clone that can
@@ -396,7 +398,7 @@ func TestGCRemovesBranchOfMergedPR(t *testing.T) {
 	must(t, a.Store.SetField(task.ID, "pr", "https://github.com/o/r/pull/7"))
 	prev := prHead
 	defer func() { prHead = prev }()
-	prHead = func(_, url string) (PRHead, error) {
+	prHead = func(_ forge.Forge, url string) (PRHead, error) {
 		return PRHead{State: "MERGED", BaseRefName: "main", HeadRefOid: tip}, nil
 	}
 	_, err := a.GC()
@@ -409,7 +411,7 @@ func TestGCRemovesBranchOfMergedPR(t *testing.T) {
 	task2 := killedWithWork(t, a, "moved on", "n.txt", "n2.txt")
 	must(t, a.Store.SetField(task2.ID, "pr", "https://github.com/o/r/pull/8"))
 	head := git(t, a.Root, "rev-parse", task2.Branch+"~1")
-	prHead = func(_, url string) (PRHead, error) {
+	prHead = func(_ forge.Forge, url string) (PRHead, error) {
 		return PRHead{State: "MERGED", BaseRefName: "main", HeadRefOid: head}, nil
 	}
 	_, err = a.GC()
