@@ -19,7 +19,6 @@ import (
 
 	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
-	"github.com/brandonapol/saddle/internal/banner"
 	"github.com/brandonapol/saddle/internal/ciwatch"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/doctor"
@@ -99,33 +98,6 @@ func resolveTask(a *app.App, flag string) (string, error) {
 		return "", fmt.Errorf("no task given (use --task, or run inside a task worktree): %w", err)
 	}
 	return t.ID, nil
-}
-
-func initCmd() *cobra.Command {
-	var quiet, trusted bool
-	cmd := &cobra.Command{
-		Use:   "init",
-		Short: "Create .saddle/ with a config template",
-		Long: `Creates .saddle/ with a config template and installs saddle's git hooks.
-The first time in a repo it asks whether you trust it, before writing anything.
-Without a terminal, pass --trust (or set SADDLE_TRUST=1).`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			banner.Print(cmd.OutOrStdout(), banner.Options{Quiet: quiet, IsTTY: stdoutIsTTY})
-			if err := gateTrust(cmd.OutOrStdout(), cmd.InOrStdin(), trusted); err != nil {
-				return err
-			}
-			return withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
-				if err := a.Init(); err != nil {
-					return err
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "initialized %s/.saddle (edit .saddle/config.toml)\n", a.Root)
-				return nil
-			})(cmd, args)
-		},
-	}
-	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "don't print the howdy banner")
-	cmd.Flags().BoolVar(&trusted, "trust", false, "trust this repo without asking (remembered; see saddle trust)")
-	return cmd
 }
 
 func upCmd() *cobra.Command {

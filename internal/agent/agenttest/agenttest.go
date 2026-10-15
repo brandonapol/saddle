@@ -6,6 +6,7 @@ package agenttest
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -32,10 +33,15 @@ var authEnv = []string{
 // Path makes a fresh $HOME and a PATH holding only bins, each a script that
 // prints a version. Every name in logins is logged in: an agent CLI gets its
 // credentials file, and gh or glab answers `auth status` with success. It
-// returns the PATH dir.
+// returns the PATH dir. git, when installed, stays on PATH.
 func Path(t *testing.T, bins, logins []string) string {
 	t.Helper()
 	dir, home := t.TempDir(), t.TempDir()
+	if git, err := exec.LookPath("git"); err == nil {
+		if err := os.Symlink(git, filepath.Join(dir, "git")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, k := range authEnv {
 		t.Setenv(k, "")
 	}
