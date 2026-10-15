@@ -1,8 +1,9 @@
 # Bench: collision scenarios and a scorer
 
 Status: **Proposed** (#599). The fixture, ten scenarios, the fake-agent
-runner and the scorer are implemented; real-agent runs and symbol
-granularity are not (see [Not yet](#not-yet), #605).
+runner, the scorer and symbol granularity with a file-vs-symbol comparison
+(#626) are implemented; real-agent runs are not (see [Not yet](#not-yet),
+#605).
 
 ## Why
 
@@ -51,6 +52,9 @@ it. Its packages:
 saddle bench list
 saddle bench run control
 saddle bench run same-function --out bench/results
+saddle bench run same-file --granularity symbol
+saddle bench compare                  # every scenario, file vs symbol
+saddle bench compare same-file signature
 ```
 
 `saddle bench run <scenario>` must run inside a saddle source checkout: it
@@ -67,16 +71,16 @@ builds saddle, the fake `gh` and the fake agent from it, the same way
 4. Ticks autopilot until it stops, nothing has happened for `--stall`
    (default 60s), or `--timeout` (default 10m) passes.
 5. Checks out the integration branch and runs the fixture's tests on it.
-6. Writes `<out>/<scenario>-<timestamp>.json` (the event log and the
-   report) and `<scenario>-<timestamp>.md` (the summary), and prints the
-   summary.
+6. Writes `<out>/<scenario>-<granularity>-<timestamp>.json` (the event
+   log and the report) and `<scenario>-<granularity>-<timestamp>.md` (the
+   summary), and prints the summary.
 
 Flags:
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--adapter` | `fake` | `fake` runs the scripted agent. `claude`, `grok` and `codex` are reserved for real-agent runs, not wired yet. |
-| `--granularity` | `file` | `file` is today's path claims. `symbol` is reserved for symbol-level claims (#329). |
+| `--granularity` | `file` | `file` is path claims, saddle's default. `symbol` sets `[claims] granularity = "symbol"` in the world's config and opens the bench's spawn gate (see [Symbol claims](#symbol-claims)). |
 | `--out` | `bench/results` | where the JSON and markdown go |
 | `--stall` | `60s` | end the run when no task makes progress for this long |
 | `--timeout` | `10m` | end the run regardless |
@@ -87,6 +91,46 @@ run in CI. The end-to-end test `TestBenchRunsControlAndACollision` (build tag
 `e2e`, needs tmux) runs `control` and `narrow-claim`. `make test/e2e` includes
 `./internal/bench/...`, so that test runs with the other end-to-end journeys.
 Real-agent runs spend quota, are manual and opt-in, and never run in CI.
+
+## Symbol claims
+
+`--granularity symbol` runs the same scenario with saddle's symbol-level
+claims on (`docs/symbol-claims.md`): rule 1 lets a task write a file another
+task claims when their edits touch different symbols, rule 2 denies a write
+over a symbol that changed on integration since the task's base, and rule 3
+warns when an edit uses a symbol whose signature another live task is
+changing (and denies it once that change has landed).
+
+Autopilot's own spawn gate stays path-based in both modes, so on its own it
+would never start two tickets that claim one file and rule 1 would never
+come into play. Under symbol claims the bench therefore opens the gate for
+its tickets: autopilot sees the scenario's live tasks as holding no claims,
+and a ticket whose claims another live task already holds is spawned
+without those globs. Those files stay their owner's, so each write to them
+is a path-claim deny that the symbol rules then rule on. This models an
+orchestrator that leaves overlap to the edit-time rules; a symbol-aware gate
+in autopilot itself is #627.
+
+`saddle bench compare [scenario…]` runs each scenario (all of them by
+default) once per granularity, writes every run's files like `run`, and
+prints one table with a row per scenario and each cell as file → symbol:
+tickets landed, peak parallelism (with the safe number), denied writes,
+claim waits, train bounces, tickets that needed help, the integration
+tests, and the symbol run's shares, denies and notes. It takes `--adapter`,
+`--out`, `--stall` and `--timeout`.
+
+`TestBenchSymbolGranularity` (build tag `e2e`) holds the acceptance:
+
+- `same-file` reaches peak parallelism 1 under file claims and 2 under
+  symbol claims, where both tickets land, the integration tests pass, and
+  the second writer's deny is a symbol share.
+- `same-function` under symbol claims: the second writer of `Rect.Area` is
+  denied (rule 1, or the path deny it falls back to past its 250ms
+  budget), recorded as the #1–#2 collision.
+- `signature` under symbol claims: #2's `units.Scale(v, 2)` gets rule 3's
+  note while #1's new signature is live, recorded as the #1–#2 collision.
+  It is a warning, so #2 still lands and #1 then fails the train's tests,
+  as it does under file claims.
 
 ## The fake agent's edits
 
@@ -109,12 +153,18 @@ Edits are applied in order to an in-memory copy of the base:
 | `remove` | delete `path` |
 
 The fake agent asks the write guard before every write, as Claude Code
-would; a denied write is logged and skipped, and the agent carries on. That
-is how a ticket whose claim is too narrow loses work.
+would; a denied write is logged and its script stops there, so the ticket
+never calls done. That is how a ticket whose claim is too narrow loses
+work. After a write, its PostToolUse carries `tool_response.originalFile`
+(the file before the write) as Claude Code's does, so rule 3 can see what
+the write added.
 
 `wait_for = [N, …]` holds a ticket's agent after its commit, before done,
 until the agents of tickets N… have finished their scripts. The runner then
-messages it `bench-release`. This pins an interleaving that would otherwise
+messages it `bench-release`. `start_after = [N, …]` holds a ticket's agent
+before its first write until the agents of tickets N… have committed (or
+stopped); the runner then messages it `bench-start`. A `start_after` cycle
+is rejected at load. This pins an interleaving that would otherwise
 be a race (for example: the narrow-claim ticket must write while the other
 task still holds the claim).
 
@@ -151,7 +201,9 @@ shows it as a spawn refusal and a ticket that needed help.
 
 `signature` is the stale assumption. Each ticket's edits pass the fixture's
 tests, and the two together do not
-(`TestSignatureScenarioBreaksWhenCombined`): `extra.Twice` is written
+(`TestSignatureScenarioBreaksWhenCombined`). #2 starts after #1 has
+committed and #1 waits for #2 before done, so #2 always writes while #1's
+change is live: `extra.Twice` is written
 against `Scale(v, n int)` while the other ticket has changed it to
 `Scale(v int, unit string)`. Their claims do not overlap, so file claims
 do not keep them apart. `ci-red` stacks the second ticket on the first
@@ -182,6 +234,10 @@ it (`TestScoreFixedLog`).
 | `restacks`, `restack_conflicts` | `restack` and `auto_rebase` events; `restack_conflict` events |
 | `stale_edits` | `bench_stale` events: an edit whose anchor was gone |
 | `spawn_refusals` | tickets with an `autopilot_skip` event: autopilot tried to spawn them and saddle refused |
+| `symbol_shares` | `deny` events that rule 1 turned into an allow (the task's next event is a `symbol_allow` on that path); not counted in `denied_writes` |
+| `symbol_denies` | `symbol_deny` events: a symbol rule refused a write. Counted once in `denied_writes`, even when CheckWrite's `deny` came first |
+| `symbol_notes` | `symbol_note` events: rule 3 warned about a signature another live task is changing |
+| `symbol_fallbacks` | `symbol_fallback` events: a symbol rule could not decide and kept today's verdict |
 | `needed_help` | tickets not landed when the run ended, or with a `train_escalated` or `hand_fix` event |
 | `peak_parallelism` | most tasks live at once (spawn to landed) |
 | `safe_parallelism` | from scenario.toml |
@@ -191,7 +247,12 @@ A *predicted collision* is a forecast pair at level medium or above. An
 *actual collision* is a pair of tickets where one task's trouble names the
 other:
 
-- a `deny` of path p: every other ticket whose claims cover p;
+- a `deny` of path p: every other ticket whose claims cover p (not when
+  rule 1 allowed the write, nor when a `symbol_deny` names the collision);
+- a `symbol_deny`: rule 1's with the task it names, rule 2's with every
+  other ticket whose edits touch its path, rule 3's with every other ticket
+  that changes a symbol of that name;
+- a `symbol_note`: the ticket of the task whose signature change it names;
 - a `train_conflict`, `restack_conflict` or `bench_stale` on files F: every
   other ticket whose edits touch a file in F;
 - a `train_test_failed`: every other ticket landed before it whose files
@@ -238,5 +299,5 @@ Tracked in #605.
 - **Real agents.** `--adapter claude|grok|codex` would run real agents on
   the same tickets in an isolated world that still sees the user's adapter
   credentials, and report tokens. Opt-in, manual, never in CI.
-- **Symbol granularity.** `--granularity symbol` waits on symbol-level
-  claims (`docs/symbol-claims.md`, #329).
+- **A symbol-aware spawn gate in autopilot.** Under symbol claims the
+  bench opens the gate itself (see [Symbol claims](#symbol-claims), #627).
