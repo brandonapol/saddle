@@ -452,6 +452,34 @@ layers over it. Details: [sre.md](sre.md).
   `saddle sre close` builds the record from the incident
   (`PostmortemFromIncident`) and writes it. Format: [postmortems/README.md](postmortems/README.md).
 
+## Forge layer (#644)
+
+Saddle reaches its git host through `internal/forge` and nowhere else
+(decision: [ADR 0001](adr/0001-forge-layer.md)).
+
+- **One process start.** `forge.Output`, `forge.CombinedOutput` and
+  `forge.CLI` are the only code that runs `gh` (and, with #645, `glab`).
+  `TestNoDirectCLIExec` parses the repo and fails when another package passes
+  a forge CLI to `exec.Command`. Generic exec helpers (doctor's `Env.Exec`,
+  the changelog's runner) hand a forge CLI name to `forge`.
+- **One interface.** `forge.Forge` is the provider-neutral surface: create,
+  view, list, retarget, edit and close PRs; comments and labels; rerun CI;
+  merge settings; auth; issues. Its types (`forge.PR`, `forge.Issue`, …) carry
+  no GitHub JSON names. `forge.GitHub` implements it over `gh` with the same
+  arguments saddle always passed. Operations a provider lacks return
+  `forge.ErrUnsupported`, and saddle drops the feature instead of failing.
+- **Selection.** `App.Forge()` is `forge.New(cfg.Forge, root)`: GitHub unless
+  `[forge]` says `cli = "none"` (local-only) or GitLab (not supported until
+  #645). It starts no process; detecting the provider and CLI from the
+  remote is a setup step in `saddle init` and `saddle doctor`
+  (`doctor.DetectForge`, #646).
+- **Still GitHub-shaped.** `ciwatch`, `sweeper`, `automerge.GH`, `sentinel`,
+  `planner.Push` and `ghstack` take an injected gh runner and read GitHub's
+  JSON themselves. Their runner comes from `forge`, but they move onto
+  `forge.Forge` before GitLab lands; until then they ignore `[forge]`.
+- **Tests.** `internal/e2e/fakegh` is a fake `gh` binary on `PATH`, so e2e
+  journeys exercise `forge.GitHub` end to end.
+
 ## Layout on disk
 
 ```
@@ -473,6 +501,7 @@ internal/cli/        cobra commands
 internal/config/     TOML loading and merging
 internal/store/      sqlite schema and migrations
 internal/doctor/     saddle doctor preflight checks
+internal/forge/      the git host: forge.Forge, GitHub over gh, the only gh exec
 internal/gitx/       worktrees, watcher, rename detection, train, stacks
 internal/claims/     glob claims and overlap
 internal/planner/    epic → DAG, static checker
