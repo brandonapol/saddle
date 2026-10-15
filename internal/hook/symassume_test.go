@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/config"
@@ -14,6 +15,7 @@ import (
 // #592: PostToolUse returns the stale-assumption note in additionalContext
 // together with notices already queued for the task.
 func TestPostToolUseAssumeNoteAlongsideNotices(t *testing.T) {
+	t.Cleanup(app.SetAssumeBudget(time.Minute))
 	a := setup(t)
 	a.Cfg.Claims.Granularity = config.GranularitySymbol
 	storeSrc := "package store\n\nfunc (s *Store) Claim(path string) error {\n\treturn nil\n}\n"

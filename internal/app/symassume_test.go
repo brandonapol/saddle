@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/store"
@@ -41,6 +42,7 @@ const (
 // runs with the default budget; tests that need a different one set it.
 func assumeSetup(t *testing.T) (*App, store.Task, store.Task) {
 	t.Helper()
+	t.Cleanup(SetAssumeBudget(time.Minute))
 	a, _ := setup(t)
 	a.Cfg.Claims.Granularity = config.GranularitySymbol
 	write(t, a.Root, claimPath, claimBase)
@@ -91,6 +93,14 @@ func TestAssumeNotesLiveSignatureChangeOnce(t *testing.T) {
 	}
 	if ev := taskEvents(t, a, t2.ID, "symbol_note"); len(ev) != 1 {
 		t.Errorf("symbol_note events = %q, want the first one only", ev)
+	}
+
+	// A different task's first edit hits the blob-pair cache and still notes.
+	t3, err := a.Spawn(SpawnReq{Title: "also use claim"})
+	must(t, err)
+	third := assumeCall(t, t3, claimUseRel, "return nil", `return s.Claim("c")`)
+	if n := a.EditNotes(third); !strings.Contains(n, t1.ID) || !strings.Contains(n, claimOldSig) || !strings.Contains(n, claimNewSig) {
+		t.Fatalf("cached signature diff note = %q", n)
 	}
 }
 
@@ -149,7 +159,7 @@ func TestAssumeLandedSignatureDeniesUntilSync(t *testing.T) {
 			t.Errorf("reason %q lacks %q", d.Reason, want)
 		}
 	}
-	if ev := taskEvents(t, a, t2.ID, "symbol_deny"); len(ev) != 1 || !strings.Contains(ev[0], "stale-assumption") {
+	if ev := taskEvents(t, a, t2.ID, "symbol_deny"); len(ev) != 1 || !strings.Contains(ev[0], RuleStaleAssumption) {
 		t.Errorf("symbol_deny events = %q", ev)
 	}
 
@@ -173,5 +183,20 @@ func TestAssumeFileModeIsSilent(t *testing.T) {
 	}
 	if d := a.CheckEdit(call); !d.Allow {
 		t.Fatalf("file mode denied: %+v", d)
+	}
+}
+
+// #592: past the budget the rule says nothing, the same as today's hook.
+func TestAssumeSilentPastBudget(t *testing.T) {
+	a, t1, t2 := assumeSetup(t)
+	t.Cleanup(SetAssumeBudget(0))
+	write(t, t1.Worktree, claimPath, claimSig)
+	call := assumeCall(t, t2, claimUseRel, "return nil", `return s.Claim("a")`)
+	if n := a.EditNotes(call); n != "" {
+		t.Fatalf("over budget noted: %q", n)
+	}
+	ev := taskEvents(t, a, t2.ID, "symbol_fallback")
+	if len(ev) != 1 || !strings.Contains(ev[0], RuleStaleAssumption) || !strings.Contains(ev[0], "budget") {
+		t.Fatalf("symbol_fallback events = %q", ev)
 	}
 }

@@ -171,7 +171,14 @@ func TestStaleOverwriteFallsBack(t *testing.T) {
 		t.Fatalf("over budget denied: %+v", d)
 	}
 
-	ev := taskEvents(t, a, tk.ID, "symbol_fallback")
+	// Rule 3 logs its own symbol_fallback on the same edits. This test is
+	// about rule 2's reasons, in order.
+	var ev []string
+	for _, e := range taskEvents(t, a, tk.ID, "symbol_fallback") {
+		if strings.Contains(e, "stale-overwrite") {
+			ev = append(ev, e)
+		}
+	}
 	want := []string{"unknown proposed content", "parse error", "budget"}
 	if len(ev) != len(want) {
 		t.Fatalf("symbol_fallback events = %q, want %d", ev, len(want))
