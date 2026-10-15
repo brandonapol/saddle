@@ -119,12 +119,14 @@ func (l *Lang) walk(n Node, outer string, out *[]gitx.Symbol) {
 		if kind, ok := l.Kinds[typ]; ok {
 			if name := l.nameOf(c); name != "" {
 				qual = l.qualify(outer, name)
+				sig := signature(c)
 				*out = append(*out, gitx.Symbol{
 					Name:      qual,
 					Kind:      kind,
 					StartLine: int(c.StartPoint().Row) + 1,
 					EndLine:   endLine(c.Node),
-					SigHash:   sigHash(signature(c)),
+					SigHash:   sigHash(sig),
+					SigText:   displaySig(sig),
 				})
 			}
 		}
@@ -219,6 +221,84 @@ func slice(src []byte, start, end int) string {
 func sigHash(text string) string {
 	sum := sha256.Sum256([]byte(stripSpace(text)))
 	return hex.EncodeToString(sum[:])
+}
+
+// displaySig is the signature as a note shows it: one line, internal
+// whitespace collapsed. The hash uses stripSpace, so spacing still is not
+// a signature change.
+func displaySig(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// Use is a name mentioned on a line. Qual is the selector's qualifier for
+// an x.Name (s.Claim, store.Claim); it is empty for a bare identifier.
+type Use struct {
+	Name string
+	Qual string
+}
+
+// Uses returns identifiers and x.Name selectors in src whose name starts
+// on a line in lines (1-based). A selector is reported and its operands
+// are also reported as bare names, so a same-package method call matches
+// on the bare name. Callers drop names in strings and comments because
+// those are not identifier nodes.
+func (x *Extractor) Uses(path string, src []byte, lines map[int]bool) ([]Use, error) {
+	if len(lines) == 0 {
+		return nil, nil
+	}
+	l, ok := x.byExt[filepath.Ext(path)]
+	if !ok {
+		return nil, nil
+	}
+	lang := l.Language()
+	tree, err := ts.NewParser(lang).Parse(src)
+	if err != nil {
+		return nil, err
+	}
+	defer tree.Release()
+	var out []Use
+	walkUses(tree.RootNode(), lang, src, lines, &out)
+	return out, nil
+}
+
+func walkUses(n *ts.Node, lang *ts.Language, src []byte, lines map[int]bool, out *[]Use) {
+	if n == nil {
+		return
+	}
+	typ := n.Type(lang)
+	if typ == "selector_expression" || typ == "attribute" {
+		qualNode := n.ChildByFieldName("operand", lang)
+		nameNode := n.ChildByFieldName("field", lang)
+		if nameNode == nil {
+			qualNode = n.ChildByFieldName("object", lang)
+			nameNode = n.ChildByFieldName("attribute", lang)
+		}
+		if nameNode != nil && lines[int(nameNode.StartPoint().Row)+1] {
+			*out = append(*out, Use{Name: nameNode.Text(src), Qual: qualIdent(qualNode, lang, src)})
+		}
+	}
+	if isIdent(typ) && lines[int(n.StartPoint().Row)+1] {
+		*out = append(*out, Use{Name: n.Text(src)})
+	}
+	for i := 0; i < n.ChildCount(); i++ {
+		walkUses(n.Child(i), lang, src, lines, out)
+	}
+}
+
+func qualIdent(n *ts.Node, lang *ts.Language, src []byte) string {
+	if n == nil || !isIdent(n.Type(lang)) {
+		return ""
+	}
+	return n.Text(src)
+}
+
+func isIdent(typ string) bool {
+	switch typ {
+	case "identifier", "field_identifier", "type_identifier", "package_identifier":
+		return true
+	default:
+		return false
+	}
 }
 
 func stripSpace(s string) string {

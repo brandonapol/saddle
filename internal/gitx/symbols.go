@@ -13,20 +13,25 @@ import (
 // Symbol is a named function, method or type in a source file. Lines are
 // 1-based and inclusive. Nested symbols carry qualified names ("T.Method").
 // SigHash is the hex sha256 of the signature text with whitespace removed, so
-// a body-only edit or a gofmt spacing change does not move it. Empty when the
-// symbol was built without an extractor.
+// a body-only edit or a gofmt spacing change does not move it. SigText is
+// that signature with whitespace collapsed to single spaces, for notes.
+// Both are empty when the symbol was built without an extractor.
 type Symbol struct {
 	Name      string
 	Kind      string // "func", "method", "type", "class", "var", "const", ...
 	StartLine int
 	EndLine   int
 	SigHash   string
+	SigText   string
 }
 
 // SpanCacheVersion is the extractor version in the on-disk span cache path.
 // Bump it when symbol extraction or signature rules change, so a stale entry
 // cannot feed a verdict.
-const SpanCacheVersion = 1
+//
+// 2: Symbol.SigText. A v1 entry leaves it empty and would warn with a blank
+// signature.
+const SpanCacheVersion = 2
 
 // SymbolExtractor finds the symbols in a file. Implementations live outside
 // this package (see gitx/symbols) so gitx does not link a parser it may not use.

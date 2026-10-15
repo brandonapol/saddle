@@ -83,6 +83,49 @@ func TestBrokenSourceStillParses(t *testing.T) {
 	}
 }
 
+func TestSigTextIsTheDeclaration(t *testing.T) {
+	src := "package store\n\nfunc (s *Store) Claim(path string) error {\n\treturn nil\n}\n"
+	syms, err := Default().Symbols("store.go", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(syms) != 1 {
+		t.Fatalf("symbols = %v", names(syms))
+	}
+	if syms[0].SigText != "func (s *Store) Claim(path string) error" {
+		t.Fatalf("SigText = %q", syms[0].SigText)
+	}
+	body := "package store\n\nfunc (s *Store) Claim(path string) error {\n\treturn errors.New(\"no\")\n}\n"
+	again, err := Default().Symbols("store.go", []byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again[0].SigText != syms[0].SigText || again[0].SigHash != syms[0].SigHash {
+		t.Fatalf("body edit moved the signature: %q %s", again[0].SigText, again[0].SigHash)
+	}
+}
+
+func TestUsesNamesAndSelectors(t *testing.T) {
+	src := "package store\n\nfunc Use(s *Store) error {\n\treturn s.Claim(\"Claim\")\n}\n"
+	uses, err := Default().Uses("store/use.go", []byte(src), map[int]bool{4: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, u := range uses {
+		got[u.Qual+" "+u.Name] = true
+	}
+	if !got["s Claim"] || !got[" Claim"] {
+		t.Fatalf("uses = %v", got)
+	}
+	// The string "Claim" is not an identifier, and line 3 is not added.
+	for _, u := range uses {
+		if u.Name == "Use" || u.Name == "Store" {
+			t.Fatalf("use %q is not on the added line", u.Name)
+		}
+	}
+}
+
 func TestSupports(t *testing.T) {
 	x := Default()
 	if !x.Supports("a/b.go") || !x.Supports("x.py") || x.Supports("README.md") {

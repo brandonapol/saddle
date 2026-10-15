@@ -208,8 +208,11 @@ Trigger: PostToolUse after a write to a supported f in `symbol` mode.
    `Store.Claim` (internal/store/store.go): old `…` → new `…`. Depend on the
    new shape, stub it, or coordinate through the orchestrator." Each (T,
    symbol, new SigHash) is noted once per task (an event records it).
-6. Landed match: **undecided (Q2)**, recommended a PreToolUse deny with the
-   rule 2 wording, since that edit will not compile after the next sync.
+6. Landed match (Q2, taken for #592): a PreToolUse deny with the rule 2
+   wording, "`<symbol>` in <path> changed on <integration> since your base
+   (`<subject>`). Run `saddle sync`, then redo this edit on the new
+   version." The edit will not compile after the next sync. Live matches
+   stay warnings.
 7. Body-only changes (same `SigHash`): nothing.
 
 Rule 3 has a 300ms budget across all tasks; past it, it emits nothing. A
@@ -290,7 +293,8 @@ False positives (deny or warn needlessly) cost throughput only; the
    turned on in this repo's `.saddle/config.toml` only. Track `symbol_allow`,
    `symbol_deny`, `symbol_fallback` (by reason), hook latency, and any train
    conflict on a file where a symbol allow happened.
-3. **Rule 3** (S5) once Q2 is answered, warn-only first.
+3. **Rule 3** (S5). Live signature changes warn; a use of a signature that
+   has landed since the task's base is a PreToolUse deny (Q2).
 4. **Flip the default** to `symbol` once the owner's criteria (Q4) are met.
    `file` stays as the kill switch.
 5. **More languages** (Q3): TypeScript/TSX next, with weft's arrow-function
@@ -305,10 +309,10 @@ False positives (deny or warn needlessly) cost throughput only; the
   two edits of one symbol both through, and it is symmetric with how path
   claims work today. The cost is that A, the declared owner, can be made to
   wait.
-- **Q2 (blocks S5): what does "an error once landed" mean?** Recommended:
-  a PreToolUse deny of the edit that uses the old signature, with the rule 2
-  wording (sync first). The alternative is a warning that escalates to a
-  blocking notice at `done`.
+- **Q2 (was blocking S5): what does "an error once landed" mean?** Taken
+  for #592: a PreToolUse deny of the edit that uses the changed signature,
+  with the rule 2 wording (sync first). The alternative was a warning that
+  escalates to a blocking notice at `done`.
 - **Q3 (no ticket yet): TypeScript/TSX.** The issue asks for TS test shapes,
   but the extractor has no TS. Add it as a follow-up after the dogfood stage,
   or now as a seventh ticket?
@@ -324,5 +328,5 @@ False positives (deny or warn needlessly) cost throughput only; the
 | S2 | #588 Edit seam: proposed content in the hook, `CheckEdit`/`EditNotes`, `[claims] granularity` | standard | yes | — |
 | S3 | #590 Rule 2: deny stale overwrites | hard | yes | S1, S2 |
 | S4 | #591 Rule 1: share a file by symbols, symbol-claim table | hard | no (Q1) | S1, S2 |
-| S5 | #592 Rule 3: warn on stale assumptions | standard | no (Q2) | S1, S2 |
+| S5 | #592 Rule 3: warn on stale assumptions | standard | yes (Q2: PreToolUse deny) | S1, S2 |
 | S6 | #589 Forecast feed in status/brief; disjoint symbols score low | standard | yes | — |
