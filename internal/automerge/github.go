@@ -1,13 +1,13 @@
 package automerge
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"slices"
-	"strings"
+
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 // Runner runs gh with args and returns its stdout.
@@ -15,16 +15,8 @@ type Runner func(args ...string) (string, error)
 
 // ExecRunner runs the gh CLI in dir.
 func ExecRunner(dir string) Runner {
-	return func(args ...string) (string, error) {
-		cmd := exec.Command("gh", args...)
-		cmd.Dir = dir
-		var out, errb bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &out, &errb
-		if err := cmd.Run(); err != nil {
-			return "", fmt.Errorf("gh %s: %w: %s", strings.Join(args[:min(2, len(args))], " "), err, strings.TrimSpace(errb.String()))
-		}
-		return strings.TrimSpace(out.String()), nil
-	}
+	gh := forge.CLI(dir, forge.GH)
+	return func(args ...string) (string, error) { return gh(context.Background(), args...) }
 }
 
 // GH is GitHub through the gh CLI.

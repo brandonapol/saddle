@@ -1,27 +1,24 @@
 package ciwatch
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
+
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 // ExecRunner runs the real gh CLI in dir.
 func ExecRunner(dir string) Runner {
 	return func(ctx context.Context, args ...string) (string, error) {
-		cmd := exec.CommandContext(ctx, "gh", args...)
-		cmd.Dir = dir
-		var out, errb bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &out, &errb
-		if err := cmd.Run(); err != nil {
+		out, errb, err := forge.Output(ctx, dir, forge.GH, args...)
+		if err != nil {
 			n := min(len(args), 2)
-			return out.String(), fmt.Errorf("gh %s: %w: %s", strings.Join(args[:n], " "), err, strings.TrimSpace(errb.String()))
+			return out, fmt.Errorf("gh %s: %w: %s", strings.Join(args[:n], " "), err, strings.TrimSpace(errb))
 		}
-		return out.String(), nil
+		return out, nil
 	}
 }
 
