@@ -129,3 +129,29 @@ func TestSplitTitle(t *testing.T) {
 		t.Fatalf("splitTitle = %q, %q", title, body)
 	}
 }
+
+// TestMakefileE2ERunsBench locks #605 part 1: TestBenchRunsControlAndACollision
+// is an e2e test in this package, so make test/e2e has to start it.
+func TestMakefileE2ERunsBench(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recipe strings.Builder
+	in := false
+	for _, line := range strings.Split(string(b), "\n") {
+		switch {
+		case strings.HasPrefix(line, "test/e2e:"):
+			in = true
+		case in && line != "" && !strings.HasPrefix(line, "\t") && !strings.HasPrefix(line, "#"):
+			in = false
+		}
+		if in {
+			recipe.WriteString(line)
+			recipe.WriteByte('\n')
+		}
+	}
+	if !strings.Contains(recipe.String(), "./internal/bench/...") {
+		t.Fatalf("make test/e2e does not run ./internal/bench/...:\n%s", recipe.String())
+	}
+}
