@@ -55,6 +55,13 @@ func readStats(a *app.App, now time.Time) map[string]agentStats {
 			out[b.Task] = s
 		}
 	}
+	// Grok and codex report each model call's prompt in their own session
+	// files; that beats a bucket average, which for grok totals a turn (#598).
+	for id, u := range a.WorkerContexts() {
+		s := out[id]
+		s.Ctx, s.CtxMax, s.Model = u.Prompt, u.Window, u.Model
+		out[id] = s
+	}
 	if es, err := a.Store.Events(500); err == nil {
 		for _, e := range es {
 			act, ok := activity(e)
@@ -112,12 +119,16 @@ const (
 
 // ctxCell is a 5-cell bar and percent of the model's context window, red past
 // 80%. app.WorkerContext clamps a real reading at 100 and renders "?" when the
-// prompt is larger than the window (#522).
+// prompt is larger than the window (#522). A window the harness reported
+// (CtxMax) wins over the model table's.
 func ctxCell(s agentStats) string {
 	if s.Ctx <= 0 {
 		return sFaint.Render(fmt.Sprintf("%-*s", ctxW, " ctx —"))
 	}
 	u := app.WorkerContext(s.Model, s.Ctx)
+	if s.CtxMax > 0 {
+		u.Window = s.CtxMax
+	}
 	frac := 0.0
 	style := sFaint
 	if u.Trustworthy() {

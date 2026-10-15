@@ -459,3 +459,71 @@ func TestWorkerContextGrok(t *testing.T) {
 		t.Fatalf("claude past 200K = %+v, want the 1M window", u)
 	}
 }
+
+// grokWorkerUpdates is a scrubbed tail of a live grok worker's updates.jsonl:
+// the latest model call's prompt, then the turn's cumulative usage (#598).
+const grokWorkerUpdates = `{"timestamp":1792026049,"method":"session/update","params":{"sessionId":"01a1fixture","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Done."}},"_meta":{"totalTokens":144127,"requestTrimmedTokens":0,"eventId":"01a1fixture-8001","promptId":"p1","updateType":"AgentMessageChunk"}}}
+{"timestamp":1792026049,"method":"_x.ai/session/update","params":{"sessionId":"01a1fixture","update":{"sessionUpdate":"turn_completed","usage":{"inputTokens":9132422,"outputTokens":124474,"totalTokens":9256896,"cachedReadTokens":8753664,"modelCalls":88,"modelUsage":{"grok-4.7-build":{"inputTokens":9132422}}}},"_meta":{"eventId":"01a1fixture-8006"}}}
+`
+
+// codexWorkerRollout is a scrubbed slice of a live codex worker's rollout.
+func codexWorkerRollout(cwd string) string {
+	return `{"timestamp":"2026-10-14T14:22:37.100Z","type":"session_meta","payload":{"id":"01a1fixture","cwd":"` + cwd + `","originator":"codex_cli_rs"}}
+{"timestamp":"2026-10-14T14:22:39.478Z","type":"turn_context","payload":{"turn_id":"turn-1","cwd":"` + cwd + `","model":"gpt-5.6-sol"}}
+{"timestamp":"2026-10-14T14:39:55.469Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":4298911,"cached_input_tokens":4215296,"output_tokens":9011,"total_tokens":4307922},"last_token_usage":{"input_tokens":129200,"cached_input_tokens":128584,"output_tokens":133,"total_tokens":129333},"model_context_window":258400}}}
+`
+}
+
+// workerContextApp is an App with one running grok worker and one running
+// codex worker whose harnesses keep their session files under fake homes.
+func workerContextApp(t *testing.T) *App {
+	t.Helper()
+	tmp := t.TempDir()
+	grokHome, codexHome := filepath.Join(tmp, "grok"), filepath.Join(tmp, "codex")
+	t.Setenv("GROK_HOME", grokHome)
+	t.Setenv("CODEX_HOME", codexHome)
+	st, err := store.Open(filepath.Join(tmp, "state.db"))
+	must(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	gw, cw := filepath.Join(tmp, "wt", "t1"), filepath.Join(tmp, "wt", "t2")
+	must(t, st.CreateTask(store.Task{ID: "t1", Role: store.RoleWorker, Status: store.Running, Adapter: usage.Grok, Worktree: gw, SessionID: "01a1grok"}))
+	must(t, st.CreateTask(store.Task{ID: "t2", Role: store.RoleWorker, Status: store.Running, Adapter: usage.Codex, Worktree: cw}))
+	sess := filepath.Join(grokHome, "sessions", "%2Fwt%2Ft1", "01a1grok")
+	must(t, os.MkdirAll(sess, 0o755))
+	must(t, os.WriteFile(filepath.Join(sess, "usage.json"), []byte(`{"turns":[]}`), 0o644))
+	must(t, os.WriteFile(filepath.Join(sess, "updates.jsonl"), []byte(grokWorkerUpdates), 0o644))
+	day := filepath.Join(codexHome, "sessions", "2026", "10", "14")
+	must(t, os.MkdirAll(day, 0o755))
+	must(t, os.WriteFile(filepath.Join(day, "rollout-2026-10-14T10-22-37-01a1fixture.jsonl"), []byte(codexWorkerRollout(cw)), 0o644))
+	return &App{Root: tmp, Store: st, Cfg: config.Default()}
+}
+
+// A running grok or codex worker's context comes from its harness's own
+// per-call reading, not the usage buckets' cumulative turn totals (#598).
+func TestWorkerContextsReadLiveSessions(t *testing.T) {
+	a := workerContextApp(t)
+	got := a.WorkerContexts()
+	g := got["t1"]
+	if g.Prompt != 144_127 || g.Window != 256_000 || g.Percent() != "56%" {
+		t.Errorf("grok worker = %+v (%s), want 144127 of 256K = 56%%", g, g.Percent())
+	}
+	c := got["t2"]
+	if c.Prompt != 129_200 || c.Window != 258_400 || c.Model != "gpt-5.6-sol" || c.Percent() != "50%" {
+		t.Errorf("codex worker = %+v (%s), want 129200 of codex's reported 258400 = 50%%", c, c.Percent())
+	}
+	if again := a.WorkerContexts(); again["t1"] != g || again["t2"] != c {
+		t.Errorf("an unchanged session must keep its reading, got %+v", again)
+	}
+}
+
+// The orchestrator's codex reader sizes against the window Codex reports.
+func TestContextReaderCodexUsesReportedWindow(t *testing.T) {
+	t.Parallel()
+	p := filepath.Join(t.TempDir(), "rollout.jsonl")
+	must(t, os.WriteFile(p, []byte(codexWorkerRollout("/w")), 0o644))
+	u, err := (&ContextReader{Agent: usage.Codex}).Read(p)
+	must(t, err)
+	if u.Prompt != 129_200 || u.Window != 258_400 || u.Model != "gpt-5.6-sol" {
+		t.Fatalf("codex context = %+v, want 129200 of 258400 on gpt-5.6-sol", u)
+	}
+}
