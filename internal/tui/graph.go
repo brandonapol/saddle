@@ -126,10 +126,12 @@ func (s series) label() string {
 // usageGraph is the last hour of usage by series, one slot per minute,
 // oldest first, series totals/costs, and Opus tokens spent resolving merges.
 type usageGraph struct {
-	Minutes     [graphMinutes]map[series]int64
-	Totals      map[series]int64
-	AllTokens   map[series]int64
-	Costs       map[series]float64
+	Minutes   [graphMinutes]map[series]int64
+	Totals    map[series]int64
+	AllTokens map[series]int64
+	Costs     map[series]float64
+	// Unpriced marks series with usage that has no price (#637).
+	Unpriced    map[series]bool
 	QuotaResets [nProviders]string
 	// CodexExcluded are [adapters.codex] exclude_models; their rows say so.
 	CodexExcluded []string
@@ -234,11 +236,15 @@ func buildGraphPrices(bs []usage.Bucket, es []store.Event, now time.Time, cacheR
 		if i < 0 || i >= graphMinutes {
 			continue
 		}
-		cost := b.CostUSD
-		if cost <= 0 {
-			cost = usage.CostUSD(b.Model, b.Tokens, prices)
+		cost, ok := usage.BucketCostUSD(b, prices)
+		s := seriesOf(b.Adapter, b.Model)
+		g.add(i, s, countTokens(b.Tokens, cacheReads), b.Total(), cost)
+		if !ok && b.Total() > 0 {
+			if g.Unpriced == nil {
+				g.Unpriced = map[series]bool{}
+			}
+			g.Unpriced[s] = true
 		}
-		g.add(i, seriesOf(b.Adapter, b.Model), countTokens(b.Tokens, cacheReads), b.Total(), cost)
 	}
 	return g
 }
@@ -364,8 +370,8 @@ func (g *usageGraph) render(w, h int) string {
 			quota = "excluded"
 		}
 		row := lipgloss.NewStyle().Foreground(s.color()).Render("■") + " " +
-			sDim.Render(fmt.Sprintf("%s · %s  %s tok · $%.2f · %s",
-				s.label(), providerOwners[s.Provider], humanTokens(g.AllTokens[s]), g.Costs[s], quota))
+			sDim.Render(fmt.Sprintf("%s · %s  %s tok · %s · %s",
+				s.label(), providerOwners[s.Provider], humanTokens(g.AllTokens[s]), usd(g.Costs[s], g.Unpriced[s]), quota))
 		rows = append(rows, lipgloss.NewStyle().MaxWidth(w).Render(row))
 	}
 	legend := []string{sDim.Render("peak " + humanTokens(peakMin) + "/m")}

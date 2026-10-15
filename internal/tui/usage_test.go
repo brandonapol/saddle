@@ -161,3 +161,19 @@ func TestOrchestratorUrgentMarker(t *testing.T) {
 		t.Errorf("stored history = %+v", hist)
 	}
 }
+
+// #637: a window whose usage includes an unpriced model shows its cost as
+// unknown, not as $0.00.
+func TestUsageStripShowsUnpricedCostAsUnknown(t *testing.T) {
+	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	bs := []usage.Bucket{{Key: usage.Key{Minute: now, Adapter: usage.Grok, Model: "grok-4.7-build"}, Tokens: usage.Tokens{Input: 1000}, Messages: 1}}
+	got := usageStrip(usage.EstimateBuckets(bs, usage.Limits{}, now), 160)
+	if strings.Contains(got, "$0.00") || !strings.Contains(got, "$?") {
+		t.Errorf("unpriced strip = %q", got)
+	}
+	bs = append(bs, usage.Bucket{Key: usage.Key{Minute: now, Model: "claude-opus-5-5"}, Tokens: usage.Tokens{Input: 1_000_000}, Messages: 1})
+	got = usageStrip(usage.EstimateBuckets(bs, usage.Limits{}, now), 160)
+	if !strings.Contains(got, "$4.00+?") {
+		t.Errorf("partly priced strip = %q", got)
+	}
+}

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -266,5 +267,29 @@ func TestUsageGraphUnknownCodexModelRow(t *testing.T) {
 	}
 	if c := (series{providerCodex, "gpt-7-nova"}).color(); c == cDim {
 		t.Errorf("unknown codex model is gray")
+	}
+}
+
+// #637: an unknown Codex model is costed at the default Codex price, and a
+// row whose usage has no price shows its cost as unknown, not $0.00.
+func TestUsageGraphCostsUnknownCodexModelAndMarksUnpriced(t *testing.T) {
+	min := graphNow.Truncate(time.Minute)
+	bs := []usage.Bucket{
+		{Key: usage.Key{Minute: min, Task: "t5", Adapter: usage.Codex, Model: "gpt-5.6-sol"}, Tokens: usage.Tokens{Input: 1_000_000}, Messages: 1},
+		{Key: usage.Key{Minute: min, Task: "t6", Adapter: usage.Grok, Model: "grok-4.7-build"}, Tokens: usage.Tokens{Input: 1_000_000}, Messages: 1},
+	}
+	g := buildGraph(bs, nil, graphNow, false)
+	out := g.render(160, g.height())
+	want := fmt.Sprintf("$%.2f", usage.DefaultPrices[usage.Codex].Input)
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.Contains(line, "codex sol") && !strings.Contains(line, want):
+			t.Errorf("codex row lacks %s: %q", want, line)
+		case strings.Contains(line, "grok · xAI") && (!strings.Contains(line, "$?") || strings.Contains(line, "$0.00")):
+			t.Errorf("grok row should show unknown cost: %q", line)
+		}
+	}
+	if !strings.Contains(out, "codex sol") || !strings.Contains(out, "grok · xAI") {
+		t.Errorf("rows missing:\n%s", out)
 	}
 }
