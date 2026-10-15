@@ -45,6 +45,10 @@ func (a *App) Claim(task string, want []string) (ClaimResult, error) {
 type Decision struct {
 	Allow  bool
 	Reason string
+	// Owner is the task whose path claim denied the write. Serial-file and
+	// outside-worktree denies leave it empty, so a symbol rule can tell a
+	// claim deny (which it may override) from those (which it never does).
+	Owner string
 }
 
 // CheckWrite decides whether task may write the file at abs. Paths nobody owns
@@ -97,7 +101,7 @@ func (a *App) CheckWrite(task, abs string) Decision {
 	}
 	if reason != "" {
 		a.Store.Event(task, "deny", rel)
-		return Decision{Reason: reason}
+		return Decision{Reason: reason, Owner: owner}
 	}
 	return Decision{Allow: true}
 }

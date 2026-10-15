@@ -25,6 +25,10 @@ type Input struct {
 	PermissionMode string         `json:"permission_mode"`
 	// Grok is set when the payload came from the Grok CLI (camelCase keys).
 	Grok bool `json:"-"`
+	// ToolResponse is the tool's result (PostToolUse), when it is an object.
+	// decodeInput sets it; a plain decode skips it, as some tools answer
+	// with a string.
+	ToolResponse map[string]any `json:"-"`
 }
 
 type specific struct {
@@ -66,7 +70,11 @@ func Handle(a *app.App, task string, in Input) *Output {
 			}
 		}
 		for _, p := range writePaths(in) {
-			if d := a.CheckWrite(task, p); !d.Allow {
+			e := app.Edit{Task: task, Abs: p}
+			if a.SymbolMode() {
+				e.Before, e.After, e.Known = proposed(in, p)
+			}
+			if d := a.CheckEdit(e); !d.Allow {
 				return deny(in, RuleWriteGuard, d.Reason+ownerDiff(a, task, p))
 			}
 		}
@@ -75,7 +83,7 @@ func Handle(a *app.App, task string, in Input) *Output {
 	case "PostToolUse":
 		markActive(st, task) // a tool ran, so any prompt it was waiting on was answered
 		st.Event(task, "tool", strings.TrimSpace(in.ToolName+" "+filePath(in.ToolInput)))
-		return context(in.Event, takeAll(st, task))
+		return context(in.Event, joinNotes(takeAll(st, task), editNotes(a, task, in)))
 
 	case "UserPromptSubmit":
 		markActive(st, task)
@@ -174,6 +182,8 @@ type inputWire struct {
 	ToolCamel      string         `json:"toolName"`
 	InputSnake     map[string]any `json:"tool_input"`
 	InputCamel     map[string]any `json:"toolInput"`
+	RespSnake      any            `json:"tool_response"`
+	RespCamel      any            `json:"toolResponse"`
 	Message        string         `json:"message"`
 	NoticeType     string         `json:"notificationType"`
 	StopSnake      bool           `json:"stop_hook_active"`
@@ -201,6 +211,9 @@ func decodeInput(b []byte) (Input, error) {
 	}
 	if in.ToolInput == nil {
 		in.ToolInput = w.InputCamel
+	}
+	if in.ToolResponse, _ = w.RespSnake.(map[string]any); in.ToolResponse == nil {
+		in.ToolResponse, _ = w.RespCamel.(map[string]any)
 	}
 	if in.Message == "" {
 		in.Message = w.NoticeType
@@ -291,6 +304,32 @@ func patchPaths(patch string) []string {
 		}
 	}
 	return ps
+}
+
+// editNotes is what the PostToolUse symbol rules say about the files the
+// call wrote. It is "" in file mode.
+func editNotes(a *app.App, task string, in Input) string {
+	if !a.SymbolMode() {
+		return ""
+	}
+	var notes []string
+	for _, p := range writePaths(in) {
+		e := app.Edit{Task: task, Abs: p}
+		e.Before, e.After, e.Known = applied(in, p)
+		notes = append(notes, a.EditNotes(e))
+	}
+	return joinNotes(notes...)
+}
+
+// joinNotes joins the non-empty texts with a blank line.
+func joinNotes(texts ...string) string {
+	var out []string
+	for _, t := range texts {
+		if t != "" {
+			out = append(out, t)
+		}
+	}
+	return strings.Join(out, "\n\n")
 }
 
 func takeAll(st *store.Store, task string) string {
