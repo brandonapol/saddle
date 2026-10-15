@@ -4,18 +4,18 @@ Re-audit date 2026-10-14 against `main` at 5508efd. Scope: the issues still open
 
 Each DELIVERED issue got a comment with its evidence and was closed. Each issue left open got a comment that lists what is missing. An epic was closed only when every child was delivered or closed.
 
-**39 open issues audited: 28 closed (23 delivered, 1 superseded, 4 epics complete), 11 left open (4 partial, 3 open, 4 epics).**
+**39 open issues audited: 29 closed (23 delivered, 2 superseded or descoped, 4 epics complete), 10 left open (4 partial, 2 open, 4 epics).**
 
-Owner decisions:
-- **#45 reactor.** It was specified for `saddled`, and #5 dropped the daemon. `docs/ARCHITECTURE.md` still calls the reactor the target design. Build an in-process reactor (inside `saddle up` / `saddle plugin engine`) with a replayable decision log, or descope it in ARCHITECTURE.md and close #45.
-- **#4 plan tables.** Persist the plan DAG (`epics`, `deps`, claim `kind`) or descope. #17's dependency gating needs it.
+Owner decisions (2026-10-14):
+- **#45 reactor: descoped and closed.** Saddle stays in-process (#5); scheduling decisions stay inline in `internal/app`. The `docs/ARCHITECTURE.md` edit that records this was handed to t298, which holds that file.
+- **#4 plan tables: kept open.** #17's dependency gating needs `epics` and `deps` persisted.
 
 | Issue | Title | Status | Evidence | Missing |
 |---|---|---|---|---|
 | #1 | Epic: Foundation | OPEN (epic) | #2 delivered; #5 superseded | #3, #4 partial |
 | #2 | Scaffold Go module, CLI skeleton and CI | CLOSED: delivered | `cmd/saddle`, `internal/cli/root.go`, `.github/workflows/ci.yml`; TestVersion | |
 | #3 | Config: global + per-repo TOML | PARTIAL | `internal/config/config.go`: merge, `regen`, `adapters.<name>` (cmd, model, models per difficulty), `narrator.model`, `claude.orchestrator_model`; `config_test.go` | `saddle config` printing the merged config; planner model key (`planner/model.go` hard-codes DefaultModel) |
-| #4 | State store schema (SQLite) | PARTIAL | `internal/store/store.go` migrations: tasks, claims, events, train, notices, renames, chat, usage, narrator_spend, triage_calls | `epics`, `deps` tables, claim `kind`. Owner decision |
+| #4 | State store schema (SQLite) | PARTIAL | `internal/store/store.go` migrations: tasks, claims, events, train, notices, renames, chat, usage, narrator_spend, triage_calls | `epics`, `deps` tables, claim `kind`. Kept open: #17 needs it |
 | #5 | Daemon `saddled` | CLOSED: superseded | `docs/ARCHITECTURE.md` "Processes": in-process, no daemon (decision #5) | |
 | #6 | Epic: Planner | CLOSED: complete | #7, #8, #10, #11 delivered (#143); #9 closed | |
 | #7 | Epic sources | CLOSED: delivered | #143; `internal/planner/source.go` (file, stdin, `gh:#N`); `source_test.go` | |
@@ -49,12 +49,12 @@ Owner decisions:
 | #38 | Epic: Narrator + usage | CLOSED: complete | #41, #43 delivered; #39, #40, #42 closed | |
 | #41 | Usage graph | CLOSED: delivered | #148; `tui/graph.go`; TestBuildUsageGraph | |
 | #43 | Ask the narrator | CLOSED: delivered | #148; `tui/ask.go`; TestAskNarratorThreadsQuestionAndAnswer | |
-| #44 | Epic: Event loop + dispatcher | OPEN (epic) | #46, #47, #49, #50 closed; forecast feed in status and brief (#596) | #45, #48, #51 open |
-| #45 | Reactor | OPEN | Decisions are made inline in `internal/app` | Owner decision (see above) |
+| #44 | Epic: Event loop + dispatcher | OPEN (epic) | #46, #47, #49, #50 closed; #45 descoped; forecast feed in status and brief (#596) | #48, #51 open |
+| #45 | Reactor | CLOSED: descoped | Owner decision: no reactor; decisions stay inline in `internal/app` | |
 
 ## Remaining work
 
 - **Small:** #3 (`saddle config` command, planner model key).
 - **Needs #4 first:** #17 dependency gating, then #27 barrier lane pause.
 - **Merge train:** #31 pre-rebase (M), #29 structural merge spike (M).
-- **Owner decisions:** #45 reactor, #4 plan tables.
+- **#4 plan tables:** prerequisite for #17.
