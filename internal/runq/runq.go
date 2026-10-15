@@ -85,6 +85,23 @@ var DefaultClasses = map[string]int{
 	"generic-heavy": 2,
 }
 
+// DefaultWeights are the built-in classes' weights: how many units of the
+// machine's budget one run uses. Classes named nowhere weigh 1.
+var DefaultWeights = map[string]int{
+	"flutter-test": 3,
+}
+
+// DefaultBudget is the machine's budget when none is configured: half the
+// cores, but never under the heaviest built-in weight, so every built-in
+// class can run.
+func DefaultBudget(cpus int) int {
+	b := cpus / 2
+	for _, w := range DefaultWeights {
+		b = max(b, w)
+	}
+	return b
+}
+
 // Priorities. Waiting AgingStep raises a waiter's priority by one, so a
 // background run outranks a fresh worker run after 10 steps.
 const (
@@ -99,6 +116,8 @@ type Options struct {
 	Mode         Mode                         // observe when empty; EnvBypass overrides it
 	Slots        map[string]int               // slots per class, written when a class is first seen (DefaultClasses when nil)
 	DefaultSlots int                          // slots for classes not in Slots (1)
+	Weights      map[string]int               // units of Budget one run of a class uses (DefaultWeights when nil; 1 when unnamed)
+	Budget       int                          // units every class's running leases share (DefaultBudget(CPUs)); < 0 turns the budget off
 	Heartbeat    time.Duration                // how often holders and waiters check in (2s)
 	StaleAfter   time.Duration                // a lease without a heartbeat this long is dead (15s)
 	PollMin      time.Duration                // first wait between attempts (50ms)
@@ -167,7 +186,9 @@ CREATE TABLE IF NOT EXISTS leases(
   granted INTEGER NOT NULL DEFAULT 0,
   heartbeat INTEGER NOT NULL,
   mode TEXT NOT NULL DEFAULT 'enforce',
-  repo TEXT NOT NULL DEFAULT ''
+  repo TEXT NOT NULL DEFAULT '',
+  weight INTEGER NOT NULL DEFAULT 1,
+  external INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS leases_class ON leases(class, state);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL);
@@ -189,6 +210,8 @@ CREATE TABLE IF NOT EXISTS history(
 var migrations = []struct{ table, column, def string }{
 	{"leases", "mode", "TEXT NOT NULL DEFAULT 'enforce'"},
 	{"leases", "repo", "TEXT NOT NULL DEFAULT ''"},
+	{"leases", "weight", "INTEGER NOT NULL DEFAULT 1"},
+	{"leases", "external", "INTEGER NOT NULL DEFAULT 0"},
 	{"history", "cpu_ms", "INTEGER NOT NULL DEFAULT 0"},
 	{"history", "max_rss_kb", "INTEGER NOT NULL DEFAULT 0"},
 	{"history", "mode", "TEXT NOT NULL DEFAULT 'enforce'"},
@@ -338,6 +361,12 @@ func withDefaults(o Options) Options {
 	if o.CPUs <= 0 {
 		o.CPUs = runtime.NumCPU()
 	}
+	if o.Weights == nil {
+		o.Weights = DefaultWeights
+	}
+	if o.Budget == 0 {
+		o.Budget = DefaultBudget(o.CPUs)
+	}
 	if o.LookPath == nil {
 		o.LookPath = exec.LookPath
 	}
@@ -372,6 +401,9 @@ type Request struct {
 	Label string // who is asking (task id); SADDLE_TASK or "pid N" when empty
 	Repo  string // the saddle repo asking, for status across repos; may be empty
 	Cmd   string // what will run, for status
+	// Foreign marks a run no saddle agent started (a git hook, another
+	// tool): saddle run without SADDLE_TASK. Status and saddle queue list it.
+	Foreign bool
 	// OnWait is called while queued, whenever the position or holder changes.
 	OnWait func(Wait)
 }
@@ -383,6 +415,7 @@ type Wait struct {
 	Waiters  int
 	Holders  []Entry
 	Gated    string        // why the load gate holds the run, if it does
+	Budget   string        // why the machine budget holds the run, if it does
 	Drained  bool          // the class has 0 slots (saddle runq drain)
 	ETA      time.Duration // class median run time × turns ahead; 0 without history
 	Since    time.Time
@@ -400,6 +433,9 @@ func (w Wait) String() string {
 	}
 	if w.Drained {
 		s += fmt.Sprintf(", class drained (saddle runq slots %s N resumes it)", w.Class)
+	}
+	if w.Budget != "" {
+		s += ", waiting on budget: " + w.Budget
 	}
 	if w.Gated != "" {
 		s += ", waiting on load: " + w.Gated
@@ -592,7 +628,7 @@ func (q *Queue) Acquire(ctx context.Context, req Request) (*Lease, error) {
 // counts only by kind ("load", "cpu pressure"): its figures move on every
 // probe, and a line per probe would flood the agent's context.
 func waitKey(w Wait) string {
-	k := fmt.Sprintf("%d/%d/%s", w.Position, w.Waiters, gateKind(w.Gated))
+	k := fmt.Sprintf("%d/%d/%s/%s", w.Position, w.Waiters, gateKind(w.Gated), gateKind(w.Budget))
 	for _, h := range w.Holders {
 		k += "/" + h.Token
 	}
@@ -620,8 +656,9 @@ func (q *Queue) enqueue(req Request, mode Mode) (*Lease, error) {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO classes(name, slots) VALUES(?, ?)`, req.Class, q.slotsFor(req.Class)); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`INSERT INTO leases(token, class, prio, state, label, repo, cmd, pid, host, enqueued, granted, heartbeat, mode)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, token, req.Class, req.Prio, state, req.Label, req.Repo, req.Cmd, os.Getpid(), q.host, now, granted, now, string(mode))
+		_, err := tx.Exec(`INSERT INTO leases(token, class, prio, state, label, repo, cmd, pid, host, enqueued, granted, heartbeat, mode, weight, external)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, token, req.Class, req.Prio, state, req.Label, req.Repo, req.Cmd, os.Getpid(), q.host, now, granted, now, string(mode),
+			q.WeightFor(req.Class), req.Foreign)
 		return err
 	})
 	if err != nil {
@@ -638,6 +675,14 @@ func (q *Queue) slotsFor(class string) int {
 		return n
 	}
 	return q.opts.DefaultSlots
+}
+
+// WeightFor is how many budget units one run of class uses.
+func (q *Queue) WeightFor(class string) int {
+	if n, ok := q.opts.Weights[class]; ok && n > 0 {
+		return n
+	}
+	return 1
 }
 
 // abandon drops a waiting lease (ctx canceled or an error).
@@ -692,6 +737,13 @@ func (q *Queue) try(l *Lease, req Request, gatedSince *time.Time) (granted bool,
 		free := cs.Slots - len(cs.Holders)
 		if w.Position == 0 || w.Position > free {
 			*gatedSince = time.Time{}
+			return nil
+		}
+		if ok, why, err := q.budgetAdmits(tx, l.token, now); err != nil {
+			return err
+		} else if !ok {
+			*gatedSince = time.Time{}
+			w.Budget = why
 			return nil
 		}
 		if q.opts.Gate != nil {
@@ -932,6 +984,8 @@ type Entry struct {
 	Cmd      string
 	PID      int
 	Prio     int           // effective (aged) priority
+	Weight   int           // budget units the run uses
+	Foreign  bool          // no saddle agent started it (Request.Foreign)
 	Position int           // 1-based among waiters; 0 for holders
 	Age      time.Duration // holders: running for; waiters: waiting for
 	ETA      time.Duration // waiters, in Status: median run time × turns ahead; 0 without history
@@ -993,7 +1047,7 @@ func (q *Queue) classStatus(tx *sql.Tx, class string, now time.Time) (ClassStatu
 	if err := tx.QueryRow(`SELECT slots FROM classes WHERE name=?`, class).Scan(&cs.Slots); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return cs, err
 	}
-	rows, err := tx.Query(`SELECT seq, token, label, repo, cmd, pid, prio, state, enqueued, granted FROM leases WHERE class=? ORDER BY seq`, class)
+	rows, err := tx.Query(`SELECT seq, token, label, repo, cmd, pid, prio, state, enqueued, granted, weight, external FROM leases WHERE class=? ORDER BY seq`, class)
 	if err != nil {
 		return cs, err
 	}
@@ -1007,7 +1061,7 @@ func (q *Queue) classStatus(tx *sql.Tx, class string, now time.Time) (ClassStatu
 		var e Entry
 		var seq, enq, granted int64
 		var state string
-		if err := rows.Scan(&seq, &e.Token, &e.Label, &e.Repo, &e.Cmd, &e.PID, &e.Prio, &state, &enq, &granted); err != nil {
+		if err := rows.Scan(&seq, &e.Token, &e.Label, &e.Repo, &e.Cmd, &e.PID, &e.Prio, &state, &enq, &granted, &e.Weight, &e.Foreign); err != nil {
 			return cs, err
 		}
 		e.Class = class
