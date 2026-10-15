@@ -22,13 +22,14 @@ const DefaultTags = "grammar_subset grammar_subset_go grammar_subset_python"
 
 // Bins are the binaries a World runs.
 type Bins struct {
-	Dir    string // holds saddle and gh; put it first on PATH
+	Dir    string // holds saddle, gh and glab; put it first on PATH
 	Saddle string
 	GH     string
+	Glab   string // the fake glab (#645)
 	Agent  string // the fake agent
 }
 
-// Build compiles saddle, the gh shim and the fake agent into dir, at once. With
+// Build compiles saddle, the gh and glab shims and the fake agent into dir, at once. With
 // E2E_RACE=1 saddle is built with the race detector.
 func Build(dir string) (Bins, error) {
 	b := binsIn(dir)
@@ -43,6 +44,7 @@ func Build(dir string) (Bins, error) {
 	pkgs := map[string]string{
 		b.Saddle: "./cmd/saddle",
 		b.GH:     "./internal/e2e/fakegh/cmd/gh",
+		b.Glab:   "./internal/e2e/fakeglab/cmd/glab",
 		b.Agent:  "./internal/e2e/fakeagent/cmd/fakeagent",
 	}
 	errs := make(chan error, len(pkgs))
@@ -74,7 +76,7 @@ func Build(dir string) (Bins, error) {
 // binsIn are the binaries Build puts in dir.
 func binsIn(dir string) Bins {
 	return Bins{Dir: dir, Saddle: filepath.Join(dir, "saddle"), GH: filepath.Join(dir, "gh"),
-		Agent: filepath.Join(dir, "fakeagent")}
+		Glab: filepath.Join(dir, "glab"), Agent: filepath.Join(dir, "fakeagent")}
 }
 
 func moduleRoot() (string, error) {

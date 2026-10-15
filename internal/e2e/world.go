@@ -18,6 +18,7 @@ import (
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/e2e/fakeagent"
 	"github.com/brandonapol/saddle/internal/e2e/fakegh"
+	"github.com/brandonapol/saddle/internal/e2e/fakeglab"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 )
 
@@ -46,7 +47,10 @@ type World struct {
 	Bin     string // this world's bin dir: the claude wrapper
 	Tmux    *Tmux
 	GH      fakegh.Repo
-	env     []string
+	// GL is the same origin as a fake GitLab; a World uses it when its
+	// config says [forge] provider = "gitlab" (#645).
+	GL  fakeglab.Repo
+	env []string
 }
 
 // New builds a World: a temp HOME with a git identity, a bare origin on
@@ -108,6 +112,8 @@ func New(t testing.TB, bins Bins, opts Options) *World {
 	w.Git(root, "init", "-q", "--bare", "-b", "main", w.Origin)
 	var err error
 	w.GH, err = fakegh.Init(w.Origin, "e2e", "demo")
+	must(t, err)
+	w.GL, err = fakeglab.Init(w.Origin, "e2e", "demo")
 	must(t, err)
 	must(t, os.MkdirAll(w.Repo, 0o755))
 	w.Git(w.Repo, "init", "-q", "-b", "main")
@@ -354,6 +360,14 @@ func (w *World) GHState() *fakegh.State {
 	return s
 }
 
+// GLState is a snapshot of the fake GitLab.
+func (w *World) GLState() *fakeglab.State {
+	w.T.Helper()
+	s, err := w.GL.Load()
+	must(w.T, err)
+	return s
+}
+
 // OriginFile is a file's content on a branch of origin, or "" if missing.
 func (w *World) OriginFile(branch, rel string) string {
 	r := w.Exec(w.Origin, "git", "--git-dir", w.Origin, "show", branch+":"+rel)
@@ -364,7 +378,7 @@ func (w *World) OriginFile(branch, rel string) string {
 }
 
 // Diagnose logs what a failed journey needs to be debugged: status, the
-// agents' logs and windows, the fake GitHub's calls.
+// agents' logs and windows, the fake GitHub's and GitLab's calls.
 func (w *World) Diagnose() {
 	w.T.Helper()
 	if !w.T.Failed() {
@@ -383,6 +397,11 @@ func (w *World) Diagnose() {
 	if s, err := w.GH.Load(); err == nil {
 		for _, c := range s.Calls {
 			w.T.Logf("gh %s", strings.Join(c, " "))
+		}
+	}
+	if s, err := w.GL.Load(); err == nil {
+		for _, c := range s.Calls {
+			w.T.Logf("glab %s", strings.Join(c, " "))
 		}
 	}
 	if out, err := w.Tmux.Run("list-windows", "-a"); err == nil {
