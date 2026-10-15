@@ -43,6 +43,13 @@ merged PRs, the train) and asks for a lookahead step instead of a status. The
 same unchanged idle state is nudged at most three times; then the owner hears
 once and the nudges stop until something changes. See also *infinite mode*.
 
+### bench
+`saddle bench list|run|score`. The collision bench: works a scenario's dummy
+tickets (`bench/scenarios`) with autopilot and fake agents on a copy of
+`bench/fixture` in a hermetic world, then scores the run (denied writes, claim
+waits, train bounces, forecast hits, tickets that needed help). Run it from a
+saddle source checkout. See [bench.md](bench.md).
+
 ### blockers
 `saddle blockers`: lists open `saddle-blocker` issues, most frequent first.
 See [blocker-issues.md](blocker-issues.md).
