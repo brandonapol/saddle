@@ -2,8 +2,12 @@ description = "Two tickets change the same function. Running them together would
 overlap = "critical"
 safe_parallelism = 1
 
+# Hold #1 before done until #2 has written, so the two overlap under
+# symbol claims instead of #1 landing before autopilot's next tick spawns
+# #2. Under file claims #2 can't start while #1 runs, so the hold lifts.
 [[ticket]]
 file = "01-guard-area.md"
+wait_for = [2]
 
 [[ticket.edit]]
 path = "shapes/shapes.go"

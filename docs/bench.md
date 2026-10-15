@@ -198,7 +198,9 @@ the write added.
 
 `wait_for = [N, …]` holds a ticket's agent after its commit, before done,
 until the agents of tickets N… have finished their scripts. The runner then
-messages it `bench-release`. `start_after = [N, …]` holds a ticket's agent
+messages it `bench-release`. Under file claims it also releases the hold
+when autopilot keeps ticket N back for overlapping claims, since N can't
+start until the held ticket lands. `start_after = [N, …]` holds a ticket's agent
 before its first write until the agents of tickets N… have committed (or
 stopped); the runner then messages it `bench-start`. A `start_after` cycle
 is rejected at load. This pins an interleaving that would otherwise
