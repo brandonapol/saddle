@@ -132,6 +132,43 @@ tests, and the symbol run's shares, denies and notes. It takes `--adapter`,
   It is a warning, so #2 still lands and #1 then fails the train's tests,
   as it does under file claims.
 
+What the first comparison found (fake agent, 2026-10-15):
+
+| Scenario | Landed | Peak (safe) | Denied writes | Claim waits | Train bounces | Needed help | Integration | Symbol shares / denies / notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ci-red | 2/2 → 2/2 | 1 → 1 (2) | 0 → 0 | 0 → 0 | 0 → 0 | – → – | pass → pass | 0 / 0 / 0 |
+| control | 2/2 → 2/2 | 2 → 2 (2) | 0 → 0 | 0 → 0 | 0 → 0 | – → – | pass → pass | 0 / 0 / 0 |
+| generated | 2/2 → 1/2 | 1 → 2 (1) | 0 → 1 | 1 → 1 | 0 → 0 | – → #2 | pass → pass | 0 / 1 / 0 |
+| narrow-claim | 1/2 → 2/2 | 2 → 2 (2) | 1 → 0 | 0 → 0 | 0 → 0 | #2 → – | pass → pass | 1 / 0 / 0 |
+| registry | 2/2 → 1/2 | 1 → 2 (1) | 0 → 1 | 1 → 1 | 0 → 0 | – → #2 | pass → pass | 0 / 1 / 0 |
+| rename | 2/2 → 1/2 | 1 → 2 (1) | 0 → 1 | 1 → 1 | 0 → 0 | – → #2 | pass → pass | 0 / 1 / 0 |
+| same-file | 2/2 → 2/2 | 1 → 2 (2) | 0 → 0 | 1 → 1 | 0 → 0 | – → – | pass → pass | 1 / 0 / 0 |
+| same-function | 2/2 → 1/2 | 1 → 2 (1) | 0 → 1 | 1 → 1 | 0 → 0 | – → #2 | pass → pass | 0 / 1 / 0 |
+| serial | 1/2 → 1/2 | 1 → 2 (1) | 0 → 1 | 1 → 1 | 0 → 0 | #2 → #2 | pass → pass | 0 / 0 / 0 |
+| signature | 1/2 → 1/2 | 2 → 2 (1) | 0 → 0 | 0 → 0 | 1 → 1 | #1 → #1 | pass → pass | 0 / 0 / 1 |
+
+- `same-file` reaches its safe parallelism of 2 under symbol claims and
+  lands both tickets; under file claims it runs them one at a time. The
+  one claim wait in both modes is the tick that spawned #1: autopilot
+  counts a ticket spawned this tick against the next one.
+- `narrow-claim` gets better: #2's write outside its claim lands in a
+  function #1 doesn't touch, so rule 1 shares it and both tickets land.
+- `same-function`, `rename`, `registry` and `generated` get worse: with the
+  gate open both tickets run, rule 1 denies the second writer of the shared
+  symbol, and the fake agent's script stops at a denied write, so #2 never
+  lands. File claims serialize them and both land. A real agent told
+  "leave it to t1" could finish around it; the fake one can't. The deny is
+  recorded every time, so nothing collides silently.
+- `serial` is unchanged in effect: `go.mod` is the train's, rule 1 never
+  overrides a serial deny, and #2 needs help in both modes.
+- `signature` warns instead of failing silently: #2 gets rule 3's note
+  while #1's new `Scale` is live. It is only a warning, so #2 lands and #1
+  fails the train's tests, as under file claims.
+
+So the open gate is right for disjoint edits and costs a ticket wherever
+the forecaster already says critical; a gate that consults the forecast
+(#627) would keep both.
+
 ## The fake agent's edits
 
 A real agent reads the current file and changes it. The fake agent can't,
