@@ -165,14 +165,13 @@ func (g *pausingGH) PR(url string) (automerge.PR, error) {
 
 // TestJourneyAutomergeHoldDuringCheckSticks (#209): a hold (or on,
 // off, release) made while the watcher is in the middle of a check must
-// survive that check. Today Check saves the whole state it loaded before
-// reading GitHub, so the hold is silently dropped and the held stack can
-// merge on the next tick.
+// survive that check. Check saves only the fields it owns (#286), so a
+// hold placed while it reads GitHub is not overwritten and the held stack
+// does not merge on the next tick.
 func TestJourneyAutomergeHoldDuringCheckSticks(t *testing.T) {
 	if Fork(t) {
 		return
 	}
-	t.Skip("#209: a check saves the state it loaded first, dropping holds and toggles made meanwhile")
 	w := world(t, Options{})
 	landThree(t, w)
 	a := w.App()
