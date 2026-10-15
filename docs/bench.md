@@ -1,8 +1,8 @@
 # Bench: collision scenarios and a scorer
 
-Status: **Proposed** (#599). The fixture, six scenarios, the fake-agent
+Status: **Proposed** (#599). The fixture, ten scenarios, the fake-agent
 runner and the scorer are implemented; real-agent runs and symbol
-granularity are not (see [Not yet](#not-yet)).
+granularity are not (see [Not yet](#not-yet), #605).
 
 ## Why
 
@@ -38,6 +38,12 @@ it. Its packages:
 | `textutil` | `Reverse`, `Title` in `util.go` | a rename |
 | `server` | a `Routes` table and a handler per route | a shared registry |
 | `report` | `Line`, built on `greet` and `mathx` | an edit outside its claim |
+| `units` | `Scale` | a signature `label` calls |
+| `label` | `Doubled`, built on `units.Scale` | the existing caller of a signature |
+| `ledger` | `Post` and `View` | the bottom of a stack |
+| `codec` | `Spec` and generated `Generated` | a generated file |
+
+`go.mod` is the serial path: two tickets rewrite its `go` line.
 
 ## Running it
 
@@ -122,6 +128,10 @@ task still holds the claim).
 | `rename` | move `textutil/util.go`; edit `Reverse` in it | a rename under an edit | critical | 1 |
 | `registry` | two new routes in `server.Routes` | a shared registry | critical | 1 |
 | `narrow-claim` | `mathx.Clamp`; `report` writes `mathx/mean.go` outside its claim | a write outside the claim | medium | 2 |
+| `signature` | `units.Scale`'s signature; `extra.Twice` still calls the old one | a caller elsewhere keeps a stale signature | medium | 1 |
+| `ci-red` | `ledger.Post`; `audit` stacks on it (`After: #1`) and imports `ledger` | a layer under a stack | medium | 2 |
+| `generated` | both add a name to `codec.Spec` and its generated mirror | a generated file | critical | 1 |
+| `serial` | both rewrite the `go` line in `go.mod` | a serial path | high | 1 |
 
 *Expected overlap* is the worst pair's level from `internal/forecast`, given
 each ticket's claims and the files, symbols and imports its edits touch
@@ -139,9 +149,18 @@ refuses the spawn ("needs confirmation") because its claim covers a file a
 landed task changed, and autopilot retries it forever (#604). The report
 shows it as a spawn refusal and a ticket that needed help.
 
-Planned next (#605): a signature change with a caller elsewhere (stale
-assumption), a CI-red layer under a stack, a generated file, and a serial
-path (`go.mod`).
+`signature` is the stale assumption. Each ticket's edits pass the fixture's
+tests, and the two together do not
+(`TestSignatureScenarioBreaksWhenCombined`): `extra.Twice` is written
+against `Scale(v, n int)` while the other ticket has changed it to
+`Scale(v int, unit string)`. Their claims do not overlap, so file claims
+do not keep them apart. `ci-red` stacks the second ticket on the first
+with `After: #1`. Their files do not clash, which is why its safe
+parallelism stays 2, and a red check on the ledger layer is what holds
+the audit ticket above it. `generated` has both tickets rewrite one
+generated variable, so the forecaster calls it critical. `serial` has
+both rewrite `go.mod`'s `go` line, the file only the merge train should
+own.
 
 ## Metrics
 
@@ -221,4 +240,3 @@ Tracked in #605.
   credentials, and report tokens. Opt-in, manual, never in CI.
 - **Symbol granularity.** `--granularity symbol` waits on symbol-level
   claims (`docs/symbol-claims.md`, #329).
-- **More scenarios**, listed above.

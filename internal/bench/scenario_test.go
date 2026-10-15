@@ -17,8 +17,8 @@ func scenarios(t *testing.T) []*Scenario {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(names) < 4 {
-		t.Fatalf("scenarios = %v, want at least 4", names)
+	if len(names) < 10 {
+		t.Fatalf("scenarios = %v, want at least 10", names)
 	}
 	var out []*Scenario
 	for _, n := range names {
@@ -137,8 +137,8 @@ func TestSignatureScenarioBreaksWhenCombined(t *testing.T) {
 	cmd := exec.Command("go", "test", "./...")
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("signature tickets together passed; want a broken build\n%s", out)
+	if err == nil || !strings.Contains(string(out), "units.Scale") {
+		t.Fatalf("signature tickets together should fail to compile units.Scale: %v\n%s", err, out)
 	}
 }
 

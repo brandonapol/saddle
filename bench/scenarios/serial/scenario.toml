@@ -1,0 +1,27 @@
+description = "Two tickets rewrite the go line in go.mod, a serial path only the merge train should write."
+overlap = "high"
+safe_parallelism = 1
+
+[[ticket]]
+file = "01-go-patch.md"
+
+[[ticket.edit]]
+path = "go.mod"
+old = '''
+go 1.22
+'''
+new = '''
+go 1.22.0
+'''
+
+[[ticket]]
+file = "02-go-pin.md"
+
+[[ticket.edit]]
+path = "go.mod"
+old = '''
+go 1.22
+'''
+new = '''
+go 1.22 // pinned
+'''
