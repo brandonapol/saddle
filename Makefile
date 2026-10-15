@@ -153,11 +153,12 @@ test/e2e: ## Run the end-to-end journeys (RUN=Journey to pick some; needs tmux)
 	# Builds saddle, a fake gh and a fake agent, then drives the real binary in
 	# hermetic temp repos with a private tmux server. See internal/e2e;
 	# test/e2e holds the remote-control journeys over a real listener.
+	# internal/bench holds the collision bench (TestBenchRunsControlAndACollision).
 	# E2E_RACE=1 also race-builds saddle itself (slow: minutes, not seconds).
 	# Each journey package appends its slowest journeys to E2E_REPORT, shown
 	# after the run whether it passed or not.
 	rep="$$(mktemp)"; trap 'rm -f "$$rep"' EXIT; \
-	E2E_REPORT="$$rep" E2E_GO_TAGS='$(GO_TAGS)' $(GO) test -tags '$(GO_TAGS) e2e' -race -count=1 -timeout $(E2E_GO_TIMEOUT) $(if $(E2E_PARALLEL),-parallel $(E2E_PARALLEL)) $(if $(RUN),-run '$(RUN)') ./internal/e2e/... ./test/e2e/...; \
+	E2E_REPORT="$$rep" E2E_GO_TAGS='$(GO_TAGS)' $(GO) test -tags '$(GO_TAGS) e2e' -race -count=1 -timeout $(E2E_GO_TIMEOUT) $(if $(E2E_PARALLEL),-parallel $(E2E_PARALLEL)) $(if $(RUN),-run '$(RUN)') ./internal/e2e/... ./test/e2e/... ./internal/bench/...; \
 	code=$$?; cat "$$rep"; exit $$code
 
 .PHONY: test/scripts

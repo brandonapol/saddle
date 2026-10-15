@@ -78,9 +78,8 @@ Flags:
 
 Fake runs are cheap and deterministic in what each agent writes, so they can
 run in CI. The end-to-end test `TestBenchRunsControlAndACollision` (build tag
-`e2e`, needs tmux) runs `control` and `narrow-claim`. `make test/e2e` doesn't
-list `./internal/bench/...` yet (#605); run it with
-`go test -tags 'e2e grammar_subset grammar_subset_go grammar_subset_python' ./internal/bench/`.
+`e2e`, needs tmux) runs `control` and `narrow-claim`. `make test/e2e` includes
+`./internal/bench/...`, so that test runs with the other end-to-end journeys.
 Real-agent runs spend quota, are manual and opt-in, and never run in CI.
 
 ## The fake agent's edits
