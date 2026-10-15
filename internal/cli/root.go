@@ -216,7 +216,7 @@ keep the CLI they were spawned with.
 					a: a, trace: trace, skipDoctor: skipDoctor, timeout: upDeferredTimeout,
 					doctor:     func() []doctor.Result { return doctor.Run(doctor.System(a.Root)) },
 					merge:      func() error { return a.CheckMergeSettings(io.Discard) },
-					baseBehind: a.LocalBaseBehind,
+					baseBehind: func() string { a.CheckIntegrationBehind(); return a.LocalBaseBehind() },
 				}.run(ctx)
 				if !skipDoctor {
 					upPredict(a, upPredictTimeout, upPredictSystem(a)) // one card, in the background (#408)

@@ -41,7 +41,7 @@ type upDeferred struct {
 	timeout    time.Duration
 	doctor     func() []doctor.Result // the full doctor
 	merge      func() error           // the merge-settings refusal; the doctor covers it
-	baseBehind func() string          // fetches base; "" when the checkout is current
+	baseBehind func() string          // fetches base, notes a stale integration; "" when the checkout is current
 }
 
 // run starts the work and returns at once. wait blocks until each piece
