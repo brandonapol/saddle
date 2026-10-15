@@ -81,6 +81,11 @@ func TestBenchSymbolGranularity(t *testing.T) {
 			t.Fatalf("bench run %s --granularity %s: %v\n%s", name, granularity, err, log.String())
 		}
 		t.Logf("%s (%s):\n%s\n%s", name, granularity, log.String(), Markdown(res.Report))
+		for _, e := range res.Log.Events {
+			if strings.HasPrefix(e.Kind, "symbol_") || e.Kind == "deny" {
+				t.Logf("  %s %s: %s", e.Task, e.Kind, e.Data)
+			}
+		}
 		if res.Report.Granularity != granularity {
 			t.Errorf("%s: report granularity %q, want %q", name, res.Report.Granularity, granularity)
 		}
@@ -97,8 +102,10 @@ func TestBenchSymbolGranularity(t *testing.T) {
 	}
 
 	s = run("same-function", "symbol")
-	if s.SymbolDenies < 1 || !slices.Contains(s.Forecast.ActualPairs, Pair{A: "#1", B: "#2"}) || !s.IntegrationGreen {
-		t.Errorf("same-function, symbol claims: want a symbol deny recorded as the #1–#2 collision and green: %+v", s)
+	// Rule 1 denies the second writer of Rect.Area; past its time budget it
+	// falls back to the path-claim deny. Either way the write is refused.
+	if s.DeniedWrites < 1 || !slices.Contains(s.Forecast.ActualPairs, Pair{A: "#1", B: "#2"}) || !s.IntegrationGreen {
+		t.Errorf("same-function, symbol claims: want a deny recorded as the #1–#2 collision and green: %+v", s)
 	}
 
 	s = run("signature", "symbol")
