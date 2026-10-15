@@ -17,7 +17,7 @@ import (
 func (a *App) automergePath() string { return a.stateDir("automerge.json") }
 
 // NewAutomerge returns the auto-merge watcher for the stack, talking to
-// GitHub through gh; nil gh means the repo's forge.
+// GitHub through gh (nil is the repo's forge).
 func (a *App) NewAutomerge(gh automerge.GitHub) *automerge.Watcher {
 	if gh == nil {
 		gh = &automerge.GH{Forge: a.Forge()}

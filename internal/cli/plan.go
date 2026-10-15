@@ -245,7 +245,7 @@ func slug(title string) string {
 	return s
 }
 
-// issueFetcher lets planner epic sources read GitHub issues through gh.
+// issueFetcher lets planner epic sources read issues from the repo's forge.
 func issueFetcher(a *app.App) planner.IssueFetcher {
 	return func(_ context.Context, repo string, n int) (planner.Issue, error) {
 		t, err := a.TicketIn(repo, n)
