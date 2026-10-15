@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -147,6 +148,19 @@ func TestJourneyAutomergeRetriesSoonAfterBusyTrain(t *testing.T) {
 	wa := w.App()
 	wt := wa.NewAutomerge(nil)
 	wt.Interval = time.Hour
+	// A busy tick logs its idle event before it saves the state file that
+	// status reads. Hold it between the two, as load can (#568), until the
+	// test lets it go.
+	saved := make(chan struct{})
+	var save sync.Once
+	letSave := func() { save.Do(func() { close(saved) }) }
+	logEvent := wt.Event
+	wt.Event = func(task, kind, data string) {
+		logEvent(task, kind, data)
+		if kind == automerge.EventIdle {
+			<-saved
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- wt.Run(ctx) }()
@@ -156,6 +170,7 @@ func TestJourneyAutomergeRetriesSoonAfterBusyTrain(t *testing.T) {
 			t.Errorf("run: %v", err)
 		}
 	}()
+	defer letSave()
 
 	Eventually(t, "a busy tick to say why the ready PR isn't merging", func() error {
 		idle := events(t, a, "automerge_idle")
@@ -164,12 +179,19 @@ func TestJourneyAutomergeRetriesSoonAfterBusyTrain(t *testing.T) {
 		}
 		return nil
 	})
-	out := w.MustSaddle("automerge", "status").Stdout
-	for _, want := range []string{"ready to merge", "train lock", "next check"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("status lacks %q:\n%s", want, out)
+	// The event alone doesn't mean status can show it yet: the first look
+	// is before the save, and the save goes ahead only after it.
+	Eventually(t, "status to say the ready PR waits on the train lock", func() error {
+		out := w.MustSaddle("automerge", "status").Stdout
+		for _, want := range []string{"ready to merge", "train lock", "next check"} {
+			if !strings.Contains(out, want) {
+				letSave()
+				return errorf("status lacks %q:\n%s", want, out)
+			}
 		}
-	}
+		return nil
+	})
+	letSave()
 	if p := prNumber(t, w.GHState(), url); p.State != "OPEN" {
 		t.Fatalf("merged while the train was busy: %+v", p)
 	}
