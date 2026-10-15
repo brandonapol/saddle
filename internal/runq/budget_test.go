@@ -27,10 +27,19 @@ type pending struct {
 func acquireAsync(t *testing.T, q *Queue, req Request) *pending {
 	t.Helper()
 	p := &pending{lines: make(chan string, 20), got: make(chan *Lease, 1)}
-	req.OnWait = func(w Wait) { p.lines <- w.String() }
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
+	req.OnWait = func(w Wait) {
+		select {
+		case p.lines <- w.String():
+		case <-ctx.Done():
+		}
+	}
+	done := make(chan struct{})
+	// Wait for Acquire to return, so it isn't still creating or removing
+	// its lock file when the queue closes and TempDir is removed.
+	t.Cleanup(func() { cancel(); <-done })
 	go func() {
+		defer close(done)
 		l, err := q.Acquire(ctx, req)
 		if err != nil {
 			if ctx.Err() == nil {
