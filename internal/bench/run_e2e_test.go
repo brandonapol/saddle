@@ -69,7 +69,7 @@ func TestBenchRunsControlAndACollision(t *testing.T) {
 // them, which a loaded machine (make check runs suites in parallel) can
 // hit. A symbol-mode run whose check fails is retried, up to three times in
 // all, only when it logged a "budget exceeded" fallback; any other miss
-// fails at once.
+// fails at once. #630 would let the World raise the budgets instead.
 func TestBenchSymbolGranularity(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("needs tmux")
