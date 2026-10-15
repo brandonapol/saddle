@@ -22,7 +22,9 @@ func (f *fakeForge) PR(_ context.Context, _ string, fs forge.PRFields) (forge.PR
 	return f.pr, nil
 }
 
-func (f *fakeForge) MergeSettings(context.Context) (forge.MergeSettings, error) { return f.settings, nil }
+func (f *fakeForge) MergeSettings(context.Context) (forge.MergeSettings, error) {
+	return f.settings, nil
+}
 
 func (f *fakeForge) MergePR(_ context.Context, ref, method, head string) error {
 	f.merges = append(f.merges, ref+" "+method+" "+head)
