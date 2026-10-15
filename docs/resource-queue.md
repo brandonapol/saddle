@@ -85,8 +85,9 @@ override it, key by key, since the user file describes the machine:
 # go-test = 1
 ```
 
-The same keys go at the top level of `runq.toml` (`budget`,
-`min_free_ram_pct`) and per class (`[classes.flutter-test] weight = 3`).
+`0` turns a check, or the budget, off. The same keys go at the top level of
+`runq.toml` (`budget`, `min_free_ram_pct`) and per class
+(`[classes.flutter-test] weight = 3`).
 
 ### No orchestrator-to-orchestrator messaging
 
@@ -167,8 +168,8 @@ Where `saddle` may not be installed, guard it:
 - Dead holder: `TestLeaseExpiresWhenProcessDies` (a lease held by a killed
   child process is reaped and its units freed).
 - Weights: `TestBudgetCountsWeights`, `TestBudgetBlocksLighterRunsBehindHeavyWaiter`,
-  `TestOverBudgetRunStartsAlone`.
+  `TestOverBudgetRunStartsAlone`, `TestBudgetOff`, `TestConfigWeightsAndBudget`.
 - Admission under load: `TestLoadGateHoldsOnLowRAM`, `TestAcquireWaitsOnLowRAM`.
 - CLI: `TestRunNoQueue`, `TestRunMaxWaitRunsAnyway`, `TestRunForeignLease`,
-  `TestQueueShowsForeignRuns`.
-- Config: `TestRunQueueConfig`.
+  `TestQueueShowsForeignRuns`, `TestForeignLeaseShowsInStatus`.
+- Config: `TestRunQueueConfig`, `TestHeavyRunQueueLayer`.
