@@ -126,7 +126,7 @@ func TestJourneyRunqTwoSessionsTakeTurns(t *testing.T) {
 		return
 	}
 	state, dir := t.TempDir(), t.TempDir()
-	cfg := "max_load_per_cpu = 0\nmax_cpu_pressure = 0\n[classes.flutter-test]\nslots = 1\n"
+	cfg := "max_load_per_cpu = 0\nmax_cpu_pressure = 0\nmin_free_ram_pct = 0\n[classes.flutter-test]\nslots = 1\n"
 	a := runqWorld(t, Options{}, cfg, "XDG_STATE_HOME="+state)
 	fakeFlutter(t, a, dir, false)
 	b := runqWorld(t, Options{}, cfg, "XDG_STATE_HOME="+state)
@@ -203,7 +203,7 @@ func TestJourneyRunqCrashedHolderFreesSlot(t *testing.T) {
 		return
 	}
 	dir := t.TempDir()
-	w := runqWorld(t, Options{}, "max_load_per_cpu = 0\nmax_cpu_pressure = 0\n[classes.flutter-test]\nslots = 1\n")
+	w := runqWorld(t, Options{}, "max_load_per_cpu = 0\nmax_cpu_pressure = 0\nmin_free_ram_pct = 0\n[classes.flutter-test]\nslots = 1\n")
 	fakeFlutter(t, w, dir, false)
 	release(t, dir, "t2")
 	w.Spawn("t1", "Flutter one", []string{"one/**"}, fa.Run("flutter test"))
@@ -261,7 +261,7 @@ func TestJourneyRunqHookReentrancy(t *testing.T) {
 	dir := t.TempDir()
 	gate := filepath.Join(dir, "gate.sh")
 	w := runqWorld(t, Options{TestCmd: "sh " + gate},
-		"max_load_per_cpu = 0\nmax_cpu_pressure = 0\n[classes.go-test]\nslots = 1\nmatch = [\"sh *gate.sh\", \"make check\"]\n")
+		"max_load_per_cpu = 0\nmax_cpu_pressure = 0\nmin_free_ram_pct = 0\n[classes.go-test]\nslots = 1\nmatch = [\"sh *gate.sh\", \"make check\"]\n")
 	log, hold, holding, rel := filepath.Join(dir, "log"), filepath.Join(dir, "hold"), filepath.Join(dir, "holding"), filepath.Join(dir, "release")
 	// The repo's check, run from its own directory so the pattern "make
 	// check" matches the hook's argv one for one.
@@ -359,7 +359,9 @@ func TestJourneyRunqLoadCeiling(t *testing.T) {
 	loadavg := filepath.Join(proc, "proc", "loadavg")
 	must(t, os.WriteFile(loadavg, []byte("999.00 1.00 1.00 2/300 1\n"), 0o644))
 	w := runqWorld(t, Options{},
-		"max_load_per_cpu = 1.0\nmax_cpu_pressure = 0\ngate_max_wait = \"10m\"\n[classes.flutter-test]\nslots = "+itoa(ceiling)+"\n",
+		// budget = 0: the slots are the ceiling on trial, not the machine
+		// budget (a flutter-test weighs 3 of it).
+		"max_load_per_cpu = 1.0\nmax_cpu_pressure = 0\nbudget = 0\ngate_max_wait = \"10m\"\n[classes.flutter-test]\nslots = "+itoa(ceiling)+"\n",
 		"SADDLE_RUNQ_PROC="+proc)
 	fakeFlutter(t, w, dir, true)
 	var tasks []string
