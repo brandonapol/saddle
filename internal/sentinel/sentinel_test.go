@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -450,7 +452,7 @@ type commentGH struct {
 }
 
 func newCommentGH(a *app.App) *commentGH {
-	return &commentGH{GH: &GH{Dir: a.Root}, comments: map[string][]Comment{}}
+	return &commentGH{GH: &GH{Forge: a.Forge()}, comments: map[string][]Comment{}}
 }
 
 func (g *commentGH) Comments(url string) ([]Comment, error) {
@@ -569,7 +571,7 @@ func TestSentinelExplainsNeedsHumanInPRComment(t *testing.T) {
 // GH reads, posts and edits PR comments through gh.
 func TestGHComments(t *testing.T) {
 	fake := newFakeGH(t)
-	g := &GH{Dir: t.TempDir()}
+	g := &GH{Forge: forge.New(config.Forge{}, t.TempDir())}
 	url := "https://github.com/o/r/pull/7"
 	must(t, os.WriteFile(filepath.Join(fake.dir, "view-7"),
 		[]byte(`{"comments":[{"id":"IC_1","body":"hi"},{"id":"IC_2","body":"`+commentMarker+` x"}]}`), 0o644))

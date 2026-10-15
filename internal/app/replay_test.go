@@ -333,7 +333,7 @@ func TestReplayStackIncident(t *testing.T) {
 	}
 
 	// The sentinel flags the stack; prs refuses to build on it.
-	s := &sentinel.Sentinel{App: a, GH: &sentinel.GH{Dir: root}}
+	s := &sentinel.Sentinel{App: a, GH: &sentinel.GH{Forge: a.Forge()}}
 	rep, err := s.Check()
 	if err != nil {
 		t.Fatalf("sentinel check: %v", err)
@@ -608,7 +608,7 @@ func TestReplayGitHubHumansIncident(t *testing.T) {
 
 	// The sentinel asks for a restack but labels nothing, and t1..t4 leave
 	// the stack for good.
-	s := &sentinel.Sentinel{App: a, GH: &sentinel.GH{Dir: root}}
+	s := &sentinel.Sentinel{App: a, GH: &sentinel.GH{Forge: a.Forge()}}
 	rep, err := s.Check()
 	if err != nil {
 		t.Fatalf("sentinel: %v", err)

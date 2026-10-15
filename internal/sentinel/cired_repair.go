@@ -6,7 +6,6 @@ import (
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/ciwatch"
-	"github.com/brandonapol/saddle/internal/forge"
 )
 
 // onRed gets the failing checks' log tails for a layer that newly went red
@@ -53,7 +52,7 @@ func (c *CIRed) fetchLogs(ctx context.Context, pr string) []ciwatch.Failed {
 	if c.Logs != nil {
 		return c.Logs(ctx, pr)
 	}
-	w, err := ciwatch.New(ciwatch.Config{CI: &forge.GitHub{Run: c.GH}, LogLines: 40,
+	w, err := ciwatch.New(ciwatch.Config{CI: c.Forge, LogLines: 40,
 		Targets: func(context.Context) ([]ciwatch.Target, error) { return []ciwatch.Target{{PR: pr}}, nil }})
 	if err != nil {
 		return nil

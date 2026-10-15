@@ -2,13 +2,13 @@ package sentinel
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/brandonapol/saddle/internal/ciwatch"
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 func TestRollupVerdict(t *testing.T) {
@@ -16,20 +16,20 @@ func TestRollupVerdict(t *testing.T) {
 		r    rollup
 		want string
 	}{
-		{rollup{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "SUCCESS"}, "pass"},
-		{rollup{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "FAILURE"}, "fail"},
-		{rollup{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "TIMED_OUT"}, "fail"},
-		{rollup{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "SKIPPED"}, "pass"},
-		{rollup{Typename: "CheckRun", Status: "IN_PROGRESS"}, "pending"},
-		{rollup{Typename: "StatusContext", State: "ERROR"}, "fail"},
-		{rollup{Typename: "StatusContext", State: "PENDING"}, "pending"},
-		{rollup{Typename: "StatusContext", State: "SUCCESS"}, "pass"},
+		{rollup{Kind: forge.KindJob, Status: "COMPLETED", Conclusion: "SUCCESS"}, "pass"},
+		{rollup{Kind: forge.KindJob, Status: "COMPLETED", Conclusion: "FAILURE"}, "fail"},
+		{rollup{Kind: forge.KindJob, Status: "COMPLETED", Conclusion: "TIMED_OUT"}, "fail"},
+		{rollup{Kind: forge.KindJob, Status: "COMPLETED", Conclusion: "SKIPPED"}, "pass"},
+		{rollup{Kind: forge.KindJob, Status: "IN_PROGRESS"}, "pending"},
+		{rollup{Kind: forge.KindStatus, State: "ERROR"}, "fail"},
+		{rollup{Kind: forge.KindStatus, State: "PENDING"}, "pending"},
+		{rollup{Kind: forge.KindStatus, State: "SUCCESS"}, "pass"},
 	} {
 		if got := c.r.verdict(); got != c.want {
 			t.Errorf("%+v: verdict = %s, want %s", c.r, got, c.want)
 		}
 	}
-	if l := (rollup{Typename: "CheckRun", Name: "lint", Workflow: "CI"}).label(); l != "CI / lint" {
+	if l := (rollup{Kind: forge.KindJob, Name: "lint", Workflow: "CI"}).label(); l != "CI / lint" {
 		t.Errorf("label = %q", l)
 	}
 }
@@ -54,32 +54,43 @@ func TestCIRedBackoff(t *testing.T) {
 	}
 }
 
-// ciFake answers the ci-red watcher's gh calls from a canned PR view and
-// records every call.
+// ciFake answers the ci-red watcher's PR reads from a canned PR and records
+// every other call as "rerun RUN", "label NAME", "add-label PR" or
+// "remove-label PR".
 type ciFake struct {
-	view  string
+	view  forge.PR
 	calls []string
 }
 
-func (f *ciFake) gh(_ context.Context, args ...string) (string, error) {
-	f.calls = append(f.calls, strings.Join(args, " "))
-	if len(args) > 1 && args[0] == "pr" && args[1] == "view" {
-		return f.view, nil
-	}
-	return "", nil
+func (f *ciFake) PR(context.Context, string, forge.PRFields) (forge.PR, error) { return f.view, nil }
+func (f *ciFake) Checks(context.Context, string) ([]forge.CICheck, error)      { return nil, nil }
+func (f *ciFake) FailedLog(context.Context, string, int) (forge.JobLog, error) {
+	return forge.JobLog{}, nil
+}
+func (f *ciFake) RerunFailed(_ context.Context, id string) error { return f.call("rerun " + id) }
+func (f *ciFake) EnsureLabel(_ context.Context, l forge.Label) error {
+	return f.call("label " + l.Name)
+}
+func (f *ciFake) AddLabel(_ context.Context, ref, _ string) error { return f.call("add-label " + ref) }
+func (f *ciFake) RemoveLabel(_ context.Context, ref, _ string) error {
+	return f.call("remove-label " + ref)
+}
+
+func (f *ciFake) call(c string) error {
+	f.calls = append(f.calls, c)
+	return nil
 }
 
 func (f *ciFake) called(prefix string) bool {
 	return slices.ContainsFunc(f.calls, func(c string) bool { return strings.HasPrefix(c, prefix) })
 }
 
-func ciView(head string, checks ...string) string {
-	return `{"state":"OPEN","headRefOid":"` + head + `","statusCheckRollup":[` + strings.Join(checks, ",") + `]}`
+func ciView(head string, checks ...forge.CheckRun) forge.PR {
+	return forge.PR{State: forge.StateOpen, HeadSHA: head, Checks: checks}
 }
 
-func ciRun(name, status, conclusion, started string) string {
-	return fmt.Sprintf(`{"__typename":"CheckRun","name":%q,"workflowName":"CI","status":%q,"conclusion":%q,"startedAt":%q}`,
-		name, status, conclusion, started)
+func ciRun(name, status, conclusion, started string) forge.CheckRun {
+	return forge.CheckRun{Kind: forge.KindJob, Name: name, Workflow: "CI", Status: status, Conclusion: conclusion, StartedAt: started}
 }
 
 // #234: a canceled run reads as a failed aggregate check ("needs.*.result
@@ -97,13 +108,13 @@ func TestCIRedIgnoresCanceledAndSupersededRuns(t *testing.T) {
 
 	f := &ciFake{view: ciView("aaa", ciRun("all", "COMPLETED", "FAILURE", "2026-10-06T10:00:00Z"))}
 	log := "needs.test.result == cancelled\nProcess completed with exit code 1."
-	c := &CIRed{App: a, GH: f.gh, Logs: func(context.Context, string) []ciwatch.Failed {
+	c := &CIRed{App: a, Forge: f, Logs: func(context.Context, string) []ciwatch.Failed {
 		return []ciwatch.Failed{{Check: ciwatch.Check{Name: "all", Workflow: "CI"},
 			RunURL: "https://github.com/o/r/actions/runs/42", LogTail: log}}
 	}}
 	rep, err := c.Check(context.Background())
 	must(t, err)
-	if len(rep.Red) != 0 || tasks() != before || f.called("pr edit") {
+	if len(rep.Red) != 0 || tasks() != before || f.called("add-label") {
 		t.Fatalf("canceled run went red: %+v, tasks %d→%d, calls %v", rep, before, tasks(), f.calls)
 	}
 
@@ -118,10 +129,37 @@ func TestCIRedIgnoresCanceledAndSupersededRuns(t *testing.T) {
 	// Infra: rerun once, then it counts.
 	f.view = ciView("ccc", ciRun("all", "COMPLETED", "FAILURE", "2026-10-06T11:00:00Z"))
 	log = "Error: Unable to resolve action `actions/setup-go@v9`, unable to find version"
-	if rep, err = c.Check(context.Background()); err != nil || len(rep.Red) != 0 || !f.called("run rerun 42 --failed") {
+	if rep, err = c.Check(context.Background()); err != nil || len(rep.Red) != 0 || !f.called("rerun 42") {
 		t.Fatalf("infra failure: %+v, %v, calls %v; want a rerun and no red", rep, err, f.calls)
 	}
 	if rep, _ = c.Check(context.Background()); len(rep.Red) != 1 || rep.Red[0].Task != tk.ID {
 		t.Fatalf("infra failure after its rerun: %+v, want %s red", rep, tk.ID)
+	}
+}
+
+// #647: on a forge without PR reads or labels ([forge] cli = "none") the
+// ci-red watcher and the stack sentinel's GitHub do nothing and report no
+// errors.
+func TestUnsupportedForgeIsQuiet(t *testing.T) {
+	a, _ := setup(t)
+	newFakeGH(t)
+	landTask(t, a, "t1", "f1")
+	_, err := a.PRs()
+	must(t, err)
+	none := forge.Unsupported{Reason: "local-only"}
+	rep, err := (&CIRed{App: a, Forge: none}).Check(context.Background())
+	if err != nil || len(rep.Red) != 0 {
+		t.Fatalf("ci-red on no forge = %+v, %v; want nothing and no error", rep, err)
+	}
+	g := &GH{Forge: none}
+	must(t, g.AddLabel("u", Label))
+	must(t, g.RemoveLabel("u", Label))
+	must(t, g.AddComment("u", "x"))
+	must(t, g.EditComment("IC_1", "x"))
+	if cs, err := g.Comments("u"); err != nil || cs != nil {
+		t.Fatalf("comments = %v, %v", cs, err)
+	}
+	if _, err := g.PR("u"); err == nil {
+		t.Fatal("PR on no forge: want an error, which the stack tolerates")
 	}
 }
