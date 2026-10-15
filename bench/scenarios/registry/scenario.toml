@@ -1,0 +1,45 @@
+description = "Two tickets each add a route to one shared table: the registry pattern (go.mod, a route table, a plugin list)."
+overlap = "critical"
+safe_parallelism = 1
+
+[[ticket]]
+file = "01-time-route.md"
+
+[[ticket.edit]]
+path = "server/time.go"
+new = '''
+package server
+
+func timeNow() string { return "12:00" }
+'''
+
+[[ticket.edit]]
+path = "server/routes.go"
+old = '''
+	// routes end
+'''
+new = '''
+	{"/time", timeNow},
+	// routes end
+'''
+
+[[ticket]]
+file = "02-version-route.md"
+
+[[ticket.edit]]
+path = "server/version.go"
+new = '''
+package server
+
+func version() string { return "v1" }
+'''
+
+[[ticket.edit]]
+path = "server/routes.go"
+old = '''
+	// routes end
+'''
+new = '''
+	{"/version", version},
+	// routes end
+'''

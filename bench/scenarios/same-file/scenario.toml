@@ -1,0 +1,33 @@
+description = "Two tickets change different functions of one file. They merge cleanly; file claims still serialize them."
+overlap = "low"
+safe_parallelism = 2
+
+[[ticket]]
+file = "01-rect-perimeter.md"
+
+[[ticket.edit]]
+path = "shapes/shapes.go"
+old = '''
+	return 2 * (r.W + r.H)
+'''
+new = '''
+	if r.W < 0 || r.H < 0 {
+		return 0
+	}
+	return 2 * (r.W + r.H)
+'''
+
+[[ticket]]
+file = "02-circle-area.md"
+
+[[ticket.edit]]
+path = "shapes/shapes.go"
+old = '''
+	return math.Pi * c.R * c.R
+'''
+new = '''
+	if c.R < 0 {
+		return 0
+	}
+	return math.Pi * c.R * c.R
+'''

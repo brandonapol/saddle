@@ -1,0 +1,58 @@
+description = "A ticket's claim is too narrow: it also writes mathx/mean.go, which a live task holds. The write guard denies it and the ticket can't build."
+overlap = "low"
+safe_parallelism = 2
+
+[[ticket]]
+file = "01-clamp.md"
+# Hold before done until #2 has tried its write, so mathx/** is still claimed.
+wait_for = [2]
+
+[[ticket.edit]]
+path = "mathx/clamp.go"
+new = '''
+package mathx
+
+// Clamp limits v to [lo, hi].
+func Clamp(v, lo, hi int) int {
+	return Max(lo, min(v, hi))
+}
+'''
+
+[[ticket]]
+file = "02-report-mean.md"
+
+[[ticket.edit]]
+path = "mathx/mean.go"
+new = '''
+package mathx
+
+// Mean is the integer mean of xs, 0 for none.
+func Mean(xs []int) int {
+	if len(xs) == 0 {
+		return 0
+	}
+	t := 0
+	for _, x := range xs {
+		t = Sum(t, x)
+	}
+	return t / len(xs)
+}
+'''
+
+[[ticket.edit]]
+path = "report/average.go"
+new = '''
+package report
+
+import (
+	"fmt"
+
+	"benchfixture/greet"
+	"benchfixture/mathx"
+)
+
+// Average greets name with the mean of xs.
+func Average(name string, xs []int) string {
+	return fmt.Sprintf("%s Your average is %d.", greet.Hello(name), mathx.Mean(xs))
+}
+'''
