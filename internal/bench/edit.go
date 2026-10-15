@@ -64,6 +64,15 @@ func (g GitTree) Files(dir string) []string {
 	return fs
 }
 
+// SpawnBase is the tree a task spawned now starts from: the integration
+// branch, or the base branch before the first spawn creates it.
+func SpawnBase(dir, integration, base string) GitTree {
+	if exec.Command("git", "-C", dir, "rev-parse", "--verify", "--quiet", integration+"^{commit}").Run() == nil {
+		return GitTree{Dir: dir, Rev: integration}
+	}
+	return GitTree{Dir: dir, Rev: base}
+}
+
 // Change is what a ticket's edits do to a tree.
 type Change struct {
 	Writes  map[string]string // path -> new content

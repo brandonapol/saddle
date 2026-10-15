@@ -155,6 +155,7 @@ it (`TestScoreFixedLog`).
 | `train_conflicts`, `test_failures` | each of those alone |
 | `restacks`, `restack_conflicts` | `restack` and `auto_rebase` events; `restack_conflict` events |
 | `stale_edits` | `bench_stale` events: an edit whose anchor was gone |
+| `spawn_refusals` | tickets with an `autopilot_skip` event: autopilot tried to spawn them and saddle refused |
 | `needed_help` | tickets not landed when the run ended, or with a `train_escalated` or `hand_fix` event |
 | `peak_parallelism` | most tasks live at once (spawn to landed) |
 | `safe_parallelism` | from scenario.toml |

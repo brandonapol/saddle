@@ -2,7 +2,10 @@ package bench
 
 import (
 	"maps"
+	"os"
+	"os/exec"
 	"path"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
@@ -68,5 +71,34 @@ func TestApplyStaleAnchor(t *testing.T) {
 	c := Apply(base, []Edit{{Path: "s/s.go", Old: "return r.H * r.W\n", New: "x"}, {Path: "s/t.go", From: "s/missing.go"}})
 	if len(c.Writes) != 0 || !slices.Equal(c.Stale, []string{"s/s.go", "s/missing.go"}) {
 		t.Fatalf("change = %+v", c)
+	}
+}
+
+// Before the first spawn the integration branch doesn't exist yet; a
+// task's base is then the base branch, which saddle cuts it from.
+func TestSpawnBaseFallsBackToBase(t *testing.T) {
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=b", "-c", "user.email=b@x", "-c", "commit.gpgsign=false"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "-q", "-m", "init")
+	if got := SpawnBase(dir, "saddle/integration", "main"); got != (GitTree{Dir: dir, Rev: "main"}) {
+		t.Fatalf("with no integration branch, base = %+v, want main", got)
+	}
+	if s, ok := SpawnBase(dir, "saddle/integration", "main").Read("a.txt"); !ok || s != "one\n" {
+		t.Fatalf("read a.txt = %q, %v", s, ok)
+	}
+	git("branch", "saddle/integration")
+	if got := SpawnBase(dir, "saddle/integration", "main"); got.Rev != "saddle/integration" {
+		t.Fatalf("with an integration branch, base = %+v", got)
 	}
 }

@@ -73,28 +73,30 @@ const (
 
 // Report is a scored run. See docs/bench.md for each metric.
 type Report struct {
-	Scenario         string        `json:"scenario"`
-	Adapter          string        `json:"adapter"`
-	Granularity      string        `json:"granularity"`
-	WallSeconds      float64       `json:"wall_seconds"`
-	Tokens           *int          `json:"tokens"`
-	Tickets          int           `json:"tickets"`
-	Landed           int           `json:"landed"`
-	AllLanded        bool          `json:"all_landed"`
-	IntegrationGreen bool          `json:"integration_green"`
-	DeniedWrites     int           `json:"denied_writes"`
-	ClaimWaits       int           `json:"claim_waits"`
-	TrainBounces     int           `json:"train_bounces"`
-	TrainConflicts   int           `json:"train_conflicts"`
-	TestFailures     int           `json:"test_failures"`
-	Restacks         int           `json:"restacks"`
-	RestackConflicts int           `json:"restack_conflicts"`
-	StaleEdits       int           `json:"stale_edits"`
-	NeededHelp       []string      `json:"needed_help"`
-	PeakParallelism  int           `json:"peak_parallelism"`
-	SafeParallelism  int           `json:"safe_parallelism"`
-	Forecast         ForecastScore `json:"forecast"`
-	EndedEarly       string        `json:"ended_early,omitempty"`
+	Scenario         string  `json:"scenario"`
+	Adapter          string  `json:"adapter"`
+	Granularity      string  `json:"granularity"`
+	WallSeconds      float64 `json:"wall_seconds"`
+	Tokens           *int    `json:"tokens"`
+	Tickets          int     `json:"tickets"`
+	Landed           int     `json:"landed"`
+	AllLanded        bool    `json:"all_landed"`
+	IntegrationGreen bool    `json:"integration_green"`
+	DeniedWrites     int     `json:"denied_writes"`
+	ClaimWaits       int     `json:"claim_waits"`
+	TrainBounces     int     `json:"train_bounces"`
+	TrainConflicts   int     `json:"train_conflicts"`
+	TestFailures     int     `json:"test_failures"`
+	Restacks         int     `json:"restacks"`
+	RestackConflicts int     `json:"restack_conflicts"`
+	StaleEdits       int     `json:"stale_edits"`
+	// SpawnRefusals are tickets autopilot tried to spawn and saddle refused.
+	SpawnRefusals   int           `json:"spawn_refusals"`
+	NeededHelp      []string      `json:"needed_help"`
+	PeakParallelism int           `json:"peak_parallelism"`
+	SafeParallelism int           `json:"safe_parallelism"`
+	Forecast        ForecastScore `json:"forecast"`
+	EndedEarly      string        `json:"ended_early,omitempty"`
 }
 
 // ForecastScore compares the forecaster's predicted collisions with the
@@ -150,6 +152,7 @@ func Score(l Log) Report {
 	actual := map[Pair]bool{}
 	landedAt := map[int]int64{} // ticket -> landed event id
 	live, peak := map[string]bool{}, 0
+	refused := map[string]bool{}
 	for _, e := range l.Events {
 		me := ticketOf[e.Task]
 		switch e.Kind {
@@ -187,6 +190,10 @@ func Score(l Log) Report {
 		case EventStale:
 			r.StaleEdits++
 			pairOnFiles(actual, l.Plan, me, []string{e.Data})
+		case "autopilot_skip":
+			if n, _, ok := strings.Cut(e.Data, ":"); ok {
+				refused[n] = true
+			}
 		case "train_escalated", "hand_fix":
 			if me > 0 {
 				help[me] = true
@@ -195,6 +202,7 @@ func Score(l Log) Report {
 	}
 	r.TrainBounces = r.TrainConflicts + r.TestFailures
 	r.PeakParallelism = peak
+	r.SpawnRefusals = len(refused)
 	for _, t := range l.Plan.Tickets {
 		if help[t.Number] {
 			r.NeededHelp = append(r.NeededHelp, t.Key)
@@ -340,6 +348,7 @@ func Markdown(r Report) string {
 	row("Train bounces", fmt.Sprintf("%d (%d conflicts, %d test failures)", r.TrainBounces, r.TrainConflicts, r.TestFailures))
 	row("Restacks", fmt.Sprintf("%d (%d conflicts)", r.Restacks, r.RestackConflicts))
 	row("Stale edits", fmt.Sprint(r.StaleEdits))
+	row("Spawn refusals", fmt.Sprint(r.SpawnRefusals))
 	row("Peak parallelism", fmt.Sprintf("%d (safe: %d)", r.PeakParallelism, r.SafeParallelism))
 	tokens := "n/a"
 	if r.Tokens != nil {

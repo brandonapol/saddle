@@ -54,6 +54,8 @@ func fixedLog() Log {
 			ev(13, "t3", "train_escalated", "3 attempts"),
 			ev(14, "t3", "bench_stale", "shapes/extra.go"),
 			ev(15, "", "autopilot_tick", "noise"),
+			ev(16, "", "autopilot_skip", "#3: spawn needs confirmation: …"),
+			ev(17, "", "autopilot_skip", "#3: spawn needs confirmation: …"),
 		},
 		Waits: []Wait{
 			{Issue: 2, Why: "its claim shapes/** overlaps t1's shapes/shapes.go"},
@@ -76,6 +78,7 @@ func TestScoreFixedLog(t *testing.T) {
 		TrainBounces:     2, TrainConflicts: 1, TestFailures: 1,
 		Restacks: 2, RestackConflicts: 1,
 		StaleEdits:      1,
+		SpawnRefusals:   1,
 		NeededHelp:      []string{"#3"},
 		PeakParallelism: 2, SafeParallelism: 2,
 		Forecast: ForecastScore{
@@ -113,7 +116,7 @@ func TestScoreCleanRun(t *testing.T) {
 func TestMarkdownNamesTheNumbers(t *testing.T) {
 	md := Markdown(Score(fixedLog()))
 	for _, want := range []string{"# Bench: fixed", "| Denied writes | 1 |", "| Tickets landed | 2/3 |", "| Needed help | #3 |",
-		"| Integration tests | pass |", "| Peak parallelism | 2 (safe: 2) |", "#1–#3"} {
+		"| Integration tests | pass |", "| Peak parallelism | 2 (safe: 2) |", "| Spawn refusals | 1 |", "#1–#3"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("markdown lacks %q:\n%s", want, md)
 		}
