@@ -201,7 +201,7 @@ closes it. Safe to re-run after a failure: it skips tasks that already have
 an issue and links any the epic is missing.`,
 		Args: cobra.ExactArgs(1),
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, args []string) error {
-			d, err := planner.Push(cmd.Context(), a.GH, args[0], a.Cfg.Serial, a.Cfg.Concurrency)
+			d, err := planner.Push(cmd.Context(), a.Forge(), args[0], a.Cfg.Serial, a.Cfg.Concurrency)
 			if err != nil {
 				return err
 			}

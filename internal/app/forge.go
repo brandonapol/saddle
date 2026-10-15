@@ -13,8 +13,8 @@ import (
 // Forge is the repo's git host, as [forge] selects it (docs/adr/0001-forge-layer.md).
 func (a *App) Forge() forge.Forge { return forge.New(a.Cfg.Forge, a.Root) }
 
-// gh runs the gh CLI in dir and returns its trimmed stdout. It is for the
-// GitHub-only callers that haven't moved onto Forge yet (gh-stack, GH).
+// gh runs the gh CLI in dir and returns its trimmed stdout. It is for
+// gh-stack, the GitHub-only extension behind ghStackRun.
 func gh(dir string, args ...string) (string, error) {
 	out, errb, err := forge.Output(context.Background(), dir, forge.GH, args...)
 	if err != nil {

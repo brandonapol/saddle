@@ -6,15 +6,21 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
-// GH runs the gh CLI and returns its stdout.
-type GH func(ctx context.Context, args ...string) (string, error)
+// Issues is the part of the forge Push uses; forge.Forge is one.
+type Issues interface {
+	CreateIssue(ctx context.Context, i forge.NewIssue) (forge.Issue, error)
+	SubIssueNumbers(ctx context.Context, repo string, n int) ([]int, error)
+	AddSubIssue(ctx context.Context, repo string, parent, child int) error
+}
 
 // ErrNotApproved is returned when pushing a plan that hasn't been approved.
 var ErrNotApproved = errors.New("plan is not approved; approve it before pushing it as issues")
 
-// Push publishes the approved plan at path as GitHub issues: an epic issue
+// Push publishes the approved plan at path as issues on the forge: an epic issue
 // (the one the epic came from, if any) and one sub-issue per task, linked to
 // the epic. Each task records its issue in Issues so the merge train can
 // close it when the task lands.
@@ -22,7 +28,7 @@ var ErrNotApproved = errors.New("plan is not approved; approve it before pushing
 // Push saves the plan after every issue it creates, and on each run links
 // any task issue the epic doesn't list yet, so after a failure running it
 // again finishes the job without duplicating issues.
-func Push(ctx context.Context, gh GH, path string, serial []string, limit int) (Doc, error) {
+func Push(ctx context.Context, f Issues, path string, serial []string, limit int) (Doc, error) {
 	d, err := LoadDoc(path)
 	if err != nil {
 		return Doc{}, err
@@ -30,17 +36,17 @@ func Push(ctx context.Context, gh GH, path string, serial []string, limit int) (
 	if !d.Approved {
 		return d, ErrNotApproved
 	}
-	repoArgs, api, refPrefix := []string(nil), "repos/{owner}/{repo}", ""
-	if d.Repo != "" {
-		repoArgs, api, refPrefix = []string{"-R", d.Repo}, "repos/"+d.Repo, d.Repo
-	}
+	repo, refPrefix := d.Repo, d.Repo
 	save := func() error { return WriteDoc(path, d, serial, limit) }
 	create := func(title, body string) (int, error) {
-		out, err := gh(ctx, append([]string{"issue", "create", "--title", title, "--body", body}, repoArgs...)...)
+		is, err := f.CreateIssue(ctx, forge.NewIssue{Repo: repo, Title: title, Body: body})
 		if err != nil {
 			return 0, err
 		}
-		return issueNumber(out)
+		if is.Number <= 0 {
+			return 0, fmt.Errorf("creating an issue returned %q, want an issue URL", is.URL)
+		}
+		return is.Number, nil
 	}
 
 	if d.Issue == 0 {
@@ -53,16 +59,13 @@ func Push(ctx context.Context, gh GH, path string, serial []string, limit int) (
 			return d, err
 		}
 	}
-	subs := fmt.Sprintf("%s/issues/%d/sub_issues", api, d.Issue)
-	out, err := gh(ctx, "api", subs, "--paginate", "--jq", ".[].number")
+	ns, err := f.SubIssueNumbers(ctx, repo, d.Issue)
 	if err != nil {
 		return d, fmt.Errorf("list sub-issues of #%d: %w", d.Issue, err)
 	}
 	linked := map[int]bool{}
-	for f := range strings.FieldsSeq(out) {
-		if n, err := strconv.Atoi(f); err == nil {
-			linked[n] = true
-		}
+	for _, n := range ns {
+		linked[n] = true
 	}
 
 	for i := range d.Tasks {
@@ -80,11 +83,7 @@ func Push(ctx context.Context, gh GH, path string, serial []string, limit int) (
 		if linked[n] {
 			continue
 		}
-		id, err := gh(ctx, "api", fmt.Sprintf("%s/issues/%d", api, n), "--jq", ".id")
-		if err != nil {
-			return d, fmt.Errorf("look up issue #%d: %w", n, err)
-		}
-		if _, err := gh(ctx, "api", subs, "-X", "POST", "-F", "sub_issue_id="+strings.TrimSpace(id)); err != nil {
+		if err := f.AddSubIssue(ctx, repo, d.Issue, n); err != nil {
 			return d, fmt.Errorf("link #%d under epic #%d: %w", n, d.Issue, err)
 		}
 		linked[n] = true
@@ -102,16 +101,6 @@ func taskIssue(t Task, prefix string) (int, bool) {
 		}
 	}
 	return 0, false
-}
-
-// issueNumber reads the issue number off the URL gh issue create prints.
-func issueNumber(url string) (int, error) {
-	url = strings.TrimSpace(url)
-	n, err := strconv.Atoi(url[strings.LastIndex(url, "/")+1:])
-	if err != nil || n <= 0 {
-		return 0, fmt.Errorf("gh issue create printed %q, want an issue URL", url)
-	}
-	return n, nil
 }
 
 func epicBody(d Doc) string {
