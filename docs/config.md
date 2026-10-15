@@ -33,3 +33,25 @@ some is in use. On macOS, where `/proc` is missing, the same numbers come from
 Next to the verdict is how many saddle agents are running (each one is a heavy
 process tree) and, when the heavy-run queue has holders, which classes hold a
 slot.
+
+## The heavy-run queue's admission: `[run_queue]`
+
+The machine-wide heavy-run queue (`saddle run`, docs/resource-queue.md) holds
+a run while the box is past the same readings the gauge shows. Its limits sit
+in `[run_queue]`; the repo's `.saddle/runq.toml` and then
+`~/.config/saddle/runq.toml` override them key by key.
+
+```toml
+[run_queue]
+# max_load_per_cpu = 1.0   # hold while load per core is over this
+# max_cpu_pressure = 60    # ... or CPU PSI some avg10 is over this %
+# min_free_ram_pct = 10    # ... or available RAM is under this % (the gauge's busy_ram_pct)
+# budget = 4               # units all heavy runs share (default half the cores, at least 3)
+# [run_queue.weights]
+# flutter-test = 3         # units one run of a class uses; unnamed classes weigh 1
+```
+
+`0` turns a check, or the budget, off. A run starts only when its class has
+a free slot, its weight fits in the budget, and every check passes. The load
+checks give up after `gate_max_wait` (10m), and `saddle run --max-wait` or
+`--no-queue` bound the rest.
