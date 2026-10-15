@@ -62,10 +62,10 @@ func healthy(t *testing.T) *fakeEnv {
 			"api repos/{owner}/{repo}/branches/main/protection": {out: protectionJSON},
 		},
 		exec: map[string]res{
-			"gh --version":     {out: "gh version 2.101.0 (2026-09-15)\nhttps://github.com/cli/cli"},
-			"gh auth status --hostname github.com":   {out: "github.com\n  ✓ Logged in to github.com account me (keyring)\n  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'"},
-			"tmux -V":          {out: "tmux 3.7c"},
-			"claude --version": {out: "2.1.284 (Claude Code)"},
+			"gh --version":                         {out: "gh version 2.101.0 (2026-09-15)\nhttps://github.com/cli/cli"},
+			"gh auth status --hostname github.com": {out: "github.com\n  ✓ Logged in to github.com account me (keyring)\n  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'"},
+			"tmux -V":                              {out: "tmux 3.7c"},
+			"claude --version":                     {out: "2.1.284 (Claude Code)"},
 		},
 		paths: map[string]bool{
 			"gh": true, "tmux": true, "claude": true, "go": true, "systemd-inhibit": true, "caffeinate": true,
