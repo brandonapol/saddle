@@ -15,6 +15,8 @@ type Status struct {
 	Provider string `json:"provider,omitempty"` // who serves its models (#321)
 	OK       bool   `json:"ok"`
 	Reason   string `json:"reason,omitempty"` // why not, when !OK
+	// Installed is whether its CLI is on PATH, logged in or not (#646).
+	Installed bool `json:"installed"`
 	// Hooks is whether its workers run saddle's hooks, so claims are enforced.
 	Hooks bool `json:"hooks"`
 	// OutOfQuotaUntil is set while the adapter is out of quota: its reset.
@@ -154,9 +156,18 @@ func (m machine) availability(cmds map[string]string) []Status {
 		if err := m.check(n, cmds[n]); err != nil {
 			s.OK, s.Reason = false, err.Error()
 		}
+		s.Installed = s.OK || m.installed(n, cmds[n])
 		out = append(out, s)
 	}
 	return out
+}
+
+func (m machine) installed(name, cmd string) bool {
+	if cmd == "" {
+		cmd = auths[name].bin
+	}
+	_, err := m.lookPath(cmd)
+	return err == nil
 }
 
 func (m machine) check(name, cmd string) error {
@@ -220,6 +231,9 @@ var installs = map[string]string{
 	GeminiName:   "install the Gemini CLI: npm install -g @google/gemini-cli",
 	OpenCodeName: "install opencode: npm install -g opencode-ai",
 }
+
+// LoginHint is how to log in to adapter name.
+func LoginHint(name string) string { return auths[name].login }
 
 // InstallHint is how to install and log in to adapter name, in one line.
 func InstallHint(name string) string {

@@ -120,19 +120,28 @@ func TestWriteTaskPicks(t *testing.T) {
 // steps instead of starting.
 func TestUpFallback(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		bins []string
-		want string
-		says []string
-		err  string
+		name   string
+		bins   []string
+		logins []string // nil: every bin is logged in
+		want   string
+		says   []string
+		err    string
 	}{
-		{"claude ready", []string{"claude", "codex"}, "", nil, ""},
-		{"claude missing, codex present", []string{"codex"}, "codex", []string{"claude can't run (claude not on PATH); running codex for this run", "Codex has no hooks"}, ""},
-		{"claude missing, grok present", []string{"grok", "codex"}, "grok", []string{"running grok for this run", `harness = "grok"`}, ""},
-		{"nothing", nil, "", nil, "no agent CLI is installed and logged in"},
+		{"claude ready", []string{"claude", "codex"}, nil, "", nil, ""},
+		{"claude missing, codex present", []string{"codex"}, nil, "codex", []string{"claude can't run (claude not on PATH); running codex for this run", "Codex has no hooks"}, ""},
+		{"claude missing, grok present", []string{"grok", "codex"}, nil, "grok", []string{"running grok for this run", `harness = "grok"`}, ""},
+		// No credentials file is only a guess at logged out (apiKeyHelper
+		// and the like leave none), so an installed claude still starts.
+		{"claude looks logged out", []string{"claude", "codex"}, []string{"codex"}, "", []string{"claude is not logged in: run claude /login; starting it anyway"}, ""},
+		{"claude looks logged out, nothing else", []string{"claude"}, []string{}, "", []string{"starting it anyway"}, ""},
+		{"nothing", nil, nil, "", nil, "no agent CLI is installed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			agenttest.Path(t, tc.bins, tc.bins)
+			logins := tc.logins
+			if logins == nil {
+				logins = tc.bins
+			}
+			agenttest.Path(t, tc.bins, logins)
 			cfg := config.Default()
 			var out strings.Builder
 			got, err := upFallback(&out, cfg, agent.Availability(doctor.AgentCmds(cfg)))

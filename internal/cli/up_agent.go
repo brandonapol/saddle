@@ -12,17 +12,24 @@ import (
 )
 
 // upFallback picks the agent a bare saddle up runs when the configured
-// harness can't run here (#646): the first in order that can, said in one
-// line. It returns "" when the harness can run, and an error with install
-// steps when no agent CLI can.
+// harness is not installed (#646): the first in order that can run, said in
+// one line. It returns "" to keep the harness, and an error with install
+// steps when no agent CLI can run. An installed harness that looks logged
+// out is kept with a warning: a missing credentials file is only a guess
+// (apiKeyHelper and the like leave none).
 func upFallback(out io.Writer, cfg config.Config, ss []agent.Status) (string, error) {
+	for _, s := range ss {
+		if s.Name == cfg.Harness && s.Installed {
+			if !s.OK {
+				fmt.Fprintf(out, "warning: %s; starting it anyway\n", s.Reason)
+			}
+			return "", nil
+		}
+	}
 	order := doctor.HarnessOrder(cfg)
 	fb, ok := agent.FallbackHarness(cfg.Harness, order, ss)
 	if !ok {
 		return "", fmt.Errorf("no agent CLI is installed and logged in, so saddle up has nothing to run. Install one:\n%s", agent.InstallSteps(order))
-	}
-	if fb == cfg.Harness {
-		return "", nil
 	}
 	fmt.Fprintf(out, "%s can't run (%s); running %s for this run. Set harness = %q in .saddle/config.toml to make it the default, or %s\n",
 		cfg.Harness, reasonOf(ss, cfg.Harness), fb, fb, agent.InstallHint(cfg.Harness))

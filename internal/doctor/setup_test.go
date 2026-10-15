@@ -50,17 +50,23 @@ func TestSetupGoldens(t *testing.T) {
 		name   string
 		remote string
 		bins   []string
+		logins []string // nil: every bin is logged in
 	}{
-		{"gh-only", github, []string{"gh", "claude"}},
-		{"glab-only", gitlab, []string{"glab", "claude"}},
-		{"both", github, []string{"gh", "glab", "claude"}},
-		{"both-on-gitlab", gitlab, []string{"gh", "glab", "claude"}},
-		{"neither", github, []string{"claude"}},
-		{"claude-missing-codex-present", github, []string{"gh", "codex"}},
-		{"nothing", github, nil},
+		{"gh-only", github, []string{"gh", "claude"}, nil},
+		{"glab-only", gitlab, []string{"glab", "claude"}, nil},
+		{"both", github, []string{"gh", "glab", "claude"}, nil},
+		{"both-on-gitlab", gitlab, []string{"gh", "glab", "claude"}, nil},
+		{"neither", github, []string{"claude"}, nil},
+		{"claude-missing-codex-present", github, []string{"gh", "codex"}, nil},
+		{"nothing", github, nil, nil},
+		{"claude-logged-out-codex-present", github, []string{"gh", "claude", "codex"}, []string{"gh", "codex"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			agenttest.Path(t, tc.bins, tc.bins)
+			logins := tc.logins
+			if logins == nil {
+				logins = tc.bins
+			}
+			agenttest.Path(t, tc.bins, logins)
 			f := healthy(t)
 			f.git["remote get-url origin"] = res{out: tc.remote}
 			rs := Run(pathEnv{f, System(f.root)})

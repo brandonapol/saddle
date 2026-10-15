@@ -162,9 +162,14 @@ func TestAvailabilityOnFakePath(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agenttest.Path(t, tc.bins, tc.logins)
-			got := Usable(Availability(nil))
-			if !slices.Equal(got, tc.usable) {
+			ss := Availability(nil)
+			if got := Usable(ss); !slices.Equal(got, tc.usable) {
 				t.Errorf("usable = %v, want %v", got, tc.usable)
+			}
+			for _, s := range ss {
+				if s.Installed != slices.Contains(tc.bins, s.Name) {
+					t.Errorf("%s installed = %v, want %v", s.Name, s.Installed, !s.Installed)
+				}
 			}
 		})
 	}

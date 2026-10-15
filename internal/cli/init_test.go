@@ -44,24 +44,31 @@ func TestInitSetup(t *testing.T) {
 		harness string   // harness config.Load reads afterwards
 		says    []string // substrings of the output
 		not     []string
+		logins  []string // nil: every bin is logged in
 	}{
 		{"gh and claude", github, config.Template, []string{"gh", "claude"}, "claude",
-			[]string{"git provider: GitHub (github.com) via gh", "agent: claude"}, []string{"wrote harness", "fix:"}},
+			[]string{"git provider: GitHub (github.com) via gh", "agent: claude"}, []string{"wrote harness", "fix:"}, nil},
 		{"glab only", gitlab, config.Template, []string{"glab", "claude"}, "claude",
-			[]string{"GitLab detected, glab found, GitLab support is not available yet", "local-only"}, nil},
+			[]string{"GitLab detected, glab found, GitLab support is not available yet", "local-only"}, nil, nil},
 		{"no provider CLI", github, config.Template, []string{"claude"}, "claude",
-			[]string{"local-only", "fix: install the GitHub CLI (https://cli.github.com), then gh auth login --hostname github.com"}, nil},
+			[]string{"local-only", "fix: install the GitHub CLI (https://cli.github.com), then gh auth login --hostname github.com"}, nil, nil},
 		{"claude missing, codex present", github, config.Template, []string{"gh", "codex"}, "codex",
-			[]string{"claude can't run (claude not on PATH)", `wrote harness = "codex" to .saddle/config.toml`, "Codex has no hooks, so claims are checked only at commit and done"}, nil},
+			[]string{"claude can't run (claude not on PATH)", `wrote harness = "codex" to .saddle/config.toml`, "Codex has no hooks, so claims are checked only at commit and done"}, nil, nil},
 		{"claude missing, grok present", github, config.Template, []string{"gh", "grok"}, "grok",
-			[]string{`wrote harness = "grok"`}, []string{"no hooks"}},
+			[]string{`wrote harness = "grok"`}, []string{"no hooks"}, nil},
 		{"harness set by the owner is kept", github, "harness = \"claude\"\n", []string{"gh", "codex"}, "claude",
-			[]string{`set harness = "codex" in .saddle/config.toml`}, []string{"wrote harness"}},
+			[]string{`set harness = "codex" in .saddle/config.toml`}, []string{"wrote harness"}, nil},
+		{"claude looks logged out, nothing else", github, config.Template, []string{"gh", "claude"}, "claude",
+			[]string{"agent: claude looks logged out (claude is not logged in: run claude /login)"}, []string{"wrote harness", "no agent CLI"}, []string{"gh"}},
 		{"nothing present", github, config.Template, nil, "claude",
-			[]string{"no agent CLI is installed and logged in", "@anthropic-ai/claude-code", "codex login", "run saddle init again"}, []string{"wrote harness"}},
+			[]string{"no agent CLI is installed and logged in", "@anthropic-ai/claude-code", "codex login", "run saddle init again"}, []string{"wrote harness"}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			agenttest.Path(t, tc.bins, tc.bins)
+			logins := tc.logins
+			if logins == nil {
+				logins = tc.bins
+			}
+			agenttest.Path(t, tc.bins, logins)
 			root := setupRepo(t, tc.remote, tc.cfg)
 			var out strings.Builder
 			if err := initSetup(&out, root); err != nil {

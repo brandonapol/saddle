@@ -1,0 +1,13 @@
+STATUS  CHECK         DETAIL
+ok      git provider  GitHub (github.com) via gh version 2.101.0 (2026-09-15), logged in to github.com
+ok      claude        claude 1.0.0 (fake)
+warn    agent CLIs    harness claude is installed but looks logged out (claude is not logged in: run claude /login); saddle up starts it anyway; usable instead: codex (no hooks)
+
+Optional:
+  - agent CLIs (the agent CLIs (claude, codex, grok) installed and logged in, and which one saddle up runs)
+      harness claude is installed but looks logged out (claude is not logged in: run claude /login); saddle up starts it anyway; usable instead: codex (no hooks)
+      fix: run claude /login if it isn't logged in some other way, or set harness = "codex" in .saddle/config.toml
+
+Next steps:
+  saddle up           open saddle and tell the orchestrator what to work on
+  saddle up epic.md   or hand it an epic: it plans it and shows you the plan first

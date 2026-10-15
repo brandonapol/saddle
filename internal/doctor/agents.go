@@ -98,26 +98,36 @@ func (r *run) agentCLIs() Result {
 		}
 	}
 	fb, found := agent.FallbackHarness(harness, order, ss)
-	switch {
-	case !found:
-		hints := make([]string, len(order))
-		for i, n := range order {
-			hints[i] = agent.InstallHint(n)
-		}
-		return fail(CheckAgents, "no agent CLI is installed and logged in: "+strings.Join(why, "; "),
-			strings.Join(hints, "; or "))
-	case fb == harness:
+	if found && fb == harness {
 		detail := fmt.Sprintf("harness %s is ready; usable: %s", harness, strings.Join(usable, ", "))
 		if fb == config.HarnessCodex {
 			detail += "; " + NoHooksNote
 		}
 		return ok(CheckAgents, detail)
 	}
-	reason := harness + " can't run"
+	reason, installed := harness+" can't run", false
 	for _, s := range ss {
 		if s.Name == harness {
-			reason = s.Reason
+			reason, installed = s.Reason, s.Installed
 		}
+	}
+	if installed {
+		// No credentials file is only a guess at logged out, so up keeps it.
+		detail := fmt.Sprintf("harness %s is installed but looks logged out (%s); saddle up starts it anyway", harness, reason)
+		fix := "run " + agent.LoginHint(harness) + " if it isn't logged in some other way"
+		if found && fb != harness {
+			detail += "; usable instead: " + strings.Join(usable, ", ")
+			fix += fmt.Sprintf(", or set harness = %q in .saddle/config.toml", fb)
+		}
+		return warn(CheckAgents, detail, fix)
+	}
+	if !found {
+		hints := make([]string, len(order))
+		for i, n := range order {
+			hints[i] = agent.InstallHint(n)
+		}
+		return fail(CheckAgents, "no agent CLI is installed and logged in: "+strings.Join(why, "; "),
+			strings.Join(hints, "; or "))
 	}
 	detail := fmt.Sprintf("harness %s can't run (%s); %s can, so saddle up runs %s; usable: %s", harness, reason, fb, fb, strings.Join(usable, ", "))
 	if fb == config.HarnessCodex {
