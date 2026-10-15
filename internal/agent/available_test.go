@@ -4,8 +4,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/brandonapol/saddle/internal/agent/agenttest"
 )
 
 func fakeMachine(t *testing.T, onPath []string, env map[string]string) machine {
@@ -99,5 +102,70 @@ func TestUnavailableErrListsUsable(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("%v lacks %q", err, want)
 		}
+	}
+}
+
+// #646: the harness falls back to the first usable one in order when the
+// configured one can't run; none usable is reported, not guessed.
+func TestFallbackHarness(t *testing.T) {
+	order := []string{"claude", "grok", "codex"}
+	st := func(ok ...string) []Status {
+		var ss []Status
+		for _, n := range order {
+			ss = append(ss, Status{Name: n, OK: slices.Contains(ok, n)})
+		}
+		return ss
+	}
+	for _, tc := range []struct {
+		want string
+		ss   []Status
+		got  string
+		ok   bool
+	}{
+		{"claude", st("claude", "codex"), "claude", true},
+		{"claude", st("codex"), "codex", true},
+		{"claude", st("grok", "codex"), "grok", true},
+		{"codex", st("claude", "codex"), "codex", true},
+		{"codex", st("claude"), "claude", true},
+		{"claude", st(), "", false},
+	} {
+		got, ok := FallbackHarness(tc.want, order, tc.ss)
+		if got != tc.got || ok != tc.ok {
+			t.Errorf("FallbackHarness(%s, %+v) = %q, %v; want %q, %v", tc.want, tc.ss, got, ok, tc.got, tc.ok)
+		}
+	}
+}
+
+func TestInstallSteps(t *testing.T) {
+	s := InstallSteps([]string{"claude", "codex"})
+	for _, want := range []string{"https://claude.com/claude-code", "claude /login", "@openai/codex", "codex login"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("install steps lack %q:\n%s", want, s)
+		}
+	}
+}
+
+// #646: fake claude and codex binaries on a fake PATH, with or without their
+// logins, decide which harness is usable on the real machine checks.
+func TestAvailabilityOnFakePath(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		bins   []string
+		logins []string
+		usable []string
+	}{
+		{"claude only", []string{"claude"}, []string{"claude"}, []string{"claude"}},
+		{"claude missing, codex present", []string{"codex"}, []string{"codex"}, []string{"codex"}},
+		{"claude logged out, codex present", []string{"claude", "codex"}, []string{"codex"}, []string{"codex"}},
+		{"both", []string{"claude", "codex"}, []string{"claude", "codex"}, []string{"claude", "codex"}},
+		{"nothing", nil, nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agenttest.Path(t, tc.bins, tc.logins)
+			got := Usable(Availability(nil))
+			if !slices.Equal(got, tc.usable) {
+				t.Errorf("usable = %v, want %v", got, tc.usable)
+			}
+		})
 	}
 }

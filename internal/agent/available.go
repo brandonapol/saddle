@@ -192,3 +192,45 @@ func (m machine) check(name, cmd string) error {
 	}
 	return fmt.Errorf("%s is not logged in: run %s", name, a.login)
 }
+
+// FallbackHarness is the harness saddle runs when want is configured: want
+// when it can run, else the first in order that can (#646). ok is false when
+// none can.
+func FallbackHarness(want string, order []string, ss []Status) (name string, ok bool) {
+	usable := map[string]bool{}
+	for _, s := range ss {
+		usable[s.Name] = s.OK
+	}
+	if usable[want] {
+		return want, true
+	}
+	for _, n := range order {
+		if usable[n] {
+			return n, true
+		}
+	}
+	return "", false
+}
+
+// installs is how to get each adapter's CLI onto PATH.
+var installs = map[string]string{
+	"claude":     "install Claude Code: npm install -g @anthropic-ai/claude-code (https://claude.com/claude-code)",
+	"codex":      "install the Codex CLI: npm install -g @openai/codex (https://github.com/openai/codex)",
+	"grok":       "install the Grok CLI",
+	GeminiName:   "install the Gemini CLI: npm install -g @google/gemini-cli",
+	OpenCodeName: "install opencode: npm install -g opencode-ai",
+}
+
+// InstallHint is how to install and log in to adapter name, in one line.
+func InstallHint(name string) string {
+	return installs[name] + ", then " + auths[name].login
+}
+
+// InstallSteps lists InstallHint for each name, one per line.
+func InstallSteps(names []string) string {
+	lines := make([]string, len(names))
+	for i, n := range names {
+		lines[i] = "  " + n + ": " + InstallHint(n)
+	}
+	return strings.Join(lines, "\n")
+}
