@@ -86,6 +86,8 @@ type Config struct {
 	Issues Issues `toml:"issues"`
 	// Claims configures how edit-time claim checks see a file.
 	Claims Claims `toml:"claims"`
+	// TUI is the terminal UI.
+	TUI TUI `toml:"tui"`
 }
 
 // Issues is [issues]: saddle files or comments on a GitHub issue for every
@@ -604,6 +606,52 @@ const (
 // Granularities lists the valid claims.granularity values.
 func Granularities() []string { return []string{GranularityFile, GranularitySymbol} }
 
+// TUI is [tui], the terminal UI.
+type TUI struct {
+	// Resources is the CPU and RAM gauge above the orchestrator box.
+	Resources TUIResources `toml:"resources"`
+}
+
+// TUIResources is [tui.resources]. The gauge compares the 1-minute load
+// average per core, and available RAM as a percent of MemTotal, with these
+// cutoffs. Under ok_load and above ok_ram_pct it says "OK to open another".
+// Up through busy_load, or down through busy_ram_pct, it says "Busy: wait".
+// Past either it says "Overloaded: don't". The worse of CPU and RAM wins.
+// A zero cutoff means the default. enabled defaults on; false hides the gauge.
+type TUIResources struct {
+	Enabled    bool    `toml:"enabled"`
+	OKLoad     float64 `toml:"ok_load"`
+	BusyLoad   float64 `toml:"busy_load"`
+	OKRAMPct   float64 `toml:"ok_ram_pct"`
+	BusyRAMPct float64 `toml:"busy_ram_pct"`
+}
+
+// normalizeTUIResources fills zero cutoffs from the defaults and rejects an
+// inverted pair. Zero means unset, so a file that only sets enabled = false
+// keeps the default cutoffs. enabled itself is a real bool.
+func normalizeTUIResources(r *TUIResources) error {
+	d := Default().TUI.Resources
+	if r.OKLoad <= 0 {
+		r.OKLoad = d.OKLoad
+	}
+	if r.BusyLoad <= 0 {
+		r.BusyLoad = d.BusyLoad
+	}
+	if r.OKRAMPct <= 0 {
+		r.OKRAMPct = d.OKRAMPct
+	}
+	if r.BusyRAMPct <= 0 {
+		r.BusyRAMPct = d.BusyRAMPct
+	}
+	if r.BusyLoad <= r.OKLoad {
+		return fmt.Errorf("tui.resources: busy_load %v must be above ok_load %v", r.BusyLoad, r.OKLoad)
+	}
+	if r.OKRAMPct > 100 || r.BusyRAMPct > 100 || r.BusyRAMPct >= r.OKRAMPct {
+		return fmt.Errorf("tui.resources: busy_ram_pct %v must be below ok_ram_pct %v, both at most 100", r.BusyRAMPct, r.OKRAMPct)
+	}
+	return nil
+}
+
 // SweepMethods are the merge methods gh accepts.
 var SweepMethods = []string{"squash", "merge", "rebase"}
 
@@ -803,6 +851,9 @@ func Default() Config {
 		Spawn:        Spawn{MaxDepth: 3, MaxChildren: 8},
 		Orchestrator: Orchestrator{CompactAt: 0.7},
 		Notices:      Notices{WakeAfter: 3 * time.Minute, DigestEvery: 15 * time.Minute},
+		TUI: TUI{Resources: TUIResources{
+			Enabled: true, OKLoad: 0.7, BusyLoad: 1.2, OKRAMPct: 20, BusyRAMPct: 10,
+		}},
 		Train: Train{MaxAttempts: 2, Output: "stack", StackBackend: StackBackendSaddle,
 			Prepublish: Prepublish{Parallel: 1, Timeout: 30 * time.Minute}, StuckAfter: 30 * time.Minute},
 		Usage: Usage{
@@ -1014,6 +1065,9 @@ func Load(root string) (Config, error) {
 	if g := cfg.Claims.Granularity; !slices.Contains(Granularities(), g) {
 		return cfg, fmt.Errorf("claims.granularity %q: want one of %s", g, strings.Join(Granularities(), ", "))
 	}
+	if err := normalizeTUIResources(&cfg.TUI.Resources); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 
@@ -1103,6 +1157,19 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # Run the orchestrator as an interactive Claude Code session with Remote
 # Control on, so you can steer it from the Claude app (saddle up --rc).
 # remote_control = false
+
+# The CPU and RAM gauge above the orchestrator box (docs/config.md). It says
+# whether this machine can take another terminal that uses an AI. On unless
+# enabled is false. "OK to open another" while load per core is under ok_load
+# and available RAM is above ok_ram_pct. "Busy: wait" up through busy_load, or
+# while available RAM is down through busy_ram_pct. Past either, "Overloaded:
+# don't". A zero cutoff means the default.
+# [tui.resources]
+# enabled = true
+# ok_load = 0.7
+# busy_load = 1.2
+# ok_ram_pct = 20
+# busy_ram_pct = 10
 
 [notices]
 # An idle agent whose action notices (failed tests, conflicts, messages)

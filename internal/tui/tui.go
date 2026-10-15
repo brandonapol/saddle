@@ -173,6 +173,7 @@ type model struct {
 	tr        trainState                                   // the merge view's train panel
 	rc        remoteState                                  // remote controllers seen, for the header (#314)
 	hv        heavyState                                   // the heavy-run queue: header segment and runs view
+	rs        resourceState                                // CPU and RAM gauge; sampled on a tick, never in View (#600)
 	narr      narrSink                                     // narrator lines; nil when the narrator is off
 	asker     asker                                        // answers questions; nil when the narrator is off
 	askScreen bool                                         // the next question carries the selected agent's screen
@@ -628,7 +629,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.rcShow())
 
 	case tickMsg:
-		cmds = append(cmds, m.refresh(), tick(), m.heavyTick())
+		cmds = append(cmds, m.refresh(), tick(), m.heavyTick(), m.resourcesTick())
 		switch m.view {
 		case viewPlan:
 			cmds = append(cmds, m.loadPlan())
@@ -641,6 +642,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case heavyMsg:
 		m.heavyLoaded(msg)
+
+	case resourcesMsg:
+		m.resourcesLoaded(msg)
 
 	case heavyDoneMsg:
 		m.hv.busy = false
@@ -1786,6 +1790,20 @@ func (m *model) setChatHeight(h int) {
 }
 
 func (m *model) viewChat(w, h int) string {
+	// The gauge sits directly above the orchestrator box and gives up that
+	// height so the screen stays the same size. No sample, or too little
+	// room, and the box is unchanged.
+	gauge := m.resourcesView(w)
+	// lipgloss.Height("") is 1, so an empty gauge must not shrink the box.
+	gh := 0
+	if gauge != "" {
+		gh = lipgloss.Height(gauge)
+	}
+	if gh > 0 && h-gh >= 6 {
+		h -= gh
+	} else {
+		gauge = ""
+	}
 	m.input.SetWidth(w - 4)
 	m.setChatHeight(h)
 	in := lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(cBorder).Width(w - 2).Render(m.input.View())
@@ -1794,7 +1812,11 @@ func (m *model) viewChat(w, h int) string {
 		parts = append(parts, menu)
 	}
 	body := lipgloss.JoinVertical(lipgloss.Left, append(parts, in)...)
-	return box(m.chatTitle(), w, h, m.focus == focusChat, body)
+	boxed := box(m.chatTitle(), w, h, m.focus == focusChat, body)
+	if gauge == "" {
+		return boxed
+	}
+	return gauge + "\n" + boxed
 }
 
 func statusLabel(s string) string {
