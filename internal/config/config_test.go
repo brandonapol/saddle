@@ -938,3 +938,37 @@ func TestRunQueueConfig(t *testing.T) {
 		}
 	}
 }
+
+// #646: [forge] overrides the detected git provider and CLI; bad values fail.
+func TestForgeOverride(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	for _, tc := range []struct {
+		body string
+		want Forge
+		err  string
+	}{
+		{"", Forge{}, ""},
+		{"[forge]\nprovider = \"gitlab\"\ncli = \"glab\"\n", Forge{Provider: ForgeGitLab, CLI: ForgeGlab}, ""},
+		{"[forge]\ncli = \"none\"\n", Forge{CLI: ForgeNone}, ""},
+		{"[forge]\nprovider = \"bitbucket\"\n", Forge{}, "forge.provider"},
+		{"[forge]\ncli = \"hub\"\n", Forge{}, "forge.cli"},
+	} {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, ".saddle"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".saddle", "config.toml"), []byte(tc.body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(root)
+		if tc.err != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.err) {
+				t.Errorf("%q: err = %v, want %s", tc.body, err, tc.err)
+			}
+			continue
+		}
+		if err != nil || cfg.Forge != tc.want {
+			t.Errorf("%q: forge = %+v, %v; want %+v", tc.body, cfg.Forge, err, tc.want)
+		}
+	}
+}

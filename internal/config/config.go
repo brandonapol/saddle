@@ -90,7 +90,27 @@ type Config struct {
 	TUI TUI `toml:"tui"`
 	// RunQueue is the heavy-run queue's admission (docs/resource-queue.md).
 	RunQueue RunQueue `toml:"run_queue"`
+	// Forge overrides which git provider and CLI saddle uses (#646).
+	Forge Forge `toml:"forge"`
 }
+
+// Forge is [forge]: the git provider and its CLI. Empty fields are detected
+// from the remote's host and the CLIs on PATH (#646).
+type Forge struct {
+	// Provider is github or gitlab.
+	Provider string `toml:"provider"`
+	// CLI is gh, glab, or none to run local-only.
+	CLI string `toml:"cli"`
+}
+
+// Forge providers and CLIs.
+const (
+	ForgeGitHub = "github"
+	ForgeGitLab = "gitlab"
+	ForgeGH     = "gh"
+	ForgeGlab   = "glab"
+	ForgeNone   = "none"
+)
 
 // RunQueue is [run_queue]: when the machine-wide heavy-run queue admits a
 // run (docs/resource-queue.md). It is the repo's lowest layer: the repo's
@@ -1012,6 +1032,12 @@ func Load(root string) (Config, error) {
 	if err := checkFallback(cfg.Fallback); err != nil {
 		return cfg, err
 	}
+	if p := cfg.Forge.Provider; p != "" && p != ForgeGitHub && p != ForgeGitLab {
+		return cfg, fmt.Errorf("forge.provider %q: want github or gitlab", p)
+	}
+	if c := cfg.Forge.CLI; c != "" && c != ForgeGH && c != ForgeGlab && c != ForgeNone {
+		return cfg, fmt.Errorf("forge.cli %q: want gh, glab or none", c)
+	}
 	if cfg.Claude.Advisor.Lead == "" {
 		cfg.Claude.Advisor.Lead = cfg.Claude.OrchestratorModel
 	}
@@ -1139,6 +1165,13 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 
 [test]
 # cmd = "go test ./..."
+
+# The git provider and its CLI. saddle detects both from the origin remote's
+# host and the CLIs on PATH (gh for GitHub, glab for GitLab); set them to
+# override. cli = "none" runs local-only, without PRs.
+[forge]
+# provider = "github"        # github | gitlab
+# cli = "gh"                 # gh | glab | none
 
 # Derived files the merge train regenerates instead of merging. On a rebase
 # conflict only in these paths, it takes integration's copy, runs cmd in the
