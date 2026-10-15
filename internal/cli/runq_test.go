@@ -3,10 +3,12 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/runq"
 )
@@ -179,6 +181,76 @@ func TestRootRegistersRunAndRunq(t *testing.T) {
 	for _, name := range []string{"run", "runq"} {
 		if c, _, err := Root().Find([]string{name}); err != nil || c.Name() != name {
 			t.Errorf("saddle %s not registered: %v", name, err)
+		}
+	}
+}
+
+// TestRunNoQueue: --no-queue runs at once with the class full, needs no
+// --class, and still forwards the exit code.
+func TestRunNoQueue(t *testing.T) {
+	db, code := runqEnv(t, "enforce")
+	hold(t, db)
+	out, err := runCmd(t, heavyRunCmd(), "--no-queue", "--class", "go-test", "--", "echo", "ran")
+	if err != nil || !strings.Contains(out, "ran") || strings.Contains(out, "queued") {
+		t.Fatalf("err %v out %q", err, out)
+	}
+	if _, err := runCmd(t, heavyRunCmd(), "--no-queue", "--", "sh", "-c", "exit 3"); err != nil || *code != 3 {
+		t.Fatalf("code %d err %v", *code, err)
+	}
+}
+
+// TestRunMaxWaitRunsAnyway: with the class held, --max-wait queues that
+// long, then runs the command without a lease instead of failing, so a
+// wedged queue never blocks a commit.
+func TestRunMaxWaitRunsAnyway(t *testing.T) {
+	db, code := runqEnv(t, "enforce")
+	hold(t, db)
+	out, err := runCmd(t, heavyRunCmd(), "--class", "go-test", "--max-wait", "300ms", "--", "sh", "-c", "echo ran; exit 4")
+	if err != nil || *code != 4 || !strings.Contains(out, "queued: position 1 of 1") ||
+		!strings.Contains(out, "running without the queue") || !strings.Contains(out, "ran") {
+		t.Fatalf("code %d err %v out %q", *code, err, out)
+	}
+	if out, err := runCmd(t, heavyRunCmd(), "--class", "go-test", "--max-wait", "1s", "--wait-max", "1s", "--", "true"); err == nil {
+		t.Fatalf("both waits accepted: %q", out)
+	}
+}
+
+// TestRunForeignLease: a run without SADDLE_TASK holds a lease marked
+// foreign (a git hook, another tool); an agent's run is not.
+func TestRunForeignLease(t *testing.T) {
+	db, _ := runqEnv(t, "enforce")
+	q, err := runq.Open(runq.Options{Path: db, Getenv: func(string) string { return "" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = q.Close() })
+	for task, foreign := range map[string]bool{"": true, "t9": false} {
+		t.Setenv("SADDLE_TASK", task)
+		marker := filepath.Join(t.TempDir(), "go")
+		done := make(chan string, 1)
+		go func() {
+			out, _ := runCmd(t, heavyRunCmd(), "--class", "flutter-test", "--", "sh", "-c",
+				"while [ ! -e "+marker+" ]; do sleep 0.05; done")
+			done <- out
+		}()
+		var holders []runq.Entry
+		deadline := time.Now().Add(10 * time.Second)
+		for len(holders) == 0 && time.Now().Before(deadline) {
+			st, err := q.Status()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, cs := range st {
+				holders = append(holders, cs.Holders...)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if err := os.WriteFile(marker, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out := <-done
+		if len(holders) != 1 || holders[0].Foreign != foreign || holders[0].Weight != 3 {
+			t.Fatalf("SADDLE_TASK=%q: holders %+v, out %q", task, holders, out)
 		}
 	}
 }

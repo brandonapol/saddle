@@ -61,11 +61,17 @@ func parsePrio(s string) (int, error) {
 	return n, nil
 }
 
+// runFlags are saddle run's flags.
+type runFlags struct {
+	class, prio      string
+	waitMax, maxWait time.Duration
+	noQueue          bool
+}
+
 func heavyRunCmd() *cobra.Command {
-	var class, prio string
-	var waitMax time.Duration
+	var f runFlags
 	cmd := &cobra.Command{
-		Use:   "run --class <class> [--prio train|worker|background] [--wait-max 30m] -- <cmd> [args...]",
+		Use:   "run --class <class> [--prio train|worker|background] [--wait-max 30m | --max-wait 10m | --no-queue] -- <cmd> [args...]",
 		Short: "Run a CPU-heavy command when the machine's heavy-run queue gives it a slot",
 		Long: `Runs a CPU-heavy command (tests, linters, e2e suites) through the heavy-run
 queue every saddle session, agent and repo on this machine shares. While it
@@ -88,41 +94,79 @@ CPU pressure over max_cpu_pressure (60%), for at most gate_max_wait (10m).
 The command runs at nice 10 with idle I/O (nice, ionice), and in a user
 systemd scope with scope = "systemd".
 
+A run also waits while the machine budget is full: every class's running
+leases share budget units (default half the cores), and a run uses its
+class's weight (flutter-test 3, others 1). See docs/resource-queue.md.
+
+Any tool can call it, not only saddle's agents: a git hook in another repo
+wraps its heavy line as
+
+  saddle run --class flutter-test --max-wait 10m -- flutter test
+
+A run without SADDLE_TASK shows as foreign in saddle runq status and
+saddle queue.
+
 After --wait-max (default 30m, wait_max in runq.toml) it gives up with exit
-code 75 naming the holder. Report that rather than retrying in a loop.`,
+code 75 naming the holder. Report that rather than retrying in a loop.
+--max-wait instead runs the command anyway, unqueued, once it has waited
+that long, so a wedged queue never blocks a commit. --no-queue skips the
+queue entirely.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			if class == "" {
+			if f.class == "" && !f.noQueue {
 				return errors.New("--class is required (e.g. go-test, flutter-test, golangci-lint, e2e, generic-heavy)")
 			}
-			p, err := parsePrio(prio)
+			if f.waitMax != 0 && f.maxWait != 0 {
+				return errors.New("--wait-max gives up and --max-wait runs anyway: pass one")
+			}
+			if f.maxWait < 0 {
+				return errors.New("--max-wait must not be negative")
+			}
+			p, err := parsePrio(f.prio)
 			if err != nil {
 				return err
 			}
-			if code := runHeavy(c, class, p, waitMax, args); code != 0 {
+			if code := runHeavy(c, f, p, args); code != 0 {
 				exitFn(code)
 			}
 			return nil
 		},
 	}
 	cmd.Flags().SetInterspersed(false) // everything after the command is its own
-	cmd.Flags().StringVar(&class, "class", "", "run class (go-test, flutter-test, golangci-lint, e2e, generic-heavy, ...)")
-	cmd.Flags().StringVar(&prio, "prio", "worker", "priority: train, worker, background, or a number")
-	cmd.Flags().DurationVar(&waitMax, "wait-max", 0, "give up queueing after this long, exit 75 (default wait_max from runq.toml, else 30m)")
+	cmd.Flags().StringVar(&f.class, "class", "", "run class (go-test, flutter-test, golangci-lint, e2e, generic-heavy, ...)")
+	cmd.Flags().StringVar(&f.prio, "prio", "worker", "priority: train, worker, background, or a number")
+	cmd.Flags().DurationVar(&f.waitMax, "wait-max", 0, "give up queueing after this long, exit 75 (default wait_max from runq.toml, else 30m)")
+	cmd.Flags().DurationVar(&f.maxWait, "max-wait", 0, "queue at most this long, then run the command anyway without a lease")
+	cmd.Flags().BoolVar(&f.noQueue, "no-queue", false, "run the command at once without the queue")
 	return cmd
 }
 
 // runHeavy runs args through the queue and returns the exit code.
-func runHeavy(c *cobra.Command, class string, prio int, waitMax time.Duration, args []string) int {
+func runHeavy(c *cobra.Command, f runFlags, prio int, args []string) int {
 	errOut := c.ErrOrStderr()
-	h, closeHeavy := heavy(errOut)
-	defer closeHeavy()
 	sigs := make(chan os.Signal, 4)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 	defer signal.Stop(sigs)
 	child := exec.Command(args[0], args[1:]...)
 	child.Stdin, child.Stdout, child.Stderr = c.InOrStdin(), c.OutOrStdout(), errOut
-	_, err := h.Run(c.Context(), app.HeavyOpts{Class: class, Prio: prio, WaitMax: waitMax, Status: errOut, Signals: sigs}, child)
+	if f.noQueue {
+		return exitCode(errOut, runq.Exec(child, sigs))
+	}
+	h, closeHeavy := heavy(errOut)
+	defer closeHeavy()
+	wait := f.waitMax
+	if f.maxWait > 0 {
+		wait = f.maxWait
+	}
+	_, err := h.Run(c.Context(), app.HeavyOpts{Class: f.class, Prio: prio, WaitMax: wait, Status: errOut, Signals: sigs,
+		Foreign: os.Getenv("SADDLE_TASK") == ""}, child)
+	var wm *runq.WaitMaxError
+	if f.maxWait > 0 && errors.As(err, &wm) {
+		// The queue never started child, so it can still run, unqueued.
+		fmt.Fprintf(errOut, "saddle run: waited %s for a %s slot (--max-wait); running without the queue\n",
+			wm.Waited.Round(time.Second), f.class)
+		err = runq.Exec(child, sigs)
+	}
 	return exitCode(errOut, err)
 }
 
@@ -160,9 +204,11 @@ func exitCode(errOut io.Writer, err error) int {
 
 // runqStatusJSON is saddle runq status --json.
 type runqStatusJSON struct {
-	Mode    string          `json:"mode"`
-	Path    string          `json:"path"`
-	Classes []runqClassJSON `json:"classes"`
+	Mode       string          `json:"mode"`
+	Path       string          `json:"path"`
+	BudgetUsed int             `json:"budget_used"`
+	Budget     int             `json:"budget"` // < 0: no budget
+	Classes    []runqClassJSON `json:"classes"`
 }
 
 type runqClassJSON struct {
@@ -179,6 +225,8 @@ type runqEntryJSON struct {
 	Cmd      string `json:"cmd"`
 	PID      int    `json:"pid"`
 	Prio     int    `json:"prio"`
+	Weight   int    `json:"weight"`
+	Foreign  bool   `json:"foreign,omitempty"`
 	Position int    `json:"position,omitempty"`
 	AgeMS    int64  `json:"age_ms"`
 }
@@ -187,9 +235,21 @@ func entriesJSON(es []runq.Entry) []runqEntryJSON {
 	out := []runqEntryJSON{}
 	for _, e := range es {
 		out = append(out, runqEntryJSON{Lease: e.Token, Label: e.Label, Cmd: e.Cmd, PID: e.PID, Prio: e.Prio,
-			Position: e.Position, AgeMS: e.Age.Milliseconds()})
+			Weight: e.Weight, Foreign: e.Foreign, Position: e.Position, AgeMS: e.Age.Milliseconds()})
 	}
 	return out
+}
+
+// entryTags marks a foreign lease and one heavier than a unit.
+func entryTags(e runq.Entry) string {
+	s := ""
+	if e.Foreign {
+		s += " (foreign)"
+	}
+	if e.Weight > 1 {
+		s += fmt.Sprintf(" weight %d", e.Weight)
+	}
+	return s
 }
 
 func shortLease(token string) string {
@@ -228,9 +288,13 @@ func runqCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			used, budget, err := q.Budget()
+			if err != nil {
+				return err
+			}
 			out := c.OutOrStdout()
 			if asJSON {
-				js := runqStatusJSON{Mode: string(q.Mode()), Path: q.Path(), Classes: []runqClassJSON{}}
+				js := runqStatusJSON{Mode: string(q.Mode()), Path: q.Path(), BudgetUsed: used, Budget: budget, Classes: []runqClassJSON{}}
 				for _, cs := range st {
 					js.Classes = append(js.Classes, runqClassJSON{Class: cs.Class, Slots: cs.Slots, Drained: cs.Slots == 0,
 						Holders: entriesJSON(cs.Holders), Waiters: entriesJSON(cs.Waiters)})
@@ -240,6 +304,9 @@ func runqCmd() *cobra.Command {
 				return enc.Encode(js)
 			}
 			fmt.Fprintf(out, "mode: %s\n", q.Mode())
+			if budget >= 0 {
+				fmt.Fprintf(out, "budget: %d/%d units busy\n", used, budget)
+			}
 			for _, cs := range st {
 				drained := ""
 				if cs.Slots == 0 {
@@ -247,10 +314,10 @@ func runqCmd() *cobra.Command {
 				}
 				fmt.Fprintf(out, "%s: %d/%d slots busy, %d waiting%s\n", cs.Class, len(cs.Holders), cs.Slots, len(cs.Waiters), drained)
 				for _, h := range cs.Holders {
-					fmt.Fprintf(out, "  running %s  lease %s  pid %d  %s (%s)\n", h.Label, shortLease(h.Token), h.PID, h.Cmd, h.Age.Round(time.Second))
+					fmt.Fprintf(out, "  running %s%s  lease %s  pid %d  %s (%s)\n", h.Label, entryTags(h), shortLease(h.Token), h.PID, h.Cmd, h.Age.Round(time.Second))
 				}
 				for _, w := range cs.Waiters {
-					fmt.Fprintf(out, "  #%d %s  lease %s  pid %d  prio %d  %s (waiting %s)\n", w.Position, w.Label, shortLease(w.Token), w.PID, w.Prio, w.Cmd, w.Age.Round(time.Second))
+					fmt.Fprintf(out, "  #%d %s%s  lease %s  pid %d  prio %d  %s (waiting %s)\n", w.Position, w.Label, entryTags(w), shortLease(w.Token), w.PID, w.Prio, w.Cmd, w.Age.Round(time.Second))
 				}
 			}
 			return nil
