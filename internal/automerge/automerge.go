@@ -711,6 +711,7 @@ func (w *Watcher) Check() (Status, error) {
 // IdleAt, Stopped when it stopped, and Last) merged into the file as it is
 // now, with Last's toggle and holds taken from it.
 func (w *Watcher) record(s State, st *Status, stopped bool) (Status, error) {
+	var idle func()
 	_, err := update(w.Path, func(cur *State) error {
 		cur.Behind, cur.Logged, cur.TierNoticed = s.Behind, s.Logged, s.TierNoticed
 		if stopped {
@@ -721,10 +722,13 @@ func (w *Watcher) record(s State, st *Status, stopped bool) (Status, error) {
 		holdStacks(st, cur.Holds)
 		w.explain(st, st.Checked, st.Merged)
 		cur.Idle, cur.IdleAt = s.Idle, s.IdleAt
-		w.logIdle(cur, *st)
+		idle = w.logIdle(cur, *st)
 		cur.Last = *st
 		return nil
 	})
+	if err == nil && idle != nil {
+		idle() // after the save, so a reader of the event sees this check (#613)
+	}
 	return *st, err
 }
 
@@ -781,10 +785,12 @@ func readFailed(st Status) bool {
 
 // logIdle logs an EventIdle when a check merged nothing while auto-merge is
 // on and a PR is ready, with the reason. The same reason is logged again
-// once per Interval, so busy retries don't flood the log.
-func (w *Watcher) logIdle(s *State, st Status) {
+// once per Interval, so busy retries don't flood the log. It records the
+// reason in s and returns the event for the caller to log once s is saved;
+// nil when there is nothing to log.
+func (w *Watcher) logIdle(s *State, st Status) func() {
 	if !st.Enabled || st.Merged != "" {
-		return
+		return nil
 	}
 	var prs []string
 	task, why := "", ""
@@ -798,14 +804,14 @@ func (w *Watcher) logIdle(s *State, st Status) {
 	}
 	if len(prs) == 0 {
 		s.Idle, s.IdleAt = "", time.Time{}
-		return
+		return nil
 	}
 	data := strings.Join(prs, ", ") + " ready but not merged: " + why
 	if data == s.Idle && w.now().Sub(s.IdleAt) < w.interval() {
-		return
+		return nil
 	}
 	s.Idle, s.IdleAt = data, w.now()
-	w.event(task, EventIdle, data)
+	return func() { w.event(task, EventIdle, data) }
 }
 
 // merge merges stack's bottom PR and restacks; a failure of either stops
