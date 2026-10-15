@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -37,10 +38,15 @@ func TestJourneySymbolShareLandsBoth(t *testing.T) {
 	w.WaitTask("t1", "queued in the train", queued)
 	w.Spawn("t2", "Bar work", []string{"other/**"},
 		fa.Write("pkg/x.go", bar), fa.Commit("change Bar"), fa.Done("Changes Bar."))
-	w.WaitTask("t2", "queued in the train", queued)
+	// A denied write stops t2's script, so stop waiting then rather than
+	// time out on a queue it never reaches.
+	w.WaitTask("t2", "queued in the train or stuck", func(v mcpserver.TaskView) bool {
+		return queued(v) || strings.Contains(w.AgentLog("t2"), "stuck:")
+	})
 	if log := w.AgentLog("t2"); strings.Contains(log, "denied") {
-		t.Fatalf("t2's write to t1's file was denied:\n%s", log)
+		t.Fatalf("t2's write to t1's file was denied:\n%s\n%s", log, symbolEvents(w))
 	}
+	w.WaitTask("t2", "queued in the train", queued)
 
 	r := w.MustSaddle("land")
 	for _, id := range []string{"t1", "t2"} {
@@ -52,4 +58,23 @@ func TestJourneySymbolShareLandsBoth(t *testing.T) {
 	if !strings.Contains(got, "return 10") || !strings.Contains(got, "return 30") {
 		t.Fatalf("integration pkg/x.go lacks one side:\n%s", got)
 	}
+}
+
+// symbolEvents tells a deny from file mode (no symbol events, granularity
+// not symbol) from a symbol rule's fallback, such as "budget exceeded"
+// under load (#568), whose deny text is the same path-claim deny.
+func symbolEvents(w *World) string {
+	a := w.App()
+	var b strings.Builder
+	fmt.Fprintf(&b, "granularity %q; symbol events:\n", a.Cfg.Claims.Granularity)
+	evs, err := a.Store.Events(500)
+	if err != nil {
+		return b.String() + err.Error()
+	}
+	for _, e := range evs {
+		if strings.HasPrefix(e.Kind, "symbol_") {
+			fmt.Fprintf(&b, "  %s %s: %s\n", e.Task, e.Kind, e.Data)
+		}
+	}
+	return b.String()
 }
