@@ -108,6 +108,7 @@ type Issue struct {
 	State       string   `json:"state"` // opened or closed
 	Labels      []string `json:"labels"`
 	Notes       []Note   `json:"notes"`
+	Links       []int    `json:"links,omitempty"` // linked issues' iids
 }
 
 // Repo is the fake GitLab of one bare origin.

@@ -520,18 +520,45 @@ func (g *GitLab) Issue(ctx context.Context, repo string, n int, _ IssueFields) (
 	return i.issue(), nil
 }
 
-// SubIssues: GitLab's child items are Premium epics and tasks, which saddle
-// doesn't read.
-func (g *GitLab) SubIssues(context.Context, string, int) ([]Issue, error) {
-	return nil, fmt.Errorf("list sub-issues: %w (GitLab has no sub-issues)", ErrUnsupported)
+// GitLab Free has no sub-issues (child items are Premium epics and tasks),
+// so saddle files an epic's sub-issues as linked issues ("relates to"),
+// which every tier has: SubIssues lists the issues linked to n.
+func (g *GitLab) SubIssues(ctx context.Context, repo string, n int) ([]Issue, error) {
+	var raw []gitlabIssue
+	if err := g.apiJSON(ctx, &raw, "", issuePath(repo, n)+"/links"); err != nil {
+		return nil, err
+	}
+	is := make([]Issue, len(raw))
+	for i, r := range raw {
+		is[i] = r.issue()
+	}
+	return is, nil
 }
 
-func (g *GitLab) SubIssueNumbers(context.Context, string, int) ([]int, error) {
-	return nil, fmt.Errorf("list sub-issues: %w (GitLab has no sub-issues)", ErrUnsupported)
+func (g *GitLab) SubIssueNumbers(ctx context.Context, repo string, n int) ([]int, error) {
+	is, err := g.SubIssues(ctx, repo, n)
+	if err != nil {
+		return nil, err
+	}
+	ns := make([]int, len(is))
+	for i, x := range is {
+		ns[i] = x.Number
+	}
+	return ns, nil
 }
 
-func (g *GitLab) AddSubIssue(context.Context, string, int, int) error {
-	return fmt.Errorf("link sub-issue: %w (GitLab has no sub-issues)", ErrUnsupported)
+// AddSubIssue links child to parent. The links API names the target
+// project by id, which it reads from the child.
+func (g *GitLab) AddSubIssue(ctx context.Context, repo string, parent, child int) error {
+	var c struct {
+		ProjectID int `json:"project_id"`
+	}
+	if err := g.apiJSON(ctx, &c, "", issuePath(repo, child)); err != nil {
+		return fmt.Errorf("look up issue #%d: %w", child, err)
+	}
+	_, err := g.api(ctx, "POST", issuePath(repo, parent)+"/links",
+		"-f", "target_project_id="+strconv.Itoa(c.ProjectID), "-f", "target_issue_iid="+strconv.Itoa(child))
+	return err
 }
 
 func (g *GitLab) ListIssues(ctx context.Context, q IssueQuery, _ IssueFields) ([]Issue, error) {

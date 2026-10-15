@@ -267,6 +267,12 @@ func TestIssuesAndAuth(t *testing.T) {
 	if got, _ := x.f.Issue(ctx, "e2e/demo", 1, forge.IssueBody); got.Body != "why" {
 		t.Fatalf("issue by project path = %+v", got)
 	}
+	child, err := x.f.CreateIssue(ctx, forge.NewIssue{Title: "Child"})
+	must(t, err)
+	must(t, x.f.AddSubIssue(ctx, "", 1, child.Number))
+	if ns, err := x.f.SubIssueNumbers(ctx, "", 1); err != nil || len(ns) != 1 || ns[0] != child.Number {
+		t.Fatalf("SubIssueNumbers = %v, %v", ns, err)
+	}
 	must(t, x.f.AuthStatus(ctx))
 	if _, err := x.f.Issue(ctx, "", 99, forge.IssueState); err == nil || !strings.Contains(err.Error(), "404") {
 		t.Fatalf("missing issue = %v, want 404", err)

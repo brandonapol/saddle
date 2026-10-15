@@ -437,7 +437,7 @@ func (c *call) issueJSON(is *Issue) map[string]any {
 	if labels == nil {
 		labels = []string{}
 	}
-	return map[string]any{"iid": is.IID, "id": 9000 + is.IID, "title": is.Title, "description": is.Description, "state": is.State,
+	return map[string]any{"iid": is.IID, "id": 9000 + is.IID, "project_id": 1, "title": is.Title, "description": is.Description, "state": is.State,
 		"labels": labels, "web_url": fmt.Sprintf("%s/-/issues/%d", c.s.URL(), is.IID), "created_at": "2026-10-01T00:00:00Z"}
 }
 
@@ -485,6 +485,21 @@ func (c *call) onIssue(method, id string, rest []string, f map[string]string) (a
 		c.s.Next++
 		is.Notes = append(is.Notes, Note{ID: c.s.Next, Body: f["body"]})
 		return map[string]any{"id": c.s.Next, "body": f["body"]}, nil
+	case "GET links":
+		out := []map[string]any{}
+		for _, x := range c.s.Issues {
+			if slices.Contains(is.Links, x.IID) {
+				out = append(out, c.issueJSON(x))
+			}
+		}
+		return out, nil
+	case "POST links":
+		n, _ := strconv.Atoi(f["target_issue_iid"])
+		if f["target_project_id"] != "1" || slices.Contains(is.Links, n) {
+			return nil, &httpError{409, "Issue(s) already assigned"}
+		}
+		is.Links = append(is.Links, n)
+		return map[string]any{"source_issue": c.issueJSON(is)}, nil
 	}
 	return nil, &httpError{404, "fakeglab: unsupported " + method + " issues/" + id + "/" + strings.Join(rest, "/")}
 }

@@ -263,9 +263,21 @@ func TestGitLabIssues(t *testing.T) {
 		"api -X PUT projects/:id/issues/9 -f state_event=close",
 		"api -X PUT projects/:id/issues/9 -f state_event=reopen",
 	)
-	if _, err := g.SubIssueNumbers(ctx, "", 9); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("SubIssueNumbers = %v, want ErrUnsupported", err)
+}
+
+// Sub-issues are linked issues on GitLab.
+func TestGitLabSubIssues(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeGH{replies: []string{`[{"iid":4,"title":"a","state":"opened"},{"iid":6,"state":"closed"}]`, `{"iid":7,"project_id":42}`, ""}}
+	g := f.gitlab()
+	if ns, err := g.SubIssueNumbers(ctx, "", 3); err != nil || !reflect.DeepEqual(ns, []int{4, 6}) {
+		t.Fatalf("SubIssueNumbers = %v, %v", ns, err)
 	}
+	if err := g.AddSubIssue(ctx, "g/r", 3, 7); err != nil {
+		t.Fatal(err)
+	}
+	f.want(t, "api projects/:id/issues/3/links", "api projects/g%2Fr/issues/7",
+		"api -X POST projects/g%2Fr/issues/3/links -f target_project_id=42 -f target_issue_iid=7")
 }
 
 func TestGitLabComments(t *testing.T) {
