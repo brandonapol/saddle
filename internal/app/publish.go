@@ -44,9 +44,13 @@ type publishedPR struct {
 // the train push saddle's branches, so the model never needs `git push`) and
 // opens an independent PR against base. It refuses when the commits need work
 // base doesn't have, when they would carry another task's commits (checked by
-// patch-id), or when the branch is one saddle already uses; when the PR
-// already exists it returns its URL. No task's branch moves, and prs leaves a
-// published task's PR alone.
+// patch-id), when the branch is one saddle already uses, or when --base is a
+// branch in the PR stack: the next prs puts that branch back on the commit
+// the train landed, which drops a merge into it (#336). Publish against the
+// configured base, or land the work and let prs and restack place it. When
+// the PR already exists it returns its URL. No task's branch moves, and prs
+// leaves a published task's PR alone. A long-lived process re-reads
+// [train] lint.cmd before the pre-publish gate.
 func (a *App) Publish(req PublishReq) (PublishResult, error) {
 	var res PublishResult
 	unlock, err := a.lockTrain()
@@ -54,8 +58,15 @@ func (a *App) Publish(req PublishReq) (PublishResult, error) {
 		return res, err
 	}
 	defer unlock()
+	// A long-lived saddle picks up lint.cmd before the pre-publish gate (#336).
+	if _, err := a.ReloadTrainConfig(); err != nil {
+		return res, fmt.Errorf("reloading config: %w", err)
+	}
 	if req.Base == "" {
 		req.Base = a.Cfg.Base
+	}
+	if err := a.publishStackBase(req.Base); err != nil {
+		return res, err
 	}
 	all, err := a.landedAll()
 	if err != nil {
@@ -207,6 +218,30 @@ func (a *App) publishTarget(target string) (store.Task, bool, error) {
 		return store.Task{}, false, fmt.Errorf("%s is neither a task nor a branch", target)
 	}
 	return store.Task{}, false, nil
+}
+
+// publishStackBase refuses a --base that is a branch in the PR stack.
+// prs force-pushes each of those back to the commit the train landed, so a
+// PR merged into one is dropped on the next prs (#336, and the reset
+// TestPRMergedIntoStackedBaseGetsFreshPR keeps for #119). The supported
+// path is to publish against the configured base, or to land the work and
+// let prs and restack place it.
+func (a *App) publishStackBase(base string) error {
+	if base == "" || base == a.Cfg.Base {
+		return nil
+	}
+	stack, err := a.landedStack()
+	if err != nil {
+		return err
+	}
+	for _, l := range stack {
+		if l.Branch != base {
+			continue
+		}
+		return fmt.Errorf("publish refuses --base %s: that is %s's branch in the PR stack, and the next prs puts it back on the commit the train landed, which drops a merge into it, so nothing was pushed. Publish against %s, or land the work and let prs and restack place it",
+			base, l.ID, a.Cfg.Base)
+	}
+	return nil
 }
 
 // publishBranchOK refuses a branch publish must not push: base, the

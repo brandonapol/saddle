@@ -68,6 +68,13 @@ func (a *App) ghLookup(url string) (PRInfo, error) { return prView(a.Root, url) 
 // orchestrator hears about it once. A PR GitHub can't be asked about stays.
 // It returns what GitHub said about each PR still in the stack.
 func (a *App) ReconcileStack(lookup PRLookup) (map[string]PRInfo, error) {
+	// prs runs this before the pre-publish gate. Re-read lint.cmd here so a
+	// long-lived prs picks up an edit without a restart (#336). Land and
+	// done already reload; publish does too. Restack and the sentinel come
+	// through here as well, and only a changed file is applied.
+	if _, err := a.ReloadTrainConfig(); err != nil {
+		return nil, fmt.Errorf("reloading config: %w", err)
+	}
 	all, err := a.landedAll()
 	if err != nil {
 		return nil, err
