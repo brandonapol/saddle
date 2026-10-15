@@ -56,6 +56,7 @@ var about = map[string]string{
 	CheckTestCmd:       "the command the merge train runs before it lands a branch",
 	CheckTmux:          "runs each agent in its own hidden terminal",
 	CheckClaude:        "the Claude Code CLI the agents run in",
+	CheckAgents:        "the agent CLIs (claude, codex, grok) installed and logged in, and which one saddle up runs",
 	CheckHooks:         "git hooks that stop agents from moving saddle's own branches (saddle/*)",
 	CheckPush:          "saddle itself can push branches to the remote",
 	CheckOrchAllow:     "Claude permissions an orchestrator session needs so saddle's tools aren't blocked",

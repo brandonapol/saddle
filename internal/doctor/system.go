@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/gitx"
@@ -84,6 +85,10 @@ func (s system) ClaudeAllow() []string {
 		}
 	}
 	return out
+}
+
+func (s system) Agents(cfg config.Config) []agent.Status {
+	return agent.Availability(AgentCmds(cfg))
 }
 
 func (s system) Exists(path string) bool {

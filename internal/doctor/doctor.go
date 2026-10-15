@@ -16,6 +16,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/ghstack"
@@ -118,6 +119,9 @@ type run struct {
 	url    string // the remote's URL
 	gh     bool   // gh is installed and logged in, and saddle drives PRs with it
 	local  bool   // RunLocal: no GitHub calls
+	// agents is AgentsEnv's answer, read once when agentsRead.
+	agents     []agent.Status
+	agentsRead bool
 }
 
 // slowChecks are the checks that call GitHub, push, start the agent CLI or
@@ -150,9 +154,7 @@ func runChecks(env Env, local bool) []Result {
 		{CheckTmux, func() Result {
 			return r.tool(CheckTmux, "tmux", "-V", "install tmux (e.g. `brew install tmux` or your package manager)")
 		}},
-		{CheckClaude, func() Result {
-			return r.tool(CheckClaude, r.cfg.Claude.Cmd, "--version", "install Claude Code (https://claude.com/claude-code) or set [claude] cmd in .saddle/config.toml")
-		}},
+		{CheckClaude, r.claude},
 		{CheckHooks, r.hooks}, {CheckPush, r.push}, {CheckOrchAllow, r.orchAllow}, {CheckGate, r.gate}, {CheckIgnored, r.ignored},
 		{CheckStateDB, r.stateDB}, {CheckLeftovers, r.leftovers}, {CheckInhibit, r.inhibitor},
 	}
@@ -164,6 +166,9 @@ func runChecks(env Env, local bool) []Result {
 	}
 	for _, c := range checks {
 		add(c.name, c.run)
+	}
+	if _, ok := env.(AgentsEnv); ok {
+		add(CheckAgents, r.agentCLIs)
 	}
 	if r.wantsGrok() { // after config, which sets the harness
 		add(CheckGrok, r.grok)

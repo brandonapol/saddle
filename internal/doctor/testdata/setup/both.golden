@@ -1,0 +1,8 @@
+STATUS  CHECK         DETAIL
+ok      git provider  GitHub (github.com) via gh version 2.101.0 (2026-09-15), logged in to github.com
+ok      claude        claude 1.0.0 (fake)
+ok      agent CLIs    harness claude is ready; usable: claude
+
+Next steps:
+  saddle up           open saddle and tell the orchestrator what to work on
+  saddle up epic.md   or hand it an epic: it plans it and shows you the plan first
