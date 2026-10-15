@@ -31,6 +31,7 @@ import (
 	"github.com/brandonapol/saddle/internal/remote"
 	"github.com/brandonapol/saddle/internal/sentinel"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -128,8 +129,9 @@ Without a terminal, pass --trust (or set SADDLE_TRUST=1).`,
 }
 
 func upCmd() *cobra.Command {
-	var skipDoctor, trusted bool
+	var skipDoctor, trusted, traceStartup bool
 	var wantsRC func(*app.App) bool
+	var trace *startupTrace
 	cmd := &cobra.Command{
 		Use:   "up [claude|grok|codex] [epic-file|-]",
 		Short: "Open the Saddle TUI: chat with the orchestrator, watch your agents",
@@ -151,6 +153,7 @@ keep the CLI they were spawned with.
   saddle up --rc         orchestrator under Claude Code Remote Control`,
 		Args: cobra.MaximumNArgs(2),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
+			trace = newStartupTrace(traceStartup, os.Getenv(traceStartupEnv))
 			harness, _, err := parseUpArgs(args)
 			if err != nil {
 				return err
@@ -158,9 +161,13 @@ keep the CLI they were spawned with.
 			if err := applyUpHarness(harness); err != nil {
 				return err
 			}
-			return upTrustErr(gateTrust(cmd.OutOrStdout(), cmd.InOrStdin(), trusted))
+			err = upTrustErr(gateTrust(cmd.OutOrStdout(), cmd.InOrStdin(), trusted))
+			trace.Mark("args, trust")
+			return err
 		},
 		RunE: withScratch(func(cmd *cobra.Command, a *app.App, args []string) error {
+			defer trace.Write(cmd.ErrOrStderr())
+			trace.Mark("config, state.db open")
 			// Local setup first (#163), so the doctor only stops up for what
 			// needs the user. PreRunE already checked the repo is trusted.
 			steps, err := initcmd.Ensure(a.Root, a.Init)
@@ -168,14 +175,15 @@ keep the CLI they were spawned with.
 				return err
 			}
 			initcmd.Report(cmd.OutOrStdout(), steps)
+			trace.Mark("saddle init")
+			// Only the local checks stop up before its first frame; the
+			// slow ones run after it and open a card if they fail (#635).
 			if err := upDoctor(cmd.OutOrStdout(), skipDoctor, upDoctorTimeout, func() []doctor.Result {
-				return doctor.Run(doctor.System(a.Root))
+				return doctor.RunLocal(doctor.System(a.Root))
 			}); err != nil {
 				return err
 			}
-			if err := a.CheckMergeSettings(cmd.ErrOrStderr()); err != nil {
-				return err
-			}
+			trace.Mark("doctor (local checks)")
 			rc := wantsRC(a)
 			release, err := a.AcquireLock(upLock(rc))
 			if err != nil {
@@ -184,13 +192,9 @@ keep the CLI they were spawned with.
 			defer release()
 			// Lets other commands spot a stale saddle up (#326).
 			defer recordUp(a.Root)()
+			trace.Mark("engine lock")
 			a.CleanStaleLeases(cmd.ErrOrStderr()) // heavy-run leases a crash left behind (#238)
-			if !skipDoctor {
-				upPredict(a, upPredictTimeout, upPredictSystem(a)) // one card, in the background (#408)
-			}
-			if warn := a.LocalBaseBehind(); warn != "" {
-				fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+warn)
-			}
+			trace.Mark("stale leases")
 			first := ""
 			if _, epic, _ := parseUpArgs(args); epic != "" {
 				b, err := readArg(epic)
@@ -202,9 +206,29 @@ keep the CLI they were spawned with.
 			term := make(chan os.Signal, 1)
 			signal.Notify(term, syscall.SIGTERM) // Bubble Tea quits on it too
 			defer signal.Stop(term)
-			stop := startWatchers(cmd.Context(), a)
-			err = runUpTUI(cmd.Context(), cmd.OutOrStdout(), a, first, rc)
-			stop()
+			ctx, cancel := context.WithCancel(cmd.Context())
+			defer cancel()
+			var watchers lazyStart
+			painted := func() {
+				trace.Mark(stageFirstFrame)
+				// Everything below waited for the first frame (#635).
+				upDeferred{
+					a: a, trace: trace, skipDoctor: skipDoctor, timeout: upDeferredTimeout,
+					doctor:     func() []doctor.Result { return doctor.Run(doctor.System(a.Root)) },
+					merge:      func() error { return a.CheckMergeSettings(io.Discard) },
+					baseBehind: a.LocalBaseBehind,
+				}.run(ctx)
+				if !skipDoctor {
+					upPredict(a, upPredictTimeout, upPredictSystem(a)) // one card, in the background (#408)
+				}
+				watchers.Start(func() func() {
+					defer trace.Span("watchers start")()
+					return startWatchers(ctx, a)
+				})
+			}
+			trace.Mark("before TUI")
+			err = runUpTUI(ctx, cmd.OutOrStdout(), a, first, rc, tui.WithFirstFrame(painted))
+			watchers.Stop()
 			if paused, perr := pauseOnTerm(term, a); perr != nil || paused != nil {
 				writePaused(cmd.OutOrStdout(), paused)
 				return errors.Join(err, perr)
@@ -218,6 +242,7 @@ keep the CLI they were spawned with.
 	}
 	cmd.Flags().BoolVar(&skipDoctor, "skip-doctor", false, "start without running the doctor checks")
 	cmd.Flags().BoolVar(&trusted, "trust", false, "trust this repo without asking (remembered; see saddle trust)")
+	cmd.Flags().BoolVar(&traceStartup, "trace-startup", false, "print how long each startup stage took when up exits ("+traceStartupEnv+"=1 too; ="+"<path> also appends each stage to that file as it happens)")
 	wantsRC = addRCFlag(cmd)
 	return cmd
 }
