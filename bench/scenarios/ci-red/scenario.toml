@@ -1,0 +1,55 @@
+description = "One ticket changes ledger, the bottom of a stack. The next stacks on it with After and imports ledger, so a red check on the lower layer holds it."
+overlap = "medium"
+safe_parallelism = 2
+
+[[ticket]]
+file = "01-mark-posting.md"
+
+[[ticket.edit]]
+path = "ledger/post.go"
+old = '''
+	return name + ": " + strconv.Itoa(amount)
+'''
+new = '''
+	return "posted " + name + ": " + strconv.Itoa(amount)
+'''
+
+[[ticket.edit]]
+path = "ledger/post_test.go"
+old = '''
+	if got := Post("ada", 3); got != "ada: 3" {
+'''
+new = '''
+	if got := Post("ada", 3); got != "posted ada: 3" {
+'''
+
+[[ticket]]
+file = "02-audit-check.md"
+
+[[ticket.edit]]
+path = "audit/check.go"
+new = '''
+// Package audit reads postings. It stacks on the ledger change.
+package audit
+
+import "benchfixture/ledger"
+
+// Check returns the statement line for a posting.
+func Check(name string, amount int) string {
+	return ledger.View(name, amount)
+}
+'''
+
+[[ticket.edit]]
+path = "audit/check_test.go"
+new = '''
+package audit
+
+import "testing"
+
+func TestCheck(t *testing.T) {
+	if got := Check("ada", 3); got == "" {
+		t.Fatal("Check returned nothing")
+	}
+}
+'''

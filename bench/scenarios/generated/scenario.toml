@@ -1,0 +1,49 @@
+description = "Two tickets each add a message name to codec.Spec and to the generated mirror. Both rewrite the same generated variable."
+overlap = "critical"
+safe_parallelism = 1
+
+[[ticket]]
+file = "01-pong.md"
+
+[[ticket.edit]]
+path = "codec/spec.go"
+old = '''
+	// spec end
+'''
+new = '''
+	"pong",
+	// spec end
+'''
+
+[[ticket.edit]]
+path = "codec/spec_gen.go"
+old = '''
+	// generated end
+'''
+new = '''
+	"pong",
+	// generated end
+'''
+
+[[ticket]]
+file = "02-ack.md"
+
+[[ticket.edit]]
+path = "codec/spec.go"
+old = '''
+	// spec end
+'''
+new = '''
+	"ack",
+	// spec end
+'''
+
+[[ticket.edit]]
+path = "codec/spec_gen.go"
+old = '''
+	// generated end
+'''
+new = '''
+	"ack",
+	// generated end
+'''

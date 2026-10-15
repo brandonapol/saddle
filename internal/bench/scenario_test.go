@@ -17,8 +17,8 @@ func scenarios(t *testing.T) []*Scenario {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(names) < 4 {
-		t.Fatalf("scenarios = %v, want at least 4", names)
+	if len(names) < 10 {
+		t.Fatalf("scenarios = %v, want at least 10", names)
 	}
 	var out []*Scenario
 	for _, n := range names {
@@ -87,6 +87,61 @@ func TestEachTicketAlonePasses(t *testing.T) {
 	}
 }
 
+// TestFourRemainingScenarios is #605 part 2: the four shapes #599 listed
+// after the first six. TestScenarioOverlapMatchesForecast and
+// TestEachTicketAlonePasses gate every scenario those names load.
+func TestFourRemainingScenarios(t *testing.T) {
+	names, err := List(benchDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]bool{}
+	for _, n := range names {
+		have[n] = true
+	}
+	for _, name := range []string{"signature", "ci-red", "generated", "serial"} {
+		if !have[name] {
+			t.Errorf("missing scenario %s (have %v)", name, names)
+			continue
+		}
+		if _, err := Load(benchDir, name); err != nil {
+			t.Errorf("scenario %s: %v", name, err)
+		}
+	}
+}
+
+// TestSignatureScenarioBreaksWhenCombined is the stale assumption: each
+// signature ticket passes on its own (TestEachTicketAlonePasses), and the
+// two together do not.
+func TestSignatureScenarioBreaksWhenCombined(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go test on the combined edits")
+	}
+	sc, err := Load(benchDir, "signature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := CopyFixture(FixtureDir(benchDir), dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, tk := range sc.Tickets {
+		c := Apply(DirTree(dir), tk.Edits)
+		if len(c.Stale) > 0 || len(c.Followed) > 0 {
+			t.Fatalf("%s: edits don't apply on top of the earlier tickets: stale %v, followed %v", tk.Key(), c.Stale, c.Followed)
+		}
+		if err := c.WriteTo(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("go", "test", "./...")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "units.Scale") {
+		t.Fatalf("signature tickets together should fail to compile units.Scale: %v\n%s", err, out)
+	}
+}
+
 func TestScenarioOverlapMatchesForecast(t *testing.T) {
 	for _, sc := range scenarios(t) {
 		p := MakePlan(DirTree(FixtureDir(benchDir)), sc)
@@ -127,5 +182,31 @@ func TestSplitTitle(t *testing.T) {
 	title, body := splitTitle("# Do it\n\nclaims: a/**\n")
 	if title != "Do it" || body != "claims: a/**\n" {
 		t.Fatalf("splitTitle = %q, %q", title, body)
+	}
+}
+
+// TestMakefileE2ERunsBench locks #605 part 1: TestBenchRunsControlAndACollision
+// is an e2e test in this package, so make test/e2e has to start it.
+func TestMakefileE2ERunsBench(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recipe strings.Builder
+	in := false
+	for _, line := range strings.Split(string(b), "\n") {
+		switch {
+		case strings.HasPrefix(line, "test/e2e:"):
+			in = true
+		case in && line != "" && !strings.HasPrefix(line, "\t") && !strings.HasPrefix(line, "#"):
+			in = false
+		}
+		if in {
+			recipe.WriteString(line)
+			recipe.WriteByte('\n')
+		}
+	}
+	if !strings.Contains(recipe.String(), "./internal/bench/...") {
+		t.Fatalf("make test/e2e does not run ./internal/bench/...:\n%s", recipe.String())
 	}
 }

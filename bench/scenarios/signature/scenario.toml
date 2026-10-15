@@ -1,0 +1,72 @@
+description = "One ticket changes units.Scale's signature and updates its caller. Another adds a caller still written against the old signature. Each passes alone; together the build breaks."
+overlap = "medium"
+safe_parallelism = 1
+
+[[ticket]]
+file = "01-scale-unit.md"
+
+[[ticket.edit]]
+path = "units/scale.go"
+old = '''
+// Scale multiplies v by n.
+func Scale(v, n int) int {
+	return v * n
+}
+'''
+new = '''
+// Scale multiplies v by 2 when unit is "double", and returns v otherwise.
+func Scale(v int, unit string) int {
+	if unit == "double" {
+		return v * 2
+	}
+	return v
+}
+'''
+
+[[ticket.edit]]
+path = "units/scale_test.go"
+old = '''
+	if got := Scale(3, 2); got != 6 {
+'''
+new = '''
+	if got := Scale(3, "double"); got != 6 {
+'''
+
+[[ticket.edit]]
+path = "label/label.go"
+old = '''
+	return fmt.Sprintf("%s %d", name, units.Scale(v, 2))
+'''
+new = '''
+	return fmt.Sprintf("%s %d", name, units.Scale(v, "double"))
+'''
+
+[[ticket]]
+file = "02-twice.md"
+
+[[ticket.edit]]
+path = "extra/twice.go"
+new = '''
+package extra
+
+import "benchfixture/units"
+
+// Twice is v scaled by 2, using the signature Scale had when this was written.
+func Twice(v int) int {
+	return units.Scale(v, 2)
+}
+'''
+
+[[ticket.edit]]
+path = "extra/twice_test.go"
+new = '''
+package extra
+
+import "testing"
+
+func TestTwice(t *testing.T) {
+	if got := Twice(3); got != 6 {
+		t.Fatalf("Twice = %d", got)
+	}
+}
+'''
