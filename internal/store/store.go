@@ -164,6 +164,9 @@ CREATE TABLE triage_calls(
 );
 `, `
 ALTER TABLE tasks ADD COLUMN adapter TEXT NOT NULL DEFAULT '';
+`, `
+CREATE TABLE symbol_claims(task TEXT NOT NULL, path TEXT NOT NULL, symbol TEXT NOT NULL, kind TEXT NOT NULL, PRIMARY KEY(task, path, symbol, kind));
+CREATE INDEX symbol_claims_path ON symbol_claims(path);
 `}
 
 // Open opens (creating if needed) the database at path and applies migrations,

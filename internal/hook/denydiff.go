@@ -31,6 +31,13 @@ var diffTimeout = 200 * time.Millisecond
 // committed and dirty, or a note that the owner hasn't touched it yet. It is
 // "" when no other task claims the file or the diff can't be had in time.
 func ownerDiff(a *app.App, task, abs string) string {
+	return denyDiff(a, task, abs, "")
+}
+
+// denyDiff is ownerDiff for the task a deny names: owner when set (a symbol
+// deny names the task whose edit it overlaps, #591, which need not hold the
+// path claim), else the file's path-claim owner.
+func denyDiff(a *app.App, task, abs, owner string) string {
 	t, err := a.Store.Task(task)
 	if err != nil {
 		return ""
@@ -40,11 +47,13 @@ func ownerDiff(a *app.App, task, abs string) string {
 		return ""
 	}
 	rel = filepath.ToSlash(rel)
-	all, err := a.Store.Claims()
-	if err != nil {
-		return ""
+	if owner == "" || owner == task {
+		all, err := a.Store.Claims()
+		if err != nil {
+			return ""
+		}
+		owner, _ = claims.Owner(all, task, rel)
 	}
-	owner, _ := claims.Owner(all, task, rel)
 	if owner == "" {
 		return ""
 	}
