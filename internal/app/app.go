@@ -169,7 +169,8 @@ type SpawnReq struct {
 	Needs []string
 	Force bool // ignore claim conflicts, the concurrency cap and paused launches
 	// Confirm goes ahead when every claim covers work landed or queued tasks
-	// already changed. Without it such a spawn returns ErrNeedsConfirm.
+	// already changed. Without it such a spawn returns ErrNeedsConfirm, unless
+	// it carries an Issue: a ticket of its own is new work (#604).
 	Confirm bool
 }
 
@@ -284,7 +285,7 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 			return t, a.conflictErr(c)
 		}
 	}
-	if len(r.Claims) > 0 && !r.Force && !r.Confirm {
+	if len(r.Claims) > 0 && !r.Force && !r.Confirm && r.Issue == 0 {
 		if err := a.checkNewWork(r.Claims); err != nil {
 			return t, err
 		}

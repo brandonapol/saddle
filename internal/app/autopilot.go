@@ -63,6 +63,9 @@ func (a *App) agentRules() string {
 type autopilotEnv struct {
 	a     *App
 	ready ReadyIssues
+	// asked holds the tickets whose ErrNeedsConfirm already reached the
+	// orchestrator, so a refusal repeated every tick surfaces once (#604).
+	asked map[string]bool
 }
 
 func (e *autopilotEnv) Tasks() ([]autopilot.Task, error) {
@@ -184,8 +187,28 @@ func (e *autopilotEnv) Spawn(r autopilot.SpawnReq) (string, error) {
 		return "", fmt.Errorf("%w: %v", autopilot.ErrPaused, err)
 	case err != nil && (strings.Contains(err.Error(), "at concurrency cap") || errors.Is(err, ErrBackpressure)):
 		return "", fmt.Errorf("%w: %v", autopilot.ErrAtCap, err)
+	case errors.Is(err, ErrNeedsConfirm):
+		e.askConfirm(r, err)
 	}
 	return t.ID, err
+}
+
+// askConfirm tells the orchestrator, once per ticket, that autopilot can't
+// start it until someone confirms: autopilot never answers the #340 guard
+// itself, and a refusal it only logged would loop silently (#119).
+func (e *autopilotEnv) askConfirm(r autopilot.SpawnReq, err error) {
+	key := r.Title
+	if r.Issue > 0 {
+		key = "#" + strconv.Itoa(r.Issue)
+	}
+	if e.asked[key] {
+		return
+	}
+	if e.asked == nil {
+		e.asked = map[string]bool{}
+	}
+	e.asked[key] = true
+	e.Notify(true, fmt.Sprintf("Autopilot can't start %q: %v. Spawn it yourself with confirm=true if it is new work, or drop it from the ready queue.", r.Title, err))
 }
 
 // Nudge types into the orchestrator's input the way compaction does: only
