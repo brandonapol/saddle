@@ -1,7 +1,7 @@
 // Package ciwatch polls CI status for open saddle PRs and reports changes.
 //
-// It shells out to the gh CLI: one `gh pr checks` call per target per poll,
-// plus one `gh run view --log-failed` for each check that newly fails. It
+// It asks the forge (forge.Forge): one Checks call per target per poll, plus
+// one FailedLog for each check that newly fails. It
 // remembers the last state of every check and emits an Event only when a
 // check turns red or goes back to green, so a poll that sees nothing new is
 // silent.
@@ -12,6 +12,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 // Target is one PR or branch to watch. Task is the saddle task that owns the
@@ -19,11 +21,12 @@ import (
 type Target struct {
 	Task   string
 	Branch string
-	// PR is a PR number or URL. When empty, gh resolves the PR from Branch.
+	// PR is a PR number or URL. When empty, the forge resolves the PR from
+	// Branch.
 	PR string
 }
 
-// Ref is what gh is asked about: the PR when known, else the branch.
+// Ref is what the forge is asked about: the PR when known, else the branch.
 func (t Target) Ref() string {
 	if t.PR != "" {
 		return t.PR
@@ -31,11 +34,11 @@ func (t Target) Ref() string {
 	return t.Branch
 }
 
-// Check is one CI check on a PR, as gh reports it.
+// Check is one CI check on a PR, as the forge reports it.
 type Check struct {
 	Name     string
 	Workflow string
-	// Bucket is gh's coarse state: pass, fail, pending, skipping or cancel.
+	// Bucket is the coarse state: pass, fail, pending, skipping or cancel.
 	Bucket string
 	// Link is the check's details URL; for GitHub Actions, the job page.
 	Link string
@@ -49,7 +52,7 @@ func (c Check) Label() string {
 	return c.Workflow + " / " + c.Name
 }
 
-// Gh buckets.
+// Buckets.
 const (
 	BucketPass = "pass"
 	BucketFail = "fail"
@@ -82,8 +85,8 @@ type Failed struct {
 	RunURL string
 	// Step is the last step name in the failed log, when known.
 	Step string
-	// LogTail is the end of the failed job's log, with gh's job and timestamp
-	// columns stripped. Empty for non-Actions checks or when the fetch failed.
+	// LogTail is the end of the failed job's log as plain text. Empty for
+	// checks that aren't CI jobs or when the fetch failed.
 	LogTail string
 	// LogErr is set when the log could not be fetched.
 	LogErr string
@@ -95,15 +98,17 @@ type Recovered struct {
 	Check Check
 }
 
-// Runner runs gh with args and returns its stdout. On a non-zero exit it
-// returns whatever stdout it got and an error that includes stderr; gh
-// pr checks exits non-zero while still printing JSON (8 means pending).
-type Runner func(ctx context.Context, args ...string) (string, error)
+// CI is the part of the forge the watcher reads; forge.Forge is one.
+type CI interface {
+	Checks(ctx context.Context, ref string) ([]forge.CICheck, error)
+	FailedLog(ctx context.Context, link string, lines int) (forge.JobLog, error)
+}
 
 // Config configures a Watcher.
 type Config struct {
-	// GH runs the gh CLI. Required; ExecRunner is the real one.
-	GH Runner
+	// CI is the forge. Required. One that returns forge.ErrUnsupported
+	// watches nothing and reports no errors.
+	CI CI
 	// Targets lists what to watch, read fresh on every poll so landed and
 	// closed PRs come and go. Required.
 	Targets func(ctx context.Context) ([]Target, error)
@@ -111,9 +116,9 @@ type Config struct {
 	Interval time.Duration
 	// LogLines is how many lines of a failed log to keep. Default 40.
 	LogLines int
-	// OnError receives gh and Targets errors. The target is zero for a
-	// Targets error. Nil drops them. A target whose gh call fails keeps its
-	// previous state, so a flaky gh never reads as a recovery.
+	// OnError receives forge and Targets errors. The target is zero for a
+	// Targets error. Nil drops them. A target whose forge call fails keeps
+	// its previous state, so a flaky forge never reads as a recovery.
 	OnError func(t Target, err error)
 	// Now is the clock. Default time.Now.
 	Now func() time.Time
@@ -136,8 +141,8 @@ type Seen struct {
 
 // New returns a Watcher with no remembered state.
 func New(cfg Config) (*Watcher, error) {
-	if cfg.GH == nil || cfg.Targets == nil {
-		return nil, errors.New("ciwatch: GH and Targets are required")
+	if cfg.CI == nil || cfg.Targets == nil {
+		return nil, errors.New("ciwatch: CI and Targets are required")
 	}
 	if cfg.Interval <= 0 {
 		cfg.Interval = 10 * time.Minute
@@ -188,10 +193,17 @@ func (w *Watcher) Poll(ctx context.Context) []Event {
 			continue
 		}
 		live[ref] = true
-		checks, err := prChecks(ctx, w.cfg.GH, ref)
+		cs, err := w.cfg.CI.Checks(ctx, ref)
+		if errors.Is(err, forge.ErrUnsupported) {
+			continue
+		}
 		if err != nil {
 			w.fail(t, err)
 			continue
+		}
+		checks := make([]Check, len(cs))
+		for i, c := range cs {
+			checks[i] = Check(c)
 		}
 		out = append(out, w.diff(ctx, t, checks)...)
 	}
@@ -239,17 +251,17 @@ func (w *Watcher) diff(ctx context.Context, t Target, checks []Check) []Event {
 
 func (w *Watcher) failed(ctx context.Context, o Origin, c Check) Failed {
 	f := Failed{Origin: o, Check: c, RunURL: c.Link}
-	run, job, ok := parseJobLink(c.Link)
-	if !ok {
-		return f
+	l, err := w.cfg.CI.FailedLog(ctx, c.Link, w.cfg.LogLines)
+	if l.Run != "" {
+		f.RunURL = l.Run
 	}
-	f.RunURL = run
-	log, err := w.cfg.GH(ctx, "run", "view", "--job", job, "--log-failed")
-	if err != nil && log == "" {
+	switch {
+	case errors.Is(err, forge.ErrUnsupported):
+	case err != nil:
 		f.LogErr = err.Error()
-		return f
+	default:
+		f.Step, f.LogTail = l.Step, l.Tail
 	}
-	f.Step, f.LogTail = cleanLog(log, w.cfg.LogLines)
 	return f
 }
 

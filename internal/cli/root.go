@@ -19,7 +19,6 @@ import (
 
 	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
-	"github.com/brandonapol/saddle/internal/ciwatch"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/doctor"
 	"github.com/brandonapol/saddle/internal/gitx"
@@ -246,7 +245,7 @@ func startWatchers(ctx context.Context, a *app.App) (stop func()) {
 	wg.Go(func() { remote.RunManaged(ctx, a, nil) })     // serves remote control only when [remote] is enabled in the user config (#251); problems are events
 	if !a.Cfg.CI.Disabled {
 		wg.Go(func() { _ = sentinel.NewCIRed(a).Run(ctx) }) // holds layers above red CI; errors are events
-		if ci, err := a.NewCIWatcher(ciwatch.ExecRunner(a.Root)); err == nil {
+		if ci, err := a.NewCIWatcher(nil); err == nil {
 			wg.Go(func() { ci.Run(ctx) }) // gh errors are recorded as events
 		}
 	}

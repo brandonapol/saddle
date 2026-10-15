@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/app"
-	"github.com/brandonapol/saddle/internal/ciwatch"
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/sweeper"
 	"github.com/spf13/cobra"
 )
@@ -28,7 +28,7 @@ Off until [sweeper] enabled = true in .saddle/config.toml. --dry-run always
 works and only reports.`,
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
 			return runSweep(cmd.Context(), cmd.OutOrStdout(), a.Cfg, dryRun,
-				sweeper.Runner(ciwatch.ExecRunner(a.Root)), sweepLogger(a))
+				sweeper.Runner(forge.CLI(a.Root, forge.GH)), sweepLogger(a))
 		}),
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report what would happen; merge, retarget and label nothing")

@@ -11,6 +11,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/ciwatch"
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -29,7 +30,7 @@ const (
 // CIRed watches the CI of every stacked PR.
 type CIRed struct {
 	App *app.App
-	GH  ciwatch.Runner
+	GH  forge.Runner
 	// Interval is the wait after a cycle that saw something red or changing;
 	// MaxInterval caps the backoff while all is quiet.
 	Interval, MaxInterval time.Duration
@@ -44,7 +45,7 @@ type CIRed struct {
 
 // NewCIRed returns the ci-red watcher for a, talking to GitHub through gh.
 func NewCIRed(a *app.App) *CIRed {
-	return &CIRed{App: a, GH: ciwatch.ExecRunner(a.Root), Interval: a.Cfg.CI.RedInterval, MaxInterval: a.Cfg.CI.RedMaxInterval}
+	return &CIRed{App: a, GH: forge.CLI(a.Root, forge.GH), Interval: a.Cfg.CI.RedInterval, MaxInterval: a.Cfg.CI.RedMaxInterval}
 }
 
 // CIRedReport is what one ci-red cycle found.

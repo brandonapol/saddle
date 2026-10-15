@@ -3,10 +3,11 @@ package ciwatch
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 const (
@@ -15,29 +16,40 @@ const (
 	runURL   = "https://github.com/o/r/actions/runs/100"
 )
 
-// fakeGH answers gh calls from a table keyed by the joined args and records
-// every call.
-type fakeGH struct {
-	out   map[string]string
-	errs  map[string]error
-	calls []string
+// fakeCI answers Checks by ref and FailedLog by link, and records every call
+// as "checks REF" or "log LINK".
+type fakeCI struct {
+	out     map[string][]forge.CICheck
+	errs    map[string]error
+	logs    map[string]forge.JobLog
+	logErrs map[string]error
+	calls   []string
 }
 
-func newFake() *fakeGH {
-	return &fakeGH{out: map[string]string{}, errs: map[string]error{}}
+func newFake() *fakeCI {
+	return &fakeCI{out: map[string][]forge.CICheck{}, errs: map[string]error{},
+		logs: map[string]forge.JobLog{}, logErrs: map[string]error{}}
 }
 
-func (f *fakeGH) run(_ context.Context, args ...string) (string, error) {
-	k := strings.Join(args, " ")
-	f.calls = append(f.calls, k)
-	return f.out[k], f.errs[k]
+func (f *fakeCI) Checks(_ context.Context, ref string) ([]forge.CICheck, error) {
+	f.calls = append(f.calls, "checks "+ref)
+	return f.out[ref], f.errs[ref]
 }
 
-func (f *fakeGH) checks(ref, json string) {
-	f.out["pr checks "+ref+" --json name,workflow,bucket,link"] = json
+// FailedLog returns the log set for link; any other job link is its run with
+// no log, and anything else comes back as it is.
+func (f *fakeCI) FailedLog(_ context.Context, link string, _ int) (forge.JobLog, error) {
+	f.calls = append(f.calls, "log "+link)
+	if l, ok := f.logs[link]; ok {
+		return l, f.logErrs[link]
+	}
+	run, _, _ := strings.Cut(link, "/job/")
+	return forge.JobLog{Run: run}, f.logErrs[link]
 }
 
-func (f *fakeGH) count(prefix string) int {
+func (f *fakeCI) checks(ref string, cs []forge.CICheck) { f.out[ref] = cs }
+
+func (f *fakeCI) count(prefix string) int {
 	n := 0
 	for _, c := range f.calls {
 		if strings.HasPrefix(c, prefix) {
@@ -47,16 +59,16 @@ func (f *fakeGH) count(prefix string) int {
 	return n
 }
 
-func check(bucket, link string) string {
-	return fmt.Sprintf(`[{"name":"test","workflow":"ci","bucket":%q,"link":%q},`+
-		`{"name":"GitGuardian","workflow":"","bucket":"pass","link":"https://dashboard.gitguardian.com"}]`, bucket, link)
+func check(bucket, link string) []forge.CICheck {
+	return []forge.CICheck{{Name: "test", Workflow: "ci", Bucket: bucket, Link: link},
+		{Name: "GitGuardian", Bucket: "pass", Link: "https://dashboard.gitguardian.com"}}
 }
 
-func newWatcher(t *testing.T, gh *fakeGH, targets ...Target) (*Watcher, *[]error) {
+func newWatcher(t *testing.T, gh *fakeCI, targets ...Target) (*Watcher, *[]error) {
 	t.Helper()
 	var errs []error
 	w, err := New(Config{
-		GH:      gh.run,
+		CI:      gh,
 		Targets: func(context.Context) ([]Target, error) { return targets, nil },
 		OnError: func(_ Target, err error) { errs = append(errs, err) },
 		Now:     func() time.Time { return time.Unix(0, 0) },
@@ -72,10 +84,8 @@ var t4 = Target{Task: "t4", Branch: "saddle/t4-ci", PR: "60"}
 func TestNewFailure(t *testing.T) {
 	gh := newFake()
 	gh.checks("60", check("fail", jobLink))
-	gh.out["run view --job 200 --log-failed"] = "" +
-		"test\tSet up job\t2026-10-01T17:03:01.0000000Z starting\n" +
-		"test\tRun go test\t2026-10-01T17:03:02.0529854Z --- FAIL: TestX\n" +
-		"test\tRun go test\t2026-10-01T17:03:02.0539712Z ##[error]Process completed with exit code 1.\n"
+	gh.logs[jobLink] = forge.JobLog{Run: runURL, Step: "Run go test",
+		Tail: "starting\n--- FAIL: TestX\n##[error]Process completed with exit code 1."}
 	w, errs := newWatcher(t, gh, t4)
 
 	evs := w.Poll(context.Background())
@@ -122,10 +132,10 @@ func TestRepeatedFailureIsQuiet(t *testing.T) {
 		}
 	}
 	// One checks call per poll, one log fetch in total.
-	if n := gh.count("pr checks"); n != 4 {
-		t.Errorf("pr checks calls = %d, want 4", n)
+	if n := gh.count("checks"); n != 4 {
+		t.Errorf("checks calls = %d, want 4", n)
 	}
-	if n := gh.count("run view"); n != 1 {
+	if n := gh.count("log"); n != 1 {
 		t.Errorf("log fetches = %d, want 1", n)
 	}
 
@@ -194,10 +204,10 @@ func TestGHErrors(t *testing.T) {
 	ctx := context.Background()
 	w.Poll(ctx)
 
-	// A failing gh call is reported and leaves the state alone: no
-	// recovery, and no duplicate failure once gh works again.
-	key := "pr checks 60 --json name,workflow,bucket,link"
-	gh.out[key], gh.errs[key] = "", errors.New("gh pr checks: exit status 1: HTTP 502")
+	// A failing forge call is reported and leaves the state alone: no
+	// recovery, and no duplicate failure once the forge works again.
+	key := "60"
+	gh.out[key], gh.errs[key] = nil, errors.New("gh pr checks: exit status 1: HTTP 502")
 	if evs := w.Poll(ctx); len(evs) != 0 {
 		t.Fatalf("gh error: %#v", evs)
 	}
@@ -210,38 +220,29 @@ func TestGHErrors(t *testing.T) {
 		t.Fatalf("after gh error: %#v", evs)
 	}
 
-	// Garbage output with a zero exit is an error too.
-	gh.checks("60", "[not json")
-	w.Poll(ctx)
-	if len(*errs) != 2 {
-		t.Fatalf("errors = %v", *errs)
-	}
 }
 
-func TestNonZeroExitWithJSON(t *testing.T) {
-	// gh exits 8 for pending checks but still prints them.
-	gh := newFake()
-	gh.checks("60", check("fail", jobLink))
-	gh.errs["pr checks 60 --json name,workflow,bucket,link"] = errors.New("exit status 8")
-	w, errs := newWatcher(t, gh, t4)
-	if evs := w.Poll(context.Background()); len(evs) != 1 || len(*errs) != 0 {
-		t.Fatalf("events=%#v errors=%v", evs, *errs)
+// TestUnsupportedForgeIsQuiet: a forge without CI ([forge] cli = "none")
+// watches nothing and reports no errors.
+func TestUnsupportedForgeIsQuiet(t *testing.T) {
+	var errs []error
+	w, err := New(Config{
+		CI:      forge.Unsupported{Reason: "local-only"},
+		Targets: func(context.Context) ([]Target, error) { return []Target{t4}, nil },
+		OnError: func(_ Target, err error) { errs = append(errs, err) },
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestNoChecksReported(t *testing.T) {
-	gh := newFake()
-	gh.errs["pr checks saddle/t9 --json name,workflow,bucket,link"] = errors.New("gh pr checks: exit status 1: no checks reported on the 'saddle/t9' branch")
-	w, errs := newWatcher(t, gh, Target{Task: "t9", Branch: "saddle/t9"})
-	if evs := w.Poll(context.Background()); len(evs) != 0 || len(*errs) != 0 {
-		t.Fatalf("events=%#v errors=%v", evs, *errs)
+	if evs := w.Poll(context.Background()); len(evs) != 0 || len(errs) != 0 {
+		t.Fatalf("events=%#v errors=%v", evs, errs)
 	}
 }
 
 func TestLogFetchError(t *testing.T) {
 	gh := newFake()
 	gh.checks("60", check("fail", jobLink))
-	gh.errs["run view --job 200 --log-failed"] = errors.New("log not found")
+	gh.logErrs[jobLink] = errors.New("log not found")
 	w, _ := newWatcher(t, gh, t4)
 	evs := w.Poll(context.Background())
 	if len(evs) != 1 {
@@ -253,16 +254,13 @@ func TestLogFetchError(t *testing.T) {
 	}
 }
 
-func TestNonActionsCheckSkipsLog(t *testing.T) {
+func TestNonActionsCheckHasNoLog(t *testing.T) {
 	gh := newFake()
-	gh.checks("60", `[{"name":"GitGuardian","bucket":"fail","link":"https://dashboard.gitguardian.com"}]`)
+	gh.checks("60", []forge.CICheck{{Name: "GitGuardian", Bucket: "fail", Link: "https://dashboard.gitguardian.com"}})
 	w, _ := newWatcher(t, gh, t4)
 	evs := w.Poll(context.Background())
-	if len(evs) != 1 || evs[0].(Failed).RunURL != "https://dashboard.gitguardian.com" {
+	if len(evs) != 1 || evs[0].(Failed).RunURL != "https://dashboard.gitguardian.com" || evs[0].(Failed).LogErr != "" {
 		t.Fatalf("%#v", evs)
-	}
-	if n := gh.count("run view"); n != 0 {
-		t.Errorf("log fetches = %d, want 0", n)
 	}
 }
 
@@ -273,7 +271,7 @@ func TestTargetsErrorAndPruning(t *testing.T) {
 	var tErr error
 	var errs []error
 	w, err := New(Config{
-		GH:      gh.run,
+		CI:      gh,
 		Targets: func(context.Context) ([]Target, error) { return targets, tErr },
 		OnError: func(_ Target, err error) { errs = append(errs, err) },
 	})
@@ -316,7 +314,7 @@ func TestRunPollsUntilCancelled(t *testing.T) {
 	gh := newFake()
 	gh.checks("60", check("fail", jobLink))
 	w, err := New(Config{
-		GH:       gh.run,
+		CI:       gh,
 		Targets:  func(context.Context) ([]Target, error) { return []Target{t4}, nil },
 		Interval: time.Millisecond,
 	})
@@ -354,16 +352,6 @@ func TestRunPollsUntilCancelled(t *testing.T) {
 func TestNewRequiresConfig(t *testing.T) {
 	if _, err := New(Config{}); err == nil {
 		t.Fatal("want error")
-	}
-}
-
-func TestParseJobLink(t *testing.T) {
-	run, job, ok := parseJobLink("https://github.com/o/r/actions/runs/100/attempts/2/job/200")
-	if !ok || run != runURL || job != "200" {
-		t.Fatalf("%q %q %v", run, job, ok)
-	}
-	if _, _, ok := parseJobLink("https://example.com/x"); ok {
-		t.Fatal("matched a non-Actions link")
 	}
 }
 

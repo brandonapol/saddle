@@ -30,11 +30,14 @@ type CIWatcher struct {
 	w *ciwatch.Watcher
 }
 
-// NewCIWatcher returns a watcher that runs gh through gh (ciwatch.ExecRunner
-// for the real one) and picks up any state saved by an earlier one.
-func (a *App) NewCIWatcher(gh ciwatch.Runner) (*CIWatcher, error) {
+// NewCIWatcher returns a watcher that reads CI through ci (nil is the repo's
+// forge) and picks up any state saved by an earlier one.
+func (a *App) NewCIWatcher(ci ciwatch.CI) (*CIWatcher, error) {
+	if ci == nil {
+		ci = a.Forge()
+	}
 	w, err := ciwatch.New(ciwatch.Config{
-		GH:       gh,
+		CI:       ci,
 		Targets:  a.CITargets,
 		Interval: a.Cfg.CI.Interval,
 		OnError: func(t ciwatch.Target, err error) {
