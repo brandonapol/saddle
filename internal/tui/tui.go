@@ -98,11 +98,13 @@ type attention struct {
 }
 
 type model struct {
-	app     *app.App
-	launch  agent.Launch
-	proc    orchProc
-	resumed bool // the current process was started with --resume
-	gotInit bool
+	app *app.App
+	// firstFrame runs once, when View first lays out a frame (#635).
+	firstFrame func()
+	launch     agent.Launch
+	proc       orchProc
+	resumed    bool // the current process was started with --resume
+	gotInit    bool
 	// newProc starts an orchestrator process; nil means the launch's.
 	newProc func(resume string) (orchProc, error)
 	// savedSession is the session ctrl+r resumes; nil reads the store.
@@ -260,11 +262,22 @@ type (
 
 // Run starts the orchestrator and the TUI. first, if set, is sent as the
 // user's opening message.
-func Run(a *app.App, first string) error { return runTUI(a, first, nil) }
+func Run(a *app.App, first string, opts ...Option) error { return runTUI(a, first, nil, opts...) }
+
+// Option configures Run and RunRC.
+type Option func(*model)
+
+// WithFirstFrame calls f once, on its own goroutine, when the TUI renders
+// its first laid-out frame. saddle up starts the work it defers past first
+// paint there (#635).
+func WithFirstFrame(f func()) Option { return func(m *model) { m.firstFrame = f } }
 
 // runTUI is Run, or RunRC when rc is set.
-func runTUI(a *app.App, first string, rc *orchrc.Session) error {
+func runTUI(a *app.App, first string, rc *orchrc.Session, opts ...Option) error {
 	m := &model{app: a, prev: map[string]string{}, screens: map[string]*screenState{}, follow: true, keys: newKeyMap(), prefix: tmuxPrefix(), scrub: mouseScrub{wait: escWait, pending: ttyPending()}}
+	for _, o := range opts {
+		o(m)
+	}
 	if !a.Cfg.Triage.Disabled {
 		m.attachJev(triage.FromEnv())
 	}
@@ -1675,6 +1688,10 @@ func truncate(s string, n int) string {
 func (m *model) View() string {
 	if m.width == 0 {
 		return ""
+	}
+	if f := m.firstFrame; f != nil {
+		m.firstFrame = nil
+		go f()
 	}
 	header := m.viewHeader()
 	footer := m.viewFooter()

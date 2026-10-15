@@ -16,7 +16,7 @@ import (
 // session through the plugin's wake path, never typed into its pane.
 
 // RunRC opens the TUI around the Remote Control orchestrator s.
-func RunRC(a *app.App, s orchrc.Session) error { return runTUI(a, "", &s) }
+func RunRC(a *app.App, s orchrc.Session, opts ...Option) error { return runTUI(a, "", &s, opts...) }
 
 const rcTypeHere = "The orchestrator runs under Remote Control: talk to it in its pane below (alt+` toggles it) or in the Claude app."
 
