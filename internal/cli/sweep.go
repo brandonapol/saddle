@@ -8,7 +8,6 @@ import (
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/config"
-	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/sweeper"
 	"github.com/spf13/cobra"
 )
@@ -28,15 +27,15 @@ Off until [sweeper] enabled = true in .saddle/config.toml. --dry-run always
 works and only reports.`,
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
 			return runSweep(cmd.Context(), cmd.OutOrStdout(), a.Cfg, dryRun,
-				sweeper.Runner(forge.CLI(a.Root, forge.GH)), sweepLogger(a))
+				a.Forge(), sweepLogger(a))
 		}),
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report what would happen; merge, retarget and label nothing")
 	return cmd
 }
 
-// runSweep is the command without the app, so tests can inject gh.
-func runSweep(ctx context.Context, out io.Writer, cfg config.Config, dryRun bool, gh sweeper.Runner, log func(branch, kind, data string)) error {
+// runSweep is the command without the app, so tests can inject the forge.
+func runSweep(ctx context.Context, out io.Writer, cfg config.Config, dryRun bool, f sweeper.Forge, log func(branch, kind, data string)) error {
 	sc := cfg.Sweeper
 	dryRun = dryRun || sc.DryRun
 	if !sc.Enabled && !dryRun {
@@ -47,7 +46,7 @@ func runSweep(ctx context.Context, out io.Writer, cfg config.Config, dryRun bool
 		ctx = context.Background()
 	}
 	o := sweeper.Options{
-		GH:          gh,
+		Forge:       f,
 		Trunk:       cfg.Base,
 		Method:      sc.Method,
 		ReviewLabel: sc.ReviewLabel,
