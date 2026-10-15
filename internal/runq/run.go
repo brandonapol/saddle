@@ -14,11 +14,13 @@ import (
 
 // RunOptions describe one heavy run.
 type RunOptions struct {
-	Class  string
-	Prio   int
-	Label  string    // who is asking; SADDLE_TASK or "pid N" when empty
-	Repo   string    // the saddle repo asking, for status; may be empty
-	Status io.Writer // queue lines go here; nil discards them
+	Class string
+	Prio  int
+	Label string // who is asking; SADDLE_TASK or "pid N" when empty
+	Repo  string // the saddle repo asking, for status; may be empty
+	// Foreign marks a run no saddle agent started (Request.Foreign).
+	Foreign bool
+	Status  io.Writer // queue lines go here; nil discards them
 	// WaitMax gives up queueing after this long with a *WaitMaxError; 0
 	// waits until ctx ends.
 	WaitMax time.Duration
@@ -119,11 +121,12 @@ func (q *Queue) RunWith(ctx context.Context, o RunOptions, cmd *exec.Cmd) (Resul
 	var last Wait
 	start := q.opts.Now()
 	l, err := q.Acquire(wctx, Request{
-		Class: o.Class,
-		Prio:  o.Prio,
-		Label: o.Label,
-		Repo:  o.Repo,
-		Cmd:   describe(cmd),
+		Class:   o.Class,
+		Prio:    o.Prio,
+		Label:   o.Label,
+		Repo:    o.Repo,
+		Foreign: o.Foreign,
+		Cmd:     describe(cmd),
 		OnWait: func(w Wait) {
 			last = w
 			if !queued && o.OnQueued != nil {

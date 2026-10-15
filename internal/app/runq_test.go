@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/runq"
 )
 
@@ -197,5 +198,31 @@ func TestWriteShims(t *testing.T) {
 	write(t, a.Root, ".saddle/runq.toml", "mode = \"off\"\n")
 	if dir := a.WriteShims(); dir != "" {
 		t.Fatalf("mode off still gives agents shims at %s", dir)
+	}
+}
+
+// TestHeavyRunQueueLayer: [run_queue] in config.toml is the bottom layer:
+// its keys reach the queue unless the repo's runq.toml sets them too.
+func TestHeavyRunQueueLayer(t *testing.T) {
+	a, _ := setup(t)
+	heavyTest(t, a, "budget = 7\n[classes.flutter-test]\nslots = 2\n")
+	ram, budget := 20.0, 3
+	h := a.Heavy()
+	h.Base = &config.RunQueue{MinFreeRAMPct: &ram, Budget: &budget, Weights: map[string]int{"flutter-test": 5, "sqlc": 2}}
+	c, err := h.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *c.Budget != 7 || *c.MinFreeRAMPct != 20 {
+		t.Fatalf("budget %d ram %v: runq.toml should win, [run_queue] fill the rest", *c.Budget, *c.MinFreeRAMPct)
+	}
+	if fc := c.Classes["flutter-test"]; fc.Weight != 5 || fc.Slots != 2 {
+		t.Fatalf("flutter-test %+v", fc)
+	}
+	if c.Classes["sqlc"].Weight != 2 {
+		t.Fatalf("classes %+v", c.Classes)
+	}
+	if a.Heavy().Base != &a.Cfg.RunQueue {
+		t.Fatal("App.Heavy should pass the loaded [run_queue]")
 	}
 }
