@@ -78,8 +78,10 @@ Flags:
 
 Fake runs are cheap and deterministic in what each agent writes, so they can
 run in CI. The end-to-end test `TestBenchRunsControlAndACollision` (build tag
-`e2e`, run by `make test/e2e`) runs two scenarios. Real-agent runs spend
-quota, are manual and opt-in, and never run in CI.
+`e2e`, needs tmux) runs `control` and `narrow-claim`. `make test/e2e` doesn't
+list `./internal/bench/...` yet (#605); run it with
+`go test -tags 'e2e grammar_subset grammar_subset_go grammar_subset_python' ./internal/bench/`.
+Real-agent runs spend quota, are manual and opt-in, and never run in CI.
 
 ## The fake agent's edits
 
@@ -132,7 +134,13 @@ with no collision at all, judged by hand. With file claims, saddle runs
 overlapping claims one at a time, so `same-file` reaches only 1 of a safe 2:
 the gap symbol claims are meant to close.
 
-Planned next (sub-issues): a signature change with a caller elsewhere (stale
+What the first runs found: in `same-file` and `same-function` the second
+ticket never starts. Once the first lands, saddle's #340 repair guard
+refuses the spawn ("needs confirmation") because its claim covers a file a
+landed task changed, and autopilot retries it forever (#604). The report
+shows it as a spawn refusal and a ticket that needed help.
+
+Planned next (#605): a signature change with a caller elsewhere (stale
 assumption), a CI-red layer under a stack, a generated file, and a serial
 path (`go.mod`).
 
@@ -206,6 +214,8 @@ point of predicting them. Read it next to `claim_waits`.
    `bench/fixture` with tests; the fixture's suite must pass on its own.
 
 ## Not yet
+
+Tracked in #605.
 
 - **Real agents.** `--adapter claude|grok|codex` would run real agents on
   the same tickets in an isolated world that still sees the user's adapter
