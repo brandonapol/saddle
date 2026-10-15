@@ -84,6 +84,8 @@ type Config struct {
 	Tmp Tmp `toml:"tmp"`
 	// Issues tunes the GitHub issues saddle files for blockers (#407).
 	Issues Issues `toml:"issues"`
+	// Claims configures how edit-time claim checks see a file.
+	Claims Claims `toml:"claims"`
 }
 
 // Issues is [issues]: saddle files or comments on a GitHub issue for every
@@ -586,6 +588,22 @@ type Sweeper struct {
 	DryRun bool `toml:"dry_run"`
 }
 
+// Claims configures edit-time claim checks (docs/symbol-claims.md).
+type Claims struct {
+	// Granularity is "file" (path claims only, the default) or "symbol"
+	// (symbol rules run over the path verdict). file is the kill switch.
+	Granularity string `toml:"granularity"`
+}
+
+// Claim granularities.
+const (
+	GranularityFile   = "file"
+	GranularitySymbol = "symbol"
+)
+
+// Granularities lists the valid claims.granularity values.
+func Granularities() []string { return []string{GranularityFile, GranularitySymbol} }
+
 // SweepMethods are the merge methods gh accepts.
 var SweepMethods = []string{"squash", "merge", "rebase"}
 
@@ -762,6 +780,7 @@ func Default() Config {
 		Concurrency:   5,
 		CloseOnLand:   true,
 		Issues:        Issues{AutoFile: true},
+		Claims:        Claims{Granularity: GranularityFile},
 		Harness:       HarnessClaude,
 		AdapterOrder:  []string{HarnessClaude, HarnessGrok, HarnessCodex, AdapterOpenCode},
 		AdapterPolicy: AdapterPolicy{Pick: PickBalanced, Failover: FailoverHandoff, HandoffWait: 15 * time.Minute},
@@ -991,6 +1010,9 @@ func Load(root string) (Config, error) {
 	}
 	if strings.TrimSpace(cfg.Sweeper.ReviewLabel) == "" {
 		cfg.Sweeper.ReviewLabel = Default().Sweeper.ReviewLabel
+	}
+	if g := cfg.Claims.Granularity; !slices.Contains(Granularities(), g) {
+		return cfg, fmt.Errorf("claims.granularity %q: want one of %s", g, strings.Join(Granularities(), ", "))
 	}
 	return cfg, nil
 }
@@ -1265,4 +1287,10 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # method = "squash"                # squash, merge or rebase
 # review_label = "requires review" # never merged; applied to risky PRs
 # dry_run = false
+
+[claims]
+# How the write guard sees a file. "file" denies any write to a file another
+# task claims. "symbol" also runs symbol-level rules over that verdict
+# (docs/symbol-claims.md).
+# granularity = "file"
 `
