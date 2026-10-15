@@ -30,7 +30,7 @@ func TestJourneyInitDoctorFreshRepo(t *testing.T) {
 			t.Errorf("before init, %s = %+v, want a fail fixed by saddle init", name, c)
 		}
 	}
-	for _, name := range []string{"git remote", "default branch", "gh auth", "merge settings", "tmux", "claude"} {
+	for _, name := range []string{"git remote", "default branch", "git provider", "merge settings", "tmux", "claude"} {
 		if c := checks[name]; c.Status != "ok" {
 			t.Errorf("before init, %s = %+v, want ok", name, c)
 		}
