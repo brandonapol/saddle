@@ -87,6 +87,61 @@ func TestEachTicketAlonePasses(t *testing.T) {
 	}
 }
 
+// TestFourRemainingScenarios is #605 part 2: the four shapes #599 listed
+// after the first six. TestScenarioOverlapMatchesForecast and
+// TestEachTicketAlonePasses gate every scenario those names load.
+func TestFourRemainingScenarios(t *testing.T) {
+	names, err := List(benchDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]bool{}
+	for _, n := range names {
+		have[n] = true
+	}
+	for _, name := range []string{"signature", "ci-red", "generated", "serial"} {
+		if !have[name] {
+			t.Errorf("missing scenario %s (have %v)", name, names)
+			continue
+		}
+		if _, err := Load(benchDir, name); err != nil {
+			t.Errorf("scenario %s: %v", name, err)
+		}
+	}
+}
+
+// TestSignatureScenarioBreaksWhenCombined is the stale assumption: each
+// signature ticket passes on its own (TestEachTicketAlonePasses), and the
+// two together do not.
+func TestSignatureScenarioBreaksWhenCombined(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go test on the combined edits")
+	}
+	sc, err := Load(benchDir, "signature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := CopyFixture(FixtureDir(benchDir), dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, tk := range sc.Tickets {
+		c := Apply(DirTree(dir), tk.Edits)
+		if len(c.Stale) > 0 || len(c.Followed) > 0 {
+			t.Fatalf("%s: edits don't apply on top of the earlier tickets: stale %v, followed %v", tk.Key(), c.Stale, c.Followed)
+		}
+		if err := c.WriteTo(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("go", "test", "./...")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("signature tickets together passed; want a broken build\n%s", out)
+	}
+}
+
 func TestScenarioOverlapMatchesForecast(t *testing.T) {
 	for _, sc := range scenarios(t) {
 		p := MakePlan(DirTree(FixtureDir(benchDir)), sc)
