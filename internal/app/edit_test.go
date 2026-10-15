@@ -12,15 +12,7 @@ import (
 // must not be parallel: the tables are package state.
 func withRules(t *testing.T, edit []EditRule, note []NoteRule) {
 	t.Helper()
-	oldEdit, oldNote := editRules, noteRules
-	editRules, noteRules = nil, nil
-	for _, r := range edit {
-		RegisterEditRule(r)
-	}
-	for _, r := range note {
-		RegisterNoteRule(r)
-	}
-	t.Cleanup(func() { editRules, noteRules = oldEdit, oldNote })
+	t.Cleanup(SwapSymbolRules(edit, note))
 }
 
 // #588: a path-claim deny names its owner; serial-file and outside-worktree

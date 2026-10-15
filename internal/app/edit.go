@@ -61,6 +61,21 @@ func RegisterNoteRule(r NoteRule) {
 	slices.SortStableFunc(noteRules, func(x, y NoteRule) int { return x.Order - y.Order })
 }
 
+// SwapSymbolRules replaces both rule tables, for tests in this package and
+// the hook's, and returns a func that restores them. Callers must not run in
+// parallel with anything that checks edits.
+func SwapSymbolRules(edit []EditRule, note []NoteRule) (restore func()) {
+	oldEdit, oldNote := editRules, noteRules
+	editRules, noteRules = nil, nil
+	for _, r := range edit {
+		RegisterEditRule(r)
+	}
+	for _, r := range note {
+		RegisterNoteRule(r)
+	}
+	return func() { editRules, noteRules = oldEdit, oldNote }
+}
+
 // SymbolMode reports whether [claims] granularity is "symbol". In "file"
 // mode no symbol rule runs and the hook skips computing proposed content.
 func (a *App) SymbolMode() bool {
