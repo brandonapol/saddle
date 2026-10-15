@@ -33,9 +33,12 @@ func TestCLIRunsGHOnPATH(t *testing.T) {
 	if err != nil || out != "pr view 7" {
 		t.Fatalf("CLI = %q, %v; want trimmed stdout", out, err)
 	}
-	_, err = CLI(dir, GH)(context.Background(), "fail", "now", "please")
+	out, err = CLI(dir, GH)(context.Background(), "fail", "now", "please")
 	if err == nil || err.Error() != "gh fail now: exit status 3: it broke" {
 		t.Fatalf("CLI error = %v, want the CLI, two args and stderr", err)
+	}
+	if out != "half out" {
+		t.Fatalf("CLI stdout on failure = %q, want what gh printed (pr checks prints JSON and exits non-zero)", out)
 	}
 }
 

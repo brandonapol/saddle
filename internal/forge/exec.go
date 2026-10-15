@@ -39,7 +39,10 @@ func CombinedOutput(ctx context.Context, dir, name string, args ...string) (stri
 }
 
 // Runner runs a forge CLI with args and returns its trimmed stdout. A failure's
-// error names the CLI and its first two args, and carries its stderr.
+// error names the CLI and its first two args, and carries its stderr; what
+// it printed to stdout comes back too, since gh prints some answers (pr
+// checks while checks are pending, a failed job's log) and still exits
+// non-zero.
 type Runner func(ctx context.Context, args ...string) (string, error)
 
 // CLI is the Runner for the forge CLI name in dir.
@@ -47,7 +50,7 @@ func CLI(dir, name string) Runner {
 	return func(ctx context.Context, args ...string) (string, error) {
 		out, errb, err := Output(ctx, dir, name, args...)
 		if err != nil {
-			return "", fmt.Errorf("%s %s: %w: %s", name, strings.Join(args[:min(2, len(args))], " "), err, strings.TrimSpace(errb))
+			return strings.TrimSpace(out), fmt.Errorf("%s %s: %w: %s", name, strings.Join(args[:min(2, len(args))], " "), err, strings.TrimSpace(errb))
 		}
 		return strings.TrimSpace(out), nil
 	}

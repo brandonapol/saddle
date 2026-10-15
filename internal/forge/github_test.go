@@ -90,11 +90,11 @@ func TestGitHubPRRead(t *testing.T) {
 	}}
 	g := f.github()
 	pr, err := g.PR(ctx, "u", PRState|PRMergeable|PRBase)
-	if err != nil || pr != (PR{State: StateOpen, Mergeable: Conflicting, Base: "main"}) {
+	if err != nil || !reflect.DeepEqual(pr, PR{State: StateOpen, Mergeable: Conflicting, Base: "main"}) {
 		t.Fatalf("PR = %+v, %v", pr, err)
 	}
 	pr, _ = g.PR(ctx, "u", PRState|PRBase|PRHead)
-	if pr != (PR{State: StateMerged, Base: "main", HeadSHA: "abc"}) {
+	if !reflect.DeepEqual(pr, PR{State: StateMerged, Base: "main", HeadSHA: "abc"}) {
 		t.Fatalf("PR head = %+v", pr)
 	}
 	pr, _ = g.PR(ctx, "u", PRBody)
@@ -210,5 +210,124 @@ func TestNewSelectsByConfig(t *testing.T) {
 		if _, err := f.CreatePR(context.Background(), NewPR{}); !errors.Is(err, ErrUnsupported) {
 			t.Errorf("New(%+v).CreatePR = %v, want ErrUnsupported", tc.fc, err)
 		}
+	}
+}
+
+// TestGitHubWatcherArgs pins the operations the CI watcher, sweeper,
+// auto-merge, sentinel and planner use to the gh calls they made themselves
+// before #647.
+func TestGitHubWatcherArgs(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeGH{replies: []string{
+		`[{"number":4,"title":"T","headRefName":"saddle/t1","headRefOid":"abc","baseRefName":"main","isDraft":true,
+		  "mergeable":"MERGEABLE","labels":[{"name":"l"}],"files":[{"path":"a.go"}],
+		  "statusCheckRollup":[{"__typename":"CheckRun","name":"test","workflowName":"CI","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-01-01T00:00:00Z"},
+		                       {"__typename":"StatusContext","context":"ext","state":"PENDING"}]}]`,
+		`[{"number":3}]`,
+		`{"url":"u","state":"OPEN","mergeStateStatus":"CLEAN","headRefName":"saddle/t1"}`,
+		"",
+		"",
+		"",
+		"7\n8\n",
+		"9008",
+		"",
+		"https://github.com/o/r/issues/12",
+	}}
+	g := f.github()
+	all := PRNumber | PRTitle | PRHeadBranch | PRHead | PRBase | PRDraft | PRMergeable | PRLabels | PRFiles | PRChecks
+	prs, err := g.ListPRs(ctx, PRQuery{State: "open", Limit: 200}, all)
+	want := PR{Number: 4, Title: "T", Head: "saddle/t1", HeadSHA: "abc", Base: "main", Draft: true, Mergeable: Mergeable,
+		Labels: []string{"l"}, Files: []string{"a.go"}, Checks: []CheckRun{
+			{Kind: KindJob, Name: "test", Workflow: "CI", Status: "COMPLETED", Conclusion: "FAILURE", StartedAt: "2026-01-01T00:00:00Z"},
+			{Kind: KindStatus, Context: "ext", State: "PENDING"}}}
+	if err != nil || len(prs) != 1 || !reflect.DeepEqual(prs[0], want) {
+		t.Fatalf("ListPRs = %+v, %v\nwant %+v", prs, err, want)
+	}
+	merged, _ := g.ListPRs(ctx, PRQuery{State: "merged", Head: "saddle/t0", Limit: 1}, PRNumber)
+	if len(merged) != 1 || merged[0].Number != 3 {
+		t.Fatalf("merged = %+v", merged)
+	}
+	pr, _ := g.PR(ctx, "u", PRURL|PRState|PRDraft|PRMergeable|PRMergeState|PRBase|PRHeadBranch|PRHead|PRLabels|PRChecks)
+	if pr.MergeState != "CLEAN" || pr.Head != "saddle/t1" || pr.URL != "u" {
+		t.Fatalf("PR = %+v", pr)
+	}
+	_ = g.MergePR(ctx, "u", "rebase", "abc")
+	_ = g.MergePR(ctx, "4", "squash", "")
+	_ = g.RemoveLabel(ctx, "u", "saddle:ci-red")
+	ns, _ := g.SubIssueNumbers(ctx, "o/r", 5)
+	if !reflect.DeepEqual(ns, []int{7, 8}) {
+		t.Fatalf("SubIssueNumbers = %v", ns)
+	}
+	if err := g.AddSubIssue(ctx, "", 5, 8); err != nil {
+		t.Fatal(err)
+	}
+	is, _ := g.CreateIssue(ctx, NewIssue{Repo: "o/r", Title: "T", Body: "B"})
+	if is.Number != 12 {
+		t.Fatalf("CreateIssue = %+v", is)
+	}
+	f.want(t,
+		"pr list --state open --limit 200 --json number,title,isDraft,mergeable,baseRefName,headRefName,headRefOid,labels,files,statusCheckRollup",
+		"pr list --state merged --head saddle/t0 --limit 1 --json number",
+		"pr view u --json url,state,isDraft,mergeable,mergeStateStatus,baseRefName,headRefName,headRefOid,labels,statusCheckRollup",
+		"pr merge u --rebase --match-head-commit abc",
+		"pr merge 4 --squash",
+		"pr edit u --remove-label saddle:ci-red",
+		"api repos/o/r/issues/5/sub_issues --paginate --jq .[].number",
+		"api repos/{owner}/{repo}/issues/8 --jq .id",
+		"api repos/{owner}/{repo}/issues/5/sub_issues -X POST -F sub_issue_id=9008",
+		"issue create --title T --body B -R o/r",
+	)
+}
+
+// TestGitHubChecksAndLogs covers gh pr checks printing JSON while exiting
+// non-zero, no checks, and failed-job logs.
+func TestGitHubChecksAndLogs(t *testing.T) {
+	ctx := context.Background()
+	var calls []string
+	reply := map[string]struct {
+		out string
+		err error
+	}{
+		"pr checks 7 --json name,workflow,bucket,link": {`[{"name":"test","workflow":"CI","bucket":"fail","link":"https://github.com/o/r/actions/runs/11/job/22"}]`, errors.New("exit status 8")},
+		"pr checks 8 --json name,workflow,bucket,link": {"", errors.New("gh pr checks: no checks reported on the 'x' branch")},
+		"pr checks 9 --json name,workflow,bucket,link": {"", errors.New("gh pr checks: boom")},
+		"run view --job 22 --log-failed":               {"test\tRun go test\t2026-01-01T00:00:00.1Z --- FAIL: TestX\ntest\tRun go test\t2026-01-01T00:00:00.2Z FAIL", errors.New("exit status 1")},
+		"run view --job 23 --log-failed":               {"", errors.New("gh run view: HTTP 410")},
+	}
+	g := &GitHub{Run: func(_ context.Context, args ...string) (string, error) {
+		c := strings.Join(args, " ")
+		calls = append(calls, c)
+		return reply[c].out, reply[c].err
+	}}
+	cs, err := g.Checks(ctx, "7")
+	if err != nil || !reflect.DeepEqual(cs, []CICheck{{Name: "test", Workflow: "CI", Bucket: "fail", Link: "https://github.com/o/r/actions/runs/11/job/22"}}) {
+		t.Fatalf("Checks(7) = %+v, %v", cs, err)
+	}
+	if cs, err := g.Checks(ctx, "8"); err != nil || cs != nil {
+		t.Fatalf("Checks(8) = %+v, %v; want none", cs, err)
+	}
+	if _, err := g.Checks(ctx, "9"); err == nil {
+		t.Fatal("Checks(9): want the gh error")
+	}
+	l, err := g.FailedLog(ctx, cs[0].Link, 1)
+	if err != nil || l != (JobLog{Run: "https://github.com/o/r/actions/runs/11", Step: "Run go test", Tail: "FAIL"}) {
+		t.Fatalf("FailedLog = %+v, %v", l, err)
+	}
+	l, err = g.FailedLog(ctx, "https://github.com/o/r/actions/runs/11/attempts/2/job/23", 40)
+	if err == nil || l.Run != "https://github.com/o/r/actions/runs/11" {
+		t.Fatalf("FailedLog(no log) = %+v, %v", l, err)
+	}
+	if l, err := g.FailedLog(ctx, "https://ci.example.com/x", 40); err != nil || l != (JobLog{Run: "https://ci.example.com/x"}) {
+		t.Fatalf("FailedLog(not a job) = %+v, %v", l, err)
+	}
+	want := []string{
+		"pr checks 7 --json name,workflow,bucket,link",
+		"pr checks 8 --json name,workflow,bucket,link",
+		"pr checks 9 --json name,workflow,bucket,link",
+		"run view --job 22 --log-failed",
+		"run view --job 23 --log-failed",
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %q\nwant %q", calls, want)
 	}
 }

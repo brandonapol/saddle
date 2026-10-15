@@ -31,12 +31,20 @@ const (
 // PR is a pull request (a merge request on GitLab). A read fills only the
 // fields it was asked for.
 type PR struct {
-	URL       string
-	State     string // StateOpen, StateClosed or StateMerged
-	Mergeable string // Mergeable, Conflicting or Unknown
-	Base      string // the branch it targets, or was merged into
-	HeadSHA   string // its head commit
-	Body      string
+	Number     int
+	URL        string
+	Title      string
+	State      string // StateOpen, StateClosed or StateMerged
+	Draft      bool
+	Mergeable  string // Mergeable, Conflicting or Unknown
+	MergeState string // CLEAN, BLOCKED, BEHIND, DIRTY, UNSTABLE, UNKNOWN…
+	Base       string // the branch it targets, or was merged into
+	Head       string // its head branch
+	HeadSHA    string // its head commit
+	Body       string
+	Labels     []string
+	Files      []string // the paths it changes
+	Checks     []CheckRun
 }
 
 // PRFields picks what a PR read asks for.
@@ -48,7 +56,51 @@ const (
 	PRBase
 	PRHead
 	PRBody
+	PRNumber
+	PRURL
+	PRTitle
+	PRDraft
+	PRMergeState
+	PRHeadBranch
+	PRLabels
+	PRFiles
+	PRChecks
 )
+
+// Kinds of CheckRun.
+const (
+	KindJob    = "job"    // a CI job (a check run on GitHub)
+	KindStatus = "status" // a commit status set by an outside service
+)
+
+// CheckRun is one entry of a PR's check rollup: a CI job or a commit status.
+// Each watcher folds these into its own verdict, so they carry the raw
+// states.
+type CheckRun struct {
+	Kind       string // KindJob, KindStatus, or "" when the forge didn't say
+	Name       string // a job's name
+	Workflow   string // a job's workflow (pipeline)
+	Context    string // a commit status's name
+	Status     string // a job's progress: QUEUED, IN_PROGRESS, COMPLETED…
+	Conclusion string // a finished job's result: SUCCESS, FAILURE, SKIPPED…
+	State      string // a commit status's state: SUCCESS, PENDING, FAILURE, ERROR, EXPECTED
+	StartedAt  string // RFC 3339
+}
+
+// CICheck is one CI check on a PR as its current state.
+type CICheck struct {
+	Name     string
+	Workflow string
+	Bucket   string // pass, fail, pending, skipping or cancel
+	Link     string // its details page; for a CI job, the job page
+}
+
+// JobLog is the end of a failed CI job's log.
+type JobLog struct {
+	Run  string // the run (pipeline) page the job belongs to
+	Step string // the step the log ends in, when known
+	Tail string // the last lines, as plain text
+}
 
 // NewPR is a PR to open.
 type NewPR struct {
@@ -59,6 +111,7 @@ type NewPR struct {
 // PRQuery picks PRs to list.
 type PRQuery struct {
 	State string // open, closed, merged or all
+	Head  string // only PRs from this head branch; "" is any
 	Limit int
 }
 
@@ -101,6 +154,7 @@ type IssueQuery struct {
 
 // NewIssue is an issue to file. Its labels must exist (EnsureLabel).
 type NewIssue struct {
+	Repo        string // "owner/name"; "" is this repo
 	Title, Body string
 	Labels      []string
 }
@@ -137,8 +191,19 @@ type Forge interface {
 	AddComment(ctx context.Context, ref, body string) error
 	EditComment(ctx context.Context, id, body string) error
 	AddLabel(ctx context.Context, ref, label string) error
+	RemoveLabel(ctx context.Context, ref, label string) error
 	EnsureLabel(ctx context.Context, l Label) error
+	// MergePR merges ref with method (squash, rebase or merge), only while
+	// its head commit is still head when head isn't "". It never bypasses
+	// branch protection.
+	MergePR(ctx context.Context, ref, method, head string) error
 
+	// Checks lists the CI checks on ref, a PR or a branch with one. None is
+	// not an error.
+	Checks(ctx context.Context, ref string) ([]CICheck, error)
+	// FailedLog fetches the last lines of the failed log behind a check's
+	// link. A link that isn't a CI job's comes back as the run, with no log.
+	FailedLog(ctx context.Context, link string, lines int) (JobLog, error)
 	// RerunFailed reruns the failed jobs of CI run id.
 	RerunFailed(ctx context.Context, id string) error
 	MergeSettings(ctx context.Context) (MergeSettings, error)
@@ -147,6 +212,10 @@ type Forge interface {
 	// Issue reads issue n of repo ("owner/name"; "" is this repo).
 	Issue(ctx context.Context, repo string, n int, f IssueFields) (Issue, error)
 	SubIssues(ctx context.Context, repo string, n int) ([]Issue, error)
+	// SubIssueNumbers lists the numbers of every sub-issue of n.
+	SubIssueNumbers(ctx context.Context, repo string, n int) ([]int, error)
+	// AddSubIssue links issue child under parent.
+	AddSubIssue(ctx context.Context, repo string, parent, child int) error
 	ListIssues(ctx context.Context, q IssueQuery, f IssueFields) ([]Issue, error)
 	// CreateIssue files i and returns it with its number and URL.
 	CreateIssue(ctx context.Context, i NewIssue) (Issue, error)
@@ -199,8 +268,18 @@ func (u Unsupported) Comments(context.Context, string) ([]Comment, error) {
 func (u Unsupported) AddComment(context.Context, string, string) error  { return u.err("comment") }
 func (u Unsupported) EditComment(context.Context, string, string) error { return u.err("edit comment") }
 func (u Unsupported) AddLabel(context.Context, string, string) error    { return u.err("label PR") }
+func (u Unsupported) RemoveLabel(context.Context, string, string) error { return u.err("unlabel PR") }
 func (u Unsupported) EnsureLabel(context.Context, Label) error          { return u.err("create label") }
-func (u Unsupported) RerunFailed(context.Context, string) error         { return u.err("rerun CI") }
+func (u Unsupported) MergePR(context.Context, string, string, string) error {
+	return u.err("merge PR")
+}
+func (u Unsupported) Checks(context.Context, string) ([]CICheck, error) {
+	return nil, u.err("read CI checks")
+}
+func (u Unsupported) FailedLog(context.Context, string, int) (JobLog, error) {
+	return JobLog{}, u.err("read CI log")
+}
+func (u Unsupported) RerunFailed(context.Context, string) error { return u.err("rerun CI") }
 func (u Unsupported) MergeSettings(context.Context) (MergeSettings, error) {
 	return MergeSettings{}, u.err("read merge settings")
 }
@@ -210,6 +289,12 @@ func (u Unsupported) Issue(context.Context, string, int, IssueFields) (Issue, er
 }
 func (u Unsupported) SubIssues(context.Context, string, int) ([]Issue, error) {
 	return nil, u.err("list sub-issues")
+}
+func (u Unsupported) SubIssueNumbers(context.Context, string, int) ([]int, error) {
+	return nil, u.err("list sub-issues")
+}
+func (u Unsupported) AddSubIssue(context.Context, string, int, int) error {
+	return u.err("link sub-issue")
 }
 func (u Unsupported) ListIssues(context.Context, IssueQuery, IssueFields) ([]Issue, error) {
 	return nil, u.err("list issues")
