@@ -219,7 +219,6 @@ func applyHunks(src string, body []string) (string, bool) {
 		}
 		at := len(lines)
 		if len(h.old) > 0 {
-			at = -1
 			if end := len(lines) - len(h.old); h.eof && end >= cursor && find(lines[end:], h.old, 0) == 0 {
 				at = end
 			} else {
