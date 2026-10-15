@@ -6,3 +6,6 @@ coverage.html
 
 # personal Claude Code overrides
 .claude/settings.local.json
+
+# saddle bench run output
+/bench/results/

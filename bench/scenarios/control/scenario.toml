@@ -1,0 +1,36 @@
+description = "Control: two tickets in disjoint packages. Nothing should collide."
+overlap = "none"
+safe_parallelism = 2
+
+[[ticket]]
+file = "01-shout.md"
+
+[[ticket.edit]]
+path = "greet/shout.go"
+new = '''
+package greet
+
+import "strings"
+
+// Shout greets name in capitals.
+func Shout(name string) string {
+	return strings.ToUpper(Hello(name))
+}
+'''
+
+[[ticket]]
+file = "02-min.md"
+
+[[ticket.edit]]
+path = "mathx/mathx.go"
+append = true
+new = '''
+
+// Min is the smaller of a and b.
+func Min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+'''

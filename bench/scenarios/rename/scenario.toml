@@ -1,0 +1,29 @@
+description = "One ticket moves a file while another edits a function in it: a rename barrier."
+overlap = "critical"
+safe_parallelism = 1
+
+[[ticket]]
+file = "01-split-util.md"
+
+[[ticket.edit]]
+path = "textutil/strings.go"
+from = "textutil/util.go"
+
+[[ticket.edit]]
+path = "textutil/strings_test.go"
+from = "textutil/util_test.go"
+
+[[ticket]]
+file = "02-reverse-empty.md"
+
+[[ticket.edit]]
+path = "textutil/util.go"
+old = '''
+	r := []rune(s)
+'''
+new = '''
+	r := []rune(s)
+	if len(r) < 2 {
+		return s
+	}
+'''

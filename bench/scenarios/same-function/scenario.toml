@@ -1,0 +1,30 @@
+description = "Two tickets change the same function. Running them together would conflict at the train."
+overlap = "critical"
+safe_parallelism = 1
+
+[[ticket]]
+file = "01-guard-area.md"
+
+[[ticket.edit]]
+path = "shapes/shapes.go"
+old = '''
+	return r.W * r.H
+'''
+new = '''
+	if r.W < 0 || r.H < 0 {
+		return 0
+	}
+	return r.W * r.H
+'''
+
+[[ticket]]
+file = "02-round-area.md"
+
+[[ticket.edit]]
+path = "shapes/shapes.go"
+old = '''
+	return r.W * r.H
+'''
+new = '''
+	return math.Round(r.W*r.H*100) / 100
+'''
