@@ -75,7 +75,7 @@ func Handle(a *app.App, task string, in Input) *Output {
 				e.Before, e.After, e.Known = proposed(in, p)
 			}
 			if d := a.CheckEdit(e); !d.Allow {
-				return deny(in, RuleWriteGuard, d.Reason+ownerDiff(a, task, p))
+				return deny(in, RuleWriteGuard, d.Reason+denyDiff(a, task, p, d.Owner))
 			}
 		}
 		return nil
