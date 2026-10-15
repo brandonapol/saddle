@@ -3,11 +3,13 @@ package bench
 import (
 	"fmt"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/brandonapol/saddle/internal/claims"
+	"github.com/brandonapol/saddle/internal/forecast"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -91,7 +93,15 @@ type Report struct {
 	RestackConflicts int     `json:"restack_conflicts"`
 	StaleEdits       int     `json:"stale_edits"`
 	// SpawnRefusals are tickets autopilot tried to spawn and saddle refused.
-	SpawnRefusals   int           `json:"spawn_refusals"`
+	SpawnRefusals int `json:"spawn_refusals"`
+	// Symbol-claim rules at work (docs/symbol-claims.md); all zero under
+	// file claims. SymbolShares are path-claim denies rule 1 turned into
+	// allows; SymbolDenies are writes a symbol rule refused (also counted
+	// in DeniedWrites); SymbolNotes are rule 3's warnings.
+	SymbolShares    int           `json:"symbol_shares"`
+	SymbolDenies    int           `json:"symbol_denies"`
+	SymbolNotes     int           `json:"symbol_notes"`
+	SymbolFallbacks int           `json:"symbol_fallbacks"`
 	NeededHelp      []string      `json:"needed_help"`
 	PeakParallelism int           `json:"peak_parallelism"`
 	SafeParallelism int           `json:"safe_parallelism"`
@@ -128,6 +138,9 @@ func Score(l Log) Report {
 	landed := map[int]bool{}
 	for _, t := range l.Tasks {
 		ticketOf[t.Task] = t.Ticket
+	}
+	verdict, sameWrite := symbolVerdicts(l.Events)
+	for _, t := range l.Tasks {
 		if t.Status == store.Landed {
 			landed[t.Ticket] = true
 		}
@@ -163,7 +176,14 @@ func Score(l Log) Report {
 			delete(live, e.Task)
 			landedAt[me] = e.ID
 		case "deny":
+			if verdict[e.ID] == "symbol_allow" {
+				r.SymbolShares++
+				continue
+			}
 			r.DeniedWrites++
+			if verdict[e.ID] == "symbol_deny" {
+				continue // the symbol_deny names the collision more exactly
+			}
 			pairWith(actual, l.Plan, me, func(o PlannedTicket) bool { return claimsCover(o.Claims, e.Data) })
 		case "train_" + store.TrainError:
 			r.TrainConflicts++
@@ -190,6 +210,19 @@ func Score(l Log) Report {
 		case EventStale:
 			r.StaleEdits++
 			pairOnFiles(actual, l.Plan, me, []string{e.Data})
+		case "symbol_deny":
+			r.SymbolDenies++
+			if !sameWrite[e.ID] {
+				r.DeniedWrites++
+			}
+			pairSymbolDeny(actual, l.Plan, me, ticketOf, e.Data)
+		case "symbol_note":
+			r.SymbolNotes++
+			if other, _, ok := strings.Cut(e.Data, " "); ok {
+				pairWith(actual, l.Plan, me, func(o PlannedTicket) bool { return o.Number == ticketOf[other] })
+			}
+		case "symbol_fallback":
+			r.SymbolFallbacks++
 		case "autopilot_skip":
 			if n, _, ok := strings.Cut(e.Data, ":"); ok {
 				refused[n] = true
@@ -231,6 +264,72 @@ func Score(l Log) Report {
 	}
 	r.Forecast = f
 	return r
+}
+
+// symbolVerdicts reads what the symbol rules made of each path-claim deny.
+// CheckWrite logs "deny" before the symbol rules run, in the same hook
+// call, so the task's next event (past rule fallbacks) says how the write
+// ended. verdict maps the deny's id to that event's kind: symbol_allow
+// means rule 1 let the write through, symbol_deny that a symbol rule
+// refused it too, and sameWrite holds that symbol_deny's id so the one
+// write counts once.
+func symbolVerdicts(evs []Event) (verdict map[int64]string, sameWrite map[int64]bool) {
+	verdict, sameWrite = map[int64]string{}, map[int64]bool{}
+	for i, e := range evs {
+		if e.Kind != "deny" || e.Task == "" {
+			continue
+		}
+		for _, n := range evs[i+1:] {
+			if n.Task != e.Task || n.Kind == "symbol_fallback" {
+				continue
+			}
+			if symbolEventPath(n.Data) == e.Data {
+				switch n.Kind {
+				case "symbol_allow":
+					verdict[e.ID] = n.Kind
+				case "symbol_deny":
+					verdict[e.ID] = n.Kind
+					sameWrite[n.ID] = true
+				}
+			}
+			break
+		}
+	}
+	return verdict, sameWrite
+}
+
+// symbolEventPath is the path in a symbol rule event's data,
+// "<rule> <path>: <detail>".
+func symbolEventPath(data string) string {
+	head, _, _ := strings.Cut(data, ": ")
+	_, p, _ := strings.Cut(head, " ")
+	return p
+}
+
+// pairSymbolDeny records the collision a symbol_deny names. Rule 1's
+// ("symbol-share <path>: <symbol> with <task>") is with that task; rule 2's
+// ("stale-overwrite <path>: …") with the tickets that change the path;
+// rule 3's ("stale-assumption <path>: <symbol>") with the tickets that
+// change a symbol of that name.
+func pairSymbolDeny(actual map[Pair]bool, p Plan, me int, ticketOf map[string]int, data string) {
+	rule, _, _ := strings.Cut(data, " ")
+	_, detail, _ := strings.Cut(data, ": ")
+	switch rule {
+	case "symbol-share":
+		if i := strings.LastIndex(detail, " with "); i >= 0 {
+			other := ticketOf[detail[i+len(" with "):]]
+			pairWith(actual, p, me, func(o PlannedTicket) bool { return o.Number == other })
+		}
+	case "stale-overwrite":
+		pairOnFiles(actual, p, me, []string{symbolEventPath(data)})
+	case "stale-assumption":
+		name := detail[strings.LastIndex(detail, ".")+1:]
+		pairWith(actual, p, me, func(o PlannedTicket) bool {
+			return slices.ContainsFunc(o.Symbols, func(s forecast.Symbol) bool {
+				return s.Name[strings.LastIndex(s.Name, ".")+1:] == name
+			})
+		})
+	}
 }
 
 // pairWith records a collision between ticket me and every other planned
@@ -334,7 +433,7 @@ func overlaps(a, b map[string]bool) bool {
 func Markdown(r Report) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Bench: %s\n\n", r.Scenario)
-	fmt.Fprintf(&b, "Adapter %s, %s claims, %.1fs wall.", r.Adapter, r.Granularity, r.WallSeconds)
+	fmt.Fprintf(&b, "Adapter %s, %s claims, %.1fs wall.", r.Adapter, or(r.Granularity, "file"), r.WallSeconds)
 	if r.EndedEarly != "" {
 		fmt.Fprintf(&b, " Ended early: %s.", r.EndedEarly)
 	}
@@ -349,6 +448,12 @@ func Markdown(r Report) string {
 	row("Restacks", fmt.Sprintf("%d (%d conflicts)", r.Restacks, r.RestackConflicts))
 	row("Stale edits", fmt.Sprint(r.StaleEdits))
 	row("Spawn refusals", fmt.Sprint(r.SpawnRefusals))
+	if r.Granularity == "symbol" {
+		row("Symbol shares", fmt.Sprint(r.SymbolShares))
+		row("Symbol denies", fmt.Sprint(r.SymbolDenies))
+		row("Symbol notes", fmt.Sprint(r.SymbolNotes))
+		row("Symbol fallbacks", fmt.Sprint(r.SymbolFallbacks))
+	}
 	row("Peak parallelism", fmt.Sprintf("%d (safe: %d)", r.PeakParallelism, r.SafeParallelism))
 	tokens := "n/a"
 	if r.Tokens != nil {

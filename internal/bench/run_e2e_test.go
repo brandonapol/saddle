@@ -57,3 +57,52 @@ func TestBenchRunsControlAndACollision(t *testing.T) {
 		t.Errorf("narrow-claim: the forecaster's medium pair should be a hit: %+v", r.Forecast)
 	}
 }
+
+// TestBenchSymbolGranularity runs the symbol-claim scenarios in both modes
+// (#626). same-file's tickets touch different functions of one file: file
+// claims run them one at a time, symbol claims run both and land both.
+// same-function and signature must not collide silently under symbol
+// claims: the second writer of Rect.Area is denied, and the caller of the
+// old units.Scale is warned.
+func TestBenchSymbolGranularity(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("needs tmux")
+	}
+	bins, err := e2e.Build(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(name, granularity string) Report {
+		t.Helper()
+		var log strings.Builder
+		res, err := Run(Options{BenchDir: benchDir, Scenario: name, Granularity: granularity, Bins: &bins,
+			Stall: 20 * time.Second, Timeout: 4 * time.Minute, Progress: &log})
+		if err != nil {
+			t.Fatalf("bench run %s --granularity %s: %v\n%s", name, granularity, err, log.String())
+		}
+		t.Logf("%s (%s):\n%s\n%s", name, granularity, log.String(), Markdown(res.Report))
+		if res.Report.Granularity != granularity {
+			t.Errorf("%s: report granularity %q, want %q", name, res.Report.Granularity, granularity)
+		}
+		return res.Report
+	}
+
+	f := run("same-file", "file")
+	if f.PeakParallelism != 1 {
+		t.Errorf("same-file, file claims: peak parallelism %d, want 1", f.PeakParallelism)
+	}
+	s := run("same-file", "symbol")
+	if s.PeakParallelism != 2 || !s.AllLanded || !s.IntegrationGreen || s.DeniedWrites != 0 || s.SymbolShares < 1 {
+		t.Errorf("same-file, symbol claims: want peak 2, both landed, green, no denies, a share: %+v", s)
+	}
+
+	s = run("same-function", "symbol")
+	if s.SymbolDenies < 1 || !slices.Contains(s.Forecast.ActualPairs, Pair{A: "#1", B: "#2"}) || !s.IntegrationGreen {
+		t.Errorf("same-function, symbol claims: want a symbol deny recorded as the #1–#2 collision and green: %+v", s)
+	}
+
+	s = run("signature", "symbol")
+	if s.SymbolNotes+s.SymbolDenies < 1 || !slices.Contains(s.Forecast.ActualPairs, Pair{A: "#1", B: "#2"}) {
+		t.Errorf("signature, symbol claims: want a note or deny recorded as the #1–#2 collision: %+v", s)
+	}
+}
