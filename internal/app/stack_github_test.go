@@ -329,6 +329,33 @@ func TestRestackToleratesRetargetOfClosedPR(t *testing.T) {
 	}
 }
 
+// #336: prs re-reads [train] lint.cmd before the pre-publish gate, so a
+// long-lived process runs the command edited after it started instead of
+// the one it loaded at startup.
+func TestPRsReloadsLintCmd(t *testing.T) {
+	t.Parallel()
+	a := trainSetup(t)
+	origin, _ := originWithGh(t, a)
+	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+
+	write(t, a.Root, ".saddle/config.toml", "[test]\ncmd = \"none\"\n[train]\nlint.cmd = 'echo prs-old-gate; exit 1'\n")
+	_, err := a.PRs()
+	if err == nil || !strings.Contains(err.Error(), "echo prs-old-gate; exit 1") {
+		t.Fatalf("prs with lint.cmd edited after startup: %v", err)
+	}
+	if remoteRev(t, origin, t1.Branch) != "" {
+		t.Fatal("prs pushed past the reloaded red gate")
+	}
+
+	write(t, a.Root, ".saddle/config.toml", "[test]\ncmd = \"none\"\n[train]\nlint.cmd = \"true\"\n")
+	if _, err := a.PRs(); err != nil {
+		t.Fatalf("prs after lint.cmd changed to a green gate: %v", err)
+	}
+	if remoteRev(t, origin, t1.Branch) == "" {
+		t.Fatal("prs did not push once the reloaded gate was green")
+	}
+}
+
 // #119.2: a PR merged into the stacked base below it instead of main is
 // reported once with the fix and re-landed as a fresh PR; nobody clears
 // tasks.pr by hand.

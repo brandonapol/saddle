@@ -192,3 +192,59 @@ func TestPRsLeavesPublishedTaskAlone(t *testing.T) {
 		t.Fatalf("prs pushed %s after it was published on its own", t1.Branch)
 	}
 }
+
+// #336: publish --base of a branch in the PR stack opens a PR the next prs
+// drops, because prs puts that branch back on the commit the train landed
+// (see TestPRMergedIntoStackedBaseGetsFreshPR). Refuse it and point at prs
+// and restack. Publishing against the configured base still works.
+func TestPublishRefusesStackBranchBase(t *testing.T) {
+	t.Parallel()
+	a, origin, ghLog := publishSetup(t)
+	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+	landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})
+
+	_, err := a.Publish(PublishReq{Target: "t2", Base: t1.Branch})
+	if err == nil || !strings.Contains(err.Error(), t1.Branch) || !strings.Contains(err.Error(), "prs") || !strings.Contains(err.Error(), "restack") {
+		t.Fatalf("publish --base %s: %v", t1.Branch, err)
+	}
+	if remoteRev(t, origin, "saddle/two") != "" {
+		t.Fatal("pushed a PR branch anyway")
+	}
+	if len(ghLog()) != 0 {
+		t.Fatalf("gh called: %v", ghLog())
+	}
+
+	res, err := a.Publish(PublishReq{Target: "t1", Base: a.Cfg.Base})
+	if err != nil {
+		t.Fatalf("publish against %s: %v", a.Cfg.Base, err)
+	}
+	if remoteRev(t, origin, res.Branch) == "" {
+		t.Fatal("publish against the configured base pushed nothing")
+	}
+}
+
+// #336: publish re-reads [train] lint.cmd before the pre-publish gate, so a
+// long-lived process runs the command edited after it started.
+func TestPublishReloadsLintCmd(t *testing.T) {
+	t.Parallel()
+	a, origin, _ := publishSetup(t)
+	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+
+	write(t, a.Root, ".saddle/config.toml", "[test]\ncmd = \"none\"\n[train]\nlint.cmd = 'echo publish-old-gate; exit 1'\n")
+	_, err := a.Publish(PublishReq{Target: "t1", BranchName: "fix/one"})
+	if err == nil || !strings.Contains(err.Error(), "echo publish-old-gate; exit 1") {
+		t.Fatalf("publish with lint.cmd edited after startup: %v", err)
+	}
+	if remoteRev(t, origin, "fix/one") != "" {
+		t.Fatal("publish pushed past the reloaded red gate")
+	}
+
+	write(t, a.Root, ".saddle/config.toml", "[test]\ncmd = \"none\"\n[train]\nlint.cmd = \"true\"\n")
+	res, err := a.Publish(PublishReq{Target: "t1", BranchName: "fix/one"})
+	if err != nil {
+		t.Fatalf("publish after lint.cmd changed to a green gate: %v", err)
+	}
+	if remoteRev(t, origin, res.Branch) == "" {
+		t.Fatal("publish did not push once the reloaded gate was green")
+	}
+}
