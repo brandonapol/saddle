@@ -160,4 +160,3 @@ func (f Forge) loggedIn() string {
 	}
 	return "logged in to " + f.Host
 }
-
