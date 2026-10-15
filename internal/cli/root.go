@@ -135,6 +135,10 @@ keep the CLI they were spawned with.
 			}
 			err = upTrustErr(gateTrust(cmd.OutOrStdout(), cmd.InOrStdin(), trusted))
 			trace.Mark("args, trust")
+			if err == nil && harness == "" {
+				// An agent named on the command line is used as asked.
+				err = applyUpFallback(cmd.OutOrStdout())
+			}
 			return err
 		},
 		RunE: withScratch(func(cmd *cobra.Command, a *app.App, args []string) error {

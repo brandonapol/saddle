@@ -7,6 +7,9 @@ import (
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/agent"
+	"github.com/brandonapol/saddle/internal/agent/agenttest"
+	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/doctor"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 )
 
@@ -109,5 +112,44 @@ func TestWriteTaskPicks(t *testing.T) {
 	})
 	if got := b.String(); got != "t1 on codex: suits mechanical, 90% of budget left, 0 running\n" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// #646: a bare saddle up whose harness can't run falls back to the first
+// agent CLI that can, for this run, and with none it prints the install
+// steps instead of starting.
+func TestUpFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		bins []string
+		want string
+		says []string
+		err  string
+	}{
+		{"claude ready", []string{"claude", "codex"}, "", nil, ""},
+		{"claude missing, codex present", []string{"codex"}, "codex", []string{"claude can't run (claude not on PATH); running codex for this run", "Codex has no hooks"}, ""},
+		{"claude missing, grok present", []string{"grok", "codex"}, "grok", []string{"running grok for this run", `harness = "grok"`}, ""},
+		{"nothing", nil, "", nil, "no agent CLI is installed and logged in"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agenttest.Path(t, tc.bins, tc.bins)
+			cfg := config.Default()
+			var out strings.Builder
+			got, err := upFallback(&out, cfg, agent.Availability(doctor.AgentCmds(cfg)))
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) || !strings.Contains(err.Error(), "@anthropic-ai/claude-code") {
+					t.Fatalf("err = %v, want %q with install steps", err, tc.err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("upFallback = %q, %v; want %q", got, err, tc.want)
+			}
+			for _, w := range tc.says {
+				if !strings.Contains(out.String(), w) {
+					t.Errorf("output lacks %q:\n%s", w, out.String())
+				}
+			}
+		})
 	}
 }
