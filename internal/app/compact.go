@@ -154,16 +154,46 @@ type ContextReader struct {
 	path       string
 	cur        usage.Cursor
 	last       *usage.Record
+	// model and window are what a Codex rollout last reported: its turn's
+	// model and its model_context_window.
+	model  string
+	window int64
+}
+
+// codexParser reads a rollout's per-call prompts as records and keeps the
+// model and window they were reported with on r.
+func (r *ContextReader) codexParser(line []byte) (usage.Record, bool, error) {
+	c, ok, err := usage.ParseCodexContext(line)
+	if !ok || err != nil {
+		return usage.Record{}, false, err
+	}
+	if c.Model != "" {
+		r.model = c.Model
+	}
+	if c.Prompt <= 0 {
+		return usage.Record{}, false, nil
+	}
+	if c.Window > 0 {
+		r.window = c.Window
+	}
+	model := r.model
+	if model == "" {
+		model = usage.CodexModel
+	}
+	return usage.Record{Time: c.Time, Model: model, Tokens: usage.Tokens{Input: c.Prompt}}, true, nil
 }
 
 // Read returns the context use at the end of the transcript at path. A new
 // path starts over; a missing transcript reads as zero.
 func (r *ContextReader) Read(path string) (ContextUse, error) {
 	if path != r.path {
-		r.path, r.cur, r.last = path, usage.Cursor{}, nil
+		r.path, r.cur, r.last, r.model, r.window = path, usage.Cursor{}, nil, "", 0
 	}
 	parse := usage.ParserFor(r.Agent)
 	readPath := path
+	if r.Agent == usage.Codex {
+		parse = r.codexParser
+	}
 	if r.Agent == usage.Grok && filepath.Base(path) == "usage.json" {
 		// Grok's adapter points at the cumulative usage ledger. The sibling
 		// updates stream has the latest model call's actual prompt size.
@@ -185,7 +215,88 @@ func (r *ContextReader) Read(path string) (ContextUse, error) {
 	if r.last == nil {
 		return ContextUse{}, nil
 	}
-	return NewContextUse(r.last.Model, r.Configured, r.last.Tokens), nil
+	u := NewContextUse(r.last.Model, r.Configured, r.last.Tokens)
+	if r.Agent == usage.Codex && r.window > 0 {
+		u.Window = r.window
+	}
+	return u, nil
+}
+
+// workerTranscriptTTL is how long a worker's resolved transcript path is
+// trusted. Finding a codex rollout walks every session, and a resumed worker
+// can move to a new one.
+const workerTranscriptTTL = time.Minute
+
+// workerReader follows one worker's live session.
+type workerReader struct {
+	r        *ContextReader
+	path     string
+	resolved time.Time
+}
+
+// workerReaders holds each App's per-task readers, like compactTargets.
+var workerReaders sync.Map // *App -> *workerReaderSet
+
+type workerReaderSet struct {
+	mu sync.Mutex
+	m  map[string]*workerReader
+}
+
+// WorkerContexts reads how full each active grok and codex worker's context
+// is from its harness's own per-model-call reading: grok's updates.jsonl and
+// codex's rollout. The usage buckets can't give one for them, since grok's
+// records total every model call in a turn (#598). Readers persist per task,
+// so repeated calls read only new lines. Tasks with no reading are absent.
+func (a *App) WorkerContexts() map[string]ContextUse {
+	out := map[string]ContextUse{}
+	if a == nil || a.Store == nil {
+		return out
+	}
+	ts, err := a.Store.Tasks()
+	if err != nil {
+		return out
+	}
+	v, _ := workerReaders.LoadOrStore(a, &workerReaderSet{m: map[string]*workerReader{}})
+	set := v.(*workerReaderSet)
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	now := time.Now()
+	live := map[string]bool{}
+	for _, t := range ts {
+		if !t.Active() || t.ID == OrchestratorID {
+			continue
+		}
+		ad, err := agent.ByName(a.AdapterOf(t))
+		if err != nil {
+			continue
+		}
+		src := ad.Usage()
+		if src.Agent != usage.Grok && src.Agent != usage.Codex {
+			continue
+		}
+		live[t.ID] = true
+		w := set.m[t.ID]
+		if w == nil || w.r.Agent != src.Agent {
+			w = &workerReader{r: &ContextReader{Agent: src.Agent, Configured: t.Model}}
+			set.m[t.ID] = w
+		}
+		if w.path == "" || now.Sub(w.resolved) >= workerTranscriptTTL {
+			w.path, w.resolved = src.Transcript(t.Worktree, a.stateDir("run", t.ID), t.SessionID), now
+		}
+		if w.path == "" {
+			continue
+		}
+		if u, err := w.r.Read(w.path); err == nil && u.Prompt > 0 {
+			u.Adapter = src.Agent
+			out[t.ID] = u
+		}
+	}
+	for id := range set.m {
+		if !live[id] {
+			delete(set.m, id)
+		}
+	}
+	return out
 }
 
 // orchestratorAgent is the usage agent kind the orchestrator runs as: the

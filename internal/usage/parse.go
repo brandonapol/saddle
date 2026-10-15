@@ -202,6 +202,10 @@ type grokLine struct {
 type grokContextLine struct {
 	Timestamp int64 `json:"timestamp"`
 	Params    *struct {
+		Update *struct {
+			SessionUpdate string `json:"sessionUpdate"`
+			TokensAfter   int64  `json:"tokens_after"`
+		} `json:"update"`
 		Meta *struct {
 			TotalTokens int64  `json:"totalTokens"`
 			EventID     string `json:"eventId"`
@@ -211,23 +215,81 @@ type grokContextLine struct {
 
 // ParseGrokContext reads one Grok updates.jsonl event. Grok's usage.json
 // totals every model call in a user turn; _meta.totalTokens is the prompt size
-// of this model call and therefore the useful context-window reading.
+// of this model call and therefore the useful context-window reading. An
+// auto_compact_completed event's tokens_after is the context right after a
+// compaction, before the next model call reports one.
 func ParseGrokContext(line []byte) (Record, bool, error) {
 	var l grokContextLine
 	if err := json.Unmarshal(line, &l); err != nil {
 		return Record{}, false, err
 	}
-	if l.Params == nil || l.Params.Meta == nil || l.Params.Meta.TotalTokens <= 0 {
+	if l.Params == nil {
+		return Record{}, false, nil
+	}
+	var tokens int64
+	var id string
+	if m := l.Params.Meta; m != nil {
+		tokens, id = m.TotalTokens, m.EventID
+	}
+	if u := l.Params.Update; tokens <= 0 && u != nil && u.SessionUpdate == "auto_compact_completed" {
+		tokens = u.TokensAfter
+	}
+	if tokens <= 0 {
 		return Record{}, false, nil
 	}
 	var ts time.Time
 	if l.Timestamp > 0 {
 		ts = time.Unix(l.Timestamp, 0)
 	}
-	return Record{
-		ID: l.Params.Meta.EventID, Time: ts, Model: Grok,
-		Tokens: Tokens{Input: l.Params.Meta.TotalTokens},
-	}, true, nil
+	return Record{ID: id, Time: ts, Model: Grok, Tokens: Tokens{Input: tokens}}, true, nil
+}
+
+// ContextReading is one transcript line's view of a session's context: the
+// prompt of its latest model call against the window the harness reported.
+// Zero fields are unknown.
+type ContextReading struct {
+	Time   time.Time
+	Model  string
+	Prompt int64
+	Window int64
+}
+
+// ParseCodexContext reads one Codex rollout line for a context reading. A
+// token_count event's last_token_usage is the latest model call, whose
+// input_tokens (cached ones included) is the prompt, and model_context_window
+// is the window Codex itself sizes against. A turn_context line yields only
+// its model. ok is false for every other line.
+func ParseCodexContext(line []byte) (ContextReading, bool, error) {
+	var l struct {
+		Timestamp string `json:"timestamp"`
+		Type      string `json:"type"`
+		Payload   *struct {
+			Type  string `json:"type"`
+			Model string `json:"model"`
+			Info  *struct {
+				Last   *codexUsage `json:"last_token_usage"`
+				Window int64       `json:"model_context_window"`
+			} `json:"info"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(line, &l); err != nil {
+		return ContextReading{}, false, err
+	}
+	p := l.Payload
+	if p == nil {
+		return ContextReading{}, false, nil
+	}
+	if l.Type == "turn_context" && p.Model != "" {
+		return ContextReading{Model: p.Model}, true, nil
+	}
+	if l.Type != "event_msg" || p.Type != "token_count" || p.Info == nil || p.Info.Last == nil || p.Info.Last.Input <= 0 {
+		return ContextReading{}, false, nil
+	}
+	ts, err := parseTime(l.Timestamp)
+	if err != nil {
+		return ContextReading{}, false, err
+	}
+	return ContextReading{Time: ts, Prompt: p.Info.Last.Input, Window: p.Info.Window}, true, nil
 }
 
 // ParseGrok reads Grok CLI output. Three shapes count:

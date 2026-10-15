@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -240,6 +241,56 @@ func TestAgentRowShowsAdapter(t *testing.T) {
 	} {
 		if row := m.agentRow(v.task, c); !strings.Contains(row, v.want) {
 			t.Errorf("%s row %q lacks %q", v.task.ID, row, v.want)
+		}
+	}
+}
+
+// A running grok worker whose usage buckets hold its turns' cumulative
+// totals used to render "?"; the control view now shows its live reading
+// against grok's 256K window, and a codex worker's against the window its
+// rollout reports (#598).
+func TestCtxCellShowsLiveGrokAndCodexContext(t *testing.T) {
+	tmp := t.TempDir()
+	grokHome, codexHome := filepath.Join(tmp, "grok"), filepath.Join(tmp, "codex")
+	t.Setenv("GROK_HOME", grokHome)
+	t.Setenv("CODEX_HOME", codexHome)
+	st, err := store.Open(filepath.Join(tmp, "state.db"))
+	must(t, err)
+	defer func() { _ = st.Close() }()
+	gw, cw := filepath.Join(tmp, "wt", "t1"), filepath.Join(tmp, "wt", "t2")
+	must(t, st.CreateTask(store.Task{ID: "t1", Role: store.RoleWorker, Status: store.Running, Adapter: usage.Grok, Worktree: gw, SessionID: "01a1grok"}))
+	must(t, st.CreateTask(store.Task{ID: "t2", Role: store.RoleWorker, Status: store.Running, Adapter: usage.Codex, Worktree: cw}))
+	now := time.Now().UTC().Truncate(time.Minute)
+	must(t, st.AddUsage("s1", false, []usage.Bucket{{
+		Key:      usage.Key{Minute: now, Task: "t1", Model: "grok-4.7-build"},
+		Tokens:   usage.Tokens{Input: 378_758, CacheRead: 8_753_664, Output: 124_474},
+		Messages: 1,
+	}}))
+	sess := filepath.Join(grokHome, "sessions", "%2Fwt%2Ft1", "01a1grok")
+	must(t, os.MkdirAll(sess, 0o755))
+	must(t, os.WriteFile(filepath.Join(sess, "usage.json"), []byte(`{"turns":[]}`), 0o644))
+	must(t, os.WriteFile(filepath.Join(sess, "updates.jsonl"), []byte(
+		`{"timestamp":1792026049,"method":"session/update","params":{"sessionId":"01a1grok","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Done."}},"_meta":{"totalTokens":144127,"eventId":"01a1grok-8001","promptId":"p1","updateType":"AgentMessageChunk"}}}
+{"timestamp":1792026049,"method":"_x.ai/session/update","params":{"sessionId":"01a1grok","update":{"sessionUpdate":"turn_completed","usage":{"inputTokens":9132422,"totalTokens":9256896,"cachedReadTokens":8753664,"modelCalls":88}},"_meta":{"eventId":"01a1grok-8006"}}}
+`), 0o644))
+	day := filepath.Join(codexHome, "sessions", "2026", "10", "14")
+	must(t, os.MkdirAll(day, 0o755))
+	must(t, os.WriteFile(filepath.Join(day, "rollout-2026-10-14T10-22-37-01a1codex.jsonl"), []byte(
+		`{"timestamp":"2026-10-14T14:22:37.100Z","type":"session_meta","payload":{"id":"01a1codex","cwd":"`+cw+`"}}
+{"timestamp":"2026-10-14T14:22:39.478Z","type":"turn_context","payload":{"cwd":"`+cw+`","model":"gpt-5.6-sol"}}
+{"timestamp":"2026-10-14T14:39:55.469Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":4298911,"cached_input_tokens":4215296,"output_tokens":9011,"total_tokens":4307922},"last_token_usage":{"input_tokens":129200,"cached_input_tokens":128584,"output_tokens":133,"total_tokens":129333},"model_context_window":258400}}}
+`), 0o644))
+
+	s := readStats(&app.App{Root: tmp, Store: st, Cfg: config.Default()}, now)
+	if got := ctxCell(s["t1"]); !strings.Contains(got, "56%") {
+		t.Errorf("grok worker renders %q, want 144K of 256K = 56%%", got)
+	}
+	if got := ctxCell(s["t2"]); !strings.Contains(got, "50%") {
+		t.Errorf("codex worker renders %q, want 129K of 258K = 50%%", got)
+	}
+	for _, id := range []string{"t1", "t2"} {
+		if w := lipgloss.Width(ctxCell(s[id])); w != ctxW {
+			t.Errorf("%s context cell is %d wide, want %d", id, w, ctxW)
 		}
 	}
 }
