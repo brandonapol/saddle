@@ -64,6 +64,10 @@ var contextWindows = []struct {
 // Code's long-context alias) means one million.
 func ContextWindow(model string) int64 {
 	m := strings.ToLower(model)
+	// opencode labels are "provider/model" (possibly nested): look up the model.
+	if i := strings.LastIndex(m, "/"); i >= 0 {
+		m = m[i+1:]
+	}
 	if strings.HasSuffix(m, "[1m]") {
 		return longContext
 	}
