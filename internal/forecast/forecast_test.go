@@ -97,16 +97,6 @@ func TestSameSymbol(t *testing.T) {
 	}
 }
 
-func TestDifferentSymbolsSameFileIsOnlyHigh(t *testing.T) {
-	r := Run(Input{Tasks: []Task{
-		{ID: "t1", Files: []string{"inv.go"}, Symbols: []Symbol{{Path: "inv.go", Name: "A", Kind: "func"}}},
-		{ID: "t2", Files: []string{"inv.go"}, Symbols: []Symbol{{Path: "inv.go", Name: "B", Kind: "func"}}},
-	}}, Config{})
-	if f := pair(t, r.Pairs, "t1", "t2"); f.Level != High {
-		t.Errorf("level = %v, want high", f.Level)
-	}
-}
-
 func TestImportOfChangedPackage(t *testing.T) {
 	r := Run(Input{Tasks: []Task{
 		{ID: "t1", Files: []string{"cmd/main.go"}, Imports: map[string][]string{"cmd/main.go": {"internal/store"}}},
@@ -262,5 +252,57 @@ func TestLevelString(t *testing.T) {
 		if l.String() != want {
 			t.Errorf("%d.String() = %q, want %q", l, l.String(), want)
 		}
+	}
+}
+
+func TestSameFileDisjointSymbolsScoresLow(t *testing.T) {
+	r := Run(Input{Tasks: []Task{
+		{ID: "t1", Files: []string{"billing/meter.go"}, Symbols: []Symbol{{Path: "billing/meter.go", Name: "Meter", Kind: "function"}}},
+		{ID: "t2", Files: []string{"billing/meter.go"}, Symbols: []Symbol{{Path: "billing/meter.go", Name: "Rate", Kind: "function"}}},
+	}}, Config{})
+	f := pair(t, r.Pairs, "t1", "t2")
+	if f.Level != Low {
+		t.Errorf("level = %v, want low", f.Level)
+	}
+	if want := "same file, disjoint symbols: billing/meter.go"; f.Reason != want {
+		t.Errorf("reason = %q, want %q", f.Reason, want)
+	}
+	for _, e := range f.Evidence {
+		if e.Kind == KindFile {
+			t.Errorf("disjoint symbols still scored as same file: %+v", f.Evidence)
+		}
+	}
+}
+
+func TestSameFileSameSymbolStaysCritical(t *testing.T) {
+	r := Run(Input{Tasks: []Task{
+		{ID: "t1", Files: []string{"billing/meter.go"}, Symbols: []Symbol{
+			{Path: "billing/meter.go", Name: "Meter", Kind: "function"},
+			{Path: "billing/meter.go", Name: "Rate", Kind: "function"},
+		}},
+		{ID: "t2", Files: []string{"billing/meter.go"}, Symbols: []Symbol{{Path: "billing/meter.go", Name: "Meter", Kind: "function"}}},
+	}}, Config{})
+	f := pair(t, r.Pairs, "t1", "t2")
+	if f.Level != Critical {
+		t.Errorf("level = %v, want critical", f.Level)
+	}
+	if want := "same symbol: billing/meter.go Meter (function) (+1 more)"; f.Reason != want {
+		t.Errorf("reason = %q, want %q", f.Reason, want)
+	}
+}
+
+func TestSameFileOneSideWithoutSymbolsStaysHigh(t *testing.T) {
+	r := Run(Input{Tasks: []Task{
+		{ID: "t1", Files: []string{"billing/meter.go"}, Symbols: []Symbol{{Path: "billing/meter.go", Name: "Meter", Kind: "function"}}},
+		// t2 changed the file outside any symbol (imports, say), or on a
+		// language the extractor doesn't know.
+		{ID: "t2", Files: []string{"billing/meter.go"}, Symbols: []Symbol{{Path: "billing/other.go", Name: "X", Kind: "function"}}},
+	}}, Config{})
+	f := pair(t, r.Pairs, "t1", "t2")
+	if f.Level != High {
+		t.Errorf("level = %v, want high", f.Level)
+	}
+	if want := "same file: billing/meter.go"; f.Reason != want {
+		t.Errorf("reason = %q, want %q", f.Reason, want)
 	}
 }
