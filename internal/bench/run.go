@@ -8,20 +8,23 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/autopilot"
+	"github.com/brandonapol/saddle/internal/claims"
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/e2e"
 	fa "github.com/brandonapol/saddle/internal/e2e/fakeagent"
 	"github.com/brandonapol/saddle/internal/e2e/fakegh"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
-// Adapters and granularities the runner knows. Only the first of each runs
-// today; the rest are reserved (docs/bench.md, "Not yet").
+// Adapters and granularities the runner knows. Only the fake adapter runs
+// today; the others are reserved (docs/bench.md, "Not yet").
 var (
 	Adapters      = []string{"fake", "claude", "grok", "codex"}
 	Granularities = []string{"file", "symbol"}
@@ -33,8 +36,12 @@ const (
 	DefaultTimeout = 10 * time.Minute
 )
 
-// release is the message that lets a held fake agent call done.
-const release = "bench-release"
+// release is the message that lets a held fake agent call done; start lets
+// one held by start_after begin writing.
+const (
+	release = "bench-release"
+	start   = "bench-start"
+)
 
 // Options configure one run.
 type Options struct {
@@ -72,9 +79,7 @@ func (o Options) Check() error {
 		return fmt.Errorf("--adapter %q: want one of %v", o.Adapter, Adapters)
 	}
 	switch o.Granularity {
-	case "", "file":
-	case "symbol":
-		return errors.New("--granularity symbol: symbol-level claims are not implemented yet (docs/symbol-claims.md, #329)")
+	case "", "file", "symbol":
 	default:
 		return fmt.Errorf("--granularity %q: want one of %v", o.Granularity, Granularities)
 	}
@@ -172,6 +177,17 @@ type runner struct {
 	ticket map[int]*Ticket // issue number -> ticket
 	task   map[int]string  // issue number -> task
 	freed  map[int]bool    // issues whose held agent was released
+	// started are issues whose agent, held by start_after, was let go.
+	started map[int]bool
+}
+
+// claimsTable is the [claims] config for granularity g. File mode is the
+// default, so it writes nothing and the world runs exactly as before.
+func claimsTable(g string) string {
+	if g != config.GranularitySymbol {
+		return ""
+	}
+	return fmt.Sprintf("[claims]\ngranularity = %q\n", g)
 }
 
 // setup builds the world: the fixture as the repo's first commit, saddle
@@ -187,9 +203,11 @@ func (r *runner) setup(bins e2e.Bins, fixture string) {
 	w.Git(w.Repo, "commit", "-q", "-m", "bench fixture")
 	w.Git(w.Repo, "push", "-q", "origin", "main")
 	w.MustSaddle("init", "-q", "--trust")
-	w.WriteConfig(e2e.Options{Top: fmt.Sprintf("concurrency = %d\n", r.sc.cap()), TestCmd: "go test ./..."})
+	w.WriteConfig(e2e.Options{Top: fmt.Sprintf("concurrency = %d\n", r.sc.cap()), TestCmd: "go test ./...",
+		Tables: claimsTable(r.o.Granularity)})
 
-	r.ticket, r.task, r.freed = map[int]*Ticket{}, map[int]string{}, map[int]bool{}
+	r.ticket, r.task = map[int]*Ticket{}, map[int]string{}
+	r.freed, r.started = map[int]bool{}, map[int]bool{}
 	err := w.GH.Update(func(s *fakegh.State) error {
 		for i := range r.sc.Tickets {
 			tk := &r.sc.Tickets[i]
@@ -263,6 +281,7 @@ func (r *runner) drive() {
 			return
 		}
 		r.releaseHeld()
+		r.releaseStarts()
 		if sig := r.signature(); sig != lastSig {
 			last, lastSig = time.Now(), sig
 		}
@@ -321,6 +340,41 @@ func (r *runner) releaseHeld() {
 			}
 		}
 	}
+}
+
+// releaseStarts messages each agent held by start_after once the agents of
+// those tickets have committed.
+func (r *runner) releaseStarts() {
+	for n, tk := range r.ticket {
+		task := r.task[n]
+		if task == "" || len(tk.StartAfter) == 0 || r.started[n] {
+			continue
+		}
+		ready := true
+		for _, want := range tk.StartAfter {
+			if !r.committed(r.issueOf(want)) {
+				ready = false
+				break
+			}
+		}
+		if ready {
+			r.started[n] = true
+			if res := r.w.Saddle("message", task, start); res.Code != 0 {
+				fmt.Fprintf(r.o.Progress, "could not start %s: %s\n", task, res)
+			}
+		}
+	}
+}
+
+// committed reports whether issue n's fake agent got past its commit, or
+// stopped trying.
+func (r *runner) committed(n int) bool {
+	task := r.task[n]
+	if task == "" {
+		return false
+	}
+	b, _ := os.ReadFile(fa.LogPath(r.w.Scripts, task))
+	return strings.Contains(string(b), " commit ok") || r.finished(n)
 }
 
 // issueOf is the issue a ticket number was filed as.
@@ -387,6 +441,55 @@ type benchEnv struct {
 	r *runner
 }
 
+// Tasks is the wrapped Env's, with the symbol-mode gate: see openGate.
+func (e *benchEnv) Tasks() ([]autopilot.Task, error) {
+	ts, err := e.Env.Tasks()
+	if err != nil || e.r.o.Granularity != config.GranularitySymbol {
+		return ts, err
+	}
+	return openGate(ts, e.r.benchIssues()), nil
+}
+
+// benchIssues are the issues filed for the scenario's tickets.
+func (r *runner) benchIssues() map[int]bool {
+	out := map[int]bool{}
+	for n := range r.ticket {
+		out[n] = true
+	}
+	return out
+}
+
+// openGate is the spawn gate under symbol claims. Autopilot keeps tickets
+// whose path claims overlap a live task's apart; with symbol claims the
+// edit-time rules decide instead (docs/symbol-claims.md, rules 1-3), so the
+// bench shows autopilot its own tickets' tasks as holding no claims. They
+// stay non-nil: nil would mean "declared none, runs alone". Tasks that are
+// not bench tickets keep theirs.
+func openGate(ts []autopilot.Task, bench map[int]bool) []autopilot.Task {
+	out := slices.Clone(ts)
+	for i := range out {
+		if bench[out[i].Issue] {
+			out[i].Claims = []string{}
+		}
+	}
+	return out
+}
+
+// freeClaims is want without the globs another task in held already
+// covers, so a symbol-mode spawn isn't refused for a shared file. The
+// dropped files stay its owner's; writes to them go through rule 1. The
+// result is never nil.
+func freeClaims(held map[string][]string, want []string) []string {
+	c := claims.Conflicts(held, "", want)
+	out := []string{}
+	for _, w := range want {
+		if _, taken := c[w]; !taken {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 // Route keeps the provider preview of the Env it wraps.
 func (e *benchEnv) Route(req autopilot.SpawnReq) (string, string, string, error) {
 	if rt, ok := e.Env.(autopilot.Router); ok {
@@ -400,6 +503,16 @@ func (e *benchEnv) Spawn(req autopilot.SpawnReq) (string, error) {
 	tk := r.ticket[req.Issue]
 	if tk == nil {
 		return "", fmt.Errorf("issue #%d is not a bench ticket", req.Issue)
+	}
+	if r.o.Granularity == config.GranularitySymbol && len(req.Claims) > 0 {
+		held, err := r.a.Store.Claims()
+		if err != nil {
+			return "", err
+		}
+		if free := freeClaims(held, req.Claims); len(free) < len(req.Claims) {
+			fmt.Fprintf(r.o.Progress, "#%d shares a claimed file with a live task: spawned with claims %v of %v\n", req.Issue, free, req.Claims)
+			req.Claims = free
+		}
 	}
 	c := Apply(SpawnBase(r.a.Root, r.a.Cfg.Integration, r.a.Cfg.Base), tk.Edits)
 	script := fa.Script{Steps: steps(tk, c)}
@@ -429,6 +542,9 @@ func (e *benchEnv) Spawn(req autopilot.SpawnReq) (string, error) {
 // wait to be released, done.
 func steps(tk *Ticket, c Change) []fa.Step {
 	var out []fa.Step
+	if len(tk.StartAfter) > 0 {
+		out = append(out, fa.Wait(start))
+	}
 	paths := make([]string, 0, len(c.Writes))
 	for p := range c.Writes {
 		paths = append(paths, p)
@@ -475,7 +591,7 @@ func write(dir string, res *Result) (string, string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", "", err
 	}
-	stem := filepath.Join(dir, res.Log.Scenario+"-"+res.Log.Started.UTC().Format("20060102T150405Z"))
+	stem := filepath.Join(dir, res.Log.Scenario+"-"+res.Log.Granularity+"-"+res.Log.Started.UTC().Format("20060102T150405Z"))
 	b, err := json.MarshalIndent(struct {
 		Report Report `json:"report"`
 		Log    Log    `json:"log"`

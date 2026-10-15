@@ -81,13 +81,53 @@ it builds saddle, the fake gh and the fake agent from it. See docs/bench.md.`,
 	}
 	f := run.Flags()
 	f.StringVar(&o.Adapter, "adapter", "fake", "agent: "+strings.Join(bench.Adapters, ", ")+" (only fake runs today)")
-	f.StringVar(&o.Granularity, "granularity", "file", "claim granularity: "+strings.Join(bench.Granularities, ", ")+" (only file today)")
+	f.StringVar(&o.Granularity, "granularity", "file", "claim granularity: "+strings.Join(bench.Granularities, ", ")+" (symbol sets [claims] granularity = \"symbol\")")
 	f.StringVar(&o.Out, "out", "", "where to write the JSON and markdown (default: <bench dir>/results)")
 	f.DurationVar(&o.Stall, "stall", bench.DefaultStall, "end the run after this long without progress")
 	f.DurationVar(&o.Timeout, "timeout", bench.DefaultTimeout, "end the run regardless after this long")
 	f.BoolVar(&o.Keep, "keep", false, "keep the world's temp dir and print its path")
 
-	cmd.AddCommand(run, &cobra.Command{
+	var co bench.Options
+	compare := &cobra.Command{
+		Use:   "compare [scenario...]",
+		Short: "Run scenarios under file claims and under symbol claims and print a file-vs-symbol table",
+		Long: `compare runs each scenario twice, with [claims] granularity = "file" and
+"symbol", writes both runs' results like run does, and prints one table with a
+row per scenario. With no scenario it runs them all.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			d, err := benchDir(dir)
+			if err != nil {
+				return err
+			}
+			if len(args) == 0 {
+				if args, err = bench.List(d); err != nil {
+					return err
+				}
+			}
+			co.BenchDir, co.Progress = d, cmd.ErrOrStderr()
+			if !cmd.Flags().Changed("out") {
+				co.Out = filepath.Join(d, "results")
+			}
+			cs, err := bench.Compare(co, args)
+			if err != nil {
+				return err
+			}
+			fmt.Fprint(cmd.OutOrStdout(), bench.CompareMarkdown(cs))
+			for _, c := range cs {
+				if c.Err != "" {
+					return fmt.Errorf("%s: %s", c.Scenario, c.Err)
+				}
+			}
+			return nil
+		},
+	}
+	cf := compare.Flags()
+	cf.StringVar(&co.Adapter, "adapter", "fake", "agent: "+strings.Join(bench.Adapters, ", ")+" (only fake runs today)")
+	cf.StringVar(&co.Out, "out", "", "where to write each run's JSON and markdown (default: <bench dir>/results)")
+	cf.DurationVar(&co.Stall, "stall", bench.DefaultStall, "end a run after this long without progress")
+	cf.DurationVar(&co.Timeout, "timeout", bench.DefaultTimeout, "end a run regardless after this long")
+
+	cmd.AddCommand(run, compare, &cobra.Command{
 		Use:   "score <run.json>",
 		Short: "Rescore a saved run's event log and print the summary",
 		Args:  cobra.ExactArgs(1),

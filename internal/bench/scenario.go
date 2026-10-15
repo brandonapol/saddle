@@ -40,8 +40,12 @@ type Ticket struct {
 	File   string `toml:"file"`
 	// WaitFor holds this ticket's fake agent before done until these
 	// tickets' agents have finished their scripts.
-	WaitFor []int  `toml:"wait_for"`
-	Edits   []Edit `toml:"edit"`
+	WaitFor []int `toml:"wait_for"`
+	// StartAfter holds this ticket's fake agent before its first write
+	// until these tickets' agents have committed, so it writes against
+	// their work in progress.
+	StartAfter []int  `toml:"start_after"`
+	Edits      []Edit `toml:"edit"`
 
 	Title  string   `toml:"-"`
 	Body   string   `toml:"-"`
@@ -153,13 +157,66 @@ func (sc *Scenario) validate() error {
 				errs = append(errs, fmt.Errorf("ticket %s waits for #%d, which is not another ticket", t.Key(), w))
 			}
 		}
+		for _, w := range t.StartAfter {
+			if w < 1 || w > len(sc.Tickets) || w == t.Number {
+				errs = append(errs, fmt.Errorf("ticket %s starts after #%d, which is not another ticket", t.Key(), w))
+			}
+		}
 		for j, e := range t.Edits {
 			if err := e.validate(); err != nil {
 				errs = append(errs, fmt.Errorf("ticket %s edit %d: %w", t.Key(), j+1, err))
 			}
 		}
 	}
+	if c := sc.startCycle(); c != "" {
+		errs = append(errs, fmt.Errorf("start_after cycle %s: no agent in it would ever write", c))
+	}
 	return errors.Join(errs...)
+}
+
+// startCycle is a start_after cycle ("#1 → #2 → #1"), or "".
+func (sc *Scenario) startCycle() string {
+	const (
+		unseen = iota
+		open
+		closed
+	)
+	state := make([]int, len(sc.Tickets)+1)
+	var path []int
+	var visit func(n int) string
+	visit = func(n int) string {
+		state[n] = open
+		path = append(path, n)
+		for _, w := range sc.Tickets[n-1].StartAfter {
+			if w < 1 || w > len(sc.Tickets) || w == n {
+				continue
+			}
+			switch state[w] {
+			case open:
+				i := slices.Index(path, w)
+				var keys []string
+				for _, p := range append(slices.Clone(path[i:]), w) {
+					keys = append(keys, fmt.Sprintf("#%d", p))
+				}
+				return strings.Join(keys, " → ")
+			case unseen:
+				if c := visit(w); c != "" {
+					return c
+				}
+			}
+		}
+		path = path[:len(path)-1]
+		state[n] = closed
+		return ""
+	}
+	for n := 1; n <= len(sc.Tickets); n++ {
+		if state[n] == unseen {
+			if c := visit(n); c != "" {
+				return c
+			}
+		}
+	}
+	return ""
 }
 
 func (e Edit) validate() error {

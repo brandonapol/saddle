@@ -260,6 +260,12 @@ func (a *Agent) step(st Step) error {
 			a.Log("denied", d.Specific.PermissionDecisionReason)
 			return errors.New("write denied: " + d.Specific.PermissionDecisionReason)
 		}
+		// The file before the write goes back in PostToolUse's
+		// tool_response, as Claude Code reports it: null for a new file.
+		var orig any
+		if b, err := os.ReadFile(p); err == nil {
+			orig = string(b)
+		}
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			return err
 		}
@@ -275,6 +281,7 @@ func (a *Agent) step(st Step) error {
 		if cerr := f.Close(); err == nil {
 			err = cerr
 		}
+		tool["tool_response"] = map[string]any{"filePath": p, "originalFile": orig}
 		a.hook("PostToolUse", tool)
 		return err
 	case st.Remove != "":

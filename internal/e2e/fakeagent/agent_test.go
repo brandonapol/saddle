@@ -398,3 +398,30 @@ func TestHeadlessSlowTurnEndsOnInterrupt(t *testing.T) {
 		t.Fatalf("stream:\n%s", s)
 	}
 }
+
+// TestPostToolUseReportsOriginalFile: like Claude Code, a Write's
+// PostToolUse carries tool_response.originalFile, the file before the
+// write (null when the write created it), so saddle's PostToolUse symbol
+// rules know what the write changed (#626).
+func TestPostToolUseReportsOriginalFile(t *testing.T) {
+	r := newRig(t, Script{Steps: []Step{Write("a.txt", "one\n"), Write("a.txt", "two\n")}})
+	r.waitLog("idle: script finished")
+	b, _ := os.ReadFile(filepath.Join(r.dir, "hooks.jsonl"))
+	var orig []any
+	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var p struct {
+			Event string         `json:"hook_event_name"`
+			Resp  map[string]any `json:"tool_response"`
+		}
+		if json.Unmarshal([]byte(l), &p) == nil && p.Event == "PostToolUse" {
+			o, ok := p.Resp["originalFile"]
+			if !ok {
+				t.Fatalf("PostToolUse without tool_response.originalFile: %s", l)
+			}
+			orig = append(orig, o)
+		}
+	}
+	if len(orig) != 2 || orig[0] != nil || orig[1] != "one\n" {
+		t.Fatalf("originalFile = %#v, want [nil \"one\\n\"]", orig)
+	}
+}

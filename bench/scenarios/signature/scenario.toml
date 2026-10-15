@@ -2,8 +2,12 @@ description = "One ticket changes units.Scale's signature and updates its caller
 overlap = "medium"
 safe_parallelism = 1
 
+# #2 writes after #1 has committed its new signature, and #1 holds before
+# done until #2 is finished: #2 builds on the old Scale while #1's change is
+# live, which is what symbol claims' rule 3 warns about.
 [[ticket]]
 file = "01-scale-unit.md"
+wait_for = [2]
 
 [[ticket.edit]]
 path = "units/scale.go"
@@ -43,6 +47,7 @@ new = '''
 
 [[ticket]]
 file = "02-twice.md"
+start_after = [1]
 
 [[ticket.edit]]
 path = "extra/twice.go"
