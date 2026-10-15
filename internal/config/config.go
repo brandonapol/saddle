@@ -1042,6 +1042,9 @@ func Load(root string) (Config, error) {
 	if c := cfg.Forge.CLI; c != "" && c != ForgeGH && c != ForgeGlab && c != ForgeNone {
 		return cfg, fmt.Errorf("forge.cli %q: want gh, glab or none", c)
 	}
+	if p, c := cfg.Forge.Provider, cfg.Forge.CLI; p == ForgeGitHub && c == ForgeGlab || p == ForgeGitLab && c == ForgeGH {
+		return cfg, fmt.Errorf("forge.cli %q can't drive forge.provider %q: GitHub takes gh, GitLab glab", c, p)
+	}
 	if h := cfg.Forge.Host; strings.ContainsAny(h, "/ ") || strings.Contains(h, "://") {
 		return cfg, fmt.Errorf("forge.host %q: want a host name such as gitlab.example.com, without scheme or path", h)
 	}

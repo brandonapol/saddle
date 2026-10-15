@@ -952,6 +952,7 @@ func TestForgeOverride(t *testing.T) {
 		{"[forge]\ncli = \"none\"\n", Forge{CLI: ForgeNone}, ""},
 		{"[forge]\nprovider = \"gitlab\"\nhost = \"git.corp:8443\"\n", Forge{Provider: ForgeGitLab, Host: "git.corp:8443"}, ""},
 		{"[forge]\nhost = \"https://git.corp\"\n", Forge{}, "forge.host"},
+		{"[forge]\nprovider = \"github\"\ncli = \"glab\"\n", Forge{}, "can't drive"},
 		{"[forge]\nprovider = \"bitbucket\"\n", Forge{}, "forge.provider"},
 		{"[forge]\ncli = \"hub\"\n", Forge{}, "forge.cli"},
 	} {
