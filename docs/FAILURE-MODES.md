@@ -31,7 +31,7 @@ Each row says how it is handled, linking the code or issue, or says **gap**.
 |---|---|---|---|---|
 | Required reviews with auto-merge on: nothing ever merges | `branch_protection` | **predict**: `gh api repos/:o/:r/branches/<base>/protection` against the auto-merge switch; High | `saddle doctor` reports the approvals count: `internal/doctor/doctor.go` (`protection`) | Auto-merge itself doesn't refuse to start |
 | Required signed commits and unsigned agent commits | `branch_protection` | **predict**: `required_signatures` against `git config commit.gpgsign`; High | none | **gap** |
-| Merge commits allowed, which breaks stacked PRs (#109) | `branch_protection` | `saddle doctor` (merge settings) | `saddle up` refuses: `app.CheckRepoMergeSettings` in `internal/app` | |
+| Merge commits allowed, which breaks stacked PRs (#109) | `branch_protection` | `saddle doctor` (merge settings) | `saddle land` and `saddle prs` refuse: `app.CheckRepoMergeSettings` in `internal/app`; `saddle up` opens a card after its first frame (`internal/cli/up_deferred.go`, #635) | |
 | Linear history, CODEOWNERS | `branch_protection` | none | none | **gap** |
 
 ## GitHub
@@ -45,7 +45,7 @@ Each row says how it is handled, linking the code or issue, or says **gap**.
 
 | Failure mode | Class | Probe | Handling | Gap |
 |---|---|---|---|---|
-| gh logged out, token expired, SSO re-auth | `credentials` | **predict**: `gh auth status`; High | `saddle doctor` and `saddle up` refuse to start: `internal/doctor/doctor.go` (`ghAuth`) | Expiry mid-run is found only when a call fails |
+| gh logged out, token expired, SSO re-auth | `credentials` | **predict**: `gh auth status`; High | `saddle doctor` fails; `saddle up` opens a card after its first frame: `internal/doctor/doctor.go` (`ghAuth`), `internal/cli/up_deferred.go` (#635) | Expiry mid-run is found only when a call fails |
 | gh token lacks `workflow`, so pushes touching `.github/workflows` are rejected | `credentials` | **predict**: token scopes against `.github/workflows` files; High when the repo has them | `saddle doctor` warns | |
 | ssh-agent or GPG pinentry prompting mid-commit | `credentials` | none | none | **gap**: no dry-run signed commit or agent TTL probe |
 

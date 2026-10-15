@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fixture is a bare origin with fake GitHub state and a clone of it.
@@ -438,5 +439,46 @@ func TestStackUnavailable(t *testing.T) {
 	}
 	if _, errs, code := f.ghRun("stack", "--version"); code == 0 || !strings.Contains(errs, `unknown command "stack" for "gh"`) {
 		t.Fatalf("missing extension: %d %s", code, errs)
+	}
+}
+
+// TestHoldBlocksCallsUntilReleased: a held call waits, is logged in Held,
+// and answers once Hold lets it go (#635).
+func TestHoldBlocksCallsUntilReleased(t *testing.T) {
+	f := newFixture(t)
+	if err := f.gh.Update(func(s *State) error { s.Hold = []string{""}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan int, 1)
+	go func() { _, _, code := f.ghRun("--version"); done <- code }()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		s, err := f.gh.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(s.Held) == 1 && s.Held[0][0] == "--version" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("held = %v", s.Held)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case code := <-done:
+		t.Fatalf("a held call returned %d", code)
+	default:
+	}
+	if err := f.gh.Update(func(s *State) error { s.Hold = nil; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("released call exited %d", code)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("released call never returned")
 	}
 }

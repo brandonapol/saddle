@@ -128,15 +128,29 @@ func hookable(bin string) bool {
 
 // ensureIntegration fetches base and creates the integration branch from
 // <remote>/<base> on first use. Later it reports when integration falls behind.
-func (a *App) ensureIntegration() error {
+func (a *App) ensureIntegration() error { return a.ensureIntegrationFetch(true) }
+
+// ensureIntegrationFetch creates integration from a fresh base when it is
+// missing. When it exists, fetch has it fetch base and warn when
+// integration is behind; without fetch it is left alone.
+func (a *App) ensureIntegrationFetch(fetch bool) error {
+	exists := gitx.BranchExists(a.Root, a.Cfg.Integration)
+	if exists && !fetch {
+		return nil
+	}
 	base := a.freshBase()
-	if gitx.BranchExists(a.Root, a.Cfg.Integration) {
+	if exists {
 		a.checkBehind(base)
 		return nil
 	}
 	_, err := gitx.Run(a.Root, "branch", "--no-track", a.Cfg.Integration, base)
 	return err
 }
+
+// CheckIntegrationBehind fetches base and tells the orchestrator when
+// integration is behind it: the check Orchestrator skips, which saddle up
+// runs after its first frame instead (#635).
+func (a *App) CheckIntegrationBehind() { a.checkBehind(a.freshBase()) }
 
 type SpawnReq struct {
 	ID     string
@@ -491,11 +505,14 @@ func (a *App) start(t store.Task, cl []string, ad agent.Adapter, resume, prompt 
 // EnsureOrchestrator makes sure saddle is initialized, the integration branch
 // exists and the orchestrator task exists, and returns that task. It starts
 // no process: the TUI launches one, the Claude Code plugin is one.
-func (a *App) EnsureOrchestrator() (store.Task, error) {
+func (a *App) EnsureOrchestrator() (store.Task, error) { return a.ensureOrchestrator(true) }
+
+// ensureOrchestrator is EnsureOrchestrator; fetch is ensureIntegrationFetch's.
+func (a *App) ensureOrchestrator(fetch bool) (store.Task, error) {
 	if err := a.Init(); err != nil {
 		return store.Task{}, err
 	}
-	if err := a.ensureIntegration(); err != nil {
+	if err := a.ensureIntegrationFetch(fetch); err != nil {
 		return store.Task{}, err
 	}
 	t, err := a.Store.Task(OrchestratorID)
@@ -509,9 +526,11 @@ func (a *App) EnsureOrchestrator() (store.Task, error) {
 
 // Orchestrator ensures the orchestrator task exists and returns the launch
 // for its headless process (Claude Code, or grok-bridge under harness =
-// "grok"), plus the session to resume (if any).
+// "grok"), plus the session to resume (if any). It doesn't fetch base when
+// integration exists: saddle up runs CheckIntegrationBehind after its first
+// frame (#635).
 func (a *App) Orchestrator() (agent.Launch, string, error) {
-	t, err := a.EnsureOrchestrator()
+	t, err := a.ensureOrchestrator(false)
 	if err != nil {
 		return agent.Launch{}, "", err
 	}

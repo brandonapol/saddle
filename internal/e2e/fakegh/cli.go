@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // RepoEnv names the bare repo directly, for gh calls made outside a checkout.
@@ -45,6 +46,10 @@ func Locate(dir string) (Repo, error) {
 
 // Main runs one gh invocation in dir and returns its exit code.
 func Main(dir string, args []string, stdout, stderr io.Writer) int {
+	r, rerr := Locate(dir)
+	if rerr == nil {
+		r.waitHold(args)
+	}
 	if len(args) > 0 && args[0] == "--version" {
 		fmt.Fprintln(stdout, "gh version 2.99.0 (fakegh)")
 		return exitOK
@@ -53,12 +58,12 @@ func Main(dir string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "github.com\n  ✓ Logged in to github.com account e2e (fakegh)\n  - Token scopes: 'repo', 'workflow'")
 		return exitOK
 	}
-	r, err := Locate(dir)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	if rerr != nil {
+		fmt.Fprintln(stderr, rerr)
 		return exitErr
 	}
 	code := exitOK
+	var err error
 	err = r.Update(func(s *State) error {
 		s.Calls = append(s.Calls, args)
 		for prefix, msg := range s.Fail {
@@ -629,4 +634,32 @@ func (c *call) print(v any, jq string) error {
 		fmt.Fprintln(c.out, string(b))
 	}
 	return nil
+}
+
+// holdPoll is how often a held call checks whether it was let go.
+const holdPoll = 20 * time.Millisecond
+
+// waitHold blocks while State.Hold holds args.
+func (r Repo) waitHold(args []string) {
+	line := strings.Join(args, " ")
+	held := func(s *State) bool {
+		for _, p := range s.Hold {
+			if strings.HasPrefix(line, p) {
+				return true
+			}
+		}
+		return false
+	}
+	logged := false
+	for {
+		s, err := r.Load()
+		if err != nil || !held(s) {
+			return
+		}
+		if !logged {
+			logged = true
+			_ = r.Update(func(s *State) error { s.Held = append(s.Held, args); return nil })
+		}
+		time.Sleep(holdPoll)
+	}
 }

@@ -114,34 +114,71 @@ type run struct {
 	base   string // the detected default branch, else cfg.Base
 	repo   string // owner/repo on GitHub, "" when unknown
 	gh     bool   // gh is installed and logged in
+	local  bool   // RunLocal: no GitHub calls
 }
 
+// slowChecks are the checks that call GitHub, push, start the agent CLI or
+// walk every branch and worktree. Under load they take tens of seconds, so
+// saddle up runs them after its first frame (#635).
+var slowChecks = map[string]bool{
+	CheckGH: true, CheckMergeSettings: true, CheckProtection: true, CheckGhStack: true,
+	CheckPush: true, CheckLeftovers: true, CheckSkills: true, CheckScratch: true,
+}
+
+// Slow reports whether Run makes the named check and RunLocal skips it.
+func Slow(name string) bool { return slowChecks[name] }
+
 // Run runs every check in order.
-func Run(env Env) []Result {
-	r := &run{env: env}
-	rs := []Result{
-		r.config(), r.gitRemote(), r.defaultBranch(), r.ghAuth(), r.mergeSettings(), r.protection(), r.ghStack(),
-		r.testCmd(), r.tool(CheckTmux, "tmux", "-V", "install tmux (e.g. `brew install tmux` or your package manager)"),
-		r.tool(CheckClaude, r.cfg.Claude.Cmd, "--version", "install Claude Code (https://claude.com/claude-code) or set [claude] cmd in .saddle/config.toml"),
-		r.hooks(), r.push(), r.orchAllow(), r.gate(), r.ignored(), r.stateDB(), r.leftovers(), r.inhibitor(),
+func Run(env Env) []Result { return runChecks(env, false) }
+
+// RunLocal runs every check but the slow ones, in Run's order: what saddle
+// up blocks on before its first frame. Run covers the rest after it (#635).
+func RunLocal(env Env) []Result { return runChecks(env, true) }
+
+func runChecks(env Env, local bool) []Result {
+	r := &run{env: env, local: local}
+	checks := []struct {
+		name string
+		run  func() Result
+	}{
+		{CheckConfig, r.config}, {CheckRemote, r.gitRemote}, {CheckDefaultBranch, r.defaultBranch},
+		{CheckGH, r.ghAuth}, {CheckMergeSettings, r.mergeSettings}, {CheckProtection, r.protection}, {CheckGhStack, r.ghStack},
+		{CheckTestCmd, r.testCmd},
+		{CheckTmux, func() Result {
+			return r.tool(CheckTmux, "tmux", "-V", "install tmux (e.g. `brew install tmux` or your package manager)")
+		}},
+		{CheckClaude, func() Result {
+			return r.tool(CheckClaude, r.cfg.Claude.Cmd, "--version", "install Claude Code (https://claude.com/claude-code) or set [claude] cmd in .saddle/config.toml")
+		}},
+		{CheckHooks, r.hooks}, {CheckPush, r.push}, {CheckOrchAllow, r.orchAllow}, {CheckGate, r.gate}, {CheckIgnored, r.ignored},
+		{CheckStateDB, r.stateDB}, {CheckLeftovers, r.leftovers}, {CheckInhibit, r.inhibitor},
 	}
-	if r.wantsGrok() {
-		rs = append(rs, r.grok())
+	var rs []Result
+	add := func(name string, check func() Result) {
+		if !local || !slowChecks[name] {
+			rs = append(rs, check())
+		}
+	}
+	for _, c := range checks {
+		add(c.name, c.run)
+	}
+	if r.wantsGrok() { // after config, which sets the harness
+		add(CheckGrok, r.grok)
 	}
 	if he, ok := env.(RepoHooksEnv); ok {
-		rs = append(rs, r.repoHooks(he))
+		add(CheckRepoHooks, func() Result { return r.repoHooks(he) })
 	}
 	if te, ok := env.(TrustEnv); ok {
-		rs = append(rs, trustCheck(te))
+		add(CheckTrust, func() Result { return trustCheck(te) })
 	}
 	if se, ok := env.(ScratchEnv); ok {
-		rs = append(rs, scratchCheck(se))
+		add(CheckScratch, func() Result { return scratchCheck(se) })
 	}
 	if re, ok := env.(RemoteEnv); ok {
-		rs = append(rs, remoteCheck(re, time.Now()))
+		add(CheckRemoteControl, func() Result { return remoteCheck(re, time.Now()) })
 	}
 	if se, ok := env.(SkillsEnv); ok && r.cfg.Harness != config.HarnessGrok {
-		rs = append(rs, r.skills(se))
+		add(CheckSkills, func() Result { return r.skills(se) })
 	}
 	return describe(rs)
 }
@@ -280,7 +317,7 @@ func (r *run) defaultBranch() Result {
 			def = strings.TrimPrefix(h, r.remote+"/")
 		}
 	}
-	if def == "" {
+	if def == "" && !r.local {
 		if b, err := r.env.GH("repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"); err == nil {
 			def = strings.TrimSpace(b)
 		}

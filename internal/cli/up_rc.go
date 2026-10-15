@@ -33,19 +33,19 @@ func upLock(rc bool) string {
 // runUpTUI runs the TUI: around the headless orchestrator, or with rc
 // around the Remote Control one, whose first message is first. While it
 // runs, a sleep inhibitor is held whenever autopilot is on.
-func runUpTUI(ctx context.Context, out io.Writer, a *app.App, first string, rc bool) error {
+func runUpTUI(ctx context.Context, out io.Writer, a *app.App, first string, rc bool, opts ...tui.Option) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go orchrc.KeepAwake(ctx, a)
 	if !rc {
-		return tui.Run(a, first)
+		return tui.Run(a, first, opts...)
 	}
 	s, err := orchrc.Start(a, first, remotePushOn())
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "Orchestrator: Claude Code session %q under Remote Control (tmux window %s).\n", s.Name, s.Window)
-	return tui.RunRC(a, s)
+	return tui.RunRC(a, s, opts...)
 }
 
 // remotePushOn reports whether [remote.push] is configured, so saddle pushes

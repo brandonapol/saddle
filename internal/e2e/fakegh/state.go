@@ -46,6 +46,11 @@ type State struct {
 	Calls         [][]string `json:"calls"`
 	// Fail makes the next calls whose args start with a key fail with its value.
 	Fail map[string]string `json:"fail,omitempty"`
+	// Hold makes calls whose args start with one of its prefixes ("" for
+	// every call) wait until it no longer holds them: a GitHub that never
+	// answers. Each held call is logged in Held when it starts waiting.
+	Hold []string   `json:"hold,omitempty"`
+	Held [][]string `json:"held,omitempty"`
 	// NextComment numbers comment node ids.
 	NextComment int `json:"next_comment"`
 	// Stacks are native stacked PRs (gh stack link). Stack numbers share
