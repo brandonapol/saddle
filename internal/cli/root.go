@@ -401,6 +401,7 @@ func statusCmd() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "done-orphaned: %s called done, was never queued and went quiet; saddle %s it %s ago\n",
 					o.Task, o.Step, time.Since(o.StepAt).Round(time.Minute))
 			}
+			writeForecast(cmd.OutOrStdout(), st.Forecast)
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(w, "ID\tSTATUS\tMODEL\tWIN\tTITLE\tCLAIMS\tTRAIN")
 			for _, t := range st.Tasks {

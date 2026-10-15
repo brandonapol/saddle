@@ -6,6 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -107,6 +108,23 @@ func TestLinesFitWidth(t *testing.T) {
 	for _, want := range []string{"[ ] meter tests pass", "[x] header shows the meter", "internal/usage/**", "t2 done meter cli"} {
 		if !strings.Contains(wide, want) {
 			t.Errorf("wide brief lacks %q:\n%s", want, wide)
+		}
+	}
+}
+
+func TestLinesListCollisions(t *testing.T) {
+	b, _ := Build("t1", prompt, fixture(), nil)
+	if strings.Contains(strings.Join(b.Lines(120), "\n"), "Collisions") {
+		t.Fatal("collisions section with none forecast")
+	}
+	b.Collisions = []app.ForecastPair{
+		{A: "t1", B: "t4", Level: "critical", Reason: "same symbol: a.go F (func)"},
+		{A: "t0", B: "t1", Level: "low", Reason: "same file, disjoint symbols: b.go"},
+	}
+	out := strings.Join(b.Lines(120), "\n")
+	for _, want := range []string{"Collisions", "  critical with t4: same symbol: a.go F (func)", "  low with t0: same file, disjoint symbols: b.go"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("brief lacks %q:\n%s", want, out)
 		}
 	}
 }

@@ -171,7 +171,10 @@ type StatusOut struct {
 	AdapterPolicy string `json:"adapter_policy,omitempty" jsonschema:"how spawns without adapter= pick (balanced, order, cost or quota) and what a worker does when its adapter runs out mid-task (handoff to the next adapter, or park until the reset)"`
 	// Fallback is the [fallback] chains (#483).
 	Fallback []app.FallbackStatus `json:"fallback,omitempty" jsonschema:"[fallback] chains: from (adapter or adapter:model), the chain that takes over while it is out of quota, out_of_quota_until while it is, now (the entry new spawns and handed-off workers go to) and skipped (entries passed over: out, excluded or unable to run here)"`
-	Tasks    []TaskView           `json:"tasks"`
+	// Forecast is the collision forecast between live tasks; absent while no
+	// pair scores medium or above.
+	Forecast *app.ForecastView `json:"forecast,omitempty" jsonschema:"predicted collisions between live tasks: pairs at medium and above (a, b, level, reason), at most 10, and safe: how many pairs score low or none. Absent while no pair reaches medium"`
+	Tasks    []TaskView        `json:"tasks"`
 	// Jev is the triage log rolled up (#512). Zero calls is reported, so a
 	// quiet judge is visible rather than absent.
 	Jev JevStatus `json:"jev" jsonschema:"Jev triage so far: how many calls, how many failed, and approximate list-price spend in USD"`
@@ -297,6 +300,7 @@ type BriefOut struct {
 	Serial     []string            `json:"serial,omitempty" jsonschema:"files only the merge train changes"`
 	Children   []TaskView          `json:"children,omitempty"`
 	Notices    int                 `json:"pending_notices,omitempty"`
+	Forecast   []app.ForecastPair  `json:"forecast,omitempty" jsonschema:"predicted collisions between this task and other live tasks, riskiest first: level (low to critical) and why; ask_owner reaches the other task"`
 	DoneWhen   string              `json:"done_when"`
 }
 
@@ -338,6 +342,9 @@ func Brief(a *app.App, task string) (BriefOut, error) {
 		if v.Parent == task {
 			out.Children = append(out.Children, v)
 		}
+	}
+	if f, err := a.Forecast(); err == nil {
+		out.Forecast = f.Involving(task)
 	}
 	return out, nil
 }
@@ -410,6 +417,11 @@ func Status(a *app.App) (StatusOut, error) {
 		out.Warnings = append(out.Warnings, "jev: "+terr.Error())
 	} else {
 		out.Jev = JevStatus{Calls: ts.Calls, Errors: ts.Errors, SpendUSD: triage.ApproxSpendUSD(ts.InputTokens)}
+	}
+	if f, err := a.Forecast(); err != nil {
+		out.Warnings = append(out.Warnings, "forecast: "+err.Error())
+	} else {
+		out.Forecast = f.View()
 	}
 	out.Tasks, err = Tasks(a)
 	return out, err
@@ -547,7 +559,7 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, OK{Message: fmt.Sprintf("released %d claim(s) of %s", n, owner)}, nil
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "List saddle tasks with status and merge-train state, plus warnings, heavy_runs (the machine's heavy-run queue: holders and waiters per class) while it is busy, stack_at_risk when the stack sentinel has flagged the PR stack, and orchestrator_context: the adapter and model you run on, and how full your context is against the compact_at threshold. Compact by default: essentials per task, killed and merged tasks counted in hidden. Filter with state, ids or since; detail=true is the full dump with claims, branches and worktrees, and can be large."},
+	mcp.AddTool(s, &mcp.Tool{Name: "status", Description: "List saddle tasks with status and merge-train state, plus warnings, heavy_runs (the machine's heavy-run queue: holders and waiters per class) while it is busy, stack_at_risk when the stack sentinel has flagged the PR stack, and orchestrator_context: the adapter and model you run on, and how full your context is against the compact_at threshold. Compact by default: essentials per task, killed and merged tasks counted in hidden. forecast lists predicted collisions between live tasks (medium and above) while there are any. Filter with state, ids or since; detail=true is the full dump with claims, branches and worktrees, and can be large."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in StatusIn) (*mcp.CallToolResult, StatusOut, error) {
 			out, err := Status(a)
 			if err != nil {
@@ -568,7 +580,7 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, CatchUpOut{Since: since, Bullets: bs}, err
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "brief", Description: "Your task's live brief: goal, branch, your claims, other tasks' claims you must not touch, serial files, your sub-tasks and when you are done."},
+	mcp.AddTool(s, &mcp.Tool{Name: "brief", Description: "Your task's live brief: goal, branch, your claims, other tasks' claims you must not touch, serial files, your sub-tasks, predicted collisions with other live tasks and when you are done."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, BriefOut, error) {
 			if err := self(); err != nil {
 				return nil, BriefOut{}, err

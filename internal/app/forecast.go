@@ -3,6 +3,7 @@ package app
 import (
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/brandonapol/saddle/internal/forecast"
@@ -20,6 +21,9 @@ const forecastHistory = 200
 
 // forecastTop caps the pairs status lists.
 const forecastTop = 10
+
+// forecastSymbols is built once: status forecasts on every call.
+var forecastSymbols = sync.OnceValue(symbols.Default)
 
 // forecastSnapshot reads one worktree; tests stub it to fail or stall.
 var forecastSnapshot = gitx.Snapshot
@@ -75,7 +79,7 @@ func (a *App) Forecast() (Forecast, error) {
 	// Buffered so a snapshot that finishes past the budget never blocks.
 	results := make(chan snap, len(dirs))
 	pending := 0
-	x, snapshot := symbols.Default(), forecastSnapshot
+	x, snapshot := forecastSymbols(), forecastSnapshot
 	for i, dir := range dirs {
 		if dir == "" {
 			continue
