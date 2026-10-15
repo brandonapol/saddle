@@ -192,19 +192,20 @@ func TestNewSelectsByConfig(t *testing.T) {
 	for _, tc := range []struct {
 		fc       config.Forge
 		provider string
-		github   bool
 	}{
-		{config.Forge{}, config.ForgeGitHub, true},
-		{config.Forge{Provider: config.ForgeGitHub, CLI: config.ForgeGH}, config.ForgeGitHub, true},
-		{config.Forge{Provider: config.ForgeGitLab}, config.ForgeGitLab, false},
-		{config.Forge{CLI: config.ForgeGlab}, config.ForgeGitLab, false},
-		{config.Forge{CLI: config.ForgeNone}, "", false},
+		{config.Forge{}, config.ForgeGitHub},
+		{config.Forge{Provider: config.ForgeGitHub, CLI: config.ForgeGH}, config.ForgeGitHub},
+		{config.Forge{Provider: config.ForgeGitLab}, config.ForgeGitLab},
+		{config.Forge{CLI: config.ForgeGlab}, config.ForgeGitLab},
+		{config.Forge{CLI: config.ForgeNone}, ""},
 	} {
 		f := New(tc.fc, t.TempDir())
-		if _, ok := f.(*GitHub); ok != tc.github || f.Provider() != tc.provider {
-			t.Errorf("New(%+v) = %T provider %q, want github=%v provider %q", tc.fc, f, f.Provider(), tc.github, tc.provider)
+		_, github := f.(*GitHub)
+		_, gitlab := f.(*GitLab)
+		if github != (tc.provider == config.ForgeGitHub) || gitlab != (tc.provider == config.ForgeGitLab) || f.Provider() != tc.provider {
+			t.Errorf("New(%+v) = %T provider %q, want provider %q", tc.fc, f, f.Provider(), tc.provider)
 		}
-		if tc.github {
+		if tc.provider != "" {
 			continue
 		}
 		if _, err := f.CreatePR(context.Background(), NewPR{}); !errors.Is(err, ErrUnsupported) {

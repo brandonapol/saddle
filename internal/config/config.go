@@ -101,6 +101,10 @@ type Forge struct {
 	Provider string `toml:"provider"`
 	// CLI is gh, glab, or none to run local-only.
 	CLI string `toml:"cli"`
+	// Host is the forge's host, for a self-hosted GitLab (#645): glab is
+	// pointed at it with --hostname. "" lets glab take it from the remote
+	// (or GITLAB_HOST).
+	Host string `toml:"host"`
 }
 
 // Forge providers and CLIs.
@@ -1038,6 +1042,9 @@ func Load(root string) (Config, error) {
 	if c := cfg.Forge.CLI; c != "" && c != ForgeGH && c != ForgeGlab && c != ForgeNone {
 		return cfg, fmt.Errorf("forge.cli %q: want gh, glab or none", c)
 	}
+	if h := cfg.Forge.Host; strings.ContainsAny(h, "/ ") || strings.Contains(h, "://") {
+		return cfg, fmt.Errorf("forge.host %q: want a host name such as gitlab.example.com, without scheme or path", h)
+	}
 	if cfg.Claude.Advisor.Lead == "" {
 		cfg.Claude.Advisor.Lead = cfg.Claude.OrchestratorModel
 	}
@@ -1168,10 +1175,13 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 
 # The git provider and its CLI. saddle detects both from the origin remote's
 # host and the CLIs on PATH (gh for GitHub, glab for GitLab); set them to
-# override. cli = "none" runs local-only, without PRs.
+# override. cli = "none" runs local-only, without PRs. host points glab at
+# a self-hosted GitLab whose name saddle can't tell from the remote
+# (docs/gitlab.md).
 [forge]
 # provider = "github"        # github | gitlab
 # cli = "gh"                 # gh | glab | none
+# host = "gitlab.example.com"
 
 # Derived files the merge train regenerates instead of merging. On a rebase
 # conflict only in these paths, it takes integration's copy, runs cmd in the
