@@ -1,7 +1,7 @@
 # ADR 0001: The forge layer, one interface over gh and glab
 
 - Status: Proposed
-- Issue: #644 (this layer), #645 (GitLab), #646 (provider and CLI detection)
+- Issue: #644 (this layer), #647 (the watchers onto it), #645 (GitLab), #646 (provider and CLI detection)
 
 ## Context
 
@@ -85,14 +85,14 @@ degrades as noted.
 | Close | `ClosePR` | core | `pr close` | `mr close` | — |
 | List | `ListPRs` | core | `pr list --json` | `mr list -F json` | — |
 | Comment, list and edit comments | `AddComment`, `Comments`, `EditComment` | core | `pr comment`, `pr view --json comments`, GraphQL `updateIssueComment` | `mr note`, notes API | stack comments are skipped |
-| CI status and logs | `ciwatch` runner (see below) | core | `pr checks`, `run view --log-failed` | pipelines and jobs API | — |
+| CI status and logs | `Checks`, `FailedLog`, `PR` with `PRChecks` | core | `pr checks`, `run view --log-failed` | pipelines and jobs API | — |
 | Rerun failed CI | `RerunFailed` | optional | `run rerun --failed` | `ci retry` | repair spawns a task instead |
-| Merge, auto-merge | `automerge` runner (see below) | core | `pr merge --squash/--rebase --match-head-commit` | `mr merge --when-pipeline-succeeds` | — |
+| Merge, auto-merge | `MergePR` | core | `pr merge --squash/--rebase --match-head-commit` | `mr merge --when-pipeline-succeeds` | — |
 | Merge settings | `MergeSettings` | optional | `api repos/{owner}/{repo}` | project API (`squash_option`, `merge_method`) | warning, assume squash |
 | Branch protection | doctor | optional | `api …/branches/B/protection` | protected branches API | doctor warns |
-| Labels | `AddLabel`, `EnsureLabel` | optional | `pr edit --add-label`, `label create --force` | `mr update --label`, labels API | flags shown in saddle only |
+| Labels | `AddLabel`, `RemoveLabel`, `EnsureLabel` | optional | `pr edit --add-label`/`--remove-label`, `label create --force` | `mr update --label`, labels API | flags shown in saddle only |
 | Issues: view, list, create, comment, edit, close, reopen | `Issue`, `ListIssues`, `CreateIssue`, `CommentIssue`, `EditIssueBody`, `CloseIssue`, `ReopenIssue` | optional | `issue …` | `issue …` (`#N` numbering as on GitHub) | autopilot, blocker issues, ticket off |
-| Sub-issues | `SubIssues` | optional | REST `sub_issues` | none (child items are Premium epics) | ticket shows no sub-issues |
+| Sub-issues | `SubIssues`, `SubIssueNumbers`, `AddSubIssue` | optional | REST `sub_issues` | none (child items are Premium epics) | ticket shows no sub-issues |
 | Native stacks | `ghstack` runner | optional | `gh stack` extension | none | saddle chains PR bases itself |
 | Auth status | `AuthStatus` | core | `auth status` | `auth status` | doctor reports the fix |
 | Repo identity | `MergeSettings.Repo/URL` | core | `api repos/{owner}/{repo}` | project API | — |
@@ -103,22 +103,37 @@ today; draft MRs; squash and fast-forward are project settings; pipelines
 rather than check runs; protected-branch rules; self-hosted hosts
 (`GITLAB_HOST`).
 
-### Migration in this change, and what is left
+### Migration
 
-This change is a refactor barrier with no behaviour change for GitHub users:
+This was done in two refactor steps, with no behaviour change for GitHub
+users:
 
-- Every process start of `gh` moves into `internal/forge` (`forge.Output`,
-  `forge.CombinedOutput`). Each caller keeps its exact arguments and error
-  wording.
-- `internal/app`'s direct `gh` calls move behind `forge.Forge`; `forge.GitHub`
-  issues the same `gh` arguments the call sites did. Test seams in `app`
-  (`prHead`, `prView`, `issueText`, `ghStackRun`) stay.
-- Packages that already take an injected gh `Runner` and parse GitHub JSON
-  themselves (`ciwatch`, `sweeper`, `automerge.GH`, `sentinel.GH` and
-  `CIRed`, `planner.Push`, `ghstack`) keep that seam for now. Their real
-  runner now comes through `internal/forge`. Each moves onto typed `Forge`
-  operations in #647, which must land before #645 turns GitLab on;
-  until then they always use `gh`, whatever `[forge]` says.
+- #644 moved every process start of `gh` into `internal/forge`
+  (`forge.Output`, `forge.CombinedOutput`), each caller keeping its exact
+  arguments and error wording, and moved `internal/app`'s direct `gh` calls
+  behind `forge.Forge`. Test seams in `app` (`prHead`, `prView`, `issueText`,
+  `ghStackRun`) stay.
+- #647 moved the packages that took an injected gh runner and parsed GitHub
+  JSON themselves (`ciwatch`, `sweeper`, `automerge.GH`, `sentinel.GH` and
+  `CIRed`, `planner.Push`, `App.GH`) onto typed operations: `Checks`,
+  `FailedLog`, `MergePR`, `RemoveLabel`, `SubIssueNumbers`, `AddSubIssue`,
+  PR reads with labels, files, merge state and the check rollup
+  (`forge.CheckRun`), merged-PR lookup by head branch (`PRQuery.Head`) and
+  issue creation in another repo (`NewIssue.Repo`). Each package declares the
+  slice of `forge.Forge` it uses and is built from `App.Forge()`, so `[forge]`
+  applies everywhere; on `ErrUnsupported` each degrades quietly (no CI
+  watching, no labels or stack comments). `forge.GitHub` issues the same gh
+  subcommands, flags and values those packages did; the only difference is
+  that `--json` field lists come in forge's fixed order, which gh ignores.
+  `automerge.GH` keeps a `Run` field (a gh runner) as a compatibility seam for
+  callers that have no forge; it runs through `forge.GitHub`.
+- `TestNoGHArgsOutsideForge` parses the repo and fails when a package outside
+  `internal/forge` builds gh arguments. It allows only GitHub-only code with
+  no provider-neutral meaning: `internal/ghstack` (the gh-stack extension,
+  which stays optional and GitHub-only), `internal/doctor` (setup-time
+  diagnostics of the gh install, branch protection and rate limits) and
+  `internal/cli/changelog.go` (release notes for saddle's own GitHub
+  releases), plus the e2e fake gh and its harness.
 - `internal/e2e/fakegh` stays as is: it is a fake `gh` binary on `PATH`, so it
   fakes the GitHub implementation end to end. #645 adds a fake `glab` the
   same way.
@@ -130,7 +145,7 @@ This change is a refactor barrier with no behaviour change for GitHub users:
 - A provider implements `forge.Forge`; the matrix above is what GitLab must
   meet. Optional operations returning `ErrUnsupported` degrade features
   rather than failing saddle.
-- Until the follow-up lands, `[forge] cli = "none"` or `provider = "gitlab"`
-  turns off `internal/app`'s forge calls (PR creation, retargeting, stack
-  comments, issue reads) but not the CI watcher, sweeper, sentinel and
-  auto-merge, which still call `gh`.
+- `[forge] cli = "none"` or `provider = "gitlab"` (until #645) turns off every
+  forge call, the CI watcher, sweeper, sentinel, ci-red watcher, auto-merge
+  and plan push included. Doctor's diagnostics and gh-stack still assume
+  GitHub; they are the allowlisted exceptions above.
