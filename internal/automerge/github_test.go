@@ -1,39 +1,53 @@
 package automerge
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
+// fakeForge answers PR reads and merge settings, and records merges.
+type fakeForge struct {
+	pr       forge.PR
+	fields   forge.PRFields
+	settings forge.MergeSettings
+	merges   []string
+}
+
+func (f *fakeForge) PR(_ context.Context, _ string, fs forge.PRFields) (forge.PR, error) {
+	f.fields = fs
+	return f.pr, nil
+}
+
+func (f *fakeForge) MergeSettings(context.Context) (forge.MergeSettings, error) { return f.settings, nil }
+
+func (f *fakeForge) MergePR(_ context.Context, ref, method, head string) error {
+	f.merges = append(f.merges, ref+" "+method+" "+head)
+	return nil
+}
+
 func TestGHReadsPR(t *testing.T) {
-	var calls [][]string
-	g := &GH{Run: func(args ...string) (string, error) {
-		calls = append(calls, args)
-		return `{"url":"u","state":"OPEN","isDraft":true,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN",
-			"baseRefName":"main","headRefName":"saddle/t1","headRefOid":"abc",
-			"labels":[{"name":"needs-human"}],
-			"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"status":"QUEUED"}]}`, nil
-	}}
-	pr, err := g.PR("u")
+	f := &fakeForge{pr: forge.PR{State: forge.StateOpen, Draft: true, Mergeable: forge.Mergeable, MergeState: "CLEAN",
+		Base: "main", Head: "saddle/t1", HeadSHA: "abc", Labels: []string{NeedsHuman},
+		Checks: []forge.CheckRun{{Status: "COMPLETED", Conclusion: "SUCCESS"}, {Status: "QUEUED"}}}}
+	pr, err := (&GH{Forge: f}).PR("u")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !pr.Draft || pr.Base != "main" || pr.HeadSHA != "abc" || !slices.Equal(pr.Labels, []string{NeedsHuman}) || pr.Checks != ChecksPending {
+	if pr.URL != "u" || !pr.Draft || pr.Base != "main" || pr.HeadSHA != "abc" || !slices.Equal(pr.Labels, []string{NeedsHuman}) || pr.Checks != ChecksPending {
 		t.Fatalf("pr = %+v", pr)
 	}
-	if !strings.Contains(strings.Join(calls[0], " "), "statusCheckRollup") {
-		t.Fatalf("call = %v", calls[0])
+	if f.fields&forge.PRChecks == 0 || f.fields&forge.PRMergeState == 0 {
+		t.Fatalf("fields = %b, want the check rollup and merge state", f.fields)
 	}
 }
 
 func TestGHMergeMethodAndMerge(t *testing.T) {
-	var calls []string
-	settings := `{"allow_squash_merge":false,"allow_rebase_merge":true,"allow_merge_commit":true}`
-	g := &GH{Run: func(args ...string) (string, error) {
-		calls = append(calls, strings.Join(args, " "))
-		return settings, nil
-	}}
+	f := &fakeForge{settings: forge.MergeSettings{Merge: true, Rebase: true}}
+	g := &GH{Forge: f}
 	m, err := g.MergeMethod()
 	if err != nil || m != "rebase" {
 		t.Fatalf("method = %q, %v; want rebase (never merge commits)", m, err)
@@ -41,14 +55,39 @@ func TestGHMergeMethodAndMerge(t *testing.T) {
 	if err := g.Merge("u", m, "abc"); err != nil {
 		t.Fatal(err)
 	}
-	last := calls[len(calls)-1]
-	if last != "pr merge u --rebase --match-head-commit abc" || strings.Contains(last, "--admin") {
-		t.Fatalf("merge call = %q", last)
+	if err := g.Merge("u", "fast-forward", "abc"); err == nil {
+		t.Fatal("unknown method: want error")
 	}
-	g2 := &GH{Run: func(...string) (string, error) {
-		return `{"allow_squash_merge":false,"allow_rebase_merge":false}`, nil
-	}}
-	if _, err := g2.MergeMethod(); err == nil {
+	if !slices.Equal(f.merges, []string{"u rebase abc"}) {
+		t.Fatalf("merges = %q", f.merges)
+	}
+	if _, err := (&GH{Forge: &fakeForge{settings: forge.MergeSettings{Merge: true}}}).MergeMethod(); err == nil {
 		t.Fatal("merge-commit-only repo: want error")
+	}
+}
+
+// TestGHRunIsGitHub: a GH built from a gh runner, without a forge, makes
+// the gh calls auto-merge always made.
+func TestGHRunIsGitHub(t *testing.T) {
+	var calls []string
+	g := &GH{Run: func(args ...string) (string, error) {
+		calls = append(calls, strings.Join(args, " "))
+		if args[0] == "api" {
+			return `{"allow_squash_merge":true,"allow_rebase_merge":true,"allow_merge_commit":false}`, nil
+		}
+		return `{"url":"u","state":"OPEN","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}`, nil
+	}}
+	if pr, err := g.PR("u"); err != nil || pr.Checks != ChecksPass {
+		t.Fatalf("pr = %+v, %v", pr, err)
+	}
+	m, _ := g.MergeMethod()
+	_ = g.Merge("u", m, "abc")
+	want := []string{
+		"pr view u --json url,state,isDraft,mergeable,mergeStateStatus,baseRefName,headRefName,headRefOid,labels,statusCheckRollup",
+		"api repos/{owner}/{repo}",
+		"pr merge u --squash --match-head-commit abc",
+	}
+	if !slices.Equal(calls, want) {
+		t.Fatalf("calls\n got %q\nwant %q", calls, want)
 	}
 }

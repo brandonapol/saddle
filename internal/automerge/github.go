@@ -2,13 +2,19 @@ package automerge
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 
 	"github.com/brandonapol/saddle/internal/forge"
 )
+
+// Forge is the part of the forge the watcher uses; forge.Forge is one.
+type Forge interface {
+	PR(ctx context.Context, ref string, f forge.PRFields) (forge.PR, error)
+	MergeSettings(ctx context.Context) (forge.MergeSettings, error)
+	MergePR(ctx context.Context, ref, method, head string) error
+}
 
 // Runner runs gh with args and returns its stdout.
 type Runner func(args ...string) (string, error)
@@ -19,36 +25,37 @@ func ExecRunner(dir string) Runner {
 	return func(args ...string) (string, error) { return gh(context.Background(), args...) }
 }
 
-// GH is GitHub through the gh CLI.
+// GH is the watcher's GitHub: the repo's forge. Run is gh, for callers that
+// have a gh runner rather than a forge; it is used when Forge is nil.
 type GH struct {
+	Forge  Forge
 	Run    Runner
 	method string // cached once read
 }
 
+func (g *GH) forge() Forge {
+	if g.Forge != nil {
+		return g.Forge
+	}
+	return &forge.GitHub{Run: func(_ context.Context, args ...string) (string, error) { return g.Run(args...) }}
+}
+
 // prFields are the fields PR reads.
-const prFields = "url,state,isDraft,mergeable,mergeStateStatus,baseRefName,headRefName,headRefOid,labels,statusCheckRollup"
+const prFields = forge.PRURL | forge.PRState | forge.PRDraft | forge.PRMergeable | forge.PRMergeState |
+	forge.PRBase | forge.PRHeadBranch | forge.PRHead | forge.PRLabels | forge.PRChecks
 
 func (g *GH) PR(url string) (PR, error) {
-	out, err := g.Run("pr", "view", url, "--json", prFields)
+	p, err := g.forge().PR(context.Background(), url, prFields)
 	if err != nil {
 		return PR{}, err
 	}
-	var v struct {
-		PR
-		Labels []struct {
-			Name string `json:"name"`
-		} `json:"labels"`
-		Rollup []Check `json:"statusCheckRollup"`
+	pr := PR{URL: p.URL, State: p.State, Draft: p.Draft, Mergeable: p.Mergeable, MergeState: p.MergeState,
+		Base: p.Base, Head: p.Head, HeadSHA: p.HeadSHA, Labels: p.Labels}
+	rollup := make([]Check, len(p.Checks))
+	for i, c := range p.Checks {
+		rollup[i] = Check{Status: c.Status, Conclusion: c.Conclusion, State: c.State}
 	}
-	if err := json.Unmarshal([]byte(out), &v); err != nil {
-		return PR{}, fmt.Errorf("gh pr view %s: %w", url, err)
-	}
-	pr := v.PR
-	pr.Labels = nil
-	for _, l := range v.Labels {
-		pr.Labels = append(pr.Labels, l.Name)
-	}
-	pr.Checks = summarize(v.Rollup)
+	pr.Checks = summarize(rollup)
 	if pr.URL == "" {
 		pr.URL = url
 	}
@@ -61,23 +68,14 @@ func (g *GH) MergeMethod() (string, error) {
 	if g.method != "" {
 		return g.method, nil
 	}
-	out, err := g.Run("api", "repos/{owner}/{repo}")
+	s, err := g.forge().MergeSettings(context.Background())
 	if err != nil {
 		return "", err
 	}
-	var r struct {
-		Squash *bool `json:"allow_squash_merge"`
-		Rebase *bool `json:"allow_rebase_merge"`
-	}
-	if err := json.Unmarshal([]byte(out), &r); err != nil {
-		return "", fmt.Errorf("parse gh api output: %w", err)
-	}
 	switch {
-	case r.Squash == nil || r.Rebase == nil:
-		return "", errors.New("gh api did not return the repo's merge settings (they need push access)")
-	case *r.Squash:
+	case s.Squash:
 		g.method = "squash"
-	case *r.Rebase:
+	case s.Rebase:
 		g.method = "rebase"
 	default:
 		return "", errors.New("the repo allows neither squash nor rebase merges, and saddle needs linear history")
@@ -85,16 +83,11 @@ func (g *GH) MergeMethod() (string, error) {
 	return g.method, nil
 }
 
-// Merge merges url with method if its head is still head. It never passes
-// --admin, so branch protection always applies.
+// Merge merges url with method if its head is still head. It never bypasses
+// branch protection.
 func (g *GH) Merge(url, method, head string) error {
 	if !slices.Contains([]string{"squash", "rebase", "merge"}, method) {
 		return fmt.Errorf("unknown merge method %q", method)
 	}
-	args := []string{"pr", "merge", url, "--" + method}
-	if head != "" {
-		args = append(args, "--match-head-commit", head)
-	}
-	_, err := g.Run(args...)
-	return err
+	return g.forge().MergePR(context.Background(), url, method, head)
 }

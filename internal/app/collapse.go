@@ -77,7 +77,7 @@ func (a *App) AutoCollapse(stack string, hub automerge.GitHub) (string, error) {
 
 func (a *App) ghOr(hub automerge.GitHub) automerge.GitHub {
 	if hub == nil {
-		return &automerge.GH{Run: automerge.ExecRunner(a.Root)}
+		return &automerge.GH{Forge: a.Forge()}
 	}
 	return hub
 }
