@@ -13,6 +13,10 @@ kills the selected lease after a `y`, and narrator lines for waits over 5 minute
 holders past `max_run` (top-level or per class, default 30m) and spawn backpressure.
 Each lease records the repo that asked next to its label (the task), so another
 repo's entry reads `otherrepo/t84`.
+Machine-wide admission (#601, docs/resource-queue.md): class weights share one
+machine budget, the load gate also holds on low free RAM, `saddle run` takes
+`--no-queue` and `--max-wait`, and runs without `SADDLE_TASK` show as foreign
+in `saddle runq status` and `saddle queue`.
 
 ## Problem
 
