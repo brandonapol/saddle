@@ -88,6 +88,49 @@ type Config struct {
 	Claims Claims `toml:"claims"`
 	// TUI is the terminal UI.
 	TUI TUI `toml:"tui"`
+	// RunQueue is the heavy-run queue's admission (docs/resource-queue.md).
+	RunQueue RunQueue `toml:"run_queue"`
+}
+
+// RunQueue is [run_queue]: when the machine-wide heavy-run queue admits a
+// run (docs/resource-queue.md). It is the repo's lowest layer: the repo's
+// .saddle/runq.toml and then the user's ~/.config/saddle/runq.toml override
+// it key by key. Nil and absent keys keep the queue's defaults; 0 turns a
+// check (or the budget) off.
+type RunQueue struct {
+	// MaxLoadPerCPU holds a run while load1 / cores is over it (default 1.0).
+	MaxLoadPerCPU *float64 `toml:"max_load_per_cpu"`
+	// MaxCPUPressure holds a run while CPU PSI some avg10 is over it, in
+	// percent (default 60).
+	MaxCPUPressure *float64 `toml:"max_cpu_pressure"`
+	// MinFreeRAMPct holds a run while MemAvailable is under this percent of
+	// MemTotal (default 10, the gauge's busy_ram_pct).
+	MinFreeRAMPct *float64 `toml:"min_free_ram_pct"`
+	// Budget is the units every class's running leases share (default half
+	// the cores, at least 3).
+	Budget *int `toml:"budget"`
+	// Weights are the units one run of a class uses (flutter-test 3, else 1).
+	Weights map[string]int `toml:"weights"`
+}
+
+func checkRunQueue(r RunQueue) error {
+	for key, p := range map[string]*float64{"max_load_per_cpu": r.MaxLoadPerCPU, "max_cpu_pressure": r.MaxCPUPressure, "min_free_ram_pct": r.MinFreeRAMPct} {
+		if p != nil && *p < 0 {
+			return fmt.Errorf("run_queue.%s %v: must not be negative (0 turns the check off)", key, *p)
+		}
+	}
+	if p := r.MinFreeRAMPct; p != nil && *p > 100 {
+		return fmt.Errorf("run_queue.min_free_ram_pct %v: want 0 to 100", *p)
+	}
+	if r.Budget != nil && *r.Budget < 0 {
+		return fmt.Errorf("run_queue.budget %d: must not be negative (0 turns the budget off)", *r.Budget)
+	}
+	for class, w := range r.Weights {
+		if w < 1 {
+			return fmt.Errorf("run_queue.weights.%s %d: want 1 or more", class, w)
+		}
+	}
+	return nil
 }
 
 // Issues is [issues]: saddle files or comments on a GitHub issue for every
@@ -1068,6 +1111,9 @@ func Load(root string) (Config, error) {
 	if err := normalizeTUIResources(&cfg.TUI.Resources); err != nil {
 		return cfg, err
 	}
+	if err := checkRunQueue(cfg.RunQueue); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 
@@ -1170,6 +1216,19 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # busy_load = 1.2
 # ok_ram_pct = 20
 # busy_ram_pct = 10
+
+# The machine-wide heavy-run queue (docs/resource-queue.md). A heavy run
+# starts when its class has a slot, its weight fits in the budget, and the
+# machine is under these limits. .saddle/runq.toml and ~/.config/saddle/runq.toml
+# override this section. 0 turns a check (or the budget) off.
+# [run_queue]
+# max_load_per_cpu = 1.0   # hold while load1 / cores is over this
+# max_cpu_pressure = 60    # ... or CPU PSI some avg10 is over this %
+# min_free_ram_pct = 10    # ... or MemAvailable is under this % of MemTotal
+# budget = 4               # units all runs share (default cores/2, at least 3)
+# [run_queue.weights]
+# flutter-test = 3
+# go-test = 1
 
 [notices]
 # An idle agent whose action notices (failed tests, conflicts, messages)

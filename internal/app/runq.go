@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/runq"
 )
 
@@ -37,6 +38,9 @@ type Heavy struct {
 	Event  func(task, kind, data string) // the activity log; nil for none
 	Getenv func(string) string           // os.Getenv when nil
 	Warn   io.Writer                     // config and queue problems; discarded when nil
+	// Base is the repo's [run_queue] section, the layer under runq.toml;
+	// nil reads it from Root's config.toml.
+	Base *config.RunQueue
 }
 
 // HeavyOpts describe one heavy run.
@@ -46,11 +50,12 @@ type HeavyOpts struct {
 	WaitMax time.Duration    // 0: wait_max from config, else DefaultWaitMax; <0: no limit
 	Status  io.Writer        // the queued lines
 	Signals <-chan os.Signal // forwarded to the command
+	Foreign bool             // no saddle agent started it (saddle run without SADDLE_TASK)
 }
 
 // Heavy is the queue as this repo sees it.
 func (a *App) Heavy() Heavy {
-	return Heavy{Root: a.Root, Event: a.Store.Event}
+	return Heavy{Root: a.Root, Event: a.Store.Event, Base: &a.Cfg.RunQueue}
 }
 
 // RunHeavy runs cmd holding a slot in class at prio, for saddle's own gates
@@ -80,13 +85,39 @@ func (h Heavy) event(kind, data string) {
 	}
 }
 
-// Config reads the repo's .saddle/runq.toml, then the user's runq.toml.
+// Config reads the repo's [run_queue] section, its .saddle/runq.toml, then
+// the user's runq.toml, later layers winning key by key.
 func (h Heavy) Config() (runq.Config, error) {
 	repo := ""
+	var base runq.Config
 	if h.Root != "" {
 		repo = RunqConfigPath(h.Root)
+		rq := h.Base
+		if rq == nil {
+			if cfg, err := config.Load(h.Root); err != nil {
+				h.warn("%v; ignoring [run_queue]", err)
+			} else {
+				rq = &cfg.RunQueue
+			}
+		}
+		if rq != nil {
+			base = runqBase(*rq)
+		}
 	}
-	return runq.LoadConfig(repo, runq.UserConfigPath(h.getenv))
+	return runq.LoadConfigOver(base, repo, runq.UserConfigPath(h.getenv))
+}
+
+// runqBase turns [run_queue] into the queue's config.
+func runqBase(r config.RunQueue) runq.Config {
+	c := runq.Config{MaxLoadPerCPU: r.MaxLoadPerCPU, MaxCPUPressure: r.MaxCPUPressure,
+		MinFreeRAMPct: r.MinFreeRAMPct, Budget: r.Budget}
+	for class, w := range r.Weights {
+		if c.Classes == nil {
+			c.Classes = map[string]runq.ClassConfig{}
+		}
+		c.Classes[class] = runq.ClassConfig{Weight: w}
+	}
+	return c
 }
 
 // Open opens the machine's queue with the merged config. A config file that
@@ -130,6 +161,7 @@ func (h Heavy) Run(ctx context.Context, o HeavyOpts, cmd *exec.Cmd) (runq.Result
 		Class:   o.Class,
 		Prio:    o.Prio,
 		Repo:    repoName(h.Root),
+		Foreign: o.Foreign,
 		Status:  o.Status,
 		WaitMax: wait,
 		Signals: o.Signals,

@@ -142,8 +142,13 @@ func UserConfigPath(getenv func(string) string) string {
 
 // LoadConfig reads paths in order, later files overriding earlier ones field
 // by field and class by class. Missing files and empty paths are skipped.
-func LoadConfig(paths ...string) (Config, error) {
-	var c Config
+func LoadConfig(paths ...string) (Config, error) { return LoadConfigOver(Config{}, paths...) }
+
+// LoadConfigOver is LoadConfig starting from base instead of nothing: the
+// repo's [run_queue] section in config.toml (docs/resource-queue.md).
+func LoadConfigOver(base Config, paths ...string) (Config, error) {
+	c := base
+	c.Classes = maps.Clone(base.Classes)
 	for _, p := range paths {
 		if p == "" {
 			continue
