@@ -1,7 +1,8 @@
 # Symbol-level claims
 
-Status: **Proposed** (#329). Nothing here is implemented yet. The work is
-split into sub-issues S1–S6, #587–#592 (see [Sub-issues](#sub-issues)).
+Status: Rules 1 to 3 and the forecast feed (#587-#592) have landed behind
+`[claims] granularity = "symbol"`, default file (#329). See
+[Sub-issues](#sub-issues).
 
 ## Problem
 
@@ -63,15 +64,17 @@ says so.
 
 ```toml
 [claims]
-granularity = "file"   # "file" (default until dogfooded) | "symbol"
+granularity = "file"   # "file" (default until Q4) | "symbol"
 ```
 
 `config.Claims.Granularity`, validated at load: anything else is an error
 naming the two values. In `file` mode every code path below is skipped and
 saddle behaves exactly as today; symbol-claim rows in the store are ignored.
-That makes `file` the kill switch. Path claims, the `claim` tool, autopilot's
-overlap check and plan-time ordering stay path-based in both modes; only the
-edit-time verdict and the forecast change.
+That makes `file` the kill switch. The default stays `file` until Q4: two
+weeks without symbol-allow conflicts and hook latency under 300ms for 99%
+of calls. Path claims, the `claim` tool, autopilot's overlap check and
+plan-time ordering stay path-based in both modes; only the edit-time
+verdict and the forecast change.
 
 ### The edit seam (S2)
 
@@ -171,8 +174,8 @@ once and nothing goes stale.
 If A runs on an adapter without saddle's hooks (codex today), A's future
 edits are never checked, so rule 1 does not apply to A's files: fall back.
 
-**Undecided (Q1):** when A, the path owner, later writes a symbol B already
-took, A is denied (first writer wins), or B's claim yields to A. See
+**Decided (Q1):** first writer wins. When A, the path owner, later writes a
+symbol B already took, A is denied and gets B's hunk. See
 [Owner questions](#owner-questions).
 
 ### Rule 2: stale overwrite (S3)
@@ -208,11 +211,11 @@ Trigger: PostToolUse after a write to a supported f in `symbol` mode.
    `Store.Claim` (internal/store/store.go): old `…` → new `…`. Depend on the
    new shape, stub it, or coordinate through the orchestrator." Each (T,
    symbol, new SigHash) is noted once per task (an event records it).
-6. Landed match (Q2, taken for #592): a PreToolUse deny with the rule 2
-   wording, "`<symbol>` in <path> changed on <integration> since your base
-   (`<subject>`). Run `saddle sync`, then redo this edit on the new
-   version." The edit will not compile after the next sync. Live matches
-   stay warnings.
+6. Landed match (Q2, decided): a PreToolUse deny with "run saddle sync
+   first", using the rule 2 wording, "`<symbol>` in <path> changed on
+   <integration> since your base (`<subject>`). Run `saddle sync`, then redo
+   this edit on the new version." The edit will not compile after the next
+   sync. Live matches stay warnings.
 7. Body-only changes (same `SigHash`): nothing.
 
 Rule 3 has a 300ms budget across all tasks; past it, it emits nothing. A
@@ -273,7 +276,7 @@ False negatives (we allow, and the train or CI pays) are the costly side.
 | Risk | Mitigation |
 | --- | --- |
 | Semantic coupling without textual overlap: B changes what a helper does, A's function relies on it. | Out of scope for claims, as it is today for different files. Rule 3 catches signature changes; CI catches the rest. |
-| The owner's planned edits are invisible: A claimed f to change `X` later, B takes `X` first. | Q1. Either way the later writer is denied with the other's hunk, so no merge breaks; the question is who waits. |
+| The owner's planned edits are invisible: A claimed f to change `X` later, B takes `X` first. | Q1, decided: first writer wins. The later writer is denied with the other's hunk, so the merge stays clean; A waits when B took `X` first. |
 | Writes the hook doesn't see: Bash (`sed -i`, codegen), adapters without hooks. | Same blind spot as path claims today. Rule 1 falls back when the owner has no hooks. Rule 1 always re-reads live diffs, so a Bash edit that already happened is still counted. |
 | Parser misreads: one-line declarations, syntax errors mid-edit, grammar gaps. | Signature by hash, not lines; error nodes in a changed range fall back; S1 tests the Go and Python shapes. |
 | Insertions next to each other: both append a function at the end of the file, or add an import on adjacent lines. | The range test with `margin` catches touching hunks; new symbols with the same name conflict by name. |
@@ -294,31 +297,32 @@ False positives (deny or warn needlessly) cost throughput only; the
    `symbol_deny`, `symbol_fallback` (by reason), hook latency, and any train
    conflict on a file where a symbol allow happened.
 3. **Rule 3** (S5). Live signature changes warn; a use of a signature that
-   has landed since the task's base is a PreToolUse deny (Q2).
-4. **Flip the default** to `symbol` once the owner's criteria (Q4) are met.
+   has landed since the task's base is a PreToolUse deny (Q2, decided: run
+   saddle sync first).
+4. **Flip the default** to `symbol` once Q4 is met: two weeks without
+   symbol-allow conflicts and hook latency under 300ms for 99% of calls.
    `file` stays as the kill switch.
 5. **More languages** (Q3): TypeScript/TSX next, with weft's arrow-function
    cases (`const f = (x) => x`, `export const g = async () => {}`).
 
 ## Owner questions
 
-- **Q1 (blocks S4): who wins a symbol, the path owner or the first writer?**
-  When B took symbol `X` in A's file and A now edits `X`: deny A (first
-  writer wins; A gets B's hunk, like any claim deny) or let A through and
-  tell B its claim yielded? Recommended: first writer wins. It never lets
-  two edits of one symbol both through, and it is symmetric with how path
-  claims work today. The cost is that A, the declared owner, can be made to
-  wait.
-- **Q2 (was blocking S5): what does "an error once landed" mean?** Taken
-  for #592: a PreToolUse deny of the edit that uses the changed signature,
-  with the rule 2 wording (sync first). The alternative was a warning that
-  escalates to a blocking notice at `done`.
-- **Q3 (no ticket yet): TypeScript/TSX.** The issue asks for TS test shapes,
-  but the extractor has no TS. Add it as a follow-up after the dogfood stage,
-  or now as a seventh ticket?
-- **Q4 (stage 4): when does the default flip?** Proposed: two weeks of
-  dogfood with zero train conflicts traced to a symbol allow, and hook p99
-  under 300ms.
+- **Q1 (decided): who wins a symbol, the path owner or the first writer?**
+  First writer wins. When B took symbol `X` in A's file and A now edits
+  `X`, A is denied and gets B's hunk, the same as any claim deny. Two edits
+  of one symbol stay exclusive, and the rule matches how path claims work
+  today. A, the declared owner, waits when B took the symbol first.
+- **Q2 (decided): what does "an error once landed" mean?** Deny with "run
+  saddle sync first": a PreToolUse deny of the edit that uses the changed
+  signature, with the rule 2 wording ("Run `saddle sync`, then redo this
+  edit on the new version."). #592 shipped this deny.
+- **Q3 (open; TypeScript, after dogfooding):** TypeScript/TSX. The issue
+  asks for TS test shapes, but the extractor has no TS. Add it as a
+  follow-up after the dogfood stage, or now as a seventh ticket? Still
+  open; no ticket yet.
+- **Q4 (decided, stage 4): when does the default flip?** The default flips
+  to `symbol` after two weeks without symbol-allow conflicts and hook
+  latency under 300ms for 99% of calls. `file` stays the kill switch.
 
 ## Sub-issues
 
@@ -327,6 +331,6 @@ False positives (deny or warn needlessly) cost throughput only; the
 | S1 | #587 gitx: signature hashes, (lang, blob) span cache, in-process LineDiff | standard | yes | — |
 | S2 | #588 Edit seam: proposed content in the hook, `CheckEdit`/`EditNotes`, `[claims] granularity` | standard | yes | — |
 | S3 | #590 Rule 2: deny stale overwrites | hard | yes | S1, S2 |
-| S4 | #591 Rule 1: share a file by symbols, symbol-claim table | hard | no (Q1) | S1, S2 |
-| S5 | #592 Rule 3: warn on stale assumptions | standard | yes (Q2: PreToolUse deny) | S1, S2 |
+| S4 | #591 Rule 1: share a file by symbols, symbol-claim table | hard | yes (Q1: first writer wins) | S1, S2 |
+| S5 | #592 Rule 3: warn on stale assumptions | standard | yes (Q2: deny, run saddle sync first) | S1, S2 |
 | S6 | #589 Forecast feed in status/brief; disjoint symbols score low | standard | yes | — |
