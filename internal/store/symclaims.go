@@ -9,6 +9,11 @@ type SymbolClaim struct {
 	Task, Path, Symbol, Kind string
 }
 
+// SymbolLines is the kind of a row with no symbol: the task changed the
+// file, maybe only outside every symbol. It marks the task as one to compare
+// against and never clashes.
+const SymbolLines = "lines"
+
 // SymbolClaims returns the symbol claims on path held by live tasks. Rows
 // of landed, killed and no-change tasks are ignored, as path claims are.
 func (s *Store) SymbolClaims(path string) ([]SymbolClaim, error) {
@@ -52,7 +57,7 @@ func (s *Store) ClaimSymbols(task, path string, want []SymbolClaim) (clash *Symb
 		}
 		for _, w := range want {
 			for _, o := range others {
-				if o.Symbol == w.Symbol && o.Kind == w.Kind {
+				if w.Symbol != "" && o.Symbol == w.Symbol && o.Kind == w.Kind {
 					clash = &o
 					return nil
 				}

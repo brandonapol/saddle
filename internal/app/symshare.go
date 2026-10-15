@@ -135,9 +135,14 @@ func checkShare(a *App, e Edit, d Decision) Decision {
 	if r.r.hit != nil {
 		return a.shareDeny(e, d, *r.r.hit)
 	}
-	want := make([]store.SymbolClaim, 0, len(r.r.mine.Symbols))
+	want := make([]store.SymbolClaim, 0, len(r.r.mine.Symbols)+1)
 	for _, s := range r.r.mine.Symbols {
 		want = append(want, store.SymbolClaim{Task: e.Task, Path: e.Rel, Symbol: s.Name, Kind: s.Kind})
+	}
+	if len(r.r.mine.Ranges) > 0 {
+		// Lines outside every symbol (imports, comments) give no symbol row,
+		// but later writers must still compare against them.
+		want = append(want, store.SymbolClaim{Task: e.Task, Path: e.Rel, Kind: store.SymbolLines})
 	}
 	clash, err := a.Store.ClaimSymbols(e.Task, e.Rel, want)
 	if err != nil {

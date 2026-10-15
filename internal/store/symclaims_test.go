@@ -71,3 +71,21 @@ func TestSymbolClaimsLifecycle(t *testing.T) {
 		t.Fatalf("landed task's row still clashes: %+v", c)
 	}
 }
+
+// #591: rows without a symbol (edits outside every symbol) are listed but
+// never clash with each other.
+func TestSymbolLinesRowsNeverClash(t *testing.T) {
+	s := openTest(t)
+	for _, id := range []string{"t1", "t2"} {
+		if err := s.CreateTask(Task{ID: id, Title: id, Status: Running}); err != nil {
+			t.Fatal(err)
+		}
+		clash, err := s.ClaimSymbols(id, "x.go", []SymbolClaim{{Task: id, Path: "x.go", Kind: SymbolLines}})
+		if err != nil || clash != nil {
+			t.Fatalf("%s: clash %+v, err %v", id, clash, err)
+		}
+	}
+	if got, _ := s.SymbolClaims("x.go"); len(got) != 2 {
+		t.Fatalf("SymbolClaims = %+v, want both lines rows", got)
+	}
+}

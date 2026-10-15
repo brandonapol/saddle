@@ -65,7 +65,7 @@ func TestSymbolShareAllowsDisjointDeniesSameSymbol(t *testing.T) {
 		t.Fatalf("B's edit of Bar denied: %+v", d)
 	}
 	onDisk(t, bar)
-	if got, want := heldSymbols(t, a, "pkg/x.go"), []string{b.ID + ":Bar"}; !slices.Equal(got, want) {
+	if got, want := heldSymbols(t, a, "pkg/x.go"), []string{b.ID + ":", b.ID + ":Bar"}; !slices.Equal(got, want) {
 		t.Fatalf("symbol claims = %q, want %q", got, want)
 	}
 	if ev := taskEvents(t, a, b.ID, "symbol_allow"); len(ev) != 1 || !strings.Contains(ev[0], owner.ID) {
@@ -164,5 +164,21 @@ func TestSymbolShareFallsBackForHooklessOwnerAndUnknownEdit(t *testing.T) {
 	}
 	if ev := taskEvents(t, a, b.ID, "symbol_fallback"); len(ev) != 1 || !strings.Contains(ev[0], "unknown proposed content") {
 		t.Errorf("symbol_fallback events = %q", ev)
+	}
+}
+
+// #591: an edit that touches only lines outside every symbol (a comment
+// between functions) still leaves B a row on the file, so A's later edit
+// next to it is compared against B and denied by the range test.
+func TestSymbolShareTracksEditsOutsideSymbols(t *testing.T) {
+	a, owner, b := shareSetup(t, "")
+	note := staleEdit(t, b, "pkg/x.go", "func M2() {}\n", "// from b\nfunc M2() {}\n")
+	if d := a.CheckEdit(note); !d.Allow {
+		t.Fatalf("B's comment denied: %+v", d)
+	}
+	onDisk(t, note)
+	d := a.CheckEdit(staleEdit(t, owner, "pkg/x.go", "func M2() {}\n", "// from a\nfunc M2() {}\n"))
+	if d.Allow || d.Owner != b.ID || !strings.Contains(d.Reason, "within 2 lines") {
+		t.Fatalf("owner's comment at the same spot = %+v, want a range deny naming %s", d, b.ID)
 	}
 }
