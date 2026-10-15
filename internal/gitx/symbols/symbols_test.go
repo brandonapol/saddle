@@ -88,4 +88,118 @@ func TestSupports(t *testing.T) {
 	if !x.Supports("a/b.go") || !x.Supports("x.py") || x.Supports("README.md") {
 		t.Fatal("Supports by extension is wrong")
 	}
+	if x.Language("a/b.go") != "go" || x.Language("x.py") != "python" || x.Language("README.md") != "" {
+		t.Fatal("Language by extension is wrong")
+	}
+}
+
+// TestSigHash locks the one-line shapes a line-based check misreads: a body
+// edit keeps the hash, a signature edit changes it. Whitespace is not part of
+// the signature, so gofmt spacing is not a change either.
+func TestSigHash(t *testing.T) {
+	x := Default()
+	hash := func(path, src string) string {
+		t.Helper()
+		syms, err := x.Symbols(path, []byte(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(syms) != 1 {
+			t.Fatalf("%s %q: symbols %v, want one", path, src, names(syms))
+		}
+		if len(syms[0].SigHash) != 64 {
+			t.Fatalf("SigHash = %q, want 64 hex chars", syms[0].SigHash)
+		}
+		return syms[0].SigHash
+	}
+	cases := []struct {
+		name, path, a, b string
+		same             bool
+	}{
+		{"func body", "a.go",
+			"package p\nfunc f() int { return 1 }\n",
+			"package p\nfunc f() int { return 2 }\n", true},
+		{"func result", "a.go",
+			"package p\nfunc f() int { return 1 }\n",
+			"package p\nfunc f() int64 { return 1 }\n", false},
+		{"func spacing", "a.go",
+			"package p\nfunc f() int { return 1 }\n",
+			"package p\nfunc  f()  int { return 2 }\n", true},
+		{"var func body", "a.go",
+			"package p\nvar h = func(x int) { return x }\n",
+			"package p\nvar h = func(x int) { return x + 1 }\n", true},
+		{"var value", "a.go",
+			"package p\nvar h int = 1\n",
+			"package p\nvar h int = 2\n", true},
+		{"var type", "a.go",
+			"package p\nvar h int = 1\n",
+			"package p\nvar h int64 = 1\n", false},
+		{"alias target", "a.go",
+			"package p\ntype A = B\n",
+			"package p\ntype A = C\n", false},
+		{"alias spacing", "a.go",
+			"package p\ntype A = B\n",
+			"package p\ntype A=B\n", true},
+		{"const value", "a.go",
+			"package p\nconst c = 1\n",
+			"package p\nconst c = 2\n", true},
+		{"const typed value", "a.go",
+			"package p\nconst c int = 1\n",
+			"package p\nconst c int = 2\n", true},
+		{"const typed type", "a.go",
+			"package p\nconst c int = 1\n",
+			"package p\nconst c int64 = 1\n", false},
+		{"method body", "a.go",
+			"package p\nfunc (t *T) M() {}\n",
+			"package p\nfunc (t *T) M() { return }\n", true},
+		{"method params", "a.go",
+			"package p\nfunc (t *T) M() {}\n",
+			"package p\nfunc (t *T) M(x int) {}\n", false},
+		{"python body", "a.py",
+			"def f(): return 1\n",
+			"def f(): return 2\n", true},
+		{"python params", "a.py",
+			"def f(): return 1\n",
+			"def f(x): return 1\n", false},
+		{"class body", "a.py",
+			"class A:\n    x = 1\n",
+			"class A:\n    x = 2\n", true},
+		{"class bases", "a.py",
+			"class A:\n    pass\n",
+			"class A(B):\n    pass\n", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ha, hb := hash(c.path, c.a), hash(c.path, c.b)
+			if (ha == hb) != c.same {
+				t.Fatalf("same=%v, hashes %s and %s", c.same, ha, hb)
+			}
+		})
+	}
+}
+
+func TestParseErrors(t *testing.T) {
+	x := Default()
+	clean := "package p\n\nfunc B() {}\n"
+	syms, errs, err := x.Parse("p.go", []byte(clean))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("clean file errors = %v", errs)
+	}
+	if len(syms) != 1 || syms[0].Name != "B" {
+		t.Fatalf("clean symbols = %v", names(syms))
+	}
+
+	// The value of `x :=` is missing. That missing node is the error range.
+	broken := "package p\n\nfunc A() {\n\tx := \n}\n"
+	_, errs, err = x.Parse("p.go", []byte(broken))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []gitx.LineRange{{Start: 4, End: 4}}
+	if !reflect.DeepEqual(errs, want) {
+		t.Fatalf("errors = %v, want %v", errs, want)
+	}
 }

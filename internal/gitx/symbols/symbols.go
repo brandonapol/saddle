@@ -7,8 +7,12 @@
 package symbols
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"path/filepath"
+	"sort"
 	"strings"
+	"unicode"
 
 	ts "github.com/odvcencio/gotreesitter"
 	"github.com/odvcencio/gotreesitter/grammars"
@@ -67,22 +71,44 @@ func (x *Extractor) Supports(path string) bool {
 	return ok
 }
 
+// Language returns the language name for path ("go", "python"), or "" when
+// the extractor does not know the extension. The span cache keys on this,
+// not the path, so a rename keeps the hit.
+func (x *Extractor) Language(path string) string {
+	l, ok := x.byExt[filepath.Ext(path)]
+	if !ok {
+		return ""
+	}
+	return l.Name
+}
+
 // Symbols parses src and returns its symbols, outer before inner. Syntax
 // errors are tolerated: agents save half-written files.
 func (x *Extractor) Symbols(path string, src []byte) ([]gitx.Symbol, error) {
+	syms, _, err := x.Parse(path, src)
+	return syms, err
+}
+
+// Parse returns the symbols in src and the line ranges of parse errors
+// (tree-sitter ERROR nodes and missing nodes). A clean file has no error
+// ranges. Callers fall back to a file-level check when an error range
+// intersects a changed line. Signature rules are part of
+// gitx.SpanCacheVersion: bump that constant when they change.
+func (x *Extractor) Parse(path string, src []byte) ([]gitx.Symbol, []gitx.LineRange, error) {
 	l, ok := x.byExt[filepath.Ext(path)]
 	if !ok {
-		return nil, nil
+		return nil, nil, nil
 	}
 	lang := l.Language()
 	tree, err := ts.NewParser(lang).Parse(src)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer tree.Release()
+	root := tree.RootNode()
 	var out []gitx.Symbol
-	l.walk(Node{Node: tree.RootNode(), Lang: lang, Src: src}, "", &out)
-	return out, nil
+	l.walk(Node{Node: root, Lang: lang, Src: src}, "", &out)
+	return out, errorRanges(root, lang), nil
 }
 
 func (l *Lang) walk(n Node, outer string, out *[]gitx.Symbol) {
@@ -98,6 +124,7 @@ func (l *Lang) walk(n Node, outer string, out *[]gitx.Symbol) {
 					Kind:      kind,
 					StartLine: int(c.StartPoint().Row) + 1,
 					EndLine:   endLine(c.Node),
+					SigHash:   sigHash(signature(c)),
 				})
 			}
 		}
@@ -125,6 +152,129 @@ func (l *Lang) qualify(outer, inner string) string {
 		return inner
 	}
 	return outer + "." + inner
+}
+
+// signature is the text hashed into SigHash. Whitespace is removed by sigHash.
+//
+// Go func/method: the declaration up to the body. Go type: the whole spec.
+// Go var/const: names and the declared type, never the value. Python def:
+// name, parameters and return annotation. Python class: name and superclasses.
+func signature(n Node) string {
+	switch n.Type(n.Lang) {
+	case "function_declaration", "method_declaration":
+		if body := n.Field("body"); body != nil {
+			return slice(n.Src, int(n.StartByte()), int(body.StartByte()))
+		}
+		return slice(n.Src, int(n.StartByte()), int(n.EndByte()))
+	case "type_spec", "type_alias":
+		return slice(n.Src, int(n.StartByte()), int(n.EndByte()))
+	case "var_spec", "const_spec":
+		return spanFields(n, "name", "type")
+	case "function_definition":
+		return spanFields(n, "name", "parameters", "return_type")
+	case "class_definition":
+		return spanFields(n, "name", "superclasses")
+	default:
+		return slice(n.Src, int(n.StartByte()), int(n.EndByte()))
+	}
+}
+
+// spanFields returns the source from the first listed field to the last, so
+// tokens between them (commas, "->") stay in the signature and the body does not.
+func spanFields(n Node, fields ...string) string {
+	want := make(map[string]bool, len(fields))
+	for _, f := range fields {
+		want[f] = true
+	}
+	start, end := -1, -1
+	for i := 0; i < n.ChildCount(); i++ {
+		if !want[n.FieldNameForChild(i, n.Lang)] {
+			continue
+		}
+		c := n.Child(i)
+		if c == nil {
+			continue
+		}
+		s, e := int(c.StartByte()), int(c.EndByte())
+		if start < 0 || s < start {
+			start = s
+		}
+		if e > end {
+			end = e
+		}
+	}
+	if start < 0 {
+		return ""
+	}
+	return slice(n.Src, start, end)
+}
+
+func slice(src []byte, start, end int) string {
+	if start < 0 || end > len(src) || start > end {
+		return ""
+	}
+	return string(src[start:end])
+}
+
+func sigHash(text string) string {
+	sum := sha256.Sum256([]byte(stripSpace(text)))
+	return hex.EncodeToString(sum[:])
+}
+
+func stripSpace(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// errorRanges lists ERROR and missing nodes. A zero-width missing token is
+// reported as the line it sits on.
+func errorRanges(root *ts.Node, lang *ts.Language) []gitx.LineRange {
+	var out []gitx.LineRange
+	var walk func(*ts.Node)
+	walk = func(n *ts.Node) {
+		if n == nil {
+			return
+		}
+		if n.IsError() || n.IsMissing() {
+			out = append(out, gitx.LineRange{Start: int(n.StartPoint().Row) + 1, End: endLine(n)})
+		}
+		for i := 0; i < n.ChildCount(); i++ {
+			walk(n.Child(i))
+		}
+	}
+	walk(root)
+	return mergeLineRanges(out)
+}
+
+func mergeLineRanges(rs []gitx.LineRange) []gitx.LineRange {
+	if len(rs) == 0 {
+		return nil
+	}
+	sort.Slice(rs, func(i, j int) bool {
+		if rs[i].Start != rs[j].Start {
+			return rs[i].Start < rs[j].Start
+		}
+		return rs[i].End < rs[j].End
+	})
+	out := []gitx.LineRange{rs[0]}
+	for _, r := range rs[1:] {
+		last := &out[len(out)-1]
+		if r.Start <= last.End+1 {
+			if r.End > last.End {
+				last.End = r.End
+			}
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // endLine is the 1-based last line of n. A node ending at column 0 ends on
