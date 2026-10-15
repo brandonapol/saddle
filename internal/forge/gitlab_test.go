@@ -128,7 +128,7 @@ func TestGitLabPRRead(t *testing.T) {
 
 func TestGitLabMergeState(t *testing.T) {
 	for _, tc := range []struct {
-		m                  mrJSON
+		m                 mrJSON
 		mergeable, mstate string
 	}{
 		{mrJSON{State: "opened", DetailedMergeStatus: "mergeable"}, Mergeable, "CLEAN"},
