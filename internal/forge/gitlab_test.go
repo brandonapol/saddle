@@ -365,3 +365,22 @@ func TestNewGitLabUsesGlabOnPATH(t *testing.T) {
 		t.Fatalf("CreatePR via fake glab = %q, %v", url, err)
 	}
 }
+
+// glab prints GitLab's reason ("Label already exists") on stdout and only
+// the HTTP status on stderr, so EnsureLabel must read both.
+func TestGitLabEnsureLabelExists(t *testing.T) {
+	var calls []string
+	g := &GitLab{Run: func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, strings.Join(args, " "))
+		if len(calls) == 1 {
+			return `{"message":"Label already exists"}`, errors.New("glab api -X: exit status 1: glab: 409 Conflict (HTTP 409)")
+		}
+		return "", nil
+	}}
+	if err := g.EnsureLabel(context.Background(), Label{Name: "ci red", Color: "B60205"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 || calls[1] != "api -X PUT projects/:id/labels/ci%20red -f color=#B60205" {
+		t.Fatalf("calls = %q, want an update after the 409", calls)
+	}
+}

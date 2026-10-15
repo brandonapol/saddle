@@ -419,8 +419,8 @@ func (g *GitLab) EnsureLabel(ctx context.Context, l Label) error {
 	if l.Description != "" {
 		fields = append(fields, "-f", "description="+l.Description)
 	}
-	_, err := g.api(ctx, "POST", "projects/:id/labels", append([]string{"-f", "name=" + l.Name}, fields...)...)
-	if err != nil && strings.Contains(err.Error(), "already exists") {
+	out, err := g.api(ctx, "POST", "projects/:id/labels", append([]string{"-f", "name=" + l.Name}, fields...)...)
+	if err != nil && strings.Contains(out+err.Error(), "already exists") {
 		_, err = g.api(ctx, "PUT", "projects/:id/labels/"+url.PathEscape(l.Name), fields...)
 	}
 	return err
