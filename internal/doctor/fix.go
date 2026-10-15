@@ -49,7 +49,7 @@ var about = map[string]string{
 	CheckConfig:        "saddle's settings for this repo, in .saddle/config.toml",
 	CheckRemote:        "the GitHub remote saddle pushes branches to and opens PRs on",
 	CheckDefaultBranch: "the branch PRs land on; saddle's base must match it",
-	CheckGH:            "the GitHub CLI, logged in, which saddle uses to open and merge PRs",
+	CheckGH:            "where the repo is hosted (GitHub or GitLab) and its CLI, gh or glab, logged in, which saddle uses to open and merge PRs",
 	CheckMergeSettings: "the repo's merge options on GitHub; stacked PRs need squash merges, not merge commits",
 	CheckProtection:    "GitHub rules that keep red or unreviewed work off the base branch",
 	CheckGhStack:       "GitHub's optional native Stacked PRs",
