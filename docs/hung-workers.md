@@ -91,8 +91,8 @@ takes for a worker out of quota.
 - **Respects the cap.** A takeover replaces one session with one session in
   the same task, so it never runs more workers than before.
 - **Respects "do not kill".** Each flagged worker gets a `worker-hung` card
-  whose second option is "Don't kill it". Answering it, or
-  `saddle keep <task>`, records a `hung_keep` event: saddle still nudges,
+  whose second option is "Don't kill it". Answering it, or the
+  orchestrator's `keep` tool, records a `hung_keep` event: saddle still nudges,
   but never replaces that task's session. A task whose prompt says "do not
   kill" or "don't kill" is kept the same way.
 - **Gives up instead of looping.** After two takeovers of one task saddle
@@ -112,6 +112,9 @@ hung_after = "20m" # how long a worker may sit without progress per step
   could be nudged. A nudge is a notice and a typed line that a live agent
   reads and moves past; that is the price of catching the real hangs.
 - Tests: `TestHungWorkerIsNudgedThenTakenOver` (a worker that stops reading
-  notices is detected and replaced), `TestSlowProgressingWorkerIsNotHung`,
+  notices is detected and replaced), `TestSlowProgressingWorkerIsNotHung`
+  (a slow worker that keeps printing or committing is not),
   `TestHungTimerOnlyScreenIsStill`, `TestHungKeepNeverKills`,
-  `TestHungGateIsKilledFirst`, `TestHungSkipsDoneOrphans`.
+  `TestHungGivesUpAfterTwoTakeovers`, `TestHungGateIsKilledFirst`,
+  `TestHungSkipsDoneOrphansAndQuietIdle`, `TestHungWatchOff` and
+  `TestKeepTool`.
