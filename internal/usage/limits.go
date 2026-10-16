@@ -113,6 +113,7 @@ func (e LimitEstimate) ShouldPauseLaunches() bool { return e.pause && e.State ==
 
 type sample struct {
 	t        time.Time
+	adapter  string
 	model    string
 	tokens   Tokens
 	messages int64
@@ -124,7 +125,7 @@ type sample struct {
 func Estimate(recs []Record, l Limits, now time.Time) LimitEstimate {
 	s := make([]sample, len(recs))
 	for i, r := range recs {
-		s[i] = sample{r.Time, r.Model, r.Tokens, 1, r.CostUSD}
+		s[i] = sample{r.Time, "", r.Model, r.Tokens, 1, r.CostUSD}
 	}
 	return estimate(s, l, now)
 }
@@ -134,7 +135,7 @@ func Estimate(recs []Record, l Limits, now time.Time) LimitEstimate {
 func EstimateBuckets(bs []Bucket, l Limits, now time.Time) LimitEstimate {
 	s := make([]sample, len(bs))
 	for i, b := range bs {
-		s[i] = sample{b.Minute, b.Model, b.Tokens, b.Messages, b.CostUSD}
+		s[i] = sample{b.Minute, b.Adapter, b.Model, b.Tokens, b.Messages, b.CostUSD}
 	}
 	return estimate(s, l, now)
 }
@@ -200,15 +201,11 @@ func (w *WindowEstimate) sum(s []sample, l Limits, now time.Time, in func(time.T
 		}
 		w.Tokens = w.Tokens.Add(x.tokens)
 		w.Messages += x.messages
-		if x.costUSD > 0 {
-			w.USD += x.costUSD
-		} else {
-			p, ok := PriceFor(x.model, l.Prices)
-			if !ok {
-				unpriced[x.model] = true
-			}
-			w.USD += p.Cost(x.tokens)
+		cost, ok := costOf(x.adapter, x.model, x.tokens, x.costUSD, l.Prices)
+		if !ok {
+			unpriced[x.model] = true
 		}
+		w.USD += cost
 	}
 	for m := range unpriced {
 		w.Unpriced = append(w.Unpriced, m)

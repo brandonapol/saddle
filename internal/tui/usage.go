@@ -48,7 +48,7 @@ func usageStrip(e usage.LimitEstimate, w int) string {
 
 func usageWindow(win usage.WindowEstimate) string {
 	s := sDim.Render(win.Name) + " "
-	totals := sDim.Render(fmt.Sprintf("%s tok · $%.2f", humanTokens(win.Tokens.Total()), win.USD))
+	totals := sDim.Render(humanTokens(win.Tokens.Total()) + " tok · " + usd(win.USD, len(win.Unpriced) > 0))
 	if win.Unlimited {
 		return s + totals
 	}
@@ -62,6 +62,19 @@ func usageWindow(win usage.WindowEstimate) string {
 		s += sDim.Render(" · resets " + shortDur(win.ResetIn))
 	}
 	return s
+}
+
+// usd renders a $-equivalent. When some of the usage had no price the total
+// is a floor, so it says so: "$?" when nothing was priced, "$1.23+?" when
+// part was (#637).
+func usd(v float64, unpriced bool) string {
+	switch {
+	case !unpriced:
+		return fmt.Sprintf("$%.2f", v)
+	case v <= 0:
+		return "$?"
+	}
+	return fmt.Sprintf("$%.2f+?", v)
 }
 
 func bar(frac float64, n int) string {
