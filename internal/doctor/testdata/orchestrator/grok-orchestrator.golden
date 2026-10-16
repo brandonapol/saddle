@@ -1,0 +1,9 @@
+STATUS  CHECK         DETAIL
+ok      claude        claude 1.0.0 (fake)
+ok      agent CLIs    harness claude is ready; usable: claude, grok
+ok      orchestrator  runs on grok (model grok's default), set by [orchestrator] adapter; see grok
+ok      grok          grok 1.0.0 (fake)
+
+Next steps:
+  saddle up           open saddle and tell the orchestrator what to work on
+  saddle up epic.md   or hand it an epic: it plans it and shows you the plan first

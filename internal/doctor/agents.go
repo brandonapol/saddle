@@ -72,11 +72,25 @@ func (r *run) claude() Result {
 	if res.Status != Fail {
 		return res
 	}
+	if !r.needsClaude() {
+		res.Status, res.Fix = OK, ""
+		res.Detail += fmt.Sprintf("; not used: the orchestrator runs %s and workers run %s", r.orchAdapter(), r.workerHarness())
+		return res
+	}
 	if fb, ok := r.fallback(); ok && fb != config.HarnessClaude {
 		res.Status = Warn
 		res.Detail += "; saddle up runs " + fb + " instead (see " + CheckAgents + ")"
 	}
 	return res
+}
+
+// workerHarness is the harness workers run in this run: the configured one,
+// or what saddle up falls back to.
+func (r *run) workerHarness() string {
+	if fb, ok := r.fallback(); ok {
+		return fb
+	}
+	return r.cfg.Harness
 }
 
 // agentCLIs reports which agent CLIs can run, and what saddle up runs when

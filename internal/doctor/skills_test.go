@@ -89,6 +89,12 @@ func TestSkillsCheckSkipped(t *testing.T) {
 	if _, ok := skillsResult(t, env); ok || runs != 0 {
 		t.Fatalf("skills check ran under grok (%d probes)", runs)
 	}
+	// #668: a codex orchestrator has no Claude skills to probe.
+	env = skillsEnv{fakeEnv: healthy(t), runs: &runs}
+	env.cfg.Orchestrator.Adapter = config.HarnessCodex
+	if _, ok := skillsResult(t, env); ok || runs != 0 {
+		t.Fatalf("skills check ran for a codex orchestrator (%d probes)", runs)
+	}
 }
 
 // fakeClaude writes a stand-in claude that runs body.

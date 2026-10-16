@@ -150,7 +150,7 @@ func TestHealthyRepoAllOK(t *testing.T) {
 		t.Fatal("Failed on a healthy repo")
 	}
 	want := []string{CheckConfig, CheckRemote, CheckDefaultBranch, CheckGH, CheckMergeSettings, CheckProtection, CheckGhStack,
-		CheckTestCmd, CheckTmux, CheckClaude, CheckHooks, CheckPush, CheckOrchAllow, CheckGate, CheckIgnored, CheckStateDB, CheckLeftovers, CheckInhibit}
+		CheckTestCmd, CheckTmux, CheckClaude, CheckHooks, CheckPush, CheckOrchAllow, CheckGate, CheckIgnored, CheckStateDB, CheckLeftovers, CheckInhibit, CheckOrchestrator}
 	if len(rs) != len(want) {
 		t.Fatalf("got %d checks, want %d", len(rs), len(want))
 	}

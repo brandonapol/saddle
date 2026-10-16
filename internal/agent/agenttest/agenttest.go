@@ -85,6 +85,10 @@ func script(bin string, loggedIn bool) string {
 		} else {
 			b.WriteString("auth) echo 'x gitlab.com: No token found' >&2; exit 1 ;;\n")
 		}
+	case "codex":
+		b.WriteString("--version) echo 'codex-cli 1.0.0 (fake)' ;;\n")
+		// saddle's codex orchestrator runs headless turns with exec --json (#668).
+		b.WriteString("exec) echo 'Usage: codex exec [OPTIONS] [PROMPT]'; echo '      --json  Print events to stdout as JSONL' ;;\n")
 	default:
 		fmt.Fprintf(&b, "--version) echo '%s 1.0.0 (fake)' ;;\n", bin)
 	}

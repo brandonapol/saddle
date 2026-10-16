@@ -41,4 +41,6 @@ func (r *run) grok() Result {
 	return res
 }
 
-func (r *run) wantsGrok() bool { return r.cfg.Harness == config.HarnessGrok }
+func (r *run) wantsGrok() bool {
+	return r.cfg.Harness == config.HarnessGrok || r.orchAdapter() == config.HarnessGrok
+}

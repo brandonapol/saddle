@@ -1,0 +1,9 @@
+STATUS  CHECK         DETAIL
+ok      claude        claude 1.0.0 (fake)
+ok      agent CLIs    harness claude is ready; usable: claude
+FAIL    orchestrator  runs on codex (model codex's default), set by [orchestrator] adapter, but codex not on PATH
+
+You need to do this:
+  - orchestrator (the agent CLI saddle up's orchestrator runs on, and what it needs to call saddle's tools)
+      runs on codex (model codex's default), set by [orchestrator] adapter, but codex not on PATH
+      fix: install the Codex CLI: npm install -g @openai/codex (https://github.com/openai/codex), then codex login; or set [orchestrator] adapter = "claude" in .saddle/config.toml
