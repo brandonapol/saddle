@@ -18,6 +18,15 @@ make setup      # dev tools; asks for a Jev key / Claude login only if missing
 make install    # builds saddle into $GOBIN; agents run this binary
 ```
 
+If `$GOBIN` (by default `~/go/bin`) isn't on your PATH yet, `make install`
+appends one marked line to your shell's config, once: `export PATH=...` in
+`~/.bashrc` or `~/.zshrc`, or `fish_add_path` in fish's `config.fish`. It
+backs the file up to `<file>.saddle-backup` first, never edits your existing
+lines, and leaves a file it can't write alone. Open a new shell (or `source`
+the file) afterwards. `make install NO_PATH=1` only prints the line for you to
+add. `saddle doctor` warns when `saddle` doesn't resolve on PATH and prints
+the exact fix.
+
 ### Or: install through the Claude Code plugin
 
 To orchestrate from your own Claude Code session instead of the TUI, install
