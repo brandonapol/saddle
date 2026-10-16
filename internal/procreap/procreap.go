@@ -24,6 +24,10 @@ type Match struct {
 	// Env also matches a process whose TMPDIR or GOTMPDIR is under the dir:
 	// everything a gate or test started inherits its temp dir.
 	Env bool
+	// SkipTmux leaves tmux servers alone. A server started from a task's
+	// first window carries that window's command line, but it serves every
+	// window, so killing it would take the other tasks down with it.
+	SkipTmux bool
 }
 
 // procRoot is /proc; tests point it elsewhere.
@@ -131,6 +135,11 @@ func under(pid, uid int, dir string, m Match) bool {
 	var st syscall.Stat_t
 	if syscall.Stat(base, &st) != nil || int(st.Uid) != uid {
 		return false
+	}
+	if m.SkipTmux {
+		if b, err := os.ReadFile(filepath.Join(base, "comm")); err == nil && strings.HasPrefix(string(b), "tmux") {
+			return false
+		}
 	}
 	if cwd, err := os.Readlink(filepath.Join(base, "cwd")); err == nil && within(dir, cwd) {
 		return true

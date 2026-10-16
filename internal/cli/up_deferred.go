@@ -77,6 +77,9 @@ func (d upDeferred) run(ctx context.Context) (wait func()) {
 	}
 	wg.Go(func() { within(ctx, d.timeout, d.trace.Span("stale gate sweep"), gates) })
 	wg.Go(func() {
+		within(ctx, d.timeout, d.trace.Span("stale layout sweep"), func() app.LayoutSweep { return d.a.SweepStaleLayouts(app.GateSweepAge) })
+	})
+	wg.Go(func() {
 		warn, ok := within(ctx, d.timeout, d.trace.Span("base fetch"), d.baseBehind)
 		if ok && warn != "" {
 			_ = d.a.Notify(app.OrchestratorID, store.NoticeInfo, "warning: "+warn)

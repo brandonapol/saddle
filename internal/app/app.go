@@ -39,9 +39,10 @@ type App struct {
 	// (#321); nil means the [notify] desktop and webhook settings.
 	OwnerNotify func(text string)
 
-	wake          wakeState      // idle notice wake-ups (#183)
-	doneJobs      sync.WaitGroup // done gates running in the background (#368)
-	previewLayout bool           // compute layout with Git objects, without worktree refs or hooks
+	wake          wakeState        // idle notice wake-ups (#183)
+	doneJobs      sync.WaitGroup   // done gates running in the background (#368)
+	runReap       func(dir string) // tests stand in for reaping a run dir's processes
+	previewLayout bool             // compute layout with Git objects, without worktree refs or hooks
 }
 
 // Open finds the repo from dir (SADDLE_ROOT wins) and opens its state.
@@ -711,6 +712,7 @@ func (a *App) Kill(task string, keep bool) error {
 		}
 	}
 	a.removeTaskTmp(t.ID)
+	a.cleanRunDir(t.ID)
 	note := ""
 	if !keep && t.Role == store.RoleWorker {
 		if note, err = a.cleanup(t); err != nil {

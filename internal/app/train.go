@@ -550,6 +550,7 @@ func (a *App) landOne(id string, run *landRun) LandResult {
 	}
 	a.pruneCheckpoint(id) // the work is on integration now (#50)
 	a.removeTaskTmp(id)
+	a.cleanRunDir(id)
 
 	if err := a.broadcastLanding(t, old, head, run); err != nil {
 		res.Note += " (broadcast incomplete: " + err.Error() + ")"
