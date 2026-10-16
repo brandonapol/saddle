@@ -179,6 +179,8 @@ type runner struct {
 	freed  map[int]bool    // issues whose held agent was released
 	// started are issues whose agent, held by start_after, was let go.
 	started map[int]bool
+	// skipped is why autopilot's last tick didn't start each issue.
+	skipped map[int]string
 }
 
 // claimsTable is the [claims] config for granularity g. File mode is the
@@ -272,6 +274,7 @@ func (r *runner) drive() {
 			fmt.Fprintf(r.o.Progress, "%5.1fs autopilot: %s\n", time.Since(start).Seconds(), rep.Decision)
 			lastDecision = rep.Decision
 		}
+		r.skipped = rep.Skipped
 		for n, why := range rep.Skipped {
 			if why != "" && r.task[n] == "" {
 				r.log.Waits = append(r.log.Waits, Wait{Issue: n, Why: why})
@@ -319,7 +322,7 @@ func (r *runner) signature() string {
 }
 
 // releaseHeld messages each held agent whose wait_for tickets' agents have
-// all finished their scripts.
+// all finished their scripts, or can't start alongside it (see heldBack).
 func (r *runner) releaseHeld() {
 	for n, tk := range r.ticket {
 		task := r.task[n]
@@ -328,7 +331,8 @@ func (r *runner) releaseHeld() {
 		}
 		ready := true
 		for _, want := range tk.WaitFor {
-			if !r.finished(r.issueOf(want)) {
+			w := r.issueOf(want)
+			if !r.finished(w) && !heldBack(r.o.Granularity, r.task[w], r.skipped[w]) {
 				ready = false
 				break
 			}
@@ -340,6 +344,14 @@ func (r *runner) releaseHeld() {
 			}
 		}
 	}
+}
+
+// heldBack reports whether autopilot keeps an unspawned ticket from
+// starting because its claims overlap a live task's. Under file claims that
+// lasts until the live task lands, so a hold waiting for the ticket would
+// never release; under symbol claims openGate lifts it on the next tick.
+func heldBack(granularity, task, why string) bool {
+	return granularity == config.GranularityFile && task == "" && strings.Contains(why, " overlaps ")
 }
 
 // releaseStarts messages each agent held by start_after once the agents of

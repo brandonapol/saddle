@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/autopilot"
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/forecast"
 )
 
@@ -159,6 +160,27 @@ func TestSymbolGateHidesBenchClaims(t *testing.T) {
 	}
 	if !slices.Equal(tasks[0].Claims, []string{"shapes/shapes.go"}) {
 		t.Error("openGate changed its input")
+	}
+}
+
+// A wait_for hold on a ticket autopilot keeps back for overlapping claims
+// would never release under file claims; under symbol claims the gate lifts
+// that wait on the next tick, so the hold stands.
+func TestHeldBackOnlyUnderFileClaims(t *testing.T) {
+	overlap := "its claim shapes/shapes.go overlaps t1's shapes/shapes.go"
+	for _, c := range []struct {
+		granularity, task, why string
+		want                   bool
+	}{
+		{config.GranularityFile, "", overlap, true},
+		{config.GranularitySymbol, "", overlap, false},
+		{config.GranularityFile, "t2", overlap, false},
+		{config.GranularityFile, "", "at the cap (2 running)", false},
+		{config.GranularityFile, "", "", false},
+	} {
+		if got := heldBack(c.granularity, c.task, c.why); got != c.want {
+			t.Errorf("heldBack(%q, %q, %q) = %v, want %v", c.granularity, c.task, c.why, got, c.want)
+		}
 	}
 }
 

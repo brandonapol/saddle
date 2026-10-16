@@ -901,3 +901,40 @@ func TestOpenCodeInAdapterOrderAndFallback(t *testing.T) {
 		t.Fatalf("FallbackFor(opencode, big-pickle) = %q %v %v", km, chain, ok)
 	}
 }
+
+// TestRunQueueConfig: [run_queue] parses its thresholds, budget and
+// weights, leaves unset keys nil, and rejects values that mean nothing.
+func TestRunQueueConfig(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	write := func(body string) string {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, ".saddle"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".saddle", "config.toml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return root
+	}
+	cfg, err := Load(write("[run_queue]\nmin_free_ram_pct = 15\nbudget = 6\n[run_queue.weights]\nflutter-test = 4\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rq := cfg.RunQueue
+	if rq.MinFreeRAMPct == nil || *rq.MinFreeRAMPct != 15 || rq.Budget == nil || *rq.Budget != 6 || rq.Weights["flutter-test"] != 4 {
+		t.Fatalf("run_queue %+v", rq)
+	}
+	if rq.MaxLoadPerCPU != nil || rq.MaxCPUPressure != nil {
+		t.Fatalf("unset keys should stay nil: %+v", rq)
+	}
+	for _, bad := range []string{
+		"[run_queue]\nmax_load_per_cpu = -1\n",
+		"[run_queue]\nmin_free_ram_pct = 101\n",
+		"[run_queue]\nbudget = -2\n",
+		"[run_queue.weights]\ngo-test = 0\n",
+	} {
+		if _, err := Load(write(bad)); err == nil {
+			t.Errorf("%q: want an error", bad)
+		}
+	}
+}

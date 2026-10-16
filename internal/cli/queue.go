@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/spf13/cobra"
@@ -15,6 +16,50 @@ import (
 type queueJSON struct {
 	Engine  string           `json:"engine"`
 	Entries []queueEntryJSON `json:"entries"`
+	// ForeignRuns are heavy-run leases no saddle agent took (a git hook or
+	// another tool through saddle run), so a slow gate has a visible cause.
+	ForeignRuns []foreignRunJSON `json:"foreign_runs"`
+}
+
+type foreignRunJSON struct {
+	Class  string `json:"class"`
+	State  string `json:"state"` // running or waiting
+	Label  string `json:"label"`
+	Repo   string `json:"repo,omitempty"`
+	Cmd    string `json:"cmd"`
+	PID    int    `json:"pid"`
+	Weight int    `json:"weight"`
+	AgeMS  int64  `json:"age_ms"`
+}
+
+// foreignRuns lists the machine queue's foreign leases, holders first. The
+// heavy-run queue is advisory here: if it can't be read, there are none.
+func foreignRuns(a *app.App) []foreignRunJSON {
+	out := []foreignRunJSON{}
+	q, _, err := a.Heavy().Open()
+	if err != nil {
+		return out
+	}
+	defer func() { _ = q.Close() }()
+	st, err := q.Status()
+	if err != nil {
+		return out
+	}
+	for _, state := range []string{"running", "waiting"} {
+		for _, cs := range st {
+			es := cs.Holders
+			if state == "waiting" {
+				es = cs.Waiters
+			}
+			for _, e := range es {
+				if e.Foreign {
+					out = append(out, foreignRunJSON{Class: cs.Class, State: state, Label: e.Label, Repo: e.Repo, Cmd: e.Cmd,
+						PID: e.PID, Weight: e.Weight, AgeMS: e.Age.Milliseconds()})
+				}
+			}
+		}
+	}
+	return out
 }
 
 type queueEntryJSON struct {
@@ -33,15 +78,20 @@ func queueCmd() *cobra.Command {
 		Use:   "queue",
 		Short: "Show, reorder and hold the merge train's queue",
 		Long: `Lists the branches waiting to land, next first. Subcommands move an entry,
-hold it back without losing its place, and release it.`,
+hold it back without losing its place, and release it.
+
+Below the train it lists foreign heavy runs: leases in the machine's
+heavy-run queue that no saddle agent took (another repo's git hook or tool
+through saddle run). They share the machine budget with the train's gates.`,
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
 			q, err := a.Queue()
 			if err != nil {
 				return err
 			}
 			out := cmd.OutOrStdout()
+			foreign := foreignRuns(a)
 			if asJSON {
-				js := queueJSON{Engine: a.LockOwner(), Entries: []queueEntryJSON{}}
+				js := queueJSON{Engine: a.LockOwner(), Entries: []queueEntryJSON{}, ForeignRuns: foreign}
 				for i, e := range q {
 					js.Entries = append(js.Entries, queueEntryJSON{Position: i + 1, Task: e.Task, State: e.State, Note: e.Note, Seq: e.Seq, Attempts: e.Attempts})
 				}
@@ -49,7 +99,6 @@ hold it back without losing its place, and release it.`,
 			}
 			if len(q) == 0 {
 				fmt.Fprintln(out, "the queue is empty")
-				return nil
 			}
 			for i, e := range q {
 				line := fmt.Sprintf("%d. %s %s", i+1, e.Task, e.State)
@@ -57,6 +106,17 @@ hold it back without losing its place, and release it.`,
 					line += ": " + e.Note
 				}
 				fmt.Fprintln(out, line)
+			}
+			if len(foreign) > 0 {
+				fmt.Fprintln(out, "foreign heavy runs (not saddle agents; saddle runq status):")
+			}
+			for _, f := range foreign {
+				who := f.Label
+				if f.Repo != "" {
+					who = f.Repo + "/" + who
+				}
+				fmt.Fprintf(out, "  %s %s  %s  pid %d  weight %d  %s (%s)\n", f.State, f.Class, who, f.PID, f.Weight, f.Cmd,
+					(time.Duration(f.AgeMS) * time.Millisecond).Round(time.Second))
 			}
 			return nil
 		}),
