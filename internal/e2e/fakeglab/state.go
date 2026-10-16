@@ -89,7 +89,7 @@ type Job struct {
 	AllowFailure bool   `json:"allow_failure,omitempty"`
 	// Trace is the job log `jobs/:id/trace` returns.
 	Trace string `json:"trace,omitempty"`
-	// Retried counts pipeline retries that reran it.
+	// Retried counts the pipeline or job retries that reran it.
 	Retried int `json:"retried,omitempty"`
 }
 

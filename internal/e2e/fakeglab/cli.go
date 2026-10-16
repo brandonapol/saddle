@@ -173,6 +173,14 @@ func (c *call) api(args []string) (any, error) {
 	if len(rest) == 3 && rest[0] == "pipelines" {
 		return c.onPipeline(method, rest[1], rest[2])
 	}
+	if len(rest) == 3 && rest[0] == "jobs" && rest[2] == "retry" && method == "POST" {
+		m, j := c.job(rest[1])
+		if j == nil {
+			return nil, notFound("404 Job")
+		}
+		j.Status, j.Retried = Pending, j.Retried+1
+		return c.jobJSON(m, j), nil
+	}
 	if len(rest) >= 2 && rest[0] == "jobs" && method == "GET" {
 		m, j := c.job(rest[1])
 		if j == nil {

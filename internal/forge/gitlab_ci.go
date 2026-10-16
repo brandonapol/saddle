@@ -167,8 +167,13 @@ func cleanTrace(trace string, n int) (step, tail string) {
 	return step, strings.Join(out, "\n")
 }
 
-// RerunFailed retries the failed jobs of pipeline id.
+// RerunFailed retries the failed jobs of pipeline id, or the one job of a
+// "jobs/N" id (RunID of a job link whose pipeline wasn't known).
 func (g *GitLab) RerunFailed(ctx context.Context, id string) error {
-	_, err := g.api(ctx, "POST", "projects/:id/pipelines/"+id+"/retry")
+	path := "projects/:id/pipelines/" + id + "/retry"
+	if job, ok := strings.CutPrefix(id, JobRunPrefix); ok {
+		path = "projects/:id/jobs/" + job + "/retry"
+	}
+	_, err := g.api(ctx, "POST", path)
 	return err
 }

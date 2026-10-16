@@ -155,6 +155,19 @@ func TestGitLabStackLifecycle(t *testing.T) {
 	if j := x.state().MR(1).Pipeline.Jobs[0]; j.Status != Pending || j.Retried != 1 {
 		t.Fatalf("job after retry = %+v", j)
 	}
+	// A job link with no pipeline known retries just that job (#667).
+	if err := x.gl.SetJobs(1, Job{Name: "test", Stage: "test", Status: Failed}); err != nil {
+		t.Fatal(err)
+	}
+	if checks, err = x.f.Checks(ctx, "a"); err != nil || len(checks) != 1 {
+		t.Fatalf("Checks after SetJobs = %+v, %v", checks, err)
+	}
+	if err := x.f.RerunFailed(ctx, forge.RunID(checks[0].Link)); err != nil {
+		t.Fatal(err)
+	}
+	if j := x.state().MR(1).Pipeline.Jobs[0]; j.Status != Pending || j.Retried != 1 {
+		t.Fatalf("job after job retry = %+v", j)
+	}
 	if err := x.gl.SetJobs(1, Job{Name: "test", Stage: "test", Status: Success}); err != nil {
 		t.Fatal(err)
 	}
