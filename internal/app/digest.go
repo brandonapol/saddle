@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -17,7 +18,6 @@ const EventDigestSent = "notice_digest_sent"
 
 var (
 	mergedPRRe   = regexp.MustCompile(`^Auto-merged (\S+) \(`)
-	prNumberRe   = regexp.MustCompile(`/pull/(\d+)$`)
 	landedTaskRe = regexp.MustCompile(`^(\S+) ".*" landed on `)
 )
 
@@ -114,11 +114,7 @@ func summarizeDigest(items []store.Event) string {
 		switch topic {
 		case TopicMerged:
 			if m := mergedPRRe.FindStringSubmatch(text); m != nil {
-				if n := prNumberRe.FindStringSubmatch(m[1]); n != nil {
-					d.ids[topic] = append(d.ids[topic], "#"+n[1])
-				} else {
-					d.ids[topic] = append(d.ids[topic], m[1])
-				}
+				d.ids[topic] = append(d.ids[topic], forge.PRShort(m[1]))
 			}
 		case TopicLanded:
 			if m := landedTaskRe.FindStringSubmatch(text); m != nil {

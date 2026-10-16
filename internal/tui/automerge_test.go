@@ -342,3 +342,28 @@ func TestMergeHeaderWaitsForTheActionToLand(t *testing.T) {
 		t.Errorf("calls = %q, want %q", f.calls, want)
 	}
 }
+
+// #652: on GitLab the merge view names each MR "!12" as GitLab writes it,
+// not by its full URL.
+func TestMergeViewNamesGitLabMRs(t *testing.T) {
+	m := newViewModel(120, 40)
+	m.view = viewMerge
+	mr := "https://gitlab.com/g/r/-/merge_requests/"
+	m.am = &automerge.Status{Enabled: true, Stacks: []automerge.Stack{{
+		ID: "t5",
+		Nodes: []automerge.Node{
+			{Task: "t5", PR: mr + "12", Base: "main", Checks: "pass", Mergeable: "MERGEABLE", MergeState: "CLEAN"},
+			{Task: "t6", PR: mr + "13", Base: "saddle/t5"},
+		},
+		Next: mr + "12", Ready: true,
+	}}}
+	out := m.View()
+	for _, want := range []string{"t5 !12", "t6 !13"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("merge view lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "merge_requests") {
+		t.Errorf("merge view shows a full MR URL:\n%s", out)
+	}
+}

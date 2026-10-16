@@ -192,7 +192,7 @@ func (a *App) Publish(req PublishReq) (PublishResult, error) {
 	return res, nil
 }
 
-var prURLRe = regexp.MustCompile(`https://\S+/pull/\d+`)
+var prURLRe = regexp.MustCompile(`https://\S+/(?:pull|-/merge_requests)/\d+`)
 
 // publishTarget resolves a task id or branch. A branch that is a task's
 // branch resolves to that task.
