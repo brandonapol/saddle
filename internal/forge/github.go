@@ -245,6 +245,34 @@ func (g *GitHub) MergeSettings(ctx context.Context) (MergeSettings, error) {
 	return MergeSettings{Repo: r.FullName, URL: r.HTMLURL, Merge: *r.Merge, Squash: *r.Squash, Rebase: *r.Rebase}, nil
 }
 
+// DefaultBranch reads the repo's default branch with `gh repo view`, which
+// needs only read access.
+func (g *GitHub) DefaultBranch(ctx context.Context) (string, error) {
+	return g.Run(ctx, "repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name")
+}
+
+// RateLimit reads the core REST quota every gh call spends.
+func (g *GitHub) RateLimit(ctx context.Context) (RateLimit, error) {
+	out, err := g.Run(ctx, "api", "rate_limit")
+	if err != nil {
+		return RateLimit{}, err
+	}
+	var rl struct {
+		Resources struct {
+			Core struct {
+				Limit     int   `json:"limit"`
+				Remaining int   `json:"remaining"`
+				Reset     int64 `json:"reset"`
+			} `json:"core"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal([]byte(out), &rl); err != nil {
+		return RateLimit{}, fmt.Errorf("parse gh api output: %w", err)
+	}
+	c := rl.Resources.Core
+	return RateLimit{Limit: c.Limit, Remaining: c.Remaining, Reset: time.Unix(c.Reset, 0)}, nil
+}
+
 func (g *GitHub) AuthStatus(ctx context.Context) error {
 	_, err := g.Run(ctx, "auth", "status")
 	return err
