@@ -161,11 +161,7 @@ func (c Codex) Usage() UsageSource {
 func (c Codex) transcript(dir, _, session string) string {
 	home := c.Home
 	if home == "" {
-		home = os.Getenv("CODEX_HOME")
-	}
-	if home == "" {
-		h, _ := os.UserHomeDir()
-		home = filepath.Join(h, ".codex")
+		home = CodexHome()
 	}
 	var best, own string
 	var bestMod time.Time

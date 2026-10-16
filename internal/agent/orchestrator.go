@@ -1,7 +1,15 @@
 package agent
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
+
+	"github.com/BurntSushi/toml"
 
 	"github.com/brandonapol/saddle/internal/config"
 )
@@ -65,4 +73,64 @@ func installedIn(ss []Status, name string) bool {
 		}
 	}
 	return false
+}
+
+// CodexHome is codex's state dir: $CODEX_HOME, else ~/.codex.
+func CodexHome() string {
+	if h := os.Getenv("CODEX_HOME"); h != "" {
+		return h
+	}
+	h, _ := os.UserHomeDir()
+	return filepath.Join(h, ".codex")
+}
+
+// CodexSandbox is the sandbox a headless codex orchestrator turn runs in:
+// "danger-full-access" when approvals and the sandbox are bypassed, else
+// the sandbox_mode the turn sets. mode is [claude] permission_mode and args
+// [adapters.codex] args, as the orchestrator's launch gets them.
+func CodexSandbox(mode string, args []string) string {
+	exec := Launch{Mode: mode, Args: args}.codexExecArgs()
+	sandbox := ""
+	for i, a := range exec {
+		if a == "--dangerously-bypass-approvals-and-sandbox" {
+			return "danger-full-access"
+		}
+		v := a
+		if (a == "-c" || a == "--config") && i+1 < len(exec) {
+			v = exec[i+1]
+		}
+		v = strings.TrimPrefix(strings.TrimPrefix(v, "--config="), "-c=")
+		if k, val, ok := strings.Cut(v, "="); ok && strings.TrimSpace(k) == "sandbox_mode" {
+			sandbox = strings.Trim(strings.TrimSpace(val), `"'`)
+		}
+	}
+	return sandbox
+}
+
+// CodexSaddleServerProblem says why a saddle MCP server in codex's own
+// config.toml under home would defeat the -c mcp_servers.saddle overrides
+// saddle passes each turn, or "". Codex merges the overrides key by key,
+// so a url transport or enabled = false the overrides don't set survives.
+func CodexSaddleServerProblem(home string) string {
+	p := filepath.Join(home, "config.toml")
+	var c struct {
+		MCPServers map[string]map[string]any `toml:"mcp_servers"`
+	}
+	if _, err := toml.DecodeFile(p, &c); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return ""
+		}
+		return fmt.Sprintf("%s does not parse: %v", p, err)
+	}
+	s, ok := c.MCPServers["saddle"]
+	if !ok {
+		return ""
+	}
+	if _, ok := s["url"]; ok {
+		return fmt.Sprintf("%s defines [mcp_servers.saddle] with a url, which saddle's command override can't replace", p)
+	}
+	if on, ok := s["enabled"].(bool); ok && !on {
+		return fmt.Sprintf("%s sets [mcp_servers.saddle] enabled = false, so the orchestrator gets no saddle tools", p)
+	}
+	return ""
 }

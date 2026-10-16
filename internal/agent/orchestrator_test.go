@@ -1,12 +1,17 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/config"
 )
 
-func st(name string, ok, installed bool) Status { return Status{Name: name, OK: ok, Installed: installed} }
+func st(name string, ok, installed bool) Status {
+	return Status{Name: name, OK: ok, Installed: installed}
+}
 
 // #668: the orchestrator's adapter follows [orchestrator] adapter, then the
 // harness, then whichever headless agent can run when Claude Code is missing.
@@ -65,5 +70,53 @@ func TestOrchestratorModel(t *testing.T) {
 	// A failover to claude must not carry the codex model.
 	if got := OrchestratorModel(c, "claude"); got != "sonnet" {
 		t.Errorf("failover: OrchestratorModel(claude) = %q, want sonnet", got)
+	}
+}
+
+func TestCodexSandbox(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		args []string
+		want string
+	}{
+		{"auto", nil, "danger-full-access"},
+		{"bypassPermissions", nil, "danger-full-access"},
+		{"acceptEdits", nil, "workspace-write"},
+		{"plan", nil, "read-only"},
+		{"default", nil, "read-only"},
+		{"auto", []string{"-c", `sandbox_mode="read-only"`}, "read-only"},
+		{"plan", []string{"--yolo"}, "danger-full-access"},
+		{"auto", []string{"--config=sandbox_mode=workspace-write"}, "workspace-write"},
+	} {
+		if got := CodexSandbox(tc.mode, tc.args); got != tc.want {
+			t.Errorf("CodexSandbox(%q, %q) = %q, want %q", tc.mode, tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestCodexSaddleServerProblem(t *testing.T) {
+	home := t.TempDir()
+	if p := CodexSaddleServerProblem(home); p != "" {
+		t.Errorf("no config: %q", p)
+	}
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for body, want := range map[string]string{
+		"model = \"gpt-5\"\n": "",
+		"[mcp_servers.saddle]\ncommand = \"/old/saddle\"\nargs = [\"mcp\"]\n": "",
+		"[mcp_servers.saddle]\nurl = \"http://localhost:1\"\n":                "with a url",
+		"[mcp_servers.saddle]\ncommand = \"saddle\"\nenabled = false\n":       "enabled = false",
+		"[mcp_servers.other]\nurl = \"http://x\"\n":                           "",
+		"not toml [": "does not parse",
+	} {
+		write(body)
+		got := CodexSaddleServerProblem(home)
+		if want == "" && got != "" || want != "" && !strings.Contains(got, want) {
+			t.Errorf("%q: problem %q, want %q", body, got, want)
+		}
 	}
 }
