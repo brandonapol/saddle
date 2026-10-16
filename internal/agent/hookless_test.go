@@ -143,6 +143,27 @@ func TestCodexTranscriptIsNewestRolloutForWorktree(t *testing.T) {
 	}
 }
 
+// #668: the codex orchestrator's session id names its rollout, so the
+// owner's own codex session in the repo root isn't read as the orchestrator's.
+func TestCodexTranscriptPrefersSessionRollout(t *testing.T) {
+	home := t.TempDir()
+	c := Codex{Home: home}
+	now := time.Now()
+	day := filepath.Join(home, "sessions", "2026", "10", "16")
+	orch := filepath.Join(day, "rollout-2026-10-16T09-00-00-0199aaaa-bbbb.jsonl")
+	owners := filepath.Join(day, "rollout-2026-10-16T09-05-00-0199cccc-dddd.jsonl")
+	writeRollout(t, orch, "/repo", now.Add(-time.Minute))
+	writeRollout(t, owners, "/repo", now)
+	if got := c.Usage().Transcript("/repo", "", "0199aaaa-bbbb"); got != orch {
+		t.Errorf("by session: got %q want %q", got, orch)
+	}
+	// An id no rollout carries (a claude session from before a switch)
+	// falls back to the newest rollout in dir.
+	if got := c.Usage().Transcript("/repo", "", "not-a-codex-id"); got != owners {
+		t.Errorf("unknown session: got %q want %q", got, owners)
+	}
+}
+
 func TestGrokUsageFindsSessionSnapshot(t *testing.T) {
 	home := t.TempDir()
 	want := filepath.Join(home, "sessions", "project", "sid", "usage.json")

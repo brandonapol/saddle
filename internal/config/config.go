@@ -263,8 +263,10 @@ type Orchestrator struct {
 	// OrchestratorAdapters. Empty keeps Claude Code when it is installed and
 	// otherwise picks the first headless agent that can run (#668).
 	Adapter string `toml:"adapter"`
-	// Model is the orchestrator's model. Empty falls back to the adapter's
-	// own key: [claude] or [grok] orchestrator_model, [adapters.codex] model.
+	// Model is the orchestrator's model on Adapter; it needs Adapter set.
+	// Empty, or on another adapter after a failover, falls back to that
+	// adapter's own key: [claude] or [grok] orchestrator_model,
+	// [adapters.codex] model.
 	Model string `toml:"model"`
 }
 
@@ -1128,6 +1130,9 @@ func Load(root string) (Config, error) {
 	if o := cfg.Orchestrator.Adapter; o != "" && !slices.Contains(OrchestratorAdapters(), o) {
 		return cfg, fmt.Errorf("orchestrator.adapter %q: want one of %s", o, strings.Join(OrchestratorAdapters(), ", "))
 	}
+	if cfg.Orchestrator.Model != "" && cfg.Orchestrator.Adapter == "" {
+		return cfg, fmt.Errorf("orchestrator.model %q needs orchestrator.adapter: name the CLI the model runs on", cfg.Orchestrator.Model)
+	}
 	if cfg.Notices.WakeAfter <= 0 {
 		cfg.Notices.WakeAfter = Default().Notices.WakeAfter
 	}
@@ -1267,8 +1272,8 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # Claude Code when it is installed, else the first of these that can run.
 # saddle init writes it when Claude Code can't run.
 # adapter = "codex"
-# The orchestrator's model; unset is [claude] orchestrator_model,
-# [grok] orchestrator_model or [adapters.codex] model.
+# The orchestrator's model on that adapter; unset is [claude]
+# orchestrator_model, [grok] orchestrator_model or [adapters.codex] model.
 # model = "gpt-5-codex"
 
 # The CPU and RAM gauge above the orchestrator box (docs/config.md). It says

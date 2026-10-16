@@ -155,8 +155,10 @@ func (c Codex) Usage() UsageSource {
 	return UsageSource{Agent: usage.Codex, Transcript: c.transcript}
 }
 
-// transcript is the newest rollout whose session started in dir.
-func (c Codex) transcript(dir, _, _ string) string {
+// transcript is the rollout of session, which codex names
+// rollout-<time>-<session>.jsonl, else the newest rollout whose session
+// started in dir (#668).
+func (c Codex) transcript(dir, _, session string) string {
 	home := c.Home
 	if home == "" {
 		home = os.Getenv("CODEX_HOME")
@@ -165,11 +167,15 @@ func (c Codex) transcript(dir, _, _ string) string {
 		h, _ := os.UserHomeDir()
 		home = filepath.Join(h, ".codex")
 	}
-	var best string
+	var best, own string
 	var bestMod time.Time
 	_ = filepath.WalkDir(filepath.Join(home, "sessions"), func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasPrefix(d.Name(), "rollout-") || !strings.HasSuffix(d.Name(), ".jsonl") {
 			return nil
+		}
+		if session != "" && strings.HasSuffix(d.Name(), "-"+session+".jsonl") {
+			own = p
+			return filepath.SkipAll
 		}
 		info, err := d.Info()
 		if err != nil || !info.ModTime().After(bestMod) || rolloutCwd(p) != filepath.Clean(dir) {
@@ -178,6 +184,9 @@ func (c Codex) transcript(dir, _, _ string) string {
 		best, bestMod = p, info.ModTime()
 		return nil
 	})
+	if own != "" {
+		return own
+	}
 	return best
 }
 

@@ -1000,6 +1000,10 @@ func TestOrchestratorAdapter(t *testing.T) {
 			t.Errorf("adapter = %s: err %v, want an orchestrator.adapter error", bad, err)
 		}
 	}
+	writeConfig(t, root, "[orchestrator]\nmodel = \"gpt-5-codex\"\n")
+	if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "needs orchestrator.adapter") {
+		t.Errorf("model without adapter: err %v, want a needs-adapter error", err)
+	}
 	if !strings.Contains(Template, `# adapter = "codex"`) {
 		t.Error("template doesn't document orchestrator.adapter")
 	}
