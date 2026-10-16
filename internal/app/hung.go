@@ -266,7 +266,8 @@ func (a *App) HungTick(now time.Time) ([]string, error) {
 	}
 	seen := map[string]bool{}
 	for _, t := range ts {
-		if t.Role != store.RoleWorker || (t.Status != store.Running && t.Status != store.Idle) || queued[t.ID] || !a.ownWindow(t) {
+		// Store checks first: tmux is asked only about a watched worker.
+		if t.Role != store.RoleWorker || (t.Status != store.Running && t.Status != store.Idle) || queued[t.ID] {
 			continue
 		}
 		seen[t.ID] = true
@@ -292,6 +293,10 @@ func (a *App) HungTick(now time.Time) ([]string, error) {
 		pending, _ := a.Store.PendingNotices(t.ID)
 		if t.Status != store.Running && pending == 0 {
 			drop(t.ID) // idle with nothing unread: the engine reports a stop
+			continue
+		}
+		if !a.ownWindow(t) {
+			drop(t.ID) // no window of ours: ResumeLost's, not ours
 			continue
 		}
 		if had && answered[h.Card] && !kept[t.ID] {

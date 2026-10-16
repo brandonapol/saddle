@@ -342,3 +342,35 @@ func TestHungWatchOff(t *testing.T) {
 		t.Fatalf("watched %s with the watch off: %+v", tk.ID, hs)
 	}
 }
+
+// countingTmux counts the tmux calls ownWindow and Capture make.
+type countingTmux struct {
+	*fakeTmux
+	calls int
+}
+
+func (c *countingTmux) Alive(id string) bool { c.calls++; return c.fakeTmux.Alive(id) }
+func (c *countingTmux) WindowName(id string) (string, error) {
+	c.calls++
+	return c.fakeTmux.WindowName(id)
+}
+func (c *countingTmux) Capture(id string, n int) (string, error) {
+	c.calls++
+	return c.fakeTmux.Capture(id, n)
+}
+
+// #625: the watch runs every sentinel cycle, so idle workers with nothing
+// unread cost it no tmux call (TestJourneyRefreshTmuxExecs counts them).
+func TestHungTickLeavesQuietIdleWorkersOffTmux(t *testing.T) {
+	a, ft, tk := hungWorker(t)
+	must(t, a.Store.SetStatus(tk.ID, store.Idle))
+	ct := &countingTmux{fakeTmux: ft}
+	a.Tmux = ct
+	for i := range 3 {
+		_, err := a.HungTick(time.Now().Add(time.Duration(i) * time.Minute))
+		must(t, err)
+	}
+	if ct.calls != 0 {
+		t.Fatalf("%d tmux calls for an idle worker with nothing unread", ct.calls)
+	}
+}
