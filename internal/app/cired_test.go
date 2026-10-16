@@ -248,3 +248,24 @@ func TestReapCIRepairsMakesKilledRepairDue(t *testing.T) {
 		t.Fatalf("reaped again: %v, %v", again, err)
 	}
 }
+
+// #652: on GitLab an infra failure reruns the job's pipeline (the run link
+// is …/-/pipelines/N), as an Actions run is rerun on GitHub, instead of
+// counting as red and spawning a repair.
+func TestScreenCIPollRetriesGitLabPipeline(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	var reruns []string
+	rerun := func(run string) error { reruns = append(reruns, run); return nil }
+	p := CIPoll{Task: "t1", PR: "https://gitlab.com/g/r/-/merge_requests/1", Head: "aaa", Failed: []string{"test / test"}}
+	fails := []CIRedFailure{{Check: "test / test", RunURL: "https://gitlab.com/g/r/-/pipelines/77",
+		LogTail: "Running with gitlab-runner 17.4.0\nERROR: Job failed (system failure): prepare environment: exit code 1"}}
+	got, err := a.ScreenCIPoll(p, fails, rerun)
+	must(t, err)
+	if len(got.Failed) != 0 || !slices.Equal(reruns, []string{"77"}) {
+		t.Fatalf("GitLab runner failure: poll = %+v, reruns %v; want pipeline 77 retried, not red", got, reruns)
+	}
+	if ev := ciEvents(t, a, EventCIRerun); len(ev) != 1 || !strings.Contains(ev[0], "pipeline 77") {
+		t.Fatalf("ci_rerun events = %v, want one naming pipeline 77", ev)
+	}
+}
