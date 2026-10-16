@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/ghstack"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -531,5 +533,20 @@ func TestMergeStackNeedsGhStack(t *testing.T) {
 	useFakeStackGH(t, a, map[string]error{"api repos/{owner}/{repo}/stacks": errors.New("gh api: exit status 1: Stacked PRs are not enabled for this repository (HTTP 404)")})
 	if _, err := a.MergeStack("ui", ""); err == nil || !strings.Contains(err.Error(), "automerge") {
 		t.Fatalf("err = %v, want the bottom-up fallback named", err)
+	}
+}
+
+// GhStack is gated on the forge (#648): on a GitLab repo it refuses with
+// ErrNotGitHub and never runs gh.
+func TestGhStackOffGitHubNeverCallsGh(t *testing.T) {
+	t.Parallel()
+	a := trainSetup(t)
+	a.Cfg.Forge.Provider = config.ForgeGitLab
+	f := useFakeStackGH(t, a, nil)
+	if _, err := a.GhStack().Available(); !errors.Is(err, ghstack.ErrNotGitHub) {
+		t.Fatalf("err = %v, want ErrNotGitHub", err)
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("gh stack calls on GitLab: %q", f.calls)
 	}
 }
