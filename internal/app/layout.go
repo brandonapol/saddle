@@ -9,17 +9,26 @@ import (
 	"github.com/brandonapol/saddle/internal/gitx"
 )
 
-// openLayout makes .saddle/layout a fresh detached worktree at tip, the
-// scratch checkout the PR layout replays commits in. A stale registration
-// of that path (its directory gone, maybe left locked by a run that died
-// mid cherry-pick) is cleared first; no other worktree is pruned (#669).
+// openLayout makes a fresh detached worktree at tip under .saddle, named for
+// this run alone, the scratch checkout the PR layout replays commits in. Runs
+// that overlap (the automerge loop and a prs run) each get their own, so one
+// can't delete the other's (#680). The old shared .saddle/layout is cleared
+// of any stale registration (its directory gone, maybe left locked by a run
+// that died mid cherry-pick); no other worktree is pruned (#669).
 func (a *App) openLayout(tip string) (string, error) {
-	dir := a.stateDir("layout")
-	_ = gitx.WorktreeRemove(a.Root, dir)
-	if err := os.RemoveAll(dir); err != nil {
+	legacy := a.stateDir("layout")
+	_ = gitx.WorktreeRemove(a.Root, legacy)
+	if err := os.RemoveAll(legacy); err != nil {
 		return "", err
 	}
-	if err := a.forgetLayoutWorktree(dir); err != nil {
+	if err := a.forgetLayoutWorktree(legacy); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(a.stateDir(), 0o755); err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp(a.stateDir(), "layout-")
+	if err != nil {
 		return "", err
 	}
 	if _, err := gitx.Run(a.Root, "worktree", "add", "--detach", dir, tip); err != nil {
@@ -92,6 +101,8 @@ func (a *App) layoutReplay(dir *string, tip, from, to string) (string, bool, err
 	if err == nil {
 		return head, ok, nil
 	}
+	_ = gitx.WorktreeRemove(a.Root, *dir)
+	_ = os.RemoveAll(*dir)
 	d, oerr := a.openLayout(tip)
 	if oerr != nil {
 		*dir = ""

@@ -89,12 +89,13 @@ func newRig(t *testing.T, path string, tasks ...string) *rig {
 		path = filepath.Join(t.TempDir(), "automerge.json")
 	}
 	r.w = &Watcher{
-		Path:    path,
-		Base:    "main",
-		GH:      r.gh,
-		Entries: func() ([]Entry, error) { return r.entries, nil },
-		AtRisk:  func(task string) string { return r.risk[task] },
-		Behind:  func(head string) int { return r.behind[head] },
+		Path:           path,
+		RestackBackoff: []time.Duration{0},
+		Base:           "main",
+		GH:             r.gh,
+		Entries:        func() ([]Entry, error) { return r.entries, nil },
+		AtRisk:         func(task string) string { return r.risk[task] },
+		Behind:         func(head string) int { return r.behind[head] },
 		Restack: func() error {
 			r.restacks++
 			if r.restack != nil {
@@ -802,5 +803,51 @@ func TestOnDuringCheckClearsStop(t *testing.T) {
 	check(t, r.w)
 	if saved, _ := r.w.Status(); saved.Stopped != "" {
 		t.Fatalf("stop came back: %q", saved.Stopped)
+	}
+}
+
+// #680: one transient restack failure doesn't turn automerge off; the
+// restack is retried and the watcher keeps going.
+func TestRetriesRestackAfterTransientFailure(t *testing.T) {
+	r := newRig(t, "", "t1", "t2")
+	r.w.RestackBackoff = []time.Duration{0, 0}
+	r.on(t)
+	r.restack = func() error {
+		if r.restacks == 1 {
+			return errors.New("worktree add: exit status 128")
+		}
+		return r.retarget()
+	}
+	st := check(t, r.w)
+	if st.Stopped != "" || r.restacks != 2 {
+		t.Fatalf("stopped = %q after %d restacks", st.Stopped, r.restacks)
+	}
+}
+
+// #680: a GitHub rate limit is retry-later: it outlasts the short back-off
+// without stopping the watcher.
+func TestRateLimitedRestackDoesNotStop(t *testing.T) {
+	r := newRig(t, "", "t1", "t2")
+	r.w.RestackBackoff = []time.Duration{0}
+	r.on(t)
+	limited := true
+	r.restack = func() error {
+		if limited {
+			return errors.New("gh: API rate limit already exceeded for user ID 1")
+		}
+		return r.retarget()
+	}
+	st := check(t, r.w)
+	if st.Stopped != "" {
+		t.Fatalf("a rate limit stopped automerge: %q", st.Stopped)
+	}
+	limited = false
+	check(t, r.w) // the deferred restack
+	check(t, r.w) // t2, now retargeted
+	if r.restacks < 2 || st.Stopped != "" {
+		t.Fatalf("restack not retried on the next tick: %d", r.restacks)
+	}
+	if len(r.gh.merged) != 2 {
+		t.Fatalf("merged %v", r.gh.merged)
 	}
 }
