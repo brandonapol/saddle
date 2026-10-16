@@ -108,16 +108,7 @@ func (a *App) prLayout(stack []landedTask) ([]prLayer, error) {
 			if tip == l.From {
 				continue
 			}
-			if dir == "" && !a.previewLayout {
-				dir = a.stateDir("layout")
-				_ = os.RemoveAll(dir)
-				_, _ = gitx.Run(a.Root, "worktree", "prune")
-				if _, err := gitx.Run(a.Root, "worktree", "add", "--detach", dir, tip); err != nil {
-					dir = ""
-					return nil, err
-				}
-			}
-			head, ok, err := a.replayLayout(dir, tip, l.From, l.To)
+			head, ok, err := a.layoutReplay(&dir, tip, l.From, l.To)
 			if err != nil {
 				return nil, err
 			}
@@ -216,6 +207,7 @@ func (a *App) clusterLayers(stack []landedTask, files [][]string, union func(i, 
 // dir and returns the new head. ok is false when one conflicts; dir is left
 // clean either way.
 func replayOnto(dir, tip, from, to string) (head string, ok bool, err error) {
+	settleLayout(dir)
 	if _, err := trainGit(dir, "checkout", "-q", "--detach", tip); err != nil {
 		return "", false, err
 	}
