@@ -84,6 +84,10 @@ const (
 	ChecksNone    = "none"
 )
 
+// DefaultRestackBackoff is how long a failed restack waits before each retry
+// (so it is tried 1+len times) before automerge stops itself (#680).
+var DefaultRestackBackoff = []time.Duration{5 * time.Second, 20 * time.Second}
+
 // DefaultInterval is how often Run checks, the sentinel's cadence.
 const DefaultInterval = 2 * time.Minute
 
@@ -183,10 +187,13 @@ type Status struct {
 
 // State is the file under .saddle/ that outlives restarts.
 type State struct {
-	Enabled *bool          `json:"enabled,omitempty"` // runtime override; nil follows config
-	Holds   []string       `json:"holds,omitempty"`   // held tasks or PRs; any one holds its stack
-	Stopped string         `json:"stopped,omitempty"`
-	Behind  map[string]int `json:"behind,omitempty"` // held stacks already flagged behind
+	Enabled *bool    `json:"enabled,omitempty"` // runtime override; nil follows config
+	Holds   []string `json:"holds,omitempty"`   // held tasks or PRs; any one holds its stack
+	Stopped string   `json:"stopped,omitempty"`
+	// RestackPending is the PR merged whose restack a rate limit deferred;
+	// the next tick restacks before it merges anything else.
+	RestackPending string         `json:"restack_pending,omitempty"`
+	Behind         map[string]int `json:"behind,omitempty"` // held stacks already flagged behind
 	// Logged is the last refusal or wait logged per PR, so a reason is
 	// logged once per change even across restarts.
 	Logged map[string]string `json:"logged,omitempty"`
@@ -280,6 +287,9 @@ type Watcher struct {
 	Tiers *TierPolicy
 	// Interval is how often Run checks.
 	Interval time.Duration
+	// RestackBackoff are the waits between retries of a failed restack; nil
+	// means DefaultRestackBackoff.
+	RestackBackoff []time.Duration
 	// BusyRetry is how soon Run checks again after a tick found the train busy.
 	BusyRetry time.Duration
 	Now       func() time.Time
@@ -704,6 +714,12 @@ func (w *Watcher) Check() (Status, error) {
 	w.flagBehind(&s, st.Stacks)
 
 	if st.Enabled && s.Stopped == "" {
+		if s.RestackPending != "" {
+			release() // restack takes the train lock itself
+			w.finishRestack(&s)
+			st.Next = w.now().Add(w.wait(false))
+			return w.record(s, &st, s.Stopped != stopped)
+		}
 		w.logDecisions(&s, st.Stacks)
 		w.noticeTiers(&s, st.Stacks)
 		if i := slices.IndexFunc(st.Stacks, func(x Stack) bool { return x.Ready }); i >= 0 {
@@ -850,11 +866,81 @@ func (w *Watcher) merge(s *State, st *Status, stack Stack) {
 	st.Merged = n.PR
 	w.event(n.Task, EventMerged, fmt.Sprintf("%s by %s: checks %s, mergeable, CLEAN", n.PR, method, n.Checks))
 	delete(s.Logged, n.PR)
-	if err := w.Restack(); err != nil {
+	switch err := w.restackRetry(); {
+	case err == nil:
+	case rateLimited(err):
+		w.deferRestack(s, n, err)
+		return
+	default:
 		stop(fmt.Sprintf("restack after merging %s failed: %v", n.PR, err))
 		return
 	}
 	w.notify(false, fmt.Sprintf("Auto-merged %s (%s) into %s and restacked the rest of stack %s.", n.PR, n.Task, w.Base, stack.ID))
+}
+
+// restackRetry runs Restack, retrying the whole restack after each
+// RestackBackoff wait. A rate limit isn't retried in-tick: the wait would
+// need to outlast the limit, so the caller defers it to the next tick.
+func (w *Watcher) restackRetry() error {
+	backoff := w.RestackBackoff
+	if backoff == nil {
+		backoff = DefaultRestackBackoff
+	}
+	err := w.Restack()
+	for _, d := range backoff {
+		if err == nil || rateLimited(err) {
+			return err
+		}
+		time.Sleep(d)
+		err = w.Restack()
+	}
+	return err
+}
+
+// rateLimited reports whether err is GitHub refusing for rate limits, which
+// clears by itself (#680).
+func rateLimited(err error) bool {
+	m := strings.ToLower(err.Error())
+	return strings.Contains(m, "rate limit") || strings.Contains(m, "abuse detection")
+}
+
+// deferRestack records that n's restack hit a rate limit, so the next tick
+// retries it instead of stopping automerge.
+func (w *Watcher) deferRestack(s *State, n Node, err error) {
+	s.RestackPending = n.PR
+	if _, uerr := update(w.Path, func(cur *State) error {
+		cur.RestackPending = n.PR
+		return nil
+	}); uerr != nil {
+		s.Stopped = fmt.Sprintf("restack after merging %s hit a rate limit (%v) and couldn't be deferred: %v", n.PR, err, uerr)
+		w.event(n.Task, EventFailed, s.Stopped)
+		return
+	}
+	w.event(n.Task, EventIdle, fmt.Sprintf("restack after merging %s hit a rate limit; retrying next tick: %v", n.PR, err))
+}
+
+// finishRestack retries a deferred restack. A rate limit leaves it pending;
+// any other failure stops the watcher.
+func (w *Watcher) finishRestack(s *State) {
+	pr := s.RestackPending
+	err := w.restackRetry()
+	if err != nil && rateLimited(err) {
+		return
+	}
+	s.RestackPending = ""
+	if _, uerr := update(w.Path, func(cur *State) error {
+		cur.RestackPending = ""
+		return nil
+	}); uerr != nil && err == nil {
+		err = uerr
+	}
+	if err != nil {
+		s.Stopped = fmt.Sprintf("restack after merging %s failed: %v", pr, err)
+		w.event("", EventFailed, s.Stopped)
+		w.notify(true, fmt.Sprintf("Auto-merge stopped: %s. It won't retry; fix it (or merge by hand), then `saddle automerge on` to resume.", s.Stopped))
+		return
+	}
+	w.notify(false, fmt.Sprintf("Restacked the rest of the stack after merging %s.", pr))
 }
 
 // collapse hands a red-bottom stack to Collapse; a failure stops the watcher.

@@ -123,3 +123,30 @@ func TestReplayOntoAbortsCherryPickInProgress(t *testing.T) {
 	}
 	assertReplayed(t, a, head, tip)
 }
+
+// #680: overlapping layout runs (the automerge loop and a prs run) each get
+// their own worktree, so one opening or removing its directory can't pull
+// the other's out from under it.
+func TestLayoutRunsDoNotShareDirectory(t *testing.T) {
+	t.Parallel()
+	a := trainSetup(t)
+	tip, from, to := layoutCommits(t, a)
+	var first, second string
+	if _, _, err := a.layoutReplay(&first, tip, from, to); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.layoutReplay(&second, tip, from, to); err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("both runs use %s", first)
+	}
+	if _, err := os.Stat(first); err != nil {
+		t.Fatalf("the second run removed the first's directory: %v", err)
+	}
+	head, ok, err := a.layoutReplay(&first, tip, from, to)
+	if err != nil || !ok {
+		t.Fatalf("first run's next replay: ok=%v err=%v", ok, err)
+	}
+	assertReplayed(t, a, head, tip)
+}
