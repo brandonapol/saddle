@@ -1,0 +1,8 @@
+STATUS  CHECK         DETAIL
+ok      claude        claude 1.0.0 (fake)
+ok      agent CLIs    harness claude is ready; usable: claude, codex (no hooks)
+ok      orchestrator  runs on codex (model gpt-5-codex), set by [orchestrator] adapter; codex-cli 1.0.0 (fake); no approvals or sandbox (it runs saddle, gh and read-only git); saddle's MCP tools are passed to every turn; no hooks, so [saddle] events reach it between turns, not mid-turn
+
+Next steps:
+  saddle up           open saddle and tell the orchestrator what to work on
+  saddle up epic.md   or hand it an epic: it plans it and shows you the plan first

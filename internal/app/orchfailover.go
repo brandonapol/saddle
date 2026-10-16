@@ -43,13 +43,15 @@ func (a *App) orchOverride() string {
 	return n
 }
 
-// orchDefault is the orchestrator's adapter without a failover: grok-bridge
-// under harness = "grok", Claude Code otherwise.
+// orchDefault is the orchestrator's adapter without a failover:
+// [orchestrator] adapter, grok-bridge under harness = "grok", Claude Code
+// when it is installed, else the first headless agent that can run (#668).
 func (a *App) orchDefault() string {
-	if a.Cfg.Harness == config.HarnessGrok {
-		return usage.Grok
+	var ss []agent.Status
+	if a.Cfg.Orchestrator.Adapter == "" && a.Cfg.Harness != config.HarnessGrok {
+		ss = a.adapterStatus()
 	}
-	return usage.Claude
+	return agent.OrchestratorAdapter(a.Cfg, ss)
 }
 
 // clearStaleOverride drops the failover once the default adapter has quota

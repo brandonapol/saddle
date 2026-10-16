@@ -1,0 +1,9 @@
+STATUS  CHECK                   DETAIL
+ok      claude                  claude 1.0.0 (fake)
+ok      orchestrator allowlist  Bash(saddle:*), mcp__saddle allowed; git push goes through saddle publish
+ok      agent CLIs              harness claude is ready; usable: claude
+ok      orchestrator            runs on claude (model sonnet); see claude, orchestrator allowlist and orchestrator skills
+
+Next steps:
+  saddle up           open saddle and tell the orchestrator what to work on
+  saddle up epic.md   or hand it an epic: it plans it and shows you the plan first

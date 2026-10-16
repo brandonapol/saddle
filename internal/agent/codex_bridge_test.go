@@ -287,3 +287,19 @@ func TestHeadlessCodexWritesSpec(t *testing.T) {
 		t.Errorf("spec = %+v", spec)
 	}
 }
+
+// #668: codex hands MCP servers only the env its config names, so saddle up's
+// harness fallback must ride in mcp_servers.saddle.env, or the orchestrator's
+// spawns default to the claude it fell back from.
+func TestCodexMCPEnvCarriesHarness(t *testing.T) {
+	t.Setenv("SADDLE_HARNESS", "codex")
+	l := Launch{Bin: "/bin/saddle", Root: "/r", Task: "orchestrator"}
+	want := `mcp_servers.saddle.env={SADDLE_ROOT="/r",SADDLE_TASK="orchestrator",SADDLE_HARNESS="codex"}`
+	if got := strings.Join(l.codexExecArgs(), " "); !strings.Contains(got, want) {
+		t.Errorf("exec args lack %s: %s", want, got)
+	}
+	_, script, _ := launchScript(t, Codex{}, Launch{Bin: "/bin/saddle", Root: "/r", Task: "t1", Dir: t.TempDir(), RunDir: t.TempDir()})
+	if !strings.Contains(script, `SADDLE_HARNESS=\"codex\"`) && !strings.Contains(script, `SADDLE_HARNESS="codex"`) {
+		t.Errorf("worker launch lacks the harness in the MCP env:\n%s", script)
+	}
+}

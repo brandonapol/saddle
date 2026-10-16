@@ -18,10 +18,10 @@ type OrchIdentity struct {
 	Compact string // the command that compacts it; "" when it has none
 }
 
-// OrchestratorIdentity is the TUI's headless orchestrator: grok-bridge under
-// harness = "grok", Claude Code otherwise, or the adapter a failover moved it
-// to (#481), codex included (#506). saddle up codex still runs the
-// orchestrator on Claude Code and only workers on codex.
+// OrchestratorIdentity is the TUI's headless orchestrator: the adapter
+// orchDefault picks (#668), or the adapter a failover moved it to (#481,
+// #506). saddle up codex runs only workers on codex while Claude Code is
+// installed, unless [orchestrator] adapter = "codex".
 func (a *App) OrchestratorIdentity() OrchIdentity {
 	return a.identity(a.orchestratorAgent(), a.orchModel())
 }

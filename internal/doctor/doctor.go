@@ -170,9 +170,12 @@ func runChecks(env Env, local bool) []Result {
 		{CheckStateDB, r.stateDB}, {CheckLeftovers, r.leftovers}, {CheckInhibit, r.inhibitor},
 	}
 	var rs []Result
+	// A check that doesn't apply to this run returns a zero Result.
 	add := func(name string, check func() Result) {
 		if !local || !slowChecks[name] {
-			rs = append(rs, check())
+			if res := check(); res.Name != "" {
+				rs = append(rs, res)
+			}
 		}
 	}
 	for _, c := range checks {
@@ -181,6 +184,7 @@ func runChecks(env Env, local bool) []Result {
 	if _, ok := env.(AgentsEnv); ok {
 		add(CheckAgents, r.agentCLIs)
 	}
+	add(CheckOrchestrator, r.orchestrator)
 	if r.wantsGrok() { // after config, which sets the harness
 		add(CheckGrok, r.grok)
 	}
@@ -196,7 +200,7 @@ func runChecks(env Env, local bool) []Result {
 	if re, ok := env.(RemoteEnv); ok {
 		add(CheckRemoteControl, func() Result { return remoteCheck(re, time.Now()) })
 	}
-	if se, ok := env.(SkillsEnv); ok && r.cfg.Harness != config.HarnessGrok {
+	if se, ok := env.(SkillsEnv); ok && r.orchAdapter() == config.HarnessClaude {
 		add(CheckSkills, func() Result { return r.skills(se) })
 	}
 	return describe(rs)
@@ -739,6 +743,9 @@ var orchAllowRules = []string{"Bash(saddle:*)", "mcp__saddle"}
 // orchAllow checks that a Claude session in the repo has the orchestrator's
 // allowlist (#220), and that it doesn't hand the model git push.
 func (r *run) orchAllow() Result {
+	if r.orchAdapter() != config.HarnessClaude {
+		return Result{} // no Claude orchestrator to configure (#668)
+	}
 	invalid, warnings := settingsProblems(r.env.Root())
 	if len(invalid) > 0 {
 		return fail(CheckOrchAllow, strings.Join(invalid, "; "), "repair the named settings file; saddle doctor --fix preserves malformed files")

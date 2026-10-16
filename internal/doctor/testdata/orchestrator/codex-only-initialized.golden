@@ -1,0 +1,8 @@
+STATUS  CHECK         DETAIL
+ok      claude        claude not on PATH; not used: the orchestrator runs codex and workers run codex
+ok      agent CLIs    harness codex is ready; usable: codex (no hooks); Codex has no hooks, so claims are checked only at commit and done, not on each edit
+ok      orchestrator  runs on codex (model codex's default), set by [orchestrator] adapter; codex-cli 1.0.0 (fake); no approvals or sandbox (it runs saddle, gh and read-only git); saddle's MCP tools are passed to every turn; no hooks, so [saddle] events reach it between turns, not mid-turn
+
+Next steps:
+  saddle up           open saddle and tell the orchestrator what to work on
+  saddle up epic.md   or hand it an epic: it plans it and shows you the plan first
