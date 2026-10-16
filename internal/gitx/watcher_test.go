@@ -300,3 +300,49 @@ func TestRemoveAndClose(t *testing.T) {
 		t.Fatal("Add after Close succeeded")
 	}
 }
+
+// A snapshot taken while a rebase starts must not report a detached HEAD as
+// settled: the in-progress marker is read around the status, not before it.
+func TestSnapshotRebaseNeverLooksSettledMidway(t *testing.T) {
+	root, wt := setup(t)
+	write(t, wt, "task.go", "package lib\n\nfunc T() {}\n")
+	run(t, wt, "add", "-A")
+	run(t, wt, "commit", "-q", "-m", "task")
+	orig := run(t, wt, "rev-parse", "HEAD")
+	write(t, root, "other.go", "package lib\n\nfunc O() {}\n")
+	run(t, root, "add", ".")
+	run(t, root, "commit", "-q", "-m", "other")
+
+	var stop atomic.Bool
+	bad := make(chan gitx.State, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for !stop.Load() {
+			st, err := gitx.Snapshot(wt, gitx.SnapshotOptions{Integration: "integration"})
+			if err == nil && st.Branch == "" && !st.Rebasing {
+				select {
+				case bad <- st:
+				default:
+				}
+				return
+			}
+		}
+	}()
+	for i := 0; i < 40; i++ {
+		run(t, wt, "reset", "-q", "--hard", orig)
+		run(t, wt, "rebase", "-q", "integration")
+		select {
+		case st := <-bad:
+			t.Fatalf("detached HEAD reported as settled: %+v", st)
+		default:
+		}
+	}
+	stop.Store(true)
+	<-done
+	select {
+	case st := <-bad:
+		t.Fatalf("detached HEAD reported as settled: %+v", st)
+	default:
+	}
+}
