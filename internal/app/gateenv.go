@@ -499,3 +499,81 @@ func sweepStaleTemp(base string, cutoff time.Time) {
 		}
 	}
 }
+
+// GateSweepAge is how long a gate-* dir must sit untouched before saddle
+// up's sweep kills what still runs under it and removes it (#663). A live
+// gate is never that old: its timeout ends it long before.
+const GateSweepAge = 6 * time.Hour
+
+// EventGateSwept records stale gate dirs saddle up removed.
+const EventGateSwept = "gate_swept"
+
+// GateSweep is what SweepStaleGates removed.
+type GateSweep struct {
+	Dirs   []string // the gate-* dirs removed
+	Killed int      // processes killed under them
+}
+
+// gateBases are the dirs gate-* dirs live in: the current one and the
+// in-repo ones older saddles used (.saddle/tmp, a [train] tmpdir inside
+// the repo).
+func (a *App) gateBases() []string {
+	bases := []string{a.GateTmpdir(), filepath.Join(a.Root, ".saddle", "tmp")}
+	if d := a.Cfg.Train.Tmpdir; d != "" {
+		if !filepath.IsAbs(d) {
+			d = filepath.Join(a.Root, d)
+		}
+		bases = append(bases, filepath.Clean(d))
+	}
+	slices.Sort(bases)
+	return slices.Compact(bases)
+}
+
+// SweepStaleGates removes every gate-* dir untouched for maxAge (never less
+// than twice the gate timeout) and first kills the processes whose cwd or
+// command line is under one: a test's tmux server, fake agents and shells
+// that a killed gate left behind. Nothing outside those dirs is touched.
+func (a *App) SweepStaleGates(maxAge time.Duration) GateSweep {
+	maxAge = max(maxAge, 2*a.GateTimeout())
+	cutoff := time.Now().Add(-maxAge)
+	var res GateSweep
+	for _, base := range a.gateBases() {
+		es, err := os.ReadDir(base)
+		if err != nil {
+			continue
+		}
+		for _, e := range es {
+			if !e.IsDir() || !strings.HasPrefix(e.Name(), "gate-") {
+				continue
+			}
+			fi, err := e.Info()
+			if err != nil || !fi.ModTime().Before(cutoff) {
+				continue
+			}
+			dir := filepath.Join(base, e.Name())
+			res.Killed += procreap.Reap(dir, gateKillGrace, procreap.Match{})
+			if removeTree(dir) == nil {
+				res.Dirs = append(res.Dirs, dir)
+			}
+		}
+	}
+	if len(res.Dirs) > 0 {
+		a.Store.Event("", EventGateSwept, fmt.Sprintf("%d stale gate dirs, %d processes killed", len(res.Dirs), res.Killed))
+	}
+	return res
+}
+
+// removeTree removes dir, making its read-only dirs (Go's module cache)
+// writable when a plain remove fails.
+func removeTree(dir string) error {
+	if os.RemoveAll(dir) == nil {
+		return nil
+	}
+	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			_ = os.Chmod(p, 0o700)
+		}
+		return nil
+	})
+	return os.RemoveAll(dir)
+}
