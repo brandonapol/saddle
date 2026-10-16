@@ -31,7 +31,8 @@ const upDeferredTimeout = 2 * time.Minute
 // upDeferred is the startup work saddle up runs once its first frame is on
 // screen (#635). None of it is needed to draw the TUI, and under load it
 // took tens of seconds: the doctor's GitHub calls, push dry-run and
-// leftovers scan, the merge-settings check and the base fetch. Nothing is
+// leftovers scan, the merge-settings check and the base fetch. The sweep of
+// stale gate dirs runs here too. Nothing is
 // dropped: what used to stop up or print a warning opens a card or a
 // notice instead.
 type upDeferred struct {
@@ -42,6 +43,9 @@ type upDeferred struct {
 	doctor     func() []doctor.Result // the full doctor
 	merge      func() error           // the merge-settings refusal; the doctor covers it
 	baseBehind func() string          // fetches base, notes a stale integration; "" when the checkout is current
+	// gates sweeps stale gate-* dirs and what still runs under them (#663);
+	// nil is App.SweepStaleGates.
+	gates func() app.GateSweep
 }
 
 // run starts the work and returns at once. wait blocks until each piece
@@ -67,6 +71,11 @@ func (d upDeferred) run(ctx context.Context) (wait func()) {
 			d.report(rs)
 		})
 	}
+	gates := d.gates
+	if gates == nil {
+		gates = func() app.GateSweep { return d.a.SweepStaleGates(app.GateSweepAge) }
+	}
+	wg.Go(func() { within(ctx, d.timeout, d.trace.Span("stale gate sweep"), gates) })
 	wg.Go(func() {
 		warn, ok := within(ctx, d.timeout, d.trace.Span("base fetch"), d.baseBehind)
 		if ok && warn != "" {

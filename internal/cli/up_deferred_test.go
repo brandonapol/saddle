@@ -17,6 +17,33 @@ func deferredFor(a *app.App) upDeferred {
 		doctor:     fixed(doctor.Result{Name: doctor.CheckTmux, Status: doctor.OK}),
 		merge:      func() error { return nil },
 		baseBehind: func() string { return "" },
+		// The real sweep would reach the machine's scratch dir.
+		gates: func() app.GateSweep { return app.GateSweep{} },
+	}
+}
+
+// #663: saddle up sweeps stale gate dirs after its first frame, without
+// waiting for it.
+func TestUpDeferredSweepsStaleGates(t *testing.T) {
+	a := predictApp(t)
+	d := deferredFor(a)
+	release, swept := make(chan struct{}), make(chan struct{})
+	d.gates = func() app.GateSweep {
+		<-release
+		close(swept)
+		return app.GateSweep{}
+	}
+	start := time.Now()
+	wait := d.run(t.Context())
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("run blocked for %s", took)
+	}
+	close(release)
+	wait()
+	select {
+	case <-swept:
+	default:
+		t.Fatal("saddle up didn't sweep stale gate dirs")
 	}
 }
 

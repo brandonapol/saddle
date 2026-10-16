@@ -6,8 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // Tmux is a private tmux server: its socket lives under Dir, which saddle
@@ -52,7 +56,9 @@ func socketDir() (string, error) {
 }
 
 // NewTmux makes a socket dir (short: socket paths are length-limited, see
-// socketDir) and kills the server when t ends.
+// socketDir) and, when t ends, even failed, kills the server and every
+// pane's process group (stopTmux). A journey killed before its cleanups
+// run (go test's timeout) is reaped by Fork instead (#663).
 func NewTmux(t testing.TB) *Tmux {
 	t.Helper()
 	dir, err := socketDir()
@@ -60,11 +66,48 @@ func NewTmux(t testing.TB) *Tmux {
 		t.Fatal(err)
 	}
 	x := &Tmux{Dir: dir}
+	// tmux makes this dir for TMUX_TMPDIR but not for -S, which Run passes.
+	if err := os.MkdirAll(filepath.Dir(x.socket()), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
-		_, _ = x.Run("kill-server")
+		stopTmux(x)
 		_ = os.RemoveAll(dir)
 	})
 	return x
+}
+
+// stopTmux kills x's server and waits (up to 5s) for every pane's session
+// to exit, then SIGKILLs what is left: the panes' process groups and the
+// server itself. An agent's hook can outlive kill-server by a moment and
+// reopen .saddle/state.db, recreating its -wal and -shm while t.TempDir is
+// being removed ("directory not empty"); a pane that ignores the hangup
+// would otherwise run on after the test (#663).
+func stopTmux(x *Tmux) {
+	panes, _ := x.Run("list-panes", "-a", "-F", "#{pane_pid}")
+	servers, _ := x.Run("list-sessions", "-F", "#{pid}")
+	_, _ = x.Run("kill-server")
+	deadline := time.Now().Add(5 * time.Second)
+	for _, f := range strings.Fields(panes) {
+		pid, err := strconv.Atoi(f)
+		if err != nil || pid <= 1 {
+			continue
+		}
+		for time.Now().Before(deadline) && exec.Command("pgrep", "-s", f).Run() == nil {
+			time.Sleep(20 * time.Millisecond)
+		}
+		// A pane is its session's and its group's leader.
+		if syscall.Kill(-pid, syscall.SIGKILL) == nil {
+			for end := time.Now().Add(time.Second); time.Now().Before(end) && exec.Command("pgrep", "-s", f).Run() == nil; {
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
+	}
+	for _, f := range strings.Fields(servers) {
+		if pid, err := strconv.Atoi(f); err == nil && pid > 1 {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
 }
 
 func (x *Tmux) env() []string {
@@ -76,12 +119,15 @@ func (x *Tmux) env() []string {
 			}
 		}
 	}
+	env = slices.DeleteFunc(slices.Clone(env), func(kv string) bool { return strings.HasPrefix(kv, "TMUX=") })
 	return append(env, "TMUX_TMPDIR="+x.Dir)
 }
 
-// Run runs a tmux command against the private server.
+// Run runs a tmux command against the private server. -S names its socket
+// outright: tmux prefers $TMUX to TMUX_TMPDIR, so a stray TMUX in env would
+// otherwise reach the user's own server.
 func (x *Tmux) Run(args ...string) (string, error) {
-	cmd := exec.Command("tmux", args...)
+	cmd := exec.Command("tmux", append([]string{"-S", x.socket()}, args...)...)
 	cmd.Env = x.env()
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

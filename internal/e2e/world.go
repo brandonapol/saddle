@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/e2e/fakeagent"
@@ -406,20 +405,5 @@ func (w *World) Diagnose() {
 	}
 	if out, err := w.Tmux.Run("list-windows", "-a"); err == nil {
 		w.T.Logf("tmux windows:\n%s", out)
-	}
-}
-
-// stopTmux kills x's server and waits (up to 5s) for every pane's session
-// to exit. An agent's hook can outlive kill-server by a moment and reopen
-// .saddle/state.db, recreating its -wal and -shm while t.TempDir is being
-// removed ("directory not empty").
-func stopTmux(x *Tmux) {
-	pids, _ := x.Run("list-panes", "-a", "-F", "#{pane_pid}")
-	_, _ = x.Run("kill-server")
-	deadline := time.Now().Add(5 * time.Second)
-	for _, pid := range strings.Fields(pids) {
-		for time.Now().Before(deadline) && exec.Command("pgrep", "-s", pid).Run() == nil {
-			time.Sleep(20 * time.Millisecond)
-		}
 	}
 }

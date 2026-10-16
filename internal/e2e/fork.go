@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/brandonapol/saddle/internal/procreap"
 )
 
 // Each journey runs in its own process (#521). A World sets process env
@@ -108,6 +110,13 @@ func runMain(m *testing.M, bins *Bins) int {
 	took := time.Since(start)
 	var out strings.Builder
 	journeys.report(&out)
+	// Every journey is reaped as it ends (Fork); anything still running
+	// under the suite's temp dir escaped that, and is what piled up to load
+	// 30 on the train's machine (#663).
+	if leaked := reapJourney(base); len(leaked) > 0 {
+		fmt.Fprintf(&out, "e2e: FAIL: %d processes outlived the suite under %s, killed now (#663):\n%s\n", len(leaked), base, strings.Join(leaked, "\n"))
+		code = 1
+	}
 	if code == 0 && fullRun() {
 		if budget, scale := budgetFor(load.stop(), took); budget > 0 {
 			if took > budget {
@@ -159,12 +168,20 @@ func Fork(t *testing.T) bool {
 			args = append(args, "-test.timeout", left.Round(time.Second).String())
 		}
 	}
+	// The child's temp dir is its own, so whatever it leaves running can
+	// be found under it and reaped once it exits (#663).
+	dir, err := os.MkdirTemp("", "j-")
+	if err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(os.Args[0], args...)
 	// The race runtime sleeps a second at exit unless told not to.
 	gorace := strings.TrimSpace(os.Getenv("GORACE") + " atexit_sleep_ms=0")
-	cmd.Env = append(os.Environ(), envFork+"="+t.Name(), envBins+"="+forkBins, "GORACE="+gorace)
+	cmd.Env = append(os.Environ(), envFork+"="+t.Name(), envBins+"="+forkBins, "GORACE="+gorace,
+		"TMPDIR="+dir, "GOTMPDIR="+dir)
 	out, err := cmd.CombinedOutput()
 	t.Logf("journey %s ran in its own process (%s):\n%s", t.Name(), time.Since(start).Round(time.Millisecond), out)
+	leaked := reapJourney(dir)
 	switch {
 	case err != nil:
 		t.Fatalf("journey %s failed: %v (its output is above)", t.Name(), err)
@@ -172,8 +189,45 @@ func Fork(t *testing.T) bool {
 		t.Skipf("journey %s skipped", t.Name())
 	case !strings.Contains(string(out), "--- PASS: "+t.Name()+" "):
 		t.Fatalf("journey %s didn't run in its process: is its name a valid -run pattern?", t.Name())
+	case len(leaked) > 0:
+		t.Fatalf("journey %s passed but left %d processes running under its temp dir, killed now; "+
+			"stop what it starts in a t.Cleanup (#663):\n%s", t.Name(), len(leaked), strings.Join(leaked, "\n"))
 	}
 	return true
+}
+
+// leakGrace is how long a finished journey's processes get to exit on
+// their own before they count as leaked: a pane's shell can outlive its
+// tmux server by a moment.
+const leakGrace = 3 * time.Second
+
+// reapJourney kills whatever a finished journey left running under dir (by
+// cwd, command line or temp dir) and removes dir. A journey go test's
+// timeout killed never ran its cleanups, so its tmux server, panes and
+// fake agents are only stopped here. It returns the leaked processes'
+// command lines.
+func reapJourney(dir string) []string {
+	defer func() {
+		makeWritable(dir)
+		_ = os.RemoveAll(dir)
+	}()
+	m := procreap.Match{Env: true}
+	var pids []int
+	for end := time.Now().Add(leakGrace); ; time.Sleep(50 * time.Millisecond) {
+		if pids = procreap.Find(dir, m); len(pids) == 0 || time.Now().After(end) {
+			break
+		}
+	}
+	if len(pids) == 0 {
+		return nil
+	}
+	var leaked []string
+	for _, p := range pids {
+		b, _ := os.ReadFile(filepath.Join("/proc", strconv.Itoa(p), "cmdline"))
+		leaked = append(leaked, fmt.Sprintf("  %d: %s", p, strings.ReplaceAll(strings.TrimRight(string(b), "\x00"), "\x00", " ")))
+	}
+	procreap.Reap(dir, time.Second, m)
+	return leaked
 }
 
 // childRun is the -test.run pattern for one journey, keeping any subtest
