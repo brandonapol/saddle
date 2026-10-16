@@ -537,16 +537,7 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 			if tip == l.From {
 				continue
 			}
-			if dir == "" && !a.previewLayout {
-				dir = a.stateDir("layout")
-				_ = os.RemoveAll(dir)
-				_, _ = gitx.Run(a.Root, "worktree", "prune")
-				if _, err := gitx.Run(a.Root, "worktree", "add", "--detach", dir, tip); err != nil {
-					dir = ""
-					return nil, nil, err
-				}
-			}
-			head, ok, err := a.replayLayout(dir, tip, l.From, l.To)
+			head, ok, err := a.layoutReplay(&dir, tip, l.From, l.To)
 			if err != nil {
 				return nil, nil, err
 			}
