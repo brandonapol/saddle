@@ -525,8 +525,8 @@ func (a *App) ensureOrchestrator(fetch bool) (store.Task, error) {
 }
 
 // Orchestrator ensures the orchestrator task exists and returns the launch
-// for its headless process (Claude Code, or grok-bridge under harness =
-// "grok"), plus the session to resume (if any). It doesn't fetch base when
+// for its headless process (Claude Code, grok-bridge or codex-bridge: see
+// orchDefault), plus the session to resume (if any). It doesn't fetch base when
 // integration exists: saddle up runs CheckIntegrationBehind after its first
 // frame (#635).
 func (a *App) Orchestrator() (agent.Launch, string, error) {
@@ -570,8 +570,9 @@ func (a *App) newLaunch(t store.Task, dir, model, brief, prompt string, allow, d
 		l.Mode = a.Cfg.Grok.PermissionMode
 		return l
 	case usage.Codex:
-		// Only a failover puts the orchestrator on codex (#506); it runs
-		// headless through the codex bridge.
+		// [orchestrator] adapter, a machine without claude (#668) or a
+		// failover (#506) puts the orchestrator on codex; it runs headless
+		// through the codex bridge.
 		l.Kind = agent.KindCodex
 		l.Cmd, l.Args = a.adapterCmd(usage.Codex)
 		l.Mode = a.Cfg.Claude.PermissionMode
@@ -593,15 +594,9 @@ func (a *App) workerModel() string {
 	return a.Cfg.Claude.Model
 }
 
-func (a *App) orchModel() string {
-	switch a.orchestratorAgent() {
-	case usage.Grok:
-		return a.Cfg.Grok.OrchestratorModel
-	case usage.Codex:
-		return a.Cfg.Adapters[usage.Codex].Model // empty is codex's own default
-	}
-	return a.Cfg.Claude.OrchestratorModel
-}
+// orchModel is the orchestrator's model on the adapter it runs on (#668);
+// empty is the CLI's own default.
+func (a *App) orchModel() string { return agent.OrchestratorModel(a.Cfg, a.orchestratorAgent()) }
 
 // Down stops every agent (the tmux session). Live tasks are paused, not
 // killed: claims, worktrees and branches stay, uncommitted work is

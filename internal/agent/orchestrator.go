@@ -69,7 +69,7 @@ func OrchestratorModel(cfg config.Config, adapter string) string {
 func installedIn(ss []Status, name string) bool {
 	for _, s := range ss {
 		if s.Name == name {
-			return s.Installed
+			return s.Installed || s.OK
 		}
 	}
 	return false
