@@ -102,7 +102,70 @@ func initSetup(out io.Writer, root string) error {
 	if fb == config.HarnessCodex {
 		fmt.Fprintln(out, "  note: "+doctor.NoHooksNote)
 	}
+	cfg.Harness = fb
+	return initOrchestrator(out, root, cfg, ss)
+}
+
+// initOrchestrator writes [orchestrator] adapter when the orchestrator
+// can't run on Claude Code here and another headless agent can (#668),
+// unless the owner set it. Under harness = "grok" the orchestrator already
+// follows the harness, so nothing is written.
+func initOrchestrator(out io.Writer, root string, cfg config.Config, ss []agent.Status) error {
+	oa := agent.OrchestratorAdapter(cfg, ss)
+	if cfg.Orchestrator.Adapter != "" {
+		fmt.Fprintf(out, "orchestrator: %s ([orchestrator] adapter)\n", oa)
+		return nil
+	}
+	if oa == config.HarnessClaude || cfg.Harness == config.HarnessGrok && oa == config.HarnessGrok {
+		return nil
+	}
+	if err := writeOrchestratorAdapter(root, oa); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "orchestrator: claude can't run; wrote [orchestrator] adapter = %q to .saddle/config.toml\n", oa)
+	if oa == config.HarnessCodex {
+		fmt.Fprintln(out, "  note: a codex orchestrator has no hooks, so saddle's events reach it between turns, not mid-turn")
+	}
 	return nil
+}
+
+var (
+	orchestratorHeader  = regexp.MustCompile(`(?m)^\[orchestrator\][ \t]*$`)
+	templateOrchAdapter = regexp.MustCompile(`(?m)^#\s*adapter\s*=.*$`)
+)
+
+// writeOrchestratorAdapter sets [orchestrator] adapter = name in the repo's
+// config.toml: on the template's commented-out line when it is there, else
+// right under an [orchestrator] header, else in a new section at the end.
+func writeOrchestratorAdapter(root, name string) error {
+	p := repoConfig(root)
+	b, err := os.ReadFile(p)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	line := fmt.Sprintf("adapter = %q          # saddle init: claude can't run here", name)
+	s := string(b)
+	h := orchestratorHeader.FindStringIndex(s)
+	switch {
+	case h != nil:
+		// Only the template line inside [orchestrator]: the next section ends it.
+		rest := s[h[1]:]
+		end := len(rest)
+		if i := regexp.MustCompile(`(?m)^\[`).FindStringIndex(rest); i != nil {
+			end = i[0]
+		}
+		if loc := templateOrchAdapter.FindStringIndex(rest[:end]); loc != nil {
+			s = s[:h[1]] + rest[:loc[0]] + line + rest[loc[1]:]
+		} else {
+			s = s[:h[1]] + "\n" + line + rest
+		}
+	default:
+		if s != "" && !strings.HasSuffix(s, "\n") {
+			s += "\n"
+		}
+		s += "\n[orchestrator]\n" + line + "\n"
+	}
+	return os.WriteFile(p, []byte(s), 0o644)
 }
 
 // originURL is origin's URL, else the first remote's, else "".
