@@ -22,7 +22,7 @@ func (a *App) deferQueuedPR(t store.Task, err error) {
 		what = t.ID + "'s PR " + t.PR
 	}
 	_ = a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
-		"prs left %s and the layers stacked on it unpublished: GitHub refused the push to %s (GH006), "+
+		"prs left %s and the layers stacked on it unpublished: %s refused the push to %s (GH006), "+
 			"as it does while a PR is in the merge queue. The next prs after it leaves the queue or merges publishes them.",
-		what, t.Branch))
+		what, a.forgeName(), t.Branch))
 }
