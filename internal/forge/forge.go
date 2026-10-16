@@ -274,7 +274,7 @@ func AuthStatusArgs(host string) []string {
 }
 
 // Optional reads a provider may have beyond Forge. Call them through
-// ReadDefaultBranch, ReadRateLimit and ReadBranchProtection, which return
+// ReadDefaultBranch, ReadRateLimit, ReadMergedPRs and ReadBranchProtection, which return
 // ErrUnsupported for a forge without them.
 type (
 	defaultBrancher interface {
@@ -284,7 +284,28 @@ type (
 	rateLimiter interface {
 		RateLimit(ctx context.Context) (RateLimit, error)
 	}
+	mergedLister interface {
+		// MergedPRs lists up to limit PRs merged into base.
+		MergedPRs(ctx context.Context, base string, limit int) ([]MergedPR, error)
+	}
 )
+
+// MergedPR is a merged PR as release notes need it.
+type MergedPR struct {
+	Number   int
+	Title    string
+	Labels   []string
+	MergedAt time.Time
+}
+
+// ReadMergedPRs lists up to limit PRs merged into base. Only GitHub has it
+// (saddle changelog's release notes, #648).
+func ReadMergedPRs(ctx context.Context, f Forge, base string, limit int) ([]MergedPR, error) {
+	if m, ok := f.(mergedLister); ok {
+		return m.MergedPRs(ctx, base, limit)
+	}
+	return nil, fmt.Errorf("list merged PRs: %w", ErrUnsupported)
+}
 
 // RateLimit is how much of the forge's API quota is left.
 type RateLimit struct {

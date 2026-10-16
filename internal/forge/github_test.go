@@ -332,3 +332,26 @@ func TestGitHubChecksAndLogs(t *testing.T) {
 		t.Fatalf("calls = %q\nwant %q", calls, want)
 	}
 }
+
+func TestGitHubMergedPRs(t *testing.T) {
+	f := &fakeGH{replies: []string{`[{"number": 7, "title": "Release workflow", "labels": [{"name": "enhancement"}], "mergedAt": "2026-10-03T00:00:00Z"}]`}}
+	prs, err := ReadMergedPRs(context.Background(), f.github(), "main", 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.want(t, "pr list --state merged --base main --limit 1000 --json number,title,labels,mergedAt")
+	want := []MergedPR{{Number: 7, Title: "Release workflow", Labels: []string{"enhancement"}, MergedAt: time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)}}
+	if !reflect.DeepEqual(prs, want) {
+		t.Fatalf("MergedPRs = %+v, want %+v", prs, want)
+	}
+}
+
+// Listing merged PRs is optional: GitLab and a local-only forge refuse it
+// with ErrUnsupported, which saddle changelog turns into a clear message.
+func TestReadMergedPRsUnsupported(t *testing.T) {
+	for _, f := range []Forge{&GitLab{}, Unsupported{Reason: "local-only"}} {
+		if _, err := ReadMergedPRs(context.Background(), f, "main", 10); !errors.Is(err, ErrUnsupported) {
+			t.Fatalf("%T: err = %v, want ErrUnsupported", f, err)
+		}
+	}
+}

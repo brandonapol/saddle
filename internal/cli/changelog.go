@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,30 +12,32 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/release"
 )
 
-// changelogExec runs git or gh in dir and returns trimmed stdout; tests
-// fake it.
+// changelogExec runs git in dir and returns trimmed stdout; tests fake it.
 var changelogExec = func(dir, name string, args ...string) (string, error) {
-	var out, stderr string
-	var err error
-	if forge.IsCLI(name) {
-		out, stderr, err = forge.Output(context.Background(), dir, name, args...)
-	} else {
-		c := exec.Command(name, args...)
-		c.Dir = dir
-		var eb strings.Builder
-		c.Stderr = &eb
-		var b []byte
-		b, err = c.Output()
-		out, stderr = string(b), eb.String()
-	}
+	c := exec.Command(name, args...)
+	c.Dir = dir
+	var eb strings.Builder
+	c.Stderr = &eb
+	b, err := c.Output()
 	if err != nil {
-		return "", fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(stderr))
+		return "", fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(eb.String()))
 	}
-	return strings.TrimSpace(out), nil
+	return strings.TrimSpace(string(b)), nil
+}
+
+// changelogMerged lists the PRs merged into base through the repo's forge,
+// as [forge] selects it; tests fake it.
+var changelogMerged = func(ctx context.Context, dir, base string) ([]forge.MergedPR, error) {
+	cfg, err := config.Load(dir)
+	if err != nil {
+		cfg = config.Default()
+	}
+	return forge.ReadMergedPRs(ctx, forge.New(cfg.Forge, dir), base, 1000)
 }
 
 func changelogCmd() *cobra.Command {
@@ -46,7 +47,7 @@ func changelogCmd() *cobra.Command {
 		Use:   "changelog --version vX.Y.Z [--write]",
 		Short: "Generate release notes from the PRs merged since the last tag",
 		Long: `Lists the pull requests merged into --base since --since (default: the newest
-v* tag; every merged PR when there is none) with gh, groups them by label or
+v* tag; every merged PR when there is none) through the forge (GitHub only), groups them by label or
 conventional prefix (Breaking changes, Features, Fixes, Performance,
 Documentation, Build and CI, Other changes) and prints a CHANGELOG.md section
 for --version. AI co-author and attribution lines are never included.
@@ -134,31 +135,19 @@ func mergedSince(dir, base, since string) ([]release.PR, error) {
 			return nil, fmt.Errorf("date of %s: %w", since, err)
 		}
 	}
-	out, err := changelogExec(dir, "gh", "pr", "list", "--state", "merged", "--base", base, "--limit", "1000", "--json", "number,title,labels,mergedAt")
+	merged, err := changelogMerged(context.Background(), dir, base)
+	if errors.Is(err, forge.ErrUnsupported) {
+		return nil, fmt.Errorf("saddle changelog needs a GitHub forge to list merged PRs: %w", err)
+	}
 	if err != nil {
 		return nil, err
 	}
-	var raw []struct {
-		Number   int       `json:"number"`
-		Title    string    `json:"title"`
-		MergedAt time.Time `json:"mergedAt"`
-		Labels   []struct {
-			Name string `json:"name"`
-		} `json:"labels"`
-	}
-	if err := json.Unmarshal([]byte(out), &raw); err != nil {
-		return nil, fmt.Errorf("parse gh pr list: %w", err)
-	}
 	var prs []release.PR
-	for _, r := range raw {
+	for _, r := range merged {
 		if !r.MergedAt.After(after) {
 			continue
 		}
-		p := release.PR{Number: r.Number, Title: r.Title}
-		for _, l := range r.Labels {
-			p.Labels = append(p.Labels, l.Name)
-		}
-		prs = append(prs, p)
+		prs = append(prs, release.PR{Number: r.Number, Title: r.Title, Labels: r.Labels})
 	}
 	return prs, nil
 }
