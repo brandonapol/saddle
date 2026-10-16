@@ -399,3 +399,23 @@ func (u Unsupported) CommentIssue(context.Context, int, string) error {
 func (u Unsupported) EditIssueBody(context.Context, int, string) error { return u.err("edit issue") }
 func (u Unsupported) CloseIssue(context.Context, int, string) error    { return u.err("close issue") }
 func (u Unsupported) ReopenIssue(context.Context, int) error           { return u.err("reopen issue") }
+
+// Name is how messages name provider p: "GitHub", "GitLab", or "the forge"
+// for any other.
+func Name(p string) string {
+	switch p {
+	case config.ForgeGitHub:
+		return "GitHub"
+	case config.ForgeGitLab:
+		return "GitLab"
+	}
+	return "the forge"
+}
+
+// PRNoun is what provider p calls a pull request: "MR" on GitLab, else "PR".
+func PRNoun(p string) string {
+	if p == config.ForgeGitLab {
+		return "MR"
+	}
+	return "PR"
+}

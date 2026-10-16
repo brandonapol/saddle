@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/forge"
 )
 
@@ -31,6 +32,15 @@ type GH struct {
 	Forge  Forge
 	Run    Runner
 	method string // cached once read
+}
+
+// Provider is the forge's provider (config.ForgeGitHub when the forge
+// doesn't say), so the watcher's reasons name it.
+func (g *GH) Provider() string {
+	if p, ok := g.Forge.(interface{ Provider() string }); ok {
+		return p.Provider()
+	}
+	return config.ForgeGitHub
 }
 
 func (g *GH) forge() Forge {

@@ -50,6 +50,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 // NeedsHuman is the label the stack sentinel puts on PRs a human must decide.
@@ -621,12 +623,21 @@ func (w *Watcher) collapsible(st Stack) string {
 	return ""
 }
 
+// forgeName names w.GH's forge in reasons: GitHub unless it says otherwise
+// (GH.Provider).
+func (w *Watcher) forgeName() string {
+	if p, ok := w.GH.(interface{ Provider() string }); ok {
+		return forge.Name(p.Provider())
+	}
+	return "GitHub"
+}
+
 // refusal says why n can't merge now, "" if it can; wait marks reasons that
 // clear by themselves (pending CI, GitHub still computing, restack pending).
 func (w *Watcher) refusal(n Node) (why string, wait bool) {
 	switch {
 	case n.Error != "":
-		return "GitHub couldn't be asked about it: " + n.Error, true
+		return w.forgeName() + " couldn't be asked about it: " + n.Error, true
 	case n.Draft:
 		return "it is a draft", false
 	case slices.Contains(n.Labels, NeedsHuman):
@@ -642,9 +653,9 @@ func (w *Watcher) refusal(n Node) (why string, wait bool) {
 	case n.Checks == ChecksPending:
 		return "its CI is pending", true
 	case n.Mergeable != "MERGEABLE" || n.MergeState == "UNKNOWN" || n.MergeState == "":
-		return "GitHub is still computing whether it can merge", true
+		return w.forgeName() + " is still computing whether it can merge", true
 	case n.MergeState != "CLEAN":
-		return fmt.Sprintf("GitHub's merge state is %s, not CLEAN (branch protection, reviews or checks)", n.MergeState), true
+		return fmt.Sprintf("%s's merge state is %s, not CLEAN (branch protection, reviews or checks)", w.forgeName(), n.MergeState), true
 	}
 	return "", false
 }

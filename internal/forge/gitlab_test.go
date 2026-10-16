@@ -22,7 +22,7 @@ func TestGitLabPRArgs(t *testing.T) {
 		`{"iid":7,"web_url":"https://gitlab.com/g/r/-/merge_requests/7"}`, // create
 		"", "", "", "", // retarget, body, close, comment
 		"", "", "", // edit comment, label, unlabel
-		"", "", // ensure label, retry
+		"", "", "", // ensure label, retry, job retry
 		"", // auth
 	}}
 	g := f.gitlab()
@@ -39,6 +39,7 @@ func TestGitLabPRArgs(t *testing.T) {
 	_ = g.RemoveLabel(ctx, "7", "ci-red")
 	_ = g.EnsureLabel(ctx, Label{Name: "l", Color: "D93F0B", Description: "d"})
 	_ = g.RerunFailed(ctx, "901")
+	_ = g.RerunFailed(ctx, RunID("https://gitlab.com/g/r/-/jobs/31"))
 	_ = g.AuthStatus(ctx)
 	f.want(t,
 		"api -X POST projects/:id/merge_requests -f source_branch=b -f target_branch=main -f title=Draft: T -f description=Closes #3",
@@ -51,6 +52,7 @@ func TestGitLabPRArgs(t *testing.T) {
 		"api -X PUT projects/:id/merge_requests/7 -f remove_labels=ci-red",
 		"api -X POST projects/:id/labels -f name=l -f color=#D93F0B -f description=d",
 		"api -X POST projects/:id/pipelines/901/retry",
+		"api -X POST projects/:id/jobs/31/retry",
 		"auth status",
 	)
 }

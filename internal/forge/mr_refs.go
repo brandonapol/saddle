@@ -16,6 +16,7 @@ var (
 	mrURLNumRe  = regexp.MustCompile(`^(\S*?/-/merge_requests/\d+)(?:[/?#].*)?$`)
 	refNumberRe = regexp.MustCompile(`^[#!]?(\d+)$`)
 	runIDRe     = regexp.MustCompile(`/(?:actions/runs|-/pipelines)/(\d+)`)
+	jobIDRe     = regexp.MustCompile(`/-/jobs/(\d+)`)
 )
 
 // canonicalPR is url up to its PR or MR number, and whether it is an MR.
@@ -90,10 +91,18 @@ func noScheme(url string) string {
 
 // RunID is the CI run a check's run link names, for RerunFailed: a GitHub
 // Actions run (…/actions/runs/N) or a GitLab pipeline (…/-/pipelines/N).
-// It is "" for any other link, such as a commit status's page.
+// A GitLab job link (…/-/jobs/N), left when FailedLog couldn't read the
+// job's pipeline, is "jobs/N", which GitLab's RerunFailed retries as that
+// one job. It is "" for any other link, such as a commit status's page.
 func RunID(link string) string {
 	if m := runIDRe.FindStringSubmatch(link); m != nil {
 		return m[1]
 	}
+	if m := jobIDRe.FindStringSubmatch(link); m != nil {
+		return JobRunPrefix + m[1]
+	}
 	return ""
 }
+
+// JobRunPrefix marks a RunID that is a GitLab job rather than a pipeline.
+const JobRunPrefix = "jobs/"

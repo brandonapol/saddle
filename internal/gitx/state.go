@@ -106,6 +106,10 @@ func Snapshot(dir string, opt SnapshotOptions) (State, error) {
 	}
 	var staged []PathRename
 	st.Head, st.Branch, st.Files, staged = parseStatus(out)
+	// A rebase can run between the first check and the status read. Check both
+	// its marker and the live HEAD afterward so a detached status captured in
+	// that window is not mistaken for a settled state.
+	st.Rebasing = st.Rebasing || inProgress(gitDir) || headAttached(gitDir) != (st.Branch != "")
 
 	if opt.Integration != "" {
 		st.Integration, _ = RevParse(dir, opt.Integration)
@@ -168,6 +172,11 @@ func inProgress(gitDir string) bool {
 		}
 	}
 	return false
+}
+
+func headAttached(gitDir string) bool {
+	head, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	return err == nil && strings.HasPrefix(string(head), "ref: ")
 }
 
 // parseStatus parses `git status --porcelain=v2 -z --branch`.

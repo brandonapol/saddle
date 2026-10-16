@@ -25,7 +25,7 @@ func queuedRefusal(err error) bool {
 func (a *App) deferQueued(r restacked, err error) {
 	a.Store.Event(r.ID, EventRestackQueued, err.Error())
 	_ = a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
-		"restack left %s's PR %s and the layers above it as they were: GitHub refused the push to %s (GH006), "+
+		"restack left %s's PR %s and the layers above it as they were: %s refused the push to %s (GH006), "+
 			"as it does while a PR is in the merge queue. The next restack after it leaves the queue or merges publishes them.",
-		r.ID, r.PR, r.Branch))
+		r.ID, r.PR, a.forgeName(), r.Branch))
 }

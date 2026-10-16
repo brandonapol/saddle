@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
@@ -117,6 +118,9 @@ func (g *GH) EditComment(id, body string) error {
 }
 
 // optional drops forge.ErrUnsupported, for the operations a forge may lack.
+// Provider is the forge's provider, so the sentinel's causes name it.
+func (g *GH) Provider() string { return g.Forge.Provider() }
+
 func optional(err error) error {
 	if errors.Is(err, forge.ErrUnsupported) {
 		return nil
@@ -254,10 +258,15 @@ func (s *Sentinel) Check() (Report, error) {
 		}
 	}
 
+	provider := config.ForgeGitHub
+	if p, ok := s.GH.(interface{ Provider() string }); ok {
+		provider = p.Provider()
+	}
+	fname, noun := forge.Name(provider), forge.PRNoun(provider)
 	var hits []hit
 	for i, l := range layers {
 		if pr, ok := info[l.Task.PR]; ok && l.Task.PR != "" && pr.Mergeable == "CONFLICTING" {
-			hits = append(hits, hit{i, i, fmt.Sprintf("GitHub reports its PR %s conflicts with its base", l.Task.PR), true})
+			hits = append(hits, hit{i, i, fmt.Sprintf("%s reports its %s %s conflicts with its base", fname, noun, l.Task.PR), true})
 		}
 		if l.Problem != "" {
 			hits = append(hits, hit{i, i, l.Problem, false})

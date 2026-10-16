@@ -93,7 +93,7 @@ degrades as noted.
 | List | `ListPRs` | core | `pr list --json` | `GET merge_requests?state=&source_branch=` | — |
 | Comment, list and edit comments | `AddComment`, `Comments`, `EditComment` | core | `pr comment`, `pr view --json comments`, GraphQL `updateIssueComment` | notes API; system notes left out; a comment id is `iid:note` | stack comments are skipped |
 | CI status and logs | `Checks`, `FailedLog`, `PR` with `PRChecks` | core | `pr checks`, `run view --log-failed` | head pipeline's `pipelines/:id/jobs`, `jobs/:id/trace` | — |
-| Rerun failed CI | `RerunFailed` | optional | `run rerun --failed` | `POST pipelines/:id/retry` (saddle only finds run ids in GitHub links so far) | repair spawns a task instead |
+| Rerun failed CI | `RerunFailed` | optional | `run rerun --failed` | `POST pipelines/:id/retry`, or `POST jobs/:id/retry` for a job link whose pipeline isn't known | repair spawns a task instead |
 | Merge, auto-merge | `MergePR` | core | `pr merge --squash/--rebase --match-head-commit` | `PUT merge_requests/:iid/merge squash= sha=`; `merge_when_pipeline_succeeds` while the pipeline runs | — |
 | Merge settings | `MergeSettings` | optional | `api repos/{owner}/{repo}` | `GET projects/:id` (`merge_method`, `squash_option`) | warning, assume squash |
 | Branch protection | `ReadBranchProtection` | optional | `api …/branches/B/protection` | `GET protected_branches/:name`, then `projects/:id` (`only_allow_merge_if_pipeline_succeeds`, `approvals_before_merge`) | doctor warns "skipped" |

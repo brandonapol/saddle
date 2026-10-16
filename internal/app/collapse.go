@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/automerge"
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -106,7 +107,7 @@ func (a *App) collapseLayers(ref string, hub automerge.GitHub) ([]collapseLayer,
 		}
 		pr, err := hub.PR(mt.PR)
 		if err != nil {
-			return nil, fmt.Errorf("asking GitHub about %s's PR %s: %w", id, mt.PR, err)
+			return nil, fmt.Errorf("asking %s about %s's %s %s: %w", a.forgeName(), id, a.prNoun(), mt.PR, err)
 		}
 		if pr.State != "" && pr.State != "OPEN" {
 			return nil, fmt.Errorf("%s's PR %s is %s; run restack first", id, mt.PR, strings.ToLower(pr.State))
@@ -116,11 +117,18 @@ func (a *App) collapseLayers(ref string, hub automerge.GitHub) ([]collapseLayer,
 	return out, nil
 }
 
+// forgeName names the repo's forge in messages: "GitHub", "GitLab" or "the
+// forge".
+func (a *App) forgeName() string { return forge.Name(a.Forge().Provider()) }
+
+// prNoun is what the repo's forge calls a PR: "MR" on GitLab, else "PR".
+func (a *App) prNoun() string { return forge.PRNoun(a.Forge().Provider()) }
+
 // contains reports, as an error, whether head lacks commit; it fetches the
 // stack's branches first if it has to.
 func (a *App) contains(head, commit string) error {
 	if head == "" || commit == "" {
-		return errors.New("GitHub didn't say which commit a PR is at")
+		return fmt.Errorf("%s didn't say which commit the %s is at", a.forgeName(), a.prNoun())
 	}
 	if _, err := gitx.Run(a.Root, "cat-file", "-e", head+"^{commit}"); err != nil {
 		_, _ = trainGit(a.Root, "fetch", "--quiet", "origin", head)

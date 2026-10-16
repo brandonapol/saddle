@@ -73,7 +73,7 @@ func TestRunID(t *testing.T) {
 	for link, want := range map[string]string{
 		"https://github.com/o/r/actions/runs/123/job/456": "123",
 		"https://gitlab.com/g/r/-/pipelines/77":           "77",
-		"https://gitlab.com/g/r/-/jobs/9":                 "", // a job, not its pipeline
+		"https://gitlab.com/g/r/-/jobs/9":                 "jobs/9", // a job whose pipeline isn't known
 		"https://ci.example.com/build/5":                  "",
 	} {
 		if got := RunID(link); got != want {
