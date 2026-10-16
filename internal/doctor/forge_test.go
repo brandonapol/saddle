@@ -80,7 +80,7 @@ func onGitLab(t *testing.T) *fakeEnv {
 	f := healthy(t)
 	f.git["remote get-url origin"] = res{out: "git@gitlab.com:g/r.git"}
 	f.glab = map[string]res{
-		"api projects/:id": {out: gitlabProject},
+		"api projects/:id":                         {out: gitlabProject},
 		"api projects/:id/protected_branches/main": {out: gitlabProtected},
 	}
 	return f
