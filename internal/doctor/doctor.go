@@ -194,6 +194,9 @@ func runChecks(env Env, local bool) []Result {
 	if te, ok := env.(TrustEnv); ok {
 		add(CheckTrust, func() Result { return trustCheck(te) })
 	}
+	if pe, ok := env.(PathEnv); ok {
+		add(CheckPath, func() Result { return pathCheck(pe) })
+	}
 	if se, ok := env.(ScratchEnv); ok {
 		add(CheckScratch, func() Result { return scratchCheck(se) })
 	}

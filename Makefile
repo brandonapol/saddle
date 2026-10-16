@@ -121,14 +121,12 @@ build: ## Build ./build/saddle
 	echo "Built $(EXE) ($(VERSION))"
 
 .PHONY: install
-install: ## Install saddle into $GOBIN (what spawned agents run)
+install: ## Install saddle into $GOBIN and put it on PATH (NO_PATH=1 leaves your shell config alone)
 	$(GO) install $(GO_TAGFLAG) $(GO_LDFLAGS) $(ENTRYPOINT)
 	echo "Installed $(GOBIN)/$(BIN) ($(VERSION))"
 	# Agents run the binary by absolute path, but you will want it on PATH too.
-	case ":$$PATH:" in
-	    *":$(GOBIN):"*) ;;
-	    *) echo "Note: $(GOBIN) is not on your PATH. Add it to run 'saddle' directly." ;;
-	esac
+	# Appends one marked line to your shell's rc, once, after a backup (#666).
+	NO_PATH='$(NO_PATH)' ./scripts/install-path.sh '$(GOBIN)'
 
 .PHONY: upgrade
 upgrade: ## Fast-forward main from origin and reinstall (refuses if not on a clean main)
@@ -162,13 +160,14 @@ test/e2e: ## Run the end-to-end journeys (RUN=Journey to pick some; needs tmux)
 	code=$$?; cat "$$rep"; exit $$code
 
 .PHONY: test/scripts
-test/scripts: ## Test the shell scripts (upgrade, templeak, CI sharding, test summary)
+test/scripts: ## Test the shell scripts (upgrade, templeak, CI sharding, test summary, install PATH)
 	bash scripts/upgrade_test.sh
 	bash scripts/templeak_test.sh
 	bash scripts/e2e-nightly-shard_test.sh
 	bash scripts/ci-race-shard_test.sh
 	bash scripts/cover-report_test.sh
 	bash scripts/test-summary_test.sh
+	bash scripts/install-path_test.sh
 
 .PHONY: test/plugin
 test/plugin: ## Run the plugin's TypeScript tests (needs the claude CLI, 2.1.287+)
