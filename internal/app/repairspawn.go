@@ -140,12 +140,12 @@ func (a *App) fixPRMeta(task, pr string, fails []CIRedFailure) string {
 	}
 	var runs []string
 	for _, f := range fails {
-		if id := ciRunID(f.RunURL); id != "" && !slices.Contains(runs, id) {
+		if id := forge.RunID(f.RunURL); id != "" && !slices.Contains(runs, id) {
 			runs = append(runs, id)
 			if err := a.Forge().RerunFailed(context.Background(), id); err != nil {
 				a.Store.Event(task, EventCIError, err.Error())
 			} else {
-				what = append(what, "reran run "+id)
+				what = append(what, "reran "+ciRunName(f.RunURL, id))
 			}
 		}
 	}

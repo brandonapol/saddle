@@ -33,7 +33,7 @@ Add `internal/forge`. It owns two things:
    every non-test Go file in the repo and fails when a package other than
    `internal/forge` passes `"gh"` or `"glab"` to `exec.Command` or
    `exec.CommandContext`. Generic exec helpers that take a program name
-   (doctor's `Env.Exec`, the changelog's `changelogExec`) route a forge CLI
+   (doctor's `Env.Exec`) route a forge CLI
    name to `forge.CombinedOutput`/`forge.Output`.
 
 2. **`forge.Forge`, a provider-neutral interface** with `forge.GitHub` and
@@ -98,6 +98,7 @@ degrades as noted.
 | Merge settings | `MergeSettings` | optional | `api repos/{owner}/{repo}` | `GET projects/:id` (`merge_method`, `squash_option`) | warning, assume squash |
 | Branch protection | `ReadBranchProtection` | optional | `api …/branches/B/protection` | `GET protected_branches/:name`, then `projects/:id` (`only_allow_merge_if_pipeline_succeeds`, `approvals_before_merge`) | doctor warns "skipped" |
 | Default branch | `ReadDefaultBranch` | optional | `repo view --json defaultBranchRef` | `GET projects/:id` (`default_branch`) | doctor uses the remote's HEAD only |
+| Merged PRs by base | `ReadMergedPRs` | optional | `pr list --state merged --base` | none (`saddle changelog` refuses) | release notes need GitHub |
 | API rate limit | `ReadRateLimit` | optional | `api rate_limit` | none (no quota saddle spends) | no rate-limit risk |
 | Labels | `AddLabel`, `RemoveLabel`, `EnsureLabel` | optional | `pr edit --add-label`/`--remove-label`, `label create --force` | `PUT … add_labels/remove_labels`, labels API (create, else update) | flags shown in saddle only |
 | Issues: view, list, create, comment, edit, close, reopen | `Issue`, `ListIssues`, `CreateIssue`, `CommentIssue`, `EditIssueBody`, `CloseIssue`, `ReopenIssue` | optional | `issue …` | issues and issue notes API (`#N` numbering as on GitHub) | autopilot, blocker issues, ticket off |
@@ -180,10 +181,10 @@ users:
 - `TestNoGHArgsOutsideForge` parses the repo and fails when a package outside
   `internal/forge` builds gh arguments. It allows only GitHub-only code with
   no provider-neutral meaning: `internal/ghstack` (the gh-stack extension,
-  which stays optional and GitHub-only), `internal/doctor` (setup-time
-  diagnostics of the gh install, branch protection and rate limits) and
-  `internal/cli/changelog.go` (release notes for saddle's own GitHub
-  releases), plus the e2e fake gh and its harness.
+  which stays optional and GitHub-only; `ghstack.For` gates it on the
+  forge's provider), plus the e2e fake gh and its harness. `saddle
+  changelog` lists merged PRs through the optional `ReadMergedPRs` and
+  refuses clearly on a forge without it (#648).
 - `internal/e2e/fakegh` stays as is: it is a fake `gh` binary on `PATH`, so it
   fakes the GitHub implementation end to end. #645 added
   `internal/e2e/fakeglab`, a fake `glab` the same way: a stateful GitLab

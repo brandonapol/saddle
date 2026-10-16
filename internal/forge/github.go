@@ -251,6 +251,34 @@ func (g *GitHub) DefaultBranch(ctx context.Context) (string, error) {
 	return g.Run(ctx, "repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name")
 }
 
+// MergedPRs lists up to limit PRs merged into base with `gh pr list`.
+func (g *GitHub) MergedPRs(ctx context.Context, base string, limit int) ([]MergedPR, error) {
+	out, err := g.Run(ctx, "pr", "list", "--state", "merged", "--base", base, "--limit", strconv.Itoa(limit), "--json", "number,title,labels,mergedAt")
+	if err != nil {
+		return nil, err
+	}
+	var raw []struct {
+		Number   int       `json:"number"`
+		Title    string    `json:"title"`
+		MergedAt time.Time `json:"mergedAt"`
+		Labels   []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
+	}
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		return nil, fmt.Errorf("parse gh pr list: %w", err)
+	}
+	prs := make([]MergedPR, 0, len(raw))
+	for _, r := range raw {
+		p := MergedPR{Number: r.Number, Title: r.Title, MergedAt: r.MergedAt}
+		for _, l := range r.Labels {
+			p.Labels = append(p.Labels, l.Name)
+		}
+		prs = append(prs, p)
+	}
+	return prs, nil
+}
+
 // RateLimit reads the core REST quota every gh call spends.
 func (g *GitHub) RateLimit(ctx context.Context) (RateLimit, error) {
 	out, err := g.Run(ctx, "api", "rate_limit")

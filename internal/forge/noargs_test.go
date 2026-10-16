@@ -30,11 +30,8 @@ var ghCommands = map[string][]string{
 var ghArgsAllowed = map[string]string{
 	"internal/forge":   "the forge layer itself",
 	"internal/ghstack": "the gh-stack extension, GitHub-only by design (no GitLab equivalent): ghstack.For gates it on the forge's provider",
-	// #648's remainder: saddle's own release notes (`pr list --state merged
-	// --base`) still read GitHub through gh.
-	"internal/cli/changelog.go": "release notes for saddle's own GitHub releases",
-	"internal/e2e":              "the fake gh binary and the journeys that drive it",
-	"internal/bench":            "drives the fake gh",
+	"internal/e2e":     "the fake gh binary and the journeys that drive it",
+	"internal/bench":   "drives the fake gh",
 }
 
 // ghArgs lists where f builds gh arguments: two string literals in a row in

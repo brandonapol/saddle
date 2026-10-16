@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/release"
 )
 
@@ -24,18 +28,29 @@ func fakeChangelogExec(t *testing.T, top string, calls *[]string) {
 			return "v0.1.0", nil
 		case strings.HasPrefix(call, "git log -1 --format=%cI v0.1.0"):
 			return "2026-10-01T12:00:00Z", nil
-		case strings.HasPrefix(call, "gh pr list"):
-			return `[
- {"number": 5, "title": "feat: before the tag", "labels": [], "mergedAt": "2026-10-01T11:00:00Z"},
- {"number": 6, "title": "fix(store): keep claims", "labels": [], "mergedAt": "2026-10-02T00:00:00Z"},
- {"number": 7, "title": "Release workflow", "labels": [{"name": "enhancement"}], "mergedAt": "2026-10-03T00:00:00Z"},
- {"number": 8, "title": "Tidy footer 🤖 Generated with [Claude Code](https://claude.com/claude-code)", "labels": [], "mergedAt": "2026-10-04T00:00:00Z"}
-]`, nil
 		}
 		t.Fatalf("unexpected call %q", call)
 		return "", nil
 	}
+	day := func(d, h int) time.Time { return time.Date(2026, 10, d, h, 0, 0, 0, time.UTC) }
+	fakeChangelogMerged(t, func(base string) ([]forge.MergedPR, error) {
+		*calls = append(*calls, "merged "+base)
+		return []forge.MergedPR{
+			{Number: 5, Title: "feat: before the tag", MergedAt: day(1, 11)},
+			{Number: 6, Title: "fix(store): keep claims", MergedAt: day(2, 0)},
+			{Number: 7, Title: "Release workflow", Labels: []string{"enhancement"}, MergedAt: day(3, 0)},
+			{Number: 8, Title: "Tidy footer 🤖 Generated with [Claude Code](https://claude.com/claude-code)", MergedAt: day(4, 0)},
+		}, nil
+	})
 	t.Cleanup(func() { changelogExec = old })
+}
+
+// fakeChangelogMerged answers the forge's merged-PR list.
+func fakeChangelogMerged(t *testing.T, list func(base string) ([]forge.MergedPR, error)) {
+	t.Helper()
+	old := changelogMerged
+	changelogMerged = func(_ context.Context, _, base string) ([]forge.MergedPR, error) { return list(base) }
+	t.Cleanup(func() { changelogMerged = old })
 }
 
 func TestChangelogCmdSinceLastTag(t *testing.T) {
@@ -75,5 +90,19 @@ func TestChangelogCmdRejectsBadVersion(t *testing.T) {
 	fakeChangelogExec(t, t.TempDir(), &calls)
 	if _, _, err := runRoot(t, "changelog", "--version", "0.2"); err == nil {
 		t.Fatal("accepted a bad version")
+	}
+}
+
+// A forge that can't list merged PRs (GitLab, local-only) gets a clear
+// refusal instead of a gh error (#648).
+func TestChangelogCmdUnsupportedForge(t *testing.T) {
+	var calls []string
+	fakeChangelogExec(t, t.TempDir(), &calls)
+	fakeChangelogMerged(t, func(string) ([]forge.MergedPR, error) {
+		return nil, fmt.Errorf("list merged PRs: %w", forge.ErrUnsupported)
+	})
+	_, _, err := runRoot(t, "changelog", "--version", "v0.2.0")
+	if err == nil || !strings.Contains(err.Error(), "needs a GitHub forge") {
+		t.Fatalf("err = %v, want the GitHub-only refusal", err)
 	}
 }

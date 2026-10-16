@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/brandonapol/saddle/internal/config"
 )
 
 // fakeRepoGH answers `gh api repos/{owner}/{repo}` with the given merge
@@ -123,5 +125,47 @@ func TestAppCheckMergeSettingsRunsGH(t *testing.T) {
 	must(t, err)
 	if got := strings.TrimSpace(string(b)); got != a.Root+" api repos/{owner}/{repo}" {
 		t.Errorf("gh call = %q", got)
+	}
+}
+
+// #652: on GitLab the refusal points at the project's merge request
+// settings (Fast-forward merge), not GitHub's, and the unreadable warning
+// names GitLab's setting.
+func TestAppCheckMergeSettingsGitLab(t *testing.T) {
+	a, _ := setup(t)
+	a.Cfg.Forge.Provider = config.ForgeGitLab
+	bin := t.TempDir()
+	reply := filepath.Join(bin, "reply.json")
+	must(t, os.WriteFile(filepath.Join(bin, "glab"), []byte("#!/bin/sh\ncat "+reply+"\n"), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	must(t, os.WriteFile(reply, []byte(`{"path_with_namespace":"acme/widgets","web_url":"https://gitlab.com/acme/widgets","merge_method":"merge","squash_option":"default_off"}`), 0o644))
+	err := a.CheckMergeSettings(&bytes.Buffer{})
+	if !errors.Is(err, ErrMergeCommitsAllowed) {
+		t.Fatalf("want ErrMergeCommitsAllowed, got %v", err)
+	}
+	for _, want := range []string{
+		"acme/widgets allows merge commits",
+		"https://gitlab.com/acme/widgets/-/settings/merge_requests",
+		"Fast-forward merge",
+		"Saddle will not change this setting for you",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal message missing %q:\n%s", want, err)
+		}
+	}
+	for _, not := range []string{"gh api", "Pull Requests", "allow_merge_commit"} {
+		if strings.Contains(err.Error(), not) {
+			t.Errorf("GitLab refusal mentions GitHub's %q:\n%s", not, err)
+		}
+	}
+
+	must(t, os.WriteFile(reply, []byte(`{"path_with_namespace":"acme/widgets"}`), 0o644))
+	var warn bytes.Buffer
+	if err := a.CheckMergeSettings(&warn); err != nil {
+		t.Fatalf("unreadable settings must not block, got %v", err)
+	}
+	if w := warn.String(); !strings.Contains(w, "Fast-forward merge") || strings.Contains(w, "allow_merge_commit") {
+		t.Errorf("GitLab warning = %q", w)
 	}
 }

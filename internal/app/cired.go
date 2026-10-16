@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -165,13 +166,16 @@ var ciCanceled = []string{
 	"canceling since a higher priority", "higher priority waiting request",
 }
 
-// ciInfra are log lines of a failure in GitHub's infrastructure, not the code.
+// ciInfra are log lines of a failure in the CI host's infrastructure, not
+// the code: GitHub Actions' runners, then GitLab runners'.
 var ciInfra = []string{
 	"unable to resolve action", "the runner has received a shutdown signal",
 	"lost communication with the server", "runner lost", "the hosted runner lost",
 	"the job was not acquired by runner", "internal server error", "500 internal",
 	"502 bad gateway", "503 service unavailable", "504 gateway", "http 502", "http 503",
 	"http 504", "econnreset",
+	"job failed (system failure)", "runner system failure", "error: preparation failed",
+	"failed to pull image",
 }
 
 // ciTestFailed are log lines that mean a test or build really failed, so a
@@ -206,21 +210,21 @@ func ClassifyCIFailure(f CIRedFailure, flaky []string) (class, why string) {
 	return CIReal, ""
 }
 
-// ciRunID is the workflow run id in an Actions run URL.
-func ciRunID(url string) string {
-	_, rest, ok := strings.Cut(url, "/actions/runs/")
-	if !ok {
-		return ""
+// ciRunName names the CI run a check's run link points at, as its forge
+// does: "pipeline 77" on GitLab, "run 42" on GitHub.
+func ciRunName(url, id string) string {
+	if strings.Contains(url, "/-/pipelines/") {
+		return "pipeline " + id
 	}
-	id, _, _ := strings.Cut(rest, "/")
-	return id
+	return "run " + id
 }
 
 // ScreenCIPoll takes out of p.Failed every failed check that is not red CI,
 // given fails, the failing checks' logs. A canceled one is dropped; an infra
-// or flaky one is rerun through rerun (gh run rerun <id> --failed) the first
+// or flaky one is rerun through rerun (the forge's RerunFailed) the first
 // time it fails on p.Head and dropped, so the poll reads as pending, and
-// counts the next time. A check without a log stays red. Each decision is
+// counts the next time. The run is a GitHub Actions run or a GitLab pipeline
+// (forge.RunID). A check without a log stays red. Each decision is
 // logged once as ci_ignored or ci_rerun.
 func (a *App) ScreenCIPoll(p CIPoll, fails []CIRedFailure, rerun func(runID string) error) (CIPoll, error) {
 	if len(p.Failed) == 0 {
@@ -251,18 +255,18 @@ func (a *App) ScreenCIPoll(p CIPoll, fails []CIRedFailure, rerun func(runID stri
 				a.Store.Event(p.Task, EventCIIgnored, label+" at "+short(p.Head)+": "+why)
 			}
 		case CIRerun:
-			id := ciRunID(fails[i].RunURL)
+			id := forge.RunID(fails[i].RunURL)
 			if id == "" || slices.Contains(s.Reruns, key) {
 				red = append(red, label)
 				continue
 			}
 			if err := rerun(id); err != nil {
-				a.Store.Event(p.Task, EventCIRerun, label+" at "+short(p.Head)+": rerun of run "+id+" failed: "+err.Error())
+				a.Store.Event(p.Task, EventCIRerun, label+" at "+short(p.Head)+": rerun of "+ciRunName(fails[i].RunURL, id)+" failed: "+err.Error())
 				red = append(red, label)
 				continue
 			}
 			s.Reruns = append(s.Reruns, key)
-			a.Store.Event(p.Task, EventCIRerun, label+" at "+short(p.Head)+": "+why+"; reran the failed jobs of run "+id)
+			a.Store.Event(p.Task, EventCIRerun, label+" at "+short(p.Head)+": "+why+"; reran the failed jobs of "+ciRunName(fails[i].RunURL, id))
 		default:
 			red = append(red, label)
 		}

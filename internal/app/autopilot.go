@@ -294,8 +294,8 @@ func (e *autopilotEnv) Snapshot(time.Time) (autopilot.Snapshot, error) {
 	for i := len(train) - 1; i >= 0; i-- { // newest first
 		en := train[i]
 		pr := ""
-		if n := prNumber(byID[en.Task].PR); n != "" {
-			pr = " (PR #" + n + ")"
+		if n := prShort(byID[en.Task].PR); n != "" {
+			pr = " (PR " + n + ")"
 		}
 		switch en.State {
 		case store.TrainOK:

@@ -14,8 +14,8 @@ func unstackCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "unstack <task|pr>...",
 		Short: "Take landed tasks out of the PR stack for good",
-		Long: `Takes landed tasks out of the PR stack, by task id, PR URL or PR number (#12).
-Their train entries become superseded, the next restack drops their commits
+		Long: `Takes landed tasks out of the PR stack, by task id, PR URL or PR number
+(#12; a GitLab MR's URL or !12). Their train entries become superseded, the next restack drops their commits
 from the integration branch, and Saddle never touches their PRs again. Merged
 and closed PRs and killed tasks leave the stack by themselves; this is for the
 rest. The stack sentinel checks again right away.`,

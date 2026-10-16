@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/automerge"
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/usage"
 )
@@ -255,8 +256,8 @@ func layerLabel(l CIRedLayer, live []store.Task) string {
 	if i := slices.IndexFunc(live, func(t store.Task) bool { return t.ID == l.Task }); i >= 0 {
 		return taskLabel(live[i])
 	}
-	if n := prNumber(l.PR); n != "" {
-		return l.Task + " (#" + n + ")"
+	if n := prShort(l.PR); n != "" {
+		return l.Task + " (" + n + ")"
 	}
 	return l.Task
 }
@@ -264,24 +265,33 @@ func layerLabel(l CIRedLayer, live []store.Task) string {
 // taskLabel names a task by its id and, when it has one, its PR or issue.
 func taskLabel(t store.Task) string {
 	switch {
-	case prNumber(t.PR) != "":
-		return t.ID + " (#" + prNumber(t.PR) + ")"
+	case prShort(t.PR) != "":
+		return t.ID + " (" + prShort(t.PR) + ")"
 	case t.Issue > 0:
 		return fmt.Sprintf("%s (#%d)", t.ID, t.Issue)
 	}
 	return t.ID
 }
 
-// prNumber is the number at the end of a PR URL or reference, or "".
-func prNumber(pr string) string {
-	pr = strings.TrimRight(strings.TrimSpace(pr), "/")
+// prShort names the PR at pr, a URL or reference, as its provider writes
+// it: "#12" for a GitHub PR, "!12" for a GitLab MR. It is "" when pr names
+// no PR.
+func prShort(pr string) string {
+	pr = strings.TrimSpace(pr)
+	if s := forge.PRShort(pr); s != pr {
+		return s
+	}
+	if n := forge.RefNumber(pr); n != "" && strings.HasPrefix(pr, "!") {
+		return "!" + n
+	}
+	pr = strings.TrimRight(pr, "/")
 	if i := strings.LastIndexAny(pr, "/#"); i >= 0 {
 		pr = pr[i+1:]
 	}
 	if pr == "" || strings.Trim(pr, "0123456789") != "" {
 		return ""
 	}
-	return pr
+	return "#" + pr
 }
 
 // forDuration is " 2h" or " 15m" for how long something has waited, or ""

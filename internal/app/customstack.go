@@ -584,9 +584,10 @@ type stackLink struct {
 // ghStackRun runs gh for gh-stack in dir. Tests replace it.
 var ghStackRun = func(dir string, args ...string) (string, error) { return gh(dir, args...) }
 
-// GhStack is the gh-stack extension in the repo.
+// GhStack is the gh-stack extension in the repo, gated on its forge: off
+// GitHub every operation fails with ghstack.ErrNotGitHub (#648).
 func (a *App) GhStack() ghstack.Client {
-	return ghstack.Client{Run: func(args ...string) (string, error) { return ghStackRun(a.Root, args...) }}
+	return ghstack.For(a.Forge(), func(args ...string) (string, error) { return ghStackRun(a.Root, args...) })
 }
 
 // stackBackend is [train] stack_backend.

@@ -64,7 +64,9 @@ the same as it does with pull requests on GitHub. The design is in
 | `Closes #N` in the description | closes the issue on merge | the same, as GitLab reads it |
 | CI checks | check runs and commit statuses | the jobs of the MR's head pipeline; a job's stage reads as its workflow |
 | failed log | `gh run view --log-failed` | the job's trace, without colors and section markers |
-| rerun failed CI | `gh run rerun --failed` | retry the pipeline |
+| rerun failed CI | `gh run rerun --failed` | retry the pipeline (its failed jobs) |
+| name a PR in a command | task id, PR URL, `#12` or `12` | task id, MR URL (any page of it), `!12`, `#12` or `12` |
+| PR in the TUI, digest and notices | `#12` | `!12` |
 | merge state | `mergeStateStatus` | `detailed_merge_status` (below) |
 | merge | `gh pr merge --squash --match-head-commit` | merge API, `squash`, pinned to the head with `sha` |
 | sub-issues of an epic | sub-issues | linked issues ("relates to"); child items are a paid feature |
@@ -92,18 +94,22 @@ merges it on its own.
 Jobs marked `allow_failure` don't turn CI red. Manual jobs count as
 skipped, since they run only when someone starts them.
 
+The ci-red watcher retries a failed pipeline once when its job failed in
+the runner rather than in the code (`Job failed (system failure)`, a
+runner system failure, a failed preparation or image pull) or is listed
+in `[ci] flaky`, as it reruns a GitHub Actions run; if it fails the same
+way again it counts as red and saddle spawns a repair.
+
+Commands that take a task or PR (`saddle unstack`, `automerge hold`,
+`release` and `approve`, `stack collapse`, `repair`) take an MR as `!12`,
+its number, or its URL, including a page of it such as `…/diffs`. Saddle
+matches these against the MR links its tasks store, so they need no
+network call.
+
 ## What isn't there yet
 
 - **gh-stack** (`stack_backend = "gh-stack"`) is a GitHub extension.
   On GitLab saddle chains MR targets itself, the default backend.
-- **Automatic reruns of flaky CI.** The ci-red watcher reruns a failure
-  it thinks is infra or flaky by its GitHub Actions run id; on GitLab it
-  spawns a repair task instead.
-- **PR numbers.** Commands that take a task, PR URL or PR number
-  (`saddle unstack`, `automerge hold`/`release`, `collapse`, `repair`) find
-  a PR by number through GitHub's `/pull/12`; on GitLab give them the task
-  id or the MR's full URL. The TUI's auto-merge view and the notice digest
-  show the full MR URL where GitHub shows `#12`.
 
 ## Real-run checklist (for the owner)
 

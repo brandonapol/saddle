@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 // EventApproved is a PR approved past the max_tier gate, at a head.
@@ -78,14 +80,18 @@ func Gate(prs []Assessed, max Tier, ok Approvals) int {
 	})
 }
 
-// TierNotice is the needs-you text for a PR the gate holds.
+// TierNotice is the needs-you text for a PR the gate holds. A GitLab MR is
+// "MR !N", and approved by that.
 func TierNotice(pr string, r Result) string {
-	n := prNumber(pr)
+	what, n := "PR #"+prNumber(pr), prNumber(pr)
+	if s := forge.PRShort(pr); strings.HasPrefix(s, "!") {
+		what, n = "MR "+s, s
+	}
 	why := strings.Join(r.Reasons, "; ")
 	if why == "" {
 		why = "no reason given"
 	}
-	return fmt.Sprintf("PR #%s is %s risk (%s); approve with `saddle automerge approve %s`", n, r.Tier, why, n)
+	return fmt.Sprintf("%s is %s risk (%s); approve with `saddle automerge approve %s`", what, r.Tier, why, n)
 }
 
 // prNumber is the last path element of a PR URL: its number.
@@ -162,8 +168,8 @@ func (w *Watcher) noticeTiers(s *State, stacks []Stack) {
 
 // Approve lets PRs past the max_tier gate at their current heads: every PR
 // of the stack when ref is a stack's ID, else the one PR ref names (task,
-// PR URL or number). It reads GitHub for the heads; a push after this clears
-// the approval. It returns the PRs approved.
+// PR or MR URL, or number: "#12", "!12"). It reads the forge for the heads;
+// a push after this clears the approval. It returns the PRs approved.
 func (w *Watcher) Approve(ref string) ([]string, error) {
 	st, err := w.Plan()
 	if err != nil {
@@ -177,7 +183,7 @@ func (w *Watcher) Approve(ref string) ([]string, error) {
 			break
 		}
 		for _, n := range x.Nodes {
-			if n.Task == ref || n.PR == ref || prNumber(n.PR) == num {
+			if n.Task == ref || n.PR == ref || prNumber(n.PR) == num || forge.SamePR(n.PR, ref) {
 				pick = append(pick, n)
 			}
 		}

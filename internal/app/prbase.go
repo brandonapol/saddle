@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/forge"
-	"github.com/brandonapol/saddle/internal/ghstack"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -120,8 +119,8 @@ func names(text string, t store.Task) (string, bool) {
 		return "#" + strconv.Itoa(t.Issue), true
 	case t.PR != "" && strings.Contains(text, t.PR):
 		return t.PR, true
-	case t.PR != "" && ghstack.PRNumber(t.PR) > 0 && word("#"+strconv.Itoa(ghstack.PRNumber(t.PR))):
-		return "#" + strconv.Itoa(ghstack.PRNumber(t.PR)), true
+	case t.PR != "" && forge.PRShort(t.PR) != t.PR && word(forge.PRShort(t.PR)):
+		return forge.PRShort(t.PR), true
 	case t.Branch != "" && strings.Contains(text, t.Branch):
 		return t.Branch, true
 	}

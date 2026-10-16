@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/forge"
 )
 
@@ -37,18 +39,28 @@ func ReadMergeSettings(gh RepoGH) (MergeSettings, error) {
 // allows merge commits. It never changes the setting. When the settings
 // can't be read it writes a warning to warn and returns nil.
 func CheckRepoMergeSettings(gh RepoGH, warn io.Writer) error {
-	return checkMergeSettings(func() (MergeSettings, error) { return ReadMergeSettings(gh) }, warn)
+	return checkMergeSettings(func() (MergeSettings, error) { return ReadMergeSettings(gh) }, false, warn)
 }
 
-func checkMergeSettings(read func() (MergeSettings, error), warn io.Writer) error {
+// checkMergeSettings refuses merge commits in what read returns; gitlab
+// words the fix for a GitLab project.
+func checkMergeSettings(read func() (MergeSettings, error), gitlab bool, warn io.Writer) error {
 	s, err := read()
 	if err != nil {
+		if gitlab {
+			fmt.Fprintf(warn, "warning: could not read the project's merge settings (%v). "+
+				"Saddle assumes linear history; make sure its merge method is Fast-forward merge.\n", err)
+			return nil
+		}
 		fmt.Fprintf(warn, "warning: could not read the repo's merge settings (%v). "+
 			"Saddle assumes PRs are squash-merged; make sure allow_merge_commit is off.\n", err)
 		return nil
 	}
 	if !s.Merge {
 		return nil
+	}
+	if gitlab {
+		return gitlabMergeCommitsError(s)
 	}
 	repo, settings := s.Repo, s.URL+"/settings"
 	if repo == "" {
@@ -74,6 +86,29 @@ func checkMergeSettings(read func() (MergeSettings, error), warn io.Writer) erro
 	return mergeCommitsError(b.String())
 }
 
+// gitlabMergeCommitsError is the refusal for a GitLab project whose merge
+// method makes merge commits ("Merge commit" or "Merge commit with
+// semi-linear history"); saddle needs "Fast-forward merge".
+func gitlabMergeCommitsError(s MergeSettings) error {
+	repo, settings := s.Repo, s.URL+"/-/settings/merge_requests"
+	if repo == "" {
+		repo = "the project"
+	}
+	if s.URL == "" {
+		settings = "the project's GitLab settings"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s allows merge commits. Saddle stacks merge requests and needs linear history: "+
+		"merge commits break restack, prs and the stack sentinel.\n", repo)
+	b.WriteString("Set the merge method to Fast-forward merge, then run saddle again:\n")
+	fmt.Fprintf(&b, "  - in %s: Settings -> Merge requests -> Merge method, choose \"Fast-forward merge\"\n", settings)
+	if s.Repo != "" {
+		fmt.Fprintf(&b, "  - or: glab api -X PUT projects/%s -f merge_method=ff\n", url.PathEscape(s.Repo))
+	}
+	b.WriteString("Saddle will not change this setting for you.")
+	return mergeCommitsError(b.String())
+}
+
 // mergeCommitsError is the full refusal; it matches ErrMergeCommitsAllowed.
 type mergeCommitsError string
 
@@ -82,5 +117,7 @@ func (e mergeCommitsError) Is(target error) bool { return target == ErrMergeComm
 
 // CheckMergeSettings is CheckRepoMergeSettings on the repo's forge.
 func (a *App) CheckMergeSettings(warn io.Writer) error {
-	return checkMergeSettings(func() (MergeSettings, error) { return a.Forge().MergeSettings(context.Background()) }, warn)
+	f := a.Forge()
+	return checkMergeSettings(func() (MergeSettings, error) { return f.MergeSettings(context.Background()) },
+		f.Provider() == config.ForgeGitLab, warn)
 }

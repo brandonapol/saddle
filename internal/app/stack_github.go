@@ -268,22 +268,20 @@ func (a *App) Unstack(ref string) (store.Task, error) {
 	return t, fmt.Errorf("%s hasn't landed, so it isn't in the stack", t.ID)
 }
 
-// taskByRef finds a task by id, PR URL, or PR number with or without '#'.
+// taskByRef finds a task by id or by its PR: the PR's URL (a GitHub PR or
+// a GitLab MR, with any page after its number) or number ("#12", "!12",
+// "12"), matched by forge.SamePR.
 func (a *App) taskByRef(ref string) (store.Task, error) {
 	ref = strings.TrimSpace(ref)
 	if t, err := a.Store.Task(ref); err == nil {
 		return t, nil
-	}
-	n := strings.TrimPrefix(ref, "#")
-	if i := strings.LastIndex(n, "/pull/"); i >= 0 {
-		n = n[i+len("/pull/"):]
 	}
 	ts, err := a.Store.Tasks()
 	if err != nil {
 		return store.Task{}, err
 	}
 	for _, t := range ts {
-		if t.PR != "" && (t.PR == ref || strings.HasSuffix(t.PR, "/pull/"+n)) {
+		if forge.SamePR(t.PR, ref) {
 			return t, nil
 		}
 	}

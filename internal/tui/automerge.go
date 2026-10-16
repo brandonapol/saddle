@@ -12,6 +12,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/automerge"
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 // automerger is what the merge view's keys do: the App calls behind `saddle
@@ -278,7 +279,7 @@ func (m *model) viewStacks(w int) []string {
 		}
 		rows = append(rows, "", head)
 		for i, n := range s.Nodes {
-			line := fmt.Sprintf("   %d %s %s", i+1, n.Task, prNumber(n.PR))
+			line := fmt.Sprintf("   %d %s %s", i+1, n.Task, forge.PRShort(n.PR))
 			if n.PR == s.Next {
 				line = sText.Render(line) + color(cAccent, " next")
 			} else {
@@ -317,12 +318,4 @@ func nodeState(n automerge.Node) string {
 		parts = append(parts, "labels "+strings.Join(n.Labels, ","))
 	}
 	return strings.Join(parts, ", ")
-}
-
-// prNumber shortens a PR URL to #N.
-func prNumber(url string) string {
-	if i := strings.LastIndex(url, "/pull/"); i >= 0 {
-		return "#" + url[i+len("/pull/"):]
-	}
-	return url
 }
