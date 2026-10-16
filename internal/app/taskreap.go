@@ -20,6 +20,9 @@ import (
 // runKillGrace is how long a process gets after SIGTERM.
 const runKillGrace = 2 * time.Second
 
+// runMatch is how a run dir's processes are found.
+var runMatch = procreap.Match{SkipTmux: true}
+
 // layoutPrefix starts the name of a layout run's scratch worktree under
 // .saddle (#354).
 const layoutPrefix = "layout-"
@@ -34,9 +37,9 @@ func (a *App) cleanRunDir(id string) {
 	if a.runReap != nil {
 		a.runReap(dir)
 	} else {
-		procreap.Reap(dir, runKillGrace, procreap.Match{})
+		procreap.Reap(dir, runKillGrace, runMatch)
 	}
-	if pids := procreap.Find(dir, procreap.Match{}); len(pids) > 0 {
+	if pids := procreap.Find(dir, runMatch); len(pids) > 0 {
 		a.Store.Event(id, "run_dir_kept", fmt.Sprintf("%s: still held by pid %v", dir, pids))
 		return
 	}
@@ -66,7 +69,7 @@ func (a *App) SweepStaleLayouts(maxAge time.Duration) LayoutSweep {
 		}
 		fi, err := e.Info()
 		dir := filepath.Join(a.stateDir(), e.Name())
-		if err != nil || !fi.ModTime().Before(cutoff) || len(procreap.Find(dir, procreap.Match{})) > 0 {
+		if err != nil || !fi.ModTime().Before(cutoff) || len(procreap.Find(dir, runMatch)) > 0 {
 			continue
 		}
 		_ = gitx.WorktreeRemove(a.Root, dir)

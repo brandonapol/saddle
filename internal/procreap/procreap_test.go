@@ -119,3 +119,26 @@ func has(pids []int, cs ...*exec.Cmd) bool {
 	}
 	return true
 }
+
+// #676: SkipTmux spares a process whose comm is tmux.
+func TestSkipTmuxSparesTmuxServers(t *testing.T) {
+	root := t.TempDir()
+	old := procRoot
+	procRoot = root
+	t.Cleanup(func() { procRoot = old })
+	dir := "/srv/saddle/run/t1"
+	for pid, comm := range map[string]string{"4242": "tmux: server\n", "4343": "sh\n"} {
+		p := filepath.Join(root, pid)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.WriteFile(filepath.Join(p, "comm"), []byte(comm), 0o644)
+		_ = os.WriteFile(filepath.Join(p, "cmdline"), []byte("sh\x00"+dir+"/launch.sh\x00"), 0o644)
+	}
+	if got := Find(dir, Match{}); len(got) != 2 {
+		t.Fatalf("without SkipTmux: %v, want both", got)
+	}
+	if got := Find(dir, Match{SkipTmux: true}); len(got) != 1 || got[0] != 4343 {
+		t.Fatalf("with SkipTmux: %v, want only 4343", got)
+	}
+}
