@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 // fake is a gh runner that records calls and answers from a table keyed by
@@ -201,4 +203,48 @@ func slicesHas(ss []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// #648: gh-stack is offered only when [forge] selects GitHub. Off GitHub
+// every operation fails with ErrNotGitHub, which is also
+// forge.ErrUnsupported, and never runs gh.
+func TestForGatesOnProvider(t *testing.T) {
+	answers := map[string]answer{"stack --version": {out: "gh stack version 0.1.1"}, "api": {out: "[]"}, "stack": {}}
+	for _, tc := range []struct {
+		name    string
+		f       forge.Forge
+		offered bool
+	}{
+		{"github", &forge.GitHub{}, true},
+		{"gitlab", &forge.GitLab{}, false},
+		{"local-only", forge.Unsupported{Reason: "none"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fake{answers: answers}
+			c := For(tc.f, f.run)
+			if c.Offered() != tc.offered {
+				t.Fatalf("Offered() = %v, want %v", c.Offered(), tc.offered)
+			}
+			_, e1 := c.Available()
+			_, e2 := c.Enabled()
+			e3 := c.Link("main", "1", "2")
+			_, e4 := c.Stacks()
+			e5 := c.Merge("2", "")
+			for i, err := range []error{e1, e2, e3, e4, e5} {
+				if tc.offered && err != nil {
+					t.Errorf("op %d on GitHub: %v", i, err)
+				}
+				if !tc.offered && (!errors.Is(err, ErrNotGitHub) || !errors.Is(err, forge.ErrUnsupported)) {
+					t.Errorf("op %d off GitHub = %v, want ErrNotGitHub", i, err)
+				}
+			}
+			if !tc.offered && len(f.calls) > 0 {
+				t.Errorf("ran gh off GitHub: %q", f.calls)
+			}
+		})
+	}
+	// A Client built without a provider is GitHub, as before #648.
+	if !(Client{}).Offered() {
+		t.Error("zero Client not offered")
+	}
 }

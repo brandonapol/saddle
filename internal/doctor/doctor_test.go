@@ -26,6 +26,7 @@ type fakeEnv struct {
 	cfgErr    error
 	git       map[string]res
 	gh        map[string]res
+	glab      map[string]res
 	exec      map[string]res
 	paths     map[string]bool // LookPath and Exists
 	hooks     []refguard.HookState
@@ -35,6 +36,7 @@ type fakeEnv struct {
 	kept      int
 	leftErr   error
 	ghCalls   []string
+	glabCalls []string
 	trainGit  map[string]res
 	trainRuns []string
 	allow     []string
@@ -102,6 +104,10 @@ func (f *fakeEnv) Git(args ...string) (string, error) { return lookup(f.git, arg
 func (f *fakeEnv) GH(args ...string) (string, error) {
 	f.ghCalls = append(f.ghCalls, strings.Join(args, " "))
 	return lookup(f.gh, args)
+}
+func (f *fakeEnv) Glab(args ...string) (string, error) {
+	f.glabCalls = append(f.glabCalls, strings.Join(args, " "))
+	return lookup(f.glab, args)
 }
 func (f *fakeEnv) Exec(name string, args ...string) (string, error) {
 	return lookup(f.exec, append([]string{name}, args...))

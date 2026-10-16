@@ -147,8 +147,8 @@ blocks, it shows the next steps. `--fix` asks for trust first, like init.
 It checks the git remote and the repo's default branch (detected, not assumed
 to be `main`), the git provider with its CLI (gh or glab), login and token
 scopes, repo merge settings (merge commits off, squash on), branch
-protection (on GitLab these last two are skipped for now, #648; check them
-by hand as [GitLab](gitlab.md) says), `test.cmd`, tmux, claude and which agent CLIs can run, the ref guard
+protection (on GitLab: fast-forward merge, the protected branch and
+"Pipelines must succeed", as [GitLab](gitlab.md) says), `test.cmd`, tmux, claude and which agent CLIs can run, the ref guard
 hooks, that `.saddle/` is ignored, that `state.db` opens and migrates, how
 many stale worktrees and branches `saddle gc` could clean up, and whether
 you trust the repo. It exits

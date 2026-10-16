@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -39,6 +40,11 @@ func (f Forge) LocalOnly() bool { return f.CLI == "" }
 // localOnly is what running without a provider CLI turns off.
 const localOnly = "saddle runs local-only: no PRs (saddle prs, publish and auto-merge are off) and no merge-settings, " +
 	"branch-protection or gh-stack checks; agents, claims and the merge train still work"
+
+// runner is a doctor CLI call as a forge.Runner.
+func runner(run func(args ...string) (string, error)) forge.Runner {
+	return func(_ context.Context, args ...string) (string, error) { return run(args...) }
+}
 
 // setGitLab is the fix when glab works but nothing tells saddle the repo is
 // on GitLab.
@@ -121,11 +127,7 @@ func (f *Forge) try(x Runner, cli string) (reason, fix string) {
 		}
 		return cli + " is not installed", install + ", then " + login
 	}
-	args := []string{"auth", "status"}
-	if host != "" {
-		args = append(args, "--hostname", host)
-	}
-	out, err := x.Exec(cli, args...)
+	out, err := x.Exec(cli, forge.AuthStatusArgs(host)...)
 	if err != nil {
 		where := ""
 		if host != "" {

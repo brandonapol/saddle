@@ -96,7 +96,9 @@ degrades as noted.
 | Rerun failed CI | `RerunFailed` | optional | `run rerun --failed` | `POST pipelines/:id/retry` (saddle only finds run ids in GitHub links so far) | repair spawns a task instead |
 | Merge, auto-merge | `MergePR` | core | `pr merge --squash/--rebase --match-head-commit` | `PUT merge_requests/:iid/merge squash= sha=`; `merge_when_pipeline_succeeds` while the pipeline runs | — |
 | Merge settings | `MergeSettings` | optional | `api repos/{owner}/{repo}` | `GET projects/:id` (`merge_method`, `squash_option`) | warning, assume squash |
-| Branch protection | doctor | optional | `api …/branches/B/protection` | not read yet (#648) | doctor says skipped |
+| Branch protection | `ReadBranchProtection` | optional | `api …/branches/B/protection` | `GET protected_branches/:name`, then `projects/:id` (`only_allow_merge_if_pipeline_succeeds`, `approvals_before_merge`) | doctor warns "skipped" |
+| Default branch | `ReadDefaultBranch` | optional | `repo view --json defaultBranchRef` | `GET projects/:id` (`default_branch`) | doctor uses the remote's HEAD only |
+| API rate limit | `ReadRateLimit` | optional | `api rate_limit` | none (no quota saddle spends) | no rate-limit risk |
 | Labels | `AddLabel`, `RemoveLabel`, `EnsureLabel` | optional | `pr edit --add-label`/`--remove-label`, `label create --force` | `PUT … add_labels/remove_labels`, labels API (create, else update) | flags shown in saddle only |
 | Issues: view, list, create, comment, edit, close, reopen | `Issue`, `ListIssues`, `CreateIssue`, `CommentIssue`, `EditIssueBody`, `CloseIssue`, `ReopenIssue` | optional | `issue …` | issues and issue notes API (`#N` numbering as on GitHub) | autopilot, blocker issues, ticket off |
 | Sub-issues | `SubIssues`, `SubIssueNumbers`, `AddSubIssue` | optional | REST `sub_issues` | linked issues (`issues/:iid/links`), since child items are Premium | ticket shows no sub-issues |
@@ -143,7 +145,7 @@ handles behind the interface:
   saying the MR is scheduled, not merged, and GitLab merges it once the
   pipeline passes.
 - **Protected branches** apply to every merge; saddle has no bypass on
-  either provider. Doctor doesn't read them on GitLab yet (#648).
+  either provider. Doctor reads them through `ReadBranchProtection` (#648).
 - **Self-hosted hosts.** An origin whose host names GitLab is detected;
   otherwise `[forge] provider = "gitlab"`, and `host` passes `--hostname`
   to glab. glab's own `GITLAB_HOST` works too.
@@ -198,6 +200,6 @@ users:
   rather than failing saddle.
 - `[forge] cli = "none"` turns off every forge call, the CI watcher,
   sweeper, sentinel, ci-red watcher, auto-merge and plan push included.
-  On GitLab they all run through glab. Doctor's merge-settings and
-  branch-protection checks and gh-stack still assume GitHub; they are the
-  allowlisted exceptions above, and say they are skipped on GitLab (#648).
+  On GitLab they all run through glab, doctor included (#648). gh-stack
+  stays GitHub-only by design: `ghstack.For` gates it on the forge's
+  provider, and doctor doesn't probe it elsewhere.

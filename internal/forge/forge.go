@@ -232,15 +232,80 @@ type Forge interface {
 // other GitHub. It starts no process: the remote is read from git's config
 // file.
 func New(fc config.Forge, dir string) Forge {
+	return Over(fc, OriginURL(dir), CLI(dir, GH), CLI(dir, Glab))
+}
+
+// Select is the provider New picks for fc and an origin remote's URL:
+// config.ForgeGitHub, config.ForgeGitLab, or config.ForgeNone for cli =
+// "none".
+func Select(fc config.Forge, originURL string) string {
 	switch {
 	case fc.CLI == config.ForgeNone:
-		return Unsupported{Name: fc.Provider, Reason: `[forge] cli = "none": saddle runs local-only`}
+		return config.ForgeNone
 	case fc.Provider == config.ForgeGitLab || fc.CLI == config.ForgeGlab:
-		return &GitLab{Run: CLI(dir, Glab), Host: fc.Host}
-	case fc.Provider == "" && fc.CLI == "" && HostProvider(RemoteHost(OriginURL(dir))) == config.ForgeGitLab:
-		return &GitLab{Run: CLI(dir, Glab), Host: fc.Host}
+		return config.ForgeGitLab
+	case fc.Provider == "" && fc.CLI == "" && HostProvider(RemoteHost(originURL)) == config.ForgeGitLab:
+		return config.ForgeGitLab
 	}
-	return &GitHub{Run: CLI(dir, GH)}
+	return config.ForgeGitHub
+}
+
+// Over is the forge Select picks, driven by gh or glab: New with the CLIs
+// supplied, so doctor can run it over its own (faked) runners.
+func Over(fc config.Forge, originURL string, gh, glab Runner) Forge {
+	switch Select(fc, originURL) {
+	case config.ForgeNone:
+		return Unsupported{Name: fc.Provider, Reason: `[forge] cli = "none": saddle runs local-only`}
+	case config.ForgeGitLab:
+		return &GitLab{Run: glab, Host: fc.Host}
+	}
+	return &GitHub{Run: gh}
+}
+
+// AuthStatusArgs are the args of gh's or glab's auth status for host ("" is
+// the CLI's default host). Its output is the login and, from gh, the
+// token's scopes, which AuthStatus doesn't return.
+func AuthStatusArgs(host string) []string {
+	args := []string{"auth", "status"}
+	if host != "" {
+		args = append(args, "--hostname", host)
+	}
+	return args
+}
+
+// Optional reads a provider may have beyond Forge. Call them through
+// ReadDefaultBranch, ReadRateLimit and ReadBranchProtection, which return
+// ErrUnsupported for a forge without them.
+type (
+	defaultBrancher interface {
+		// DefaultBranch is the repo's default branch.
+		DefaultBranch(ctx context.Context) (string, error)
+	}
+	rateLimiter interface {
+		RateLimit(ctx context.Context) (RateLimit, error)
+	}
+)
+
+// RateLimit is how much of the forge's API quota is left.
+type RateLimit struct {
+	Limit, Remaining int
+	Reset            time.Time
+}
+
+// ReadDefaultBranch is f's default branch.
+func ReadDefaultBranch(ctx context.Context, f Forge) (string, error) {
+	if d, ok := f.(defaultBrancher); ok {
+		return d.DefaultBranch(ctx)
+	}
+	return "", fmt.Errorf("read default branch: %w", ErrUnsupported)
+}
+
+// ReadRateLimit is f's API quota. Only GitHub has one saddle can spend.
+func ReadRateLimit(ctx context.Context, f Forge) (RateLimit, error) {
+	if r, ok := f.(rateLimiter); ok {
+		return r.RateLimit(ctx)
+	}
+	return RateLimit{}, fmt.Errorf("read rate limit: %w", ErrUnsupported)
 }
 
 // Unsupported is a forge that does nothing: every operation returns an error

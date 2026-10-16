@@ -14,6 +14,11 @@ import (
 // a test changes a field.
 type fakePredict struct {
 	cfg        config.Config
+	origin     string
+	glabCalls  []string
+	glab       map[string]string // glab call -> output; missing is an error
+	glabAuth   error
+	ghCalls    []string
 	protection string // gh api .../protection output; "" is unprotected
 	authStatus string
 	authErr    error
@@ -50,6 +55,7 @@ func quiet() *fakePredict {
 func (f *fakePredict) Config() (config.Config, error) { return f.cfg, nil }
 func (f *fakePredict) GH(args ...string) (string, error) {
 	j := strings.Join(args, " ")
+	f.ghCalls = append(f.ghCalls, j)
 	switch {
 	case strings.HasSuffix(j, "/protection"):
 		if f.protection == "" {
@@ -61,9 +67,22 @@ func (f *fakePredict) GH(args ...string) (string, error) {
 	}
 	return "", errors.New("unexpected gh " + j)
 }
+func (f *fakePredict) OriginURL() string { return f.origin }
+func (f *fakePredict) Glab(args ...string) (string, error) {
+	j := strings.Join(args, " ")
+	f.glabCalls = append(f.glabCalls, j)
+	if out, ok := f.glab[j]; ok {
+		return out, nil
+	}
+	return "", errors.New("glab api: 404 Not Found")
+}
 func (f *fakePredict) Exec(name string, args ...string) (string, error) {
 	if name == "gh" && strings.Join(args, " ") == "auth status" {
+		f.ghCalls = append(f.ghCalls, "auth status")
 		return f.authStatus, f.authErr
+	}
+	if name == "glab" && strings.Join(args, " ") == "auth status" {
+		return "Logged in to gitlab.com", f.glabAuth
 	}
 	return "", errors.New("not set")
 }
@@ -238,5 +257,38 @@ func TestClassify(t *testing.T) {
 		if got := Classify(c.e, nil); got != c.want {
 			t.Errorf("%+v: got %s, want %s", c.e, got, c.want)
 		}
+	}
+}
+
+// #648: on GitLab the probes read the protected branch through glab, check
+// glab's login, and skip GitHub's rate limit and token scopes: no gh call.
+func TestPredictOnGitLab(t *testing.T) {
+	f := quiet()
+	f.origin = "git@gitlab.com:g/r.git"
+	f.rateLimit = `{"resources":{"core":{"limit":5000,"remaining":1,"reset":0}}}`
+	f.authStatus = "Logged in\n  - Token scopes: 'repo'"
+	f.workflows = true
+	f.autoMerge = true
+	f.glab = map[string]string{
+		"api projects/:id/protected_branches/main": `{"name":"main"}`,
+		"api projects/:id":                         `{"only_allow_merge_if_pipeline_succeeds":true,"approvals_before_merge":1}`,
+	}
+	rs := Predict(f, predictNow)
+	if len(f.ghCalls) > 0 {
+		t.Fatalf("predict called gh on a GitLab repo: %q", f.ghCalls)
+	}
+	r := findRisk(t, rs, ClassBranchProtection)
+	if r.Severity != High || !strings.Contains(r.Fix, "approval rules") {
+		t.Fatalf("approvals with auto-merge = %+v", r)
+	}
+	for _, r := range rs {
+		if r.Class == ClassRateLimit || r.Class == ClassCredentials {
+			t.Fatalf("GitHub-only risk on GitLab: %+v", r)
+		}
+	}
+	f.glabAuth = errors.New("exit status 1")
+	r = findRisk(t, Predict(f, predictNow), ClassCredentials)
+	if !strings.Contains(r.What, "glab is not logged in") || r.Fix != "glab auth login" {
+		t.Fatalf("glab logged out = %+v", r)
 	}
 }

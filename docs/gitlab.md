@@ -47,8 +47,10 @@ the same as it does with pull requests on GitHub. The design is in
 
 5. Run `saddle doctor`. The git provider row should read
    `GitLab (gitlab.com) via glab …, logged in to gitlab.com`. Its merge
-   settings and branch protection checks still read GitHub's API only and
-   say "skipped on GitLab" (#648), so check steps 3 and 4 by hand.
+   settings row checks step 3 (fast-forward merge, squash allowed) and its
+   branch protection row checks step 4 and "Pipelines must succeed",
+   through `glab api`. Reading them needs Maintainer access; without it
+   the rows warn and you check by hand.
 
 ## How saddle maps GitLab
 
@@ -92,8 +94,6 @@ skipped, since they run only when someone starts them.
 
 ## What isn't there yet
 
-- **Doctor's merge-settings and branch-protection checks** read GitHub's
-  API through `gh`; on GitLab they are skipped (#648).
 - **gh-stack** (`stack_backend = "gh-stack"`) is a GitHub extension.
   On GitLab saddle chains MR targets itself, the default backend.
 - **Automatic reruns of flaky CI.** The ci-red watcher reruns a failure

@@ -16,6 +16,9 @@ import (
 	"io"
 	"strconv"
 	"strings"
+
+	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 // Runner runs gh with args and returns its stdout; a failure's error carries
@@ -34,6 +37,9 @@ var (
 	ErrNoStack = errors.New("no stack on GitHub holds it")
 	// ErrMergeRefused: GitHub refused the atomic stack merge; nothing merged.
 	ErrMergeRefused = errors.New("GitHub refused the stack merge")
+	// ErrNotGitHub: [forge] selects another provider; gh-stack is GitHub-only
+	// (#648). It matches forge.ErrUnsupported too.
+	ErrNotGitHub = fmt.Errorf("gh-stack is GitHub-only: %w", forge.ErrUnsupported)
 )
 
 // Error is a failed gh-stack operation: Kind is one of the Err values above
@@ -80,10 +86,43 @@ func classify(op string, err error) error {
 }
 
 // Client is gh-stack in one repo.
-type Client struct{ Run Runner }
+type Client struct {
+	Run Runner
+	// Provider is the repo's forge provider. Off GitHub every operation
+	// fails with ErrNotGitHub without running gh. "" is GitHub, for callers
+	// that don't say.
+	Provider string
+}
+
+// For is gh-stack in the repo f is the forge of, run through run: usable
+// only when f is GitHub.
+func For(f forge.Forge, run Runner) Client {
+	p := f.Provider()
+	if p == "" {
+		p = config.ForgeNone // a local-only forge
+	}
+	return Client{Run: run, Provider: p}
+}
+
+// Offered reports whether gh-stack can serve the repo at all: its forge is
+// GitHub. Installed and enabled are Available and Enabled.
+func (c Client) Offered() bool {
+	return c.Provider == "" || c.Provider == config.ForgeGitHub
+}
+
+// gate is ErrNotGitHub for op when the repo isn't on GitHub.
+func (c Client) gate(op string) error {
+	if c.Offered() {
+		return nil
+	}
+	return &Error{Op: op, Kind: ErrNotGitHub, Err: fmt.Errorf("[forge] selects %s", c.Provider)}
+}
 
 // Available returns the installed extension's version, or ErrNotInstalled.
 func (c Client) Available() (string, error) {
+	if err := c.gate("version"); err != nil {
+		return "", err
+	}
 	out, err := c.Run("stack", "--version")
 	if err != nil {
 		e := classify("version", err)
@@ -106,6 +145,9 @@ const stacksPath = "repos/{owner}/{repo}/stacks"
 // repo's stacks. A refusal is (false, ErrNotEnabled); anything else that
 // fails is (false, err): unknown counts as disabled.
 func (c Client) Enabled() (bool, error) {
+	if err := c.gate("probe"); err != nil {
+		return false, err
+	}
 	if _, err := c.Run("api", stacksPath+"?per_page=1"); err != nil {
 		return false, classify("probe", err)
 	}
@@ -116,6 +158,9 @@ func (c Client) Enabled() (bool, error) {
 // bottom targeting base. Pass PR URLs or numbers: a branch makes gh-stack
 // push it, and only saddle's train pushes saddle's branches.
 func (c Client) Link(base string, refs ...string) error {
+	if err := c.gate("link"); err != nil {
+		return err
+	}
 	if len(refs) < 2 {
 		return &Error{Op: "link", Err: fmt.Errorf("a stack needs at least two PRs, got %d", len(refs))}
 	}
@@ -176,6 +221,9 @@ type apiStack struct {
 
 // Stacks lists the repo's stacks on GitHub.
 func (c Client) Stacks() ([]Stack, error) {
+	if err := c.gate("view"); err != nil {
+		return nil, err
+	}
 	out, err := c.Run("api", stacksPath+"?per_page=100", "--paginate")
 	if err != nil {
 		return nil, classify("view", err)
@@ -256,6 +304,9 @@ func (c Client) View(ref string) (Stack, error) {
 // stack up to and including PR ref, without prompting. An empty method uses
 // the one last used.
 func (c Client) Merge(ref, method string) error {
+	if err := c.gate("merge"); err != nil {
+		return err
+	}
 	args := []string{"stack", "merge", ref, "--yes"}
 	if method != "" {
 		args = append(args, "--merge-method", method)

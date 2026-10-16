@@ -482,12 +482,22 @@ func (g *GitLab) MergeSettings(ctx context.Context) (MergeSettings, error) {
 }
 
 func (g *GitLab) AuthStatus(ctx context.Context) error {
-	args := []string{"auth", "status"}
-	if g.Host != "" {
-		args = append(args, "--hostname", g.Host)
-	}
-	_, err := g.Run(ctx, args...)
+	_, err := g.Run(ctx, AuthStatusArgs(g.Host)...)
 	return err
+}
+
+// DefaultBranch reads the project's default branch.
+func (g *GitLab) DefaultBranch(ctx context.Context) (string, error) {
+	var p struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if err := g.apiJSON(ctx, &p, "", "projects/:id"); err != nil {
+		return "", err
+	}
+	if p.DefaultBranch == "" {
+		return "", errors.New("glab api did not return the project's default_branch (an empty project has none)")
+	}
+	return p.DefaultBranch, nil
 }
 
 // gitlabIssue is GitLab's issue JSON, mapped onto Issue. GitLab numbers

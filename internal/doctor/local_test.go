@@ -18,8 +18,13 @@ func (s slowSpy) GH(args ...string) (string, error) {
 	return s.fakeEnv.GH(args...)
 }
 
+func (s slowSpy) Glab(args ...string) (string, error) {
+	s.t.Errorf("RunLocal called glab %s", strings.Join(args, " "))
+	return s.fakeEnv.Glab(args...)
+}
+
 func (s slowSpy) Exec(name string, args ...string) (string, error) {
-	if name == "gh" {
+	if name == "gh" || name == "glab" {
 		s.t.Errorf("RunLocal ran gh %s", strings.Join(args, " "))
 	}
 	return s.fakeEnv.Exec(name, args...)
