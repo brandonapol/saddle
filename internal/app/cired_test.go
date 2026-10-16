@@ -269,3 +269,19 @@ func TestScreenCIPollRetriesGitLabPipeline(t *testing.T) {
 		t.Fatalf("ci_rerun events = %v, want one naming pipeline 77", ev)
 	}
 }
+
+// #681: the rerun event names a GitLab pipeline, not a workflow run.
+func TestScreenCIPollRerunEventNamesGitLabPipeline(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	rerun := func(string) error { return nil }
+	p := CIPoll{Task: "t1", PR: "1", Head: "aaa", Failed: []string{"build"}}
+	fails := []CIRedFailure{{Check: "build", RunURL: "https://gitlab.com/o/r/-/pipelines/77", LogTail: "Unable to resolve action actions/checkout@v9"}}
+	if _, err := a.ScreenCIPoll(p, fails, rerun); err != nil {
+		t.Fatal(err)
+	}
+	ev := ciEvents(t, a, EventCIRerun)
+	if len(ev) != 1 || !strings.Contains(ev[0], "pipeline 77") || strings.Contains(ev[0], "workflow") || strings.Contains(ev[0], "run 77") {
+		t.Fatalf("ci_rerun events = %v, want one naming pipeline 77", ev)
+	}
+}

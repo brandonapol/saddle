@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 const EventDigestSent = "notice_digest_sent"
 
 var (
+	mrMergedRe   = regexp.MustCompile(`^(\d+ )MR(s? merged)`)
 	mergedPRRe   = regexp.MustCompile(`^Auto-merged (\S+) \(`)
 	landedTaskRe = regexp.MustCompile(`^(\S+) ".*" landed on `)
 )
@@ -94,12 +96,22 @@ func (d digest) String() string {
 		if n == 1 {
 			s = k.one
 		}
-		if ids := d.ids[k.topic]; len(ids) > 0 {
+		ids := d.ids[k.topic]
+		if k.topic == TopicMerged && allMRs(ids) {
+			s = strings.Replace(s, "PR", "MR", 1)
+		}
+		if len(ids) > 0 {
 			s += " (" + strings.Join(ids, " ") + ")"
 		}
 		parts = append(parts, s)
 	}
 	return fmt.Sprintf("Since %s: %s.", d.since, strings.Join(parts, ", "))
+}
+
+// allMRs reports whether ids are all GitLab MR refs ("!12"), so the line says
+// "MRs merged" there, as the forge does (#681).
+func allMRs(ids []string) bool {
+	return len(ids) > 0 && !slices.ContainsFunc(ids, func(id string) bool { return !strings.HasPrefix(id, "!") })
 }
 
 // summarizeDigest folds digest items into one line.
@@ -151,6 +163,7 @@ func parseDigest(line string) (d digest, ok bool) {
 	}
 	d = newDigest(m[1])
 	for _, part := range strings.Split(m[2], ", ") {
+		part = mrMergedRe.ReplaceAllString(part, "${1}PR${2}")
 		matched := false
 		for i, k := range digestKinds {
 			for _, re := range digestPartRes[i] {

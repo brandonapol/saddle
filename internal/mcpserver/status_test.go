@@ -215,3 +215,28 @@ func TestStatusNamesEachTasksAdapter(t *testing.T) {
 		t.Fatalf("adapters = %v", got)
 	}
 }
+
+// #681: tools that take a PR ref say GitLab's !12 form too.
+func TestToolRefsMentionMRForm(t *testing.T) {
+	ctx := context.Background()
+	st, ct := mcp.NewInMemoryTransports()
+	if _, err := New(nil, app.OrchestratorID).Connect(ctx, st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cs.Close() }()
+	res, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range res.Tools {
+		b, _ := json.Marshal(tool.InputSchema)
+		s := tool.Description + string(b)
+		if strings.Contains(s, "PR number") && !strings.Contains(s, "!12") {
+			t.Errorf("tool %s names a PR number but not the !12 MR form: %s", tool.Name, s)
+		}
+	}
+}

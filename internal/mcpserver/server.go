@@ -253,7 +253,7 @@ type PublishIn struct {
 // AutomergeIn steers the auto-merge watcher.
 type AutomergeIn struct {
 	Action string `json:"action" jsonschema:"on, off, status, hold or release"`
-	Stack  string `json:"stack,omitempty" jsonschema:"for hold and release: the stack's name (its bottom task), a task id, PR URL or PR number"`
+	Stack  string `json:"stack,omitempty" jsonschema:"for hold and release: the stack's name (its bottom task), a task id, PR URL or PR number (#12, or !12 for a GitLab MR)"`
 }
 
 // AutopilotIn steers the autopilot driver.
@@ -282,7 +282,7 @@ type QueueHoldIn struct {
 }
 
 type UnstackIn struct {
-	Task string `json:"task" jsonschema:"task id (t3), PR URL, or PR number (#12)"`
+	Task string `json:"task" jsonschema:"task id (t3), PR URL, or PR number (#12, or !12 for a GitLab MR)"`
 }
 
 // BriefOut is a task's live brief: what to do, what it owns and what it must not touch.
@@ -672,7 +672,7 @@ func New(a *app.App, task string) *mcp.Server {
 			}, nil
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "unstack", Description: "Take a landed task out of the PR stack for good, by task id, PR URL or PR number: for work that should not ship as its own PR (superseded, re-landed elsewhere, abandoned). Its commits leave integration on the next restack and Saddle never touches its PR again. Merged and closed PRs and killed tasks leave the stack by themselves; this is the escape hatch for the rest. Never edit state.db instead."},
+	mcp.AddTool(s, &mcp.Tool{Name: "unstack", Description: "Take a landed task out of the PR stack for good, by task id, PR URL or PR number (#12, or !12 for a GitLab MR): for work that should not ship as its own PR (superseded, re-landed elsewhere, abandoned). Its commits leave integration on the next restack and Saddle never touches its PR again. Merged and closed PRs and killed tasks leave the stack by themselves; this is the escape hatch for the rest. Never edit state.db instead."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in UnstackIn) (*mcp.CallToolResult, OK, error) {
 			t, err := a.Unstack(in.Task)
 			if err != nil {

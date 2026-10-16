@@ -85,7 +85,7 @@ const eventCIRepairSkipped = "ci_repair_skipped"
 // with no commits. Each gets a notice instead of a worker.
 
 // prMetaRe matches a failure about the PR's body or title, not its code.
-var prMetaRe = regexp.MustCompile(`(?i)\battribution\b|generated with \[?claude|\b(pr|pull request) (body|description|title)\b`)
+var prMetaRe = regexp.MustCompile(`(?i)\battribution\b|generated with \[?claude|\b(pr|mr|pull request|merge request) (body|description|title)\b`)
 
 // ciRepairScreen reports why task's red checks get no repair task, or ""
 // when they need one. pr is its PR, head the commit the checks failed on
