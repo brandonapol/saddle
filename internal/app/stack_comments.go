@@ -1,7 +1,7 @@
 package app
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"strings"
 
@@ -43,29 +43,19 @@ func (a *App) updateStackComments(stack []store.Task, groups []int, bases []stri
 // upsertStackComment owns a marked comment, never the author's PR body.
 // Looking it up on GitHub makes repeated publication stable across restarts.
 func (a *App) upsertStackComment(url, body string) error {
-	out, err := gh(a.Root, "pr", "view", url, "--json", "comments")
+	ctx, f := context.Background(), a.Forge()
+	comments, err := f.Comments(ctx, url)
 	if err != nil {
 		return err
 	}
-	var response struct {
-		Comments []struct {
-			ID   string `json:"id"`
-			Body string `json:"body"`
-		} `json:"comments"`
-	}
-	if err := json.Unmarshal([]byte(out), &response); err != nil {
-		return fmt.Errorf("reading stack comments for %s: %w", url, err)
-	}
-	for _, comment := range response.Comments {
+	for _, comment := range comments {
 		if !strings.HasPrefix(comment.Body, stackCommentMarker) {
 			continue
 		}
 		if comment.Body == body {
 			return nil
 		}
-		_, err := gh(a.Root, "api", "graphql", "-f", "query=mutation($id: ID!, $body: String!) { updateIssueComment(input: {id: $id, body: $body}) { issueComment { id } } }", "-f", "id="+comment.ID, "-f", "body="+body)
-		return err
+		return f.EditComment(ctx, comment.ID, body)
 	}
-	_, err = gh(a.Root, "pr", "comment", url, "--body", body)
-	return err
+	return f.AddComment(ctx, url, body)
 }

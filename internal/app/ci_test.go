@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/ciwatch"
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -41,7 +42,7 @@ func ciTask(t *testing.T, a *App, id, status, pr string) store.Task {
 
 func newCI(t *testing.T, a *App, gh *ciGH) *CIWatcher {
 	t.Helper()
-	c, err := a.NewCIWatcher(gh.run)
+	c, err := a.NewCIWatcher(&forge.GitHub{Run: gh.run})
 	must(t, err)
 	return c
 }

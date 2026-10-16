@@ -7,6 +7,9 @@ import (
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/agent"
+	"github.com/brandonapol/saddle/internal/agent/agenttest"
+	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/doctor"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 )
 
@@ -109,5 +112,53 @@ func TestWriteTaskPicks(t *testing.T) {
 	})
 	if got := b.String(); got != "t1 on codex: suits mechanical, 90% of budget left, 0 running\n" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// #646: a bare saddle up whose harness can't run falls back to the first
+// agent CLI that can, for this run, and with none it prints the install
+// steps instead of starting.
+func TestUpFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		bins   []string
+		logins []string // nil: every bin is logged in
+		want   string
+		says   []string
+		err    string
+	}{
+		{"claude ready", []string{"claude", "codex"}, nil, "", nil, ""},
+		{"claude missing, codex present", []string{"codex"}, nil, "codex", []string{"claude can't run (claude not on PATH); running codex for this run", "Codex has no hooks"}, ""},
+		{"claude missing, grok present", []string{"grok", "codex"}, nil, "grok", []string{"running grok for this run", `harness = "grok"`}, ""},
+		// No credentials file is only a guess at logged out (apiKeyHelper
+		// and the like leave none), so an installed claude still starts.
+		{"claude looks logged out", []string{"claude", "codex"}, []string{"codex"}, "", []string{"claude is not logged in: run claude /login; starting it anyway"}, ""},
+		{"claude looks logged out, nothing else", []string{"claude"}, []string{}, "", []string{"starting it anyway"}, ""},
+		{"nothing", nil, nil, "", nil, "no agent CLI is installed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logins := tc.logins
+			if logins == nil {
+				logins = tc.bins
+			}
+			agenttest.Path(t, tc.bins, logins)
+			cfg := config.Default()
+			var out strings.Builder
+			got, err := upFallback(&out, cfg, agent.Availability(doctor.AgentCmds(cfg)))
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) || !strings.Contains(err.Error(), "@anthropic-ai/claude-code") {
+					t.Fatalf("err = %v, want %q with install steps", err, tc.err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("upFallback = %q, %v; want %q", got, err, tc.want)
+			}
+			for _, w := range tc.says {
+				if !strings.Contains(out.String(), w) {
+					t.Errorf("output lacks %q:\n%s", w, out.String())
+				}
+			}
+		})
 	}
 }

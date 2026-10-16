@@ -56,9 +56,15 @@ func TestLocalFailuresAreFixable(t *testing.T) {
 		}
 	}
 	f := healthy(t)
-	f.paths["gh"] = false
+	f.exec["gh auth status --hostname github.com"] = res{out: "  - Token scopes: 'gist'"}
 	if c := find(t, Run(f), CheckGH); c.Fixable || c.Group() != GroupManual {
 		t.Errorf("gh auth = %+v (group %s), want manual", c, c.Group())
+	}
+	// Without gh saddle runs local-only (#646): worth fixing, but nothing blocks.
+	f = healthy(t)
+	f.paths["gh"] = false
+	if c := find(t, Run(f), CheckGH); c.Fixable || c.Group() != GroupOptional {
+		t.Errorf("gh missing = %+v (group %s), want optional", c, c.Group())
 	}
 	f = healthy(t)
 	f.leftovers = 2
@@ -167,7 +173,7 @@ func TestRepoSlugFromRemote(t *testing.T) {
 
 func TestWriteTableGroupsAndNextSteps(t *testing.T) {
 	f := halfInit(t)
-	f.paths["gh"] = false
+	f.exec["gh auth status --hostname github.com"] = res{out: "  - Token scopes: 'gist'"}
 	var out bytes.Buffer
 	WriteTable(&out, Run(f))
 	s := out.String()

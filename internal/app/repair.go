@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -319,10 +320,10 @@ func (a *App) closeSuperseded(orig store.Task, r string) {
 	}
 	body := fmt.Sprintf("Superseded by %s, saddle's repair of %s: this PR's commits conflicted with %s after it landed and its agent was gone. "+
 		"%s re-lands the same work resolved on %s and gets its own PR.", r, orig.ID, a.Cfg.Base, r, a.Cfg.Base)
-	if _, err := gh(a.Root, "pr", "comment", orig.PR, "--body", body); err != nil {
+	if err := a.Forge().AddComment(context.Background(), orig.PR, body); err != nil {
 		a.Store.Event(orig.ID, "pr_close_error", err.Error())
 	}
-	if _, err := gh(a.Root, "pr", "close", orig.PR); err != nil {
+	if err := a.Forge().ClosePR(context.Background(), orig.PR); err != nil {
 		a.Store.Event(orig.ID, "pr_close_error", err.Error())
 	}
 }

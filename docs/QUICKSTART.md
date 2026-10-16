@@ -7,8 +7,10 @@ There is no daemon to start.
 
 ## 1. Install
 
-You need Go, git, [gh](https://cli.github.com), tmux and
-[Claude Code](https://claude.com/claude-code) on your PATH.
+You need Go, git, tmux and an agent CLI on your PATH:
+[Claude Code](https://claude.com/claude-code), or the Codex or Grok CLI. For
+pull requests you also need [gh](https://cli.github.com), logged in. Without
+it Saddle runs local-only (see step 3).
 
 ```sh
 git clone https://github.com/brandonapol/saddle && cd saddle
@@ -95,6 +97,28 @@ test command (`make check`, `npm run check`, `go test ./...`, `npm test`,
 `cargo test`) and installs the ref guard hooks, which stop anyone but the
 merge train from moving Saddle's branches.
 
+Last, init says what it found for the two CLIs Saddle drives:
+
+- **Git provider.** It reads the host of the `origin` remote: GitHub uses
+  `gh`, GitLab uses `glab`. When that CLI is missing or logged out, it falls
+  back to the other one if it is installed and logged in for the same host.
+  It prints the provider, the CLI, whether it is logged in and the exact
+  install or `auth login --hostname <host>` command. With no usable CLI,
+  Saddle runs local-only: agents, claims and the merge train work, but
+  `saddle prs`, publish and auto-merge are off. GitLab isn't supported yet
+  (#644, #645): a GitLab remote with `glab` reports "GitLab detected, glab
+  found, GitLab support is not available yet" and runs local-only. To
+  override detection, set `[forge]` in `.saddle/config.toml`:
+  `provider = "github" | "gitlab"` and `cli = "gh" | "glab" | "none"`.
+- **Agent CLIs.** It checks which of `claude`, `codex` and `grok` are
+  installed and logged in. When `claude` can't run but another can, init
+  says so and writes that one as `harness` in `.saddle/config.toml`, unless
+  you already set `harness`. Codex has no hooks, so with it claims are
+  checked only at commit and at `done`, not on each edit. With no agent CLI
+  at all, init prints how to install each one and exits cleanly.
+  A bare `saddle up` makes the same choice for its run when the configured
+  harness can't run, or stops with the install steps when nothing can.
+
 You can skip this step: the first `saddle up` in a trusted repo runs init
 itself, prints what it set up, and only then runs the doctor. Init is safe to
 rerun: it repairs missing hooks or the exclude entry and never overwrites an
@@ -110,14 +134,16 @@ saddle doctor --json   # the same for scripts, with each check's group
 
 After the table, problems are grouped: **Fixed automatically** (by `--fix`),
 **Saddle can fix these** (run `saddle doctor --fix`), **You need to do this**
-(gh login, tmux, GitHub settings) and **Optional**. Each says in plain words
+(tmux, an agent CLI, GitHub settings) and **Optional** (a missing or logged-out
+gh, which only turns PRs off). Each says in plain words
 what the check is for. Branch protection names the repo's settings URL, the
 boxes to tick and the check names from `.github/workflows/`. Once nothing
 blocks, it shows the next steps. `--fix` asks for trust first, like init.
 
 It checks the git remote and the repo's default branch (detected, not assumed
-to be `main`), gh login and token scopes, repo merge settings (merge commits
-off, squash on), branch protection, `test.cmd`, tmux and claude, the ref guard
+to be `main`), the git provider with its CLI (gh or glab), login and token
+scopes, repo merge settings (merge commits off, squash on), branch
+protection, `test.cmd`, tmux, claude and which agent CLIs can run, the ref guard
 hooks, that `.saddle/` is ignored, that `state.db` opens and migrates, how
 many stale worktrees and branches `saddle gc` could clean up, and whether
 you trust the repo. It exits

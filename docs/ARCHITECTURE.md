@@ -452,6 +452,40 @@ layers over it. Details: [sre.md](sre.md).
   `saddle sre close` builds the record from the incident
   (`PostmortemFromIncident`) and writes it. Format: [postmortems/README.md](postmortems/README.md).
 
+## Forge layer (#644, #647)
+
+Saddle reaches its git host through `internal/forge` and nowhere else
+(decision: [ADR 0001](adr/0001-forge-layer.md)).
+
+- **One process start.** `forge.Output`, `forge.CombinedOutput` and
+  `forge.CLI` are the only code that runs `gh` (and, with #645, `glab`).
+  `TestNoDirectCLIExec` parses the repo and fails when another package passes
+  a forge CLI to `exec.Command`. Generic exec helpers (doctor's `Env.Exec`,
+  the changelog's runner) hand a forge CLI name to `forge`.
+- **One interface.** `forge.Forge` is the provider-neutral surface: create,
+  view, list, retarget, edit, merge and close PRs; comments and labels; CI
+  checks, failed-job logs and reruns; merge settings; auth; issues and
+  sub-issues. Its types (`forge.PR`, `forge.CheckRun`, `forge.CICheck`,
+  `forge.Issue`, …) carry no GitHub JSON names. `forge.GitHub` implements it over `gh` with the same
+  arguments saddle always passed. Operations a provider lacks return
+  `forge.ErrUnsupported`, and saddle drops the feature instead of failing.
+- **Selection.** `App.Forge()` is `forge.New(cfg.Forge, root)`: GitHub unless
+  `[forge]` says `cli = "none"` (local-only) or GitLab (not supported until
+  #645). It starts no process; detecting the provider and CLI from the
+  remote is a setup step in `saddle init` and `saddle doctor`
+  (`doctor.DetectForge`, #646).
+- **Every caller.** `ciwatch`, `sweeper`, `automerge`, `sentinel` (the stack
+  sentinel and the ci-red watcher) and `planner.Push` each declare the small
+  slice of `forge.Forge` they use and are built from `App.Forge()`, so
+  `[forge]` applies to them too. On `ErrUnsupported` each degrades quietly:
+  the CI watchers watch nothing, labels and stack comments are skipped, and
+  auto-merge leaves its PRs unread. `TestNoGHArgsOutsideForge` fails when a
+  package outside `internal/forge` builds gh arguments; its allowlist names
+  the GitHub-only exceptions: `ghstack` (the gh-stack extension), `doctor`
+  (setup-time diagnostics) and the changelog.
+- **Tests.** `internal/e2e/fakegh` is a fake `gh` binary on `PATH`, so e2e
+  journeys exercise `forge.GitHub` end to end.
+
 ## Layout on disk
 
 ```
@@ -473,6 +507,7 @@ internal/cli/        cobra commands
 internal/config/     TOML loading and merging
 internal/store/      sqlite schema and migrations
 internal/doctor/     saddle doctor preflight checks
+internal/forge/      the git host: forge.Forge, GitHub over gh, the only gh exec
 internal/gitx/       worktrees, watcher, rename detection, train, stacks
 internal/claims/     glob claims and overlap
 internal/planner/    epic → DAG, static checker

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -319,7 +320,7 @@ func TestRestackToleratesRetargetOfClosedPR(t *testing.T) {
 	must(t, a.saveBase("t1", "saddle/gone"))
 	moveMain(t, origin, "news.txt")
 	prev := prView
-	prView = func(string, string) (PRInfo, error) { return PRInfo{}, errFakeGH }
+	prView = func(forge.Forge, string) (PRInfo, error) { return PRInfo{}, errFakeGH }
 	defer func() { prView = prev }()
 	if _, err := a.Restack(); err != nil {
 		t.Fatalf("Restack: %v", err)

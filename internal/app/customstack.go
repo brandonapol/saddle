@@ -778,7 +778,7 @@ func (a *App) MergeStack(ref, method string) (StackMerge, error) {
 		return out, err
 	}
 	if method == "" {
-		method, _ = (&automerge.GH{Run: automerge.ExecRunner(a.Root)}).MergeMethod()
+		method, _ = (&automerge.GH{Forge: a.Forge()}).MergeMethod()
 	}
 	out.Method = method
 	if err := c.Merge(strconv.Itoa(ghstack.PRNumber(out.PR)), method); err != nil {

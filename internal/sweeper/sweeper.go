@@ -1,8 +1,9 @@
 // Package sweeper merges open saddle PRs that are ready, bottom of a stack
 // first, and reports why the rest are not.
 //
-// It is deterministic and shells out to the gh CLI through an injected
-// Runner. Ready means: every CI check passed, GitHub says the PR is mergeable,
+// It is deterministic and talks to the forge through an injected Forge
+// (forge.Forge in saddle). Ready means: every CI check passed, the forge says
+// the PR is mergeable,
 // its base is the trunk (or its parent PR already merged), it does not carry
 // the review label, and it touches a _test.go file whenever it touches other
 // Go files. A PR that changes something risky (go.mod, workflows, many
@@ -12,29 +13,35 @@ package sweeper
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
-// Runner runs gh with args and returns its stdout. ciwatch.ExecRunner is the
-// real one.
-type Runner func(ctx context.Context, args ...string) (string, error)
+// Forge is the part of the forge a sweep uses; forge.Forge is one.
+type Forge interface {
+	ListPRs(ctx context.Context, q forge.PRQuery, f forge.PRFields) ([]forge.PR, error)
+	MergePR(ctx context.Context, ref, method, head string) error
+	SetPRBase(ctx context.Context, ref, base string) error
+	EnsureLabel(ctx context.Context, l forge.Label) error
+	AddLabel(ctx context.Context, ref, label string) error
+}
 
 // Options configures a sweep.
 type Options struct {
-	// GH runs the gh CLI. Required.
-	GH Runner
+	// Forge is the git host. Required.
+	Forge Forge
 	// Trunk is the branch stacks bottom out on, normally main.
 	Trunk string
 	// Method is the merge method: squash, merge or rebase.
 	Method string
 	// ReviewLabel is never merged and is applied to risky PRs.
 	ReviewLabel string
-	// DryRun makes no mutating gh calls: no merge, retarget or label.
+	// DryRun makes no mutating forge calls: no merge, retarget or label.
 	DryRun bool
 	// Prefix selects PRs by head branch. Default "saddle/".
 	Prefix string
@@ -74,36 +81,36 @@ type Result struct {
 	Labeled bool
 }
 
-// PR is the slice of `gh pr list --json` the sweeper reads.
+// PR is what the sweeper reads about an open PR.
 type PR struct {
-	Number      int     `json:"number"`
-	Title       string  `json:"title"`
-	HeadRefName string  `json:"headRefName"`
-	HeadRefOid  string  `json:"headRefOid"`
-	BaseRefName string  `json:"baseRefName"`
-	IsDraft     bool    `json:"isDraft"`
-	Mergeable   string  `json:"mergeable"`
-	Labels      []Label `json:"labels"`
-	Files       []File  `json:"files"`
-	Checks      []Check `json:"statusCheckRollup"`
+	Number      int
+	Title       string
+	HeadRefName string
+	HeadRefOid  string
+	BaseRefName string
+	IsDraft     bool
+	Mergeable   string
+	Labels      []Label
+	Files       []File
+	Checks      []Check
 }
 
 type Label struct {
-	Name string `json:"name"`
+	Name string
 }
 
 type File struct {
-	Path string `json:"path"`
+	Path string
 }
 
-// Check is one entry of statusCheckRollup: a CheckRun (name, status,
-// conclusion) or a StatusContext (context, state).
+// Check is one entry of the PR's check rollup: a CI job (name, status,
+// conclusion) or a commit status (context, state).
 type Check struct {
-	Name       string `json:"name"`
-	Context    string `json:"context"`
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
-	State      string `json:"state"`
+	Name       string
+	Context    string
+	Status     string
+	Conclusion string
+	State      string
 }
 
 func (c Check) label() string {
@@ -136,25 +143,37 @@ func (c Check) bucket() string {
 	}
 }
 
-const listFields = "number,title,headRefName,headRefOid,baseRefName,isDraft,mergeable,labels,files,statusCheckRollup"
+const listFields = forge.PRNumber | forge.PRTitle | forge.PRHeadBranch | forge.PRHead | forge.PRBase |
+	forge.PRDraft | forge.PRMergeable | forge.PRLabels | forge.PRFiles | forge.PRChecks
 
 // List returns the open PRs whose head branch starts with prefix.
-func List(ctx context.Context, gh Runner, prefix string) ([]PR, error) {
-	out, err := gh(ctx, "pr", "list", "--state", "open", "--limit", "200", "--json", listFields)
+func List(ctx context.Context, f Forge, prefix string) ([]PR, error) {
+	all, err := f.ListPRs(ctx, forge.PRQuery{State: "open", Limit: 200}, listFields)
 	if err != nil {
 		return nil, err
 	}
-	var all []PR
-	if err := json.Unmarshal([]byte(out), &all); err != nil {
-		return nil, fmt.Errorf("gh pr list: %w", err)
-	}
 	var prs []PR
 	for _, p := range all {
-		if strings.HasPrefix(p.HeadRefName, prefix) {
-			prs = append(prs, p)
+		if strings.HasPrefix(p.Head, prefix) {
+			prs = append(prs, fromForge(p))
 		}
 	}
 	return prs, nil
+}
+
+func fromForge(p forge.PR) PR {
+	pr := PR{Number: p.Number, Title: p.Title, HeadRefName: p.Head, HeadRefOid: p.HeadSHA, BaseRefName: p.Base,
+		IsDraft: p.Draft, Mergeable: p.Mergeable}
+	for _, l := range p.Labels {
+		pr.Labels = append(pr.Labels, Label{Name: l})
+	}
+	for _, f := range p.Files {
+		pr.Files = append(pr.Files, File{Path: f})
+	}
+	for _, c := range p.Checks {
+		pr.Checks = append(pr.Checks, Check{Name: c.Name, Context: c.Context, Status: c.Status, Conclusion: c.Conclusion, State: c.State})
+	}
+	return pr
 }
 
 // Verdict is Decide's answer for one PR on its own, before stack position
@@ -287,10 +306,10 @@ func (o Options) withDefaults() Options {
 // Results come back in stack order.
 func Sweep(ctx context.Context, o Options) ([]Result, error) {
 	o = o.withDefaults()
-	if o.GH == nil {
-		return nil, fmt.Errorf("sweeper: no gh runner")
+	if o.Forge == nil {
+		return nil, fmt.Errorf("sweeper: no forge")
 	}
-	prs, err := List(ctx, o.GH, o.Prefix)
+	prs, err := List(ctx, o.Forge, o.Prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -364,12 +383,8 @@ func (s *sweep) one(ctx context.Context, p *PR) Result {
 		s.markMerged(p)
 		return r
 	}
-	args := []string{"pr", "merge", strconv.Itoa(p.Number), "--" + s.o.Method}
-	if p.HeadRefOid != "" {
-		// Refuse to merge commits pushed after this sweep looked.
-		args = append(args, "--match-head-commit", p.HeadRefOid)
-	}
-	if _, err := s.o.GH(ctx, args...); err != nil {
+	// Passing the head refuses commits pushed after this sweep looked.
+	if err := s.o.Forge.MergePR(ctx, strconv.Itoa(p.Number), s.o.Method, p.HeadRefOid); err != nil {
 		r.Action, r.Reason = Blocked, "merge failed: "+err.Error()
 		return r
 	}
@@ -405,7 +420,7 @@ func (s *sweep) retarget(ctx context.Context, p *PR, n int) string {
 	if s.o.DryRun {
 		return fmt.Sprintf("parent #%d merged; would retarget to %s, then wait for CI", n, s.o.Trunk)
 	}
-	if _, err := s.o.GH(ctx, "pr", "edit", strconv.Itoa(p.Number), "--base", s.o.Trunk); err != nil {
+	if err := s.o.Forge.SetPRBase(ctx, strconv.Itoa(p.Number), s.o.Trunk); err != nil {
 		return fmt.Sprintf("parent #%d merged; retarget to %s failed: %v", n, s.o.Trunk, err)
 	}
 	p.BaseRefName = s.o.Trunk
@@ -418,15 +433,9 @@ func (s *sweep) retarget(ctx context.Context, p *PR, n int) string {
 
 // mergedPR returns the number of a merged PR whose head is branch, or 0.
 func (s *sweep) mergedPR(ctx context.Context, branch string) (int, error) {
-	out, err := s.o.GH(ctx, "pr", "list", "--state", "merged", "--head", branch, "--limit", "1", "--json", "number")
+	ns, err := s.o.Forge.ListPRs(ctx, forge.PRQuery{State: "merged", Head: branch, Limit: 1}, forge.PRNumber)
 	if err != nil {
 		return 0, err
-	}
-	var ns []struct {
-		Number int `json:"number"`
-	}
-	if err := json.Unmarshal([]byte(out), &ns); err != nil {
-		return 0, fmt.Errorf("gh pr list: %w", err)
 	}
 	if len(ns) == 0 {
 		return 0, nil
@@ -440,14 +449,14 @@ func (s *sweep) label(ctx context.Context, p *PR) error {
 		return nil
 	}
 	if !s.labelCreated {
-		// --force makes this idempotent: it updates the label if it exists.
-		if _, err := s.o.GH(ctx, "label", "create", s.o.ReviewLabel, "--force",
-			"--color", "D93F0B", "--description", "saddle sweep will not merge this; a human should review it"); err != nil {
+		// EnsureLabel is idempotent: it updates the label if it exists.
+		if err := s.o.Forge.EnsureLabel(ctx, forge.Label{Name: s.o.ReviewLabel, Color: "D93F0B",
+			Description: "saddle sweep will not merge this; a human should review it"}); err != nil {
 			return err
 		}
 		s.labelCreated = true
 	}
-	if _, err := s.o.GH(ctx, "pr", "edit", strconv.Itoa(p.Number), "--add-label", s.o.ReviewLabel); err != nil {
+	if err := s.o.Forge.AddLabel(ctx, strconv.Itoa(p.Number), s.o.ReviewLabel); err != nil {
 		return err
 	}
 	p.Labels = append(p.Labels, Label{Name: s.o.ReviewLabel})

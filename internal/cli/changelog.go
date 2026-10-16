@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,22 +11,32 @@ import (
 	"strings"
 	"time"
 
-	"github.com/brandonapol/saddle/internal/release"
 	"github.com/spf13/cobra"
+
+	"github.com/brandonapol/saddle/internal/forge"
+	"github.com/brandonapol/saddle/internal/release"
 )
 
 // changelogExec runs git or gh in dir and returns trimmed stdout; tests
 // fake it.
 var changelogExec = func(dir, name string, args ...string) (string, error) {
-	c := exec.Command(name, args...)
-	c.Dir = dir
-	var stderr strings.Builder
-	c.Stderr = &stderr
-	b, err := c.Output()
-	if err != nil {
-		return "", fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	var out, stderr string
+	var err error
+	if forge.IsCLI(name) {
+		out, stderr, err = forge.Output(context.Background(), dir, name, args...)
+	} else {
+		c := exec.Command(name, args...)
+		c.Dir = dir
+		var eb strings.Builder
+		c.Stderr = &eb
+		var b []byte
+		b, err = c.Output()
+		out, stderr = string(b), eb.String()
 	}
-	return strings.TrimSpace(string(b)), nil
+	if err != nil {
+		return "", fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(stderr))
+	}
+	return strings.TrimSpace(out), nil
 }
 
 func changelogCmd() *cobra.Command {

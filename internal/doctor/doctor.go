@@ -16,6 +16,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/ghstack"
@@ -38,7 +39,9 @@ const (
 	CheckConfig        = "config"
 	CheckRemote        = "git remote"
 	CheckDefaultBranch = "default branch"
-	CheckGH            = "gh auth"
+	// CheckGH is the git provider and its CLI's login: gh's, with its token
+	// scopes, on GitHub (#646).
+	CheckGH            = "git provider"
 	CheckMergeSettings = "merge settings"
 	CheckProtection    = "branch protection"
 	CheckGhStack       = "gh stack"
@@ -113,8 +116,12 @@ type run struct {
 	remote string
 	base   string // the detected default branch, else cfg.Base
 	repo   string // owner/repo on GitHub, "" when unknown
-	gh     bool   // gh is installed and logged in
+	url    string // the remote's URL
+	gh     bool   // gh is installed and logged in, and saddle drives PRs with it
 	local  bool   // RunLocal: no GitHub calls
+	// agents is AgentsEnv's answer, read once when agentsRead.
+	agents     []agent.Status
+	agentsRead bool
 }
 
 // slowChecks are the checks that call GitHub, push, start the agent CLI or
@@ -147,9 +154,7 @@ func runChecks(env Env, local bool) []Result {
 		{CheckTmux, func() Result {
 			return r.tool(CheckTmux, "tmux", "-V", "install tmux (e.g. `brew install tmux` or your package manager)")
 		}},
-		{CheckClaude, func() Result {
-			return r.tool(CheckClaude, r.cfg.Claude.Cmd, "--version", "install Claude Code (https://claude.com/claude-code) or set [claude] cmd in .saddle/config.toml")
-		}},
+		{CheckClaude, r.claude},
 		{CheckHooks, r.hooks}, {CheckPush, r.push}, {CheckOrchAllow, r.orchAllow}, {CheckGate, r.gate}, {CheckIgnored, r.ignored},
 		{CheckStateDB, r.stateDB}, {CheckLeftovers, r.leftovers}, {CheckInhibit, r.inhibitor},
 	}
@@ -161,6 +166,9 @@ func runChecks(env Env, local bool) []Result {
 	}
 	for _, c := range checks {
 		add(c.name, c.run)
+	}
+	if _, ok := env.(AgentsEnv); ok {
+		add(CheckAgents, r.agentCLIs)
 	}
 	if r.wantsGrok() { // after config, which sets the harness
 		add(CheckGrok, r.grok)
@@ -303,6 +311,7 @@ func (r *run) gitRemote() Result {
 		r.remote = remotes[0]
 	}
 	url, _ := r.env.Git("remote", "get-url", r.remote)
+	r.url = url
 	r.repo = repoSlug(url)
 	return ok(CheckRemote, strings.TrimSpace(r.remote+" "+url))
 }
@@ -338,28 +347,33 @@ func (r *run) defaultBranch() Result {
 	return ok(CheckDefaultBranch, def+" (matches base)")
 }
 
+// ghAuth reports the git provider, the CLI saddle drives it with and its
+// login (#646). On GitHub through gh it also checks the token's scopes.
+// Without a usable CLI saddle runs local-only, so this only warns.
 func (r *run) ghAuth() Result {
-	if _, err := r.env.LookPath("gh"); err != nil {
-		return fail(CheckGH, "gh is not installed", "install the GitHub CLI: https://cli.github.com, then gh auth login")
-	}
-	ver, _ := r.env.Exec("gh", "--version")
-	ver, _, _ = strings.Cut(ver, "\n")
-	out, err := r.env.Exec("gh", "auth", "status")
-	if err != nil {
-		return fail(CheckGH, ver+": not logged in", "gh auth login")
+	f := DetectForge(r.env, r.url, r.cfg.Forge)
+	switch {
+	case f.CLI == "" && f.Fix == "":
+		return ok(CheckGH, f.Detail)
+	case f.LocalOnly():
+		fix := f.Fix
+		if fix == "" {
+			fix = `nothing to do until GitLab support lands; set cli = "none" under [forge] in .saddle/config.toml to silence this`
+		}
+		return warn(CheckGH, f.Detail, fix)
 	}
 	r.gh = true
-	scopes, listed := tokenScopes(out)
+	scopes, listed := tokenScopes(f.Status)
 	switch {
 	case !listed:
-		return ok(CheckGH, ver+", logged in (token scopes not listed)")
+		return ok(CheckGH, f.Detail+" (token scopes not listed)")
 	case !scopes["repo"]:
-		return fail(CheckGH, ver+", token lacks the repo scope", "gh auth refresh -s repo")
+		return fail(CheckGH, f.Detail+", but the token lacks the repo scope", "gh auth refresh -s repo")
 	case !scopes["workflow"]:
-		return warn(CheckGH, ver+", token lacks the workflow scope",
+		return warn(CheckGH, f.Detail+", but the token lacks the workflow scope",
 			"gh auth refresh -s workflow; without it GitHub rejects pushes of branches that change .github/workflows")
 	}
-	return ok(CheckGH, ver+", logged in")
+	return ok(CheckGH, f.Detail)
 }
 
 // tokenScopes parses "Token scopes: 'repo', 'workflow'" from gh auth status.
@@ -378,7 +392,7 @@ func tokenScopes(status string) (map[string]bool, bool) {
 	return nil, false
 }
 
-const skippedFix = "fix gh auth above, then run saddle doctor again"
+const skippedFix = "fix git provider above, then run saddle doctor again"
 
 func (r *run) mergeSettings() Result {
 	if !r.gh {

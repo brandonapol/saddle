@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/ghstack"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -70,13 +72,9 @@ func (a *App) saveBase(task, base string) error {
 
 // issueText is issue n's title and body, as gh reports them. Tests replace it.
 var issueText = func(a *App, n int) (string, error) {
-	out, err := gh(a.Root, "issue", "view", strconv.Itoa(n), "--json", "title,body")
+	is, err := a.Forge().Issue(context.Background(), "", n, forge.IssueTitle|forge.IssueBody)
 	if err != nil {
 		return "", err
-	}
-	var is struct{ Title, Body string }
-	if err := json.Unmarshal([]byte(out), &is); err != nil {
-		return "", fmt.Errorf("gh issue view %d: %w", n, err)
 	}
 	return is.Title + "\n" + is.Body, nil
 }
@@ -209,7 +207,7 @@ func (a *App) taskOnBranch(branch string) (string, bool) {
 // relink that follows (#341).
 func (a *App) setPRBase(t store.Task, live, base, source string) error {
 	if live != base {
-		if _, err := gh(a.Root, "pr", "edit", t.PR, "--base", base); err != nil {
+		if err := a.Forge().SetPRBase(context.Background(), t.PR, base); err != nil {
 			if !linkedBaseErr(err) {
 				return err
 			}

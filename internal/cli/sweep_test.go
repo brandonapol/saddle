@@ -7,11 +7,12 @@ import (
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 // recordGH records gh calls and lists one ready PR.
-func recordGH(calls *[]string) func(context.Context, ...string) (string, error) {
-	return func(_ context.Context, args ...string) (string, error) {
+func recordGH(calls *[]string) *forge.GitHub {
+	return &forge.GitHub{Run: func(_ context.Context, args ...string) (string, error) {
 		k := strings.Join(args, " ")
 		*calls = append(*calls, k)
 		if strings.HasPrefix(k, "pr list --state open") {
@@ -19,7 +20,7 @@ func recordGH(calls *[]string) func(context.Context, ...string) (string, error) 
 "files":[{"path":"a.go"},{"path":"a_test.go"}],"statusCheckRollup":[{"name":"test","status":"COMPLETED","conclusion":"SUCCESS"}]}]`, nil
 		}
 		return "", nil
-	}
+	}}
 }
 
 func TestSweepDisabledByDefault(t *testing.T) {

@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/brandonapol/saddle/internal/app"
 	"github.com/spf13/cobra"
+
+	"github.com/brandonapol/saddle/internal/app"
 )
 
 // blockersGH is GitHub for saddle blockers; tests replace it.
-var blockersGH = func(a *app.App) app.BlockerGitHub { return app.GHBlockers{Dir: a.Root} }
+var blockersGH = func(a *app.App) app.BlockerGitHub { return app.GHBlockers{Forge: a.Forge()} }
 
 func blockersCmd() *cobra.Command {
 	cmd := &cobra.Command{

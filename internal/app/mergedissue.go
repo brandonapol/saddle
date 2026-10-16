@@ -1,10 +1,11 @@
 package app
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"strconv"
 
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -25,17 +26,14 @@ func (a *App) closeMergedIssue(t store.Task, via string) string {
 		return ""
 	}
 	n := strconv.Itoa(t.Issue)
-	out, err := gh(a.Root, "issue", "view", n, "--json", "state")
-	if err != nil {
-		return ""
-	}
-	var is struct{ State string }
-	if json.Unmarshal([]byte(out), &is) != nil || is.State != "OPEN" {
+	f := a.Forge()
+	is, err := f.Issue(context.Background(), "", t.Issue, forge.IssueState)
+	if err != nil || is.State != forge.StateOpen {
 		return ""
 	}
 	comment := fmt.Sprintf("Saddle closed this: task %s worked on it and %s, but the merge left the issue open. "+
 		"Reopen it if work remains.", t.ID, via)
-	if _, err := gh(a.Root, "issue", "close", n, "--comment", comment); err != nil {
+	if err := f.CloseIssue(context.Background(), t.Issue, comment); err != nil {
 		a.Store.Event(t.ID, EventIssueClosed+"_failed", "#"+n+": "+err.Error())
 		return ""
 	}

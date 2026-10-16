@@ -14,17 +14,15 @@
 package sentinel
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -59,82 +57,70 @@ type GitHub interface {
 	EditComment(id, body string) error
 }
 
-// Comment is a PR comment; ID is its GraphQL node ID.
+// Comment is a PR comment; ID is what EditComment takes.
 type Comment struct {
 	ID   string `json:"id"`
 	Body string `json:"body"`
 }
 
-// GH talks to GitHub through the gh CLI, run in Dir.
+// GH is the sentinel's GitHub: the repo's forge. Labels and comments are
+// optional: on a forge without them they do nothing, and the flag shows in
+// saddle only.
 type GH struct {
-	Dir   string
+	Forge forge.Forge
 	ready bool // the label exists
 }
 
-func (g *GH) gh(args ...string) (string, error) {
-	cmd := exec.Command("gh", args...)
-	cmd.Dir = g.Dir
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("gh %s: %w: %s", strings.Join(args[:2], " "), err, strings.TrimSpace(errb.String()))
-	}
-	return strings.TrimSpace(out.String()), nil
-}
-
 func (g *GH) PR(url string) (PR, error) {
-	var pr PR
-	out, err := g.gh("pr", "view", url, "--json", "state,mergeable,baseRefName")
+	p, err := g.Forge.PR(context.Background(), url, forge.PRState|forge.PRMergeable|forge.PRBase)
 	if err != nil {
-		return pr, err
+		return PR{}, err
 	}
-	if err := json.Unmarshal([]byte(out), &pr); err != nil {
-		return pr, fmt.Errorf("gh pr view %s: %w", url, err)
-	}
-	return pr, nil
+	return PR{State: p.State, Mergeable: p.Mergeable, BaseRefName: p.Base}, nil
 }
 
 func (g *GH) AddLabel(url, label string) error {
+	ctx := context.Background()
 	if !g.ready {
-		// gh pr edit fails on a label the repo doesn't have yet.
-		if _, err := g.gh("label", "create", label, "--color", "D93F0B", "--force",
-			"--description", "Saddle flagged this PR's stack; run restack before merging"); err != nil {
-			return err
+		// Labeling a PR fails on a label the repo doesn't have yet.
+		if err := g.Forge.EnsureLabel(ctx, forge.Label{Name: label, Color: "D93F0B",
+			Description: "Saddle flagged this PR's stack; run restack before merging"}); err != nil {
+			return optional(err)
 		}
 		g.ready = true
 	}
-	_, err := g.gh("pr", "edit", url, "--add-label", label)
-	return err
+	return optional(g.Forge.AddLabel(ctx, url, label))
 }
 
 func (g *GH) RemoveLabel(url, label string) error {
-	_, err := g.gh("pr", "edit", url, "--remove-label", label)
-	return err
+	return optional(g.Forge.RemoveLabel(context.Background(), url, label))
 }
 
 func (g *GH) Comments(url string) ([]Comment, error) {
-	out, err := g.gh("pr", "view", url, "--json", "comments")
+	cs, err := g.Forge.Comments(context.Background(), url)
 	if err != nil {
-		return nil, err
+		return nil, optional(err)
 	}
-	var v struct {
-		Comments []Comment `json:"comments"`
+	out := make([]Comment, len(cs))
+	for i, c := range cs {
+		out[i] = Comment(c)
 	}
-	if err := json.Unmarshal([]byte(out), &v); err != nil {
-		return nil, fmt.Errorf("gh pr view %s: %w", url, err)
-	}
-	return v.Comments, nil
+	return out, nil
 }
 
 func (g *GH) AddComment(url, body string) error {
-	_, err := g.gh("pr", "comment", url, "--body", body)
-	return err
+	return optional(g.Forge.AddComment(context.Background(), url, body))
 }
 
 func (g *GH) EditComment(id, body string) error {
-	_, err := g.gh("api", "graphql",
-		"-f", "query=mutation($id: ID!, $body: String!) { updateIssueComment(input: {id: $id, body: $body}) { issueComment { id } } }",
-		"-f", "id="+id, "-f", "body="+body)
+	return optional(g.Forge.EditComment(context.Background(), id, body))
+}
+
+// optional drops forge.ErrUnsupported, for the operations a forge may lack.
+func optional(err error) error {
+	if errors.Is(err, forge.ErrUnsupported) {
+		return nil
+	}
 	return err
 }
 
@@ -161,9 +147,9 @@ func init() {
 	}
 }
 
-// New returns a sentinel for a's stack that talks to GitHub through gh.
+// New returns a sentinel for a's stack that talks to the repo's forge.
 func New(a *app.App) *Sentinel {
-	return &Sentinel{App: a, GH: &GH{Dir: a.Root}, Interval: DefaultInterval, BusyRetry: DefaultBusyRetry, Blockers: a.NewBlockerFiler()}
+	return &Sentinel{App: a, GH: &GH{Forge: a.Forge()}, Interval: DefaultInterval, BusyRetry: DefaultBusyRetry, Blockers: a.NewBlockerFiler()}
 }
 
 // Report is the outcome of one check.

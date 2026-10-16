@@ -962,12 +962,12 @@ func (w *Watcher) Run(ctx context.Context) error {
 	}
 }
 
-// Check is one entry of GitHub's statusCheckRollup: a check run (Status,
-// Conclusion) or a commit status (State).
+// Check is one entry of a PR's check rollup: a CI job (Status, Conclusion)
+// or a commit status (State).
 type Check struct {
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
-	State      string `json:"state"`
+	Status     string
+	Conclusion string
+	State      string
 }
 
 // summarize folds a rollup into one of the Checks* values: any failure is a

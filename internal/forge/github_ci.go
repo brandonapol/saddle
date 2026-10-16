@@ -1,37 +1,20 @@
-package ciwatch
+package forge
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 )
 
-// ExecRunner runs the real gh CLI in dir.
-func ExecRunner(dir string) Runner {
-	return func(ctx context.Context, args ...string) (string, error) {
-		cmd := exec.CommandContext(ctx, "gh", args...)
-		cmd.Dir = dir
-		var out, errb bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &out, &errb
-		if err := cmd.Run(); err != nil {
-			n := min(len(args), 2)
-			return out.String(), fmt.Errorf("gh %s: %w: %s", strings.Join(args[:n], " "), err, strings.TrimSpace(errb.String()))
-		}
-		return out.String(), nil
-	}
-}
-
-// prChecks asks gh for the checks on ref, a PR number, URL or branch.
-func prChecks(ctx context.Context, gh Runner, ref string) ([]Check, error) {
-	out, err := gh(ctx, "pr", "checks", ref, "--json", "name,workflow,bucket,link")
-	// gh exits non-zero for pending or failing checks but still prints the
-	// JSON, so trust the output whenever it parses.
+// Checks asks `gh pr checks`. gh exits non-zero for pending or failing
+// checks but still prints the JSON, so the output is trusted whenever it
+// parses.
+func (g *GitHub) Checks(ctx context.Context, ref string) ([]CICheck, error) {
+	out, err := g.Run(ctx, "pr", "checks", ref, "--json", "name,workflow,bucket,link")
 	if s := strings.TrimSpace(out); strings.HasPrefix(s, "[") {
-		var cs []Check
+		var cs []CICheck
 		if jerr := json.Unmarshal([]byte(s), &cs); jerr == nil {
 			return cs, nil
 		} else if err == nil {
@@ -45,6 +28,22 @@ func prChecks(ctx context.Context, gh Runner, ref string) ([]Check, error) {
 		return nil, err
 	}
 	return nil, nil
+}
+
+// FailedLog reads `gh run view --job J --log-failed` for a GitHub Actions
+// job link. A log that came back is used even when gh then failed.
+func (g *GitHub) FailedLog(ctx context.Context, link string, lines int) (JobLog, error) {
+	run, job, ok := parseJobLink(link)
+	if !ok {
+		return JobLog{Run: link}, nil
+	}
+	l := JobLog{Run: run}
+	log, err := g.Run(ctx, "run", "view", "--job", job, "--log-failed")
+	if err != nil && log == "" {
+		return l, err
+	}
+	l.Step, l.Tail = cleanLog(log, lines)
+	return l, nil
 }
 
 var jobLinkRe = regexp.MustCompile(`^(https://[^/]+/[^/]+/[^/]+/actions/runs/\d+)(?:/attempts/\d+)?/job/(\d+)`)

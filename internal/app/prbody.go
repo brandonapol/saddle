@@ -1,20 +1,16 @@
 package app
 
 import (
-	"encoding/json"
+	"context"
 	"strings"
+
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
-// prBodyView asks GitHub for a PR's body through gh, run in dir.
-func prBodyView(dir, url string) (string, error) {
-	out, err := gh(dir, "pr", "view", url, "--json", "body")
+// prBodyView asks the forge for a PR's body.
+func prBodyView(f forge.Forge, url string) (string, error) {
+	pr, err := f.PR(context.Background(), url, forge.PRBody)
 	if err != nil {
-		return "", err
-	}
-	var pr struct {
-		Body string `json:"body"`
-	}
-	if err := json.Unmarshal([]byte(out), &pr); err != nil {
 		return "", err
 	}
 	return pr.Body, nil
@@ -34,7 +30,7 @@ func (a *App) detachedPRBody(l landedTask) string {
 	if url = strings.TrimSpace(url); url == "" {
 		return ""
 	}
-	body, err := prBodyView(a.Root, url)
+	body, err := prBodyView(a.Forge(), url)
 	if err != nil {
 		return ""
 	}

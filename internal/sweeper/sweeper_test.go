@@ -2,11 +2,12 @@ package sweeper
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 var (
@@ -85,45 +86,76 @@ func TestDecide(t *testing.T) {
 	}
 }
 
-// fakeGH answers gh calls from canned output and records every call.
-type fakeGH struct {
+// fakeForge answers from canned PRs and records every call. Mutating calls
+// are recorded as "merge N METHOD HEAD", "base N BRANCH", "label NAME" and
+// "add-label N NAME".
+type fakeForge struct {
 	open   []PR
 	merged map[string]int // head branch -> merged PR number
 	fail   map[string]error
-	calls  [][]string
+	calls  []string
 }
 
-func (f *fakeGH) run(_ context.Context, args ...string) (string, error) {
-	f.calls = append(f.calls, args)
-	key := strings.Join(args, " ")
+func (f *fakeForge) call(c string) error {
+	f.calls = append(f.calls, c)
 	for prefix, err := range f.fail {
-		if strings.HasPrefix(key, prefix) {
-			return "", err
+		if strings.HasPrefix(c, prefix) {
+			return err
 		}
 	}
-	switch {
-	case strings.HasPrefix(key, "pr list --state open"):
-		b, _ := json.Marshal(f.open)
-		return string(b), nil
-	case strings.HasPrefix(key, "pr list --state merged"):
-		head := args[slices.Index(args, "--head")+1]
-		if n, ok := f.merged[head]; ok {
-			return fmt.Sprintf(`[{"number":%d}]`, n), nil
-		}
-		return "[]", nil
-	case strings.HasPrefix(key, "pr merge"), strings.HasPrefix(key, "pr edit"), strings.HasPrefix(key, "label create"):
-		return "", nil
-	}
-	return "", fmt.Errorf("unexpected gh call: %s", key)
+	return nil
 }
 
-// mutating returns the calls that change GitHub state.
-func (f *fakeGH) mutating() []string {
+func (f *fakeForge) ListPRs(_ context.Context, q forge.PRQuery, _ forge.PRFields) ([]forge.PR, error) {
+	if err := f.call("list " + q.State); err != nil {
+		return nil, err
+	}
+	if q.State == "merged" {
+		if n, ok := f.merged[q.Head]; ok {
+			return []forge.PR{{Number: n}}, nil
+		}
+		return nil, nil
+	}
+	var out []forge.PR
+	for _, p := range f.open {
+		fp := forge.PR{Number: p.Number, Title: p.Title, Head: p.HeadRefName, HeadSHA: p.HeadRefOid, Base: p.BaseRefName,
+			Draft: p.IsDraft, Mergeable: p.Mergeable}
+		for _, l := range p.Labels {
+			fp.Labels = append(fp.Labels, l.Name)
+		}
+		for _, x := range p.Files {
+			fp.Files = append(fp.Files, x.Path)
+		}
+		for _, c := range p.Checks {
+			fp.Checks = append(fp.Checks, forge.CheckRun{Name: c.Name, Context: c.Context, Status: c.Status, Conclusion: c.Conclusion, State: c.State})
+		}
+		out = append(out, fp)
+	}
+	return out, nil
+}
+
+func (f *fakeForge) MergePR(_ context.Context, ref, method, head string) error {
+	return f.call(strings.TrimSpace("merge " + ref + " " + method + " " + head))
+}
+
+func (f *fakeForge) SetPRBase(_ context.Context, ref, base string) error {
+	return f.call("base " + ref + " " + base)
+}
+
+func (f *fakeForge) EnsureLabel(_ context.Context, l forge.Label) error {
+	return f.call("label " + l.Name + " " + l.Color + " " + l.Description)
+}
+
+func (f *fakeForge) AddLabel(_ context.Context, ref, label string) error {
+	return f.call("add-label " + ref + " " + label)
+}
+
+// mutating returns the calls that change the forge's state.
+func (f *fakeForge) mutating() []string {
 	var out []string
 	for _, c := range f.calls {
-		k := strings.Join(c, " ")
-		if strings.HasPrefix(k, "pr merge") || strings.HasPrefix(k, "pr edit") || strings.HasPrefix(k, "label") {
-			out = append(out, k)
+		if !strings.HasPrefix(c, "list ") {
+			out = append(out, c)
 		}
 	}
 	return out
@@ -140,7 +172,7 @@ func byNumber(rs []Result) map[int]Result {
 func TestSweepStackBottomFirstAndRetarget(t *testing.T) {
 	// #12 is stacked on #11 is stacked on #10; #20 stands alone. Listed out of
 	// order to prove the sweep sorts them.
-	gh := &fakeGH{open: []PR{
+	gh := &fakeForge{open: []PR{
 		pr(12, "saddle/t3-c", "saddle/t2-b"),
 		pr(20, "saddle/t9-solo", "main"),
 		pr(11, "saddle/t2-b", "saddle/t1-a"),
@@ -148,7 +180,7 @@ func TestSweepStackBottomFirstAndRetarget(t *testing.T) {
 		pr(30, "feature/not-saddle", "main"),
 	}}
 	var logged []string
-	rs, err := Sweep(context.Background(), Options{GH: gh.run, Log: func(branch, kind, data string) {
+	rs, err := Sweep(context.Background(), Options{Forge: gh, Log: func(branch, kind, data string) {
 		logged = append(logged, kind+" "+branch)
 	}})
 	if err != nil {
@@ -172,9 +204,9 @@ func TestSweepStackBottomFirstAndRetarget(t *testing.T) {
 		t.Fatalf("#12 should wait on #11: %+v", r)
 	}
 	want := []string{
-		"pr merge 10 --squash --match-head-commit sha10",
-		"pr edit 11 --base main",
-		"pr merge 20 --squash --match-head-commit sha20",
+		"merge 10 squash sha10",
+		"base 11 main",
+		"merge 20 squash sha20",
 	}
 	if m := gh.mutating(); !slices.Equal(m, want) {
 		t.Fatalf("mutating calls\n got %q\nwant %q", m, want)
@@ -188,22 +220,22 @@ func TestSweepStackBottomFirstAndRetarget(t *testing.T) {
 
 func TestSweepParentMergedEarlier(t *testing.T) {
 	// #11's parent merged in an earlier sweep without being retargeted.
-	gh := &fakeGH{open: []PR{pr(11, "saddle/t2-b", "saddle/t1-a")}, merged: map[string]int{"saddle/t1-a": 10}}
-	rs, err := Sweep(context.Background(), Options{GH: gh.run})
+	gh := &fakeForge{open: []PR{pr(11, "saddle/t2-b", "saddle/t1-a")}, merged: map[string]int{"saddle/t1-a": 10}}
+	rs, err := Sweep(context.Background(), Options{Forge: gh})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r := rs[0]; r.Action != Waiting || !strings.Contains(r.Reason, "parent #10 merged; retargeted") {
 		t.Fatalf("got %+v", r)
 	}
-	if m := gh.mutating(); !slices.Equal(m, []string{"pr edit 11 --base main"}) {
+	if m := gh.mutating(); !slices.Equal(m, []string{"base 11 main"}) {
 		t.Fatalf("mutating calls %q", m)
 	}
 }
 
 func TestSweepOrphanBaseBlocked(t *testing.T) {
-	gh := &fakeGH{open: []PR{pr(11, "saddle/t2-b", "saddle/gone")}}
-	rs, _ := Sweep(context.Background(), Options{GH: gh.run})
+	gh := &fakeForge{open: []PR{pr(11, "saddle/t2-b", "saddle/gone")}}
+	rs, _ := Sweep(context.Background(), Options{Forge: gh})
 	if rs[0].Action != Blocked || len(gh.mutating()) != 0 {
 		t.Fatalf("got %+v, calls %q", rs[0], gh.mutating())
 	}
@@ -211,14 +243,14 @@ func TestSweepOrphanBaseBlocked(t *testing.T) {
 
 func TestSweepRetargetedChildWaitsEvenIfGreen(t *testing.T) {
 	// The child's checks are green against the old base; it must still wait.
-	gh := &fakeGH{open: []PR{pr(10, "saddle/t1-a", "main"), pr(11, "saddle/t2-b", "saddle/t1-a")}}
-	rs, _ := Sweep(context.Background(), Options{GH: gh.run})
+	gh := &fakeForge{open: []PR{pr(10, "saddle/t1-a", "main"), pr(11, "saddle/t2-b", "saddle/t1-a")}}
+	rs, _ := Sweep(context.Background(), Options{Forge: gh})
 	got := byNumber(rs)
 	if got[11].Action != Waiting {
 		t.Fatalf("#11 merged in the same pass as its parent: %+v", got[11])
 	}
 	for _, c := range gh.calls {
-		if strings.HasPrefix(strings.Join(c, " "), "pr merge 11") {
+		if strings.HasPrefix(c, "merge 11") {
 			t.Fatal("#11 was merged")
 		}
 	}
@@ -228,17 +260,17 @@ func TestSweepLabelsRiskyOnce(t *testing.T) {
 	a, b := pr(10, "saddle/t1-a", "main"), pr(11, "saddle/t2-b", "main")
 	a.Files = append(a.Files, File{Path: "go.mod"})
 	b.Files = append(b.Files, File{Path: ".github/workflows/ci.yml"})
-	gh := &fakeGH{open: []PR{a, b}}
-	rs, _ := Sweep(context.Background(), Options{GH: gh.run, ReviewLabel: "needs eyes"})
+	gh := &fakeForge{open: []PR{a, b}}
+	rs, _ := Sweep(context.Background(), Options{Forge: gh, ReviewLabel: "needs eyes"})
 	for _, r := range rs {
 		if r.Action != Blocked || !r.Labeled {
 			t.Fatalf("risky PR not blocked and labeled: %+v", r)
 		}
 	}
 	want := []string{
-		"label create needs eyes --force --color D93F0B --description saddle sweep will not merge this; a human should review it",
-		"pr edit 10 --add-label needs eyes",
-		"pr edit 11 --add-label needs eyes",
+		"label needs eyes D93F0B saddle sweep will not merge this; a human should review it",
+		"add-label 10 needs eyes",
+		"add-label 11 needs eyes",
 	}
 	if m := gh.mutating(); !slices.Equal(m, want) {
 		t.Fatalf("mutating calls\n got %q\nwant %q", m, want)
@@ -246,11 +278,11 @@ func TestSweepLabelsRiskyOnce(t *testing.T) {
 }
 
 func TestSweepMethodAndMergeFailure(t *testing.T) {
-	gh := &fakeGH{
+	gh := &fakeForge{
 		open: []PR{pr(10, "saddle/t1-a", "main"), pr(11, "saddle/t2-b", "saddle/t1-a")},
-		fail: map[string]error{"pr merge 10": fmt.Errorf("head moved")},
+		fail: map[string]error{"merge 10": fmt.Errorf("head moved")},
 	}
-	rs, _ := Sweep(context.Background(), Options{GH: gh.run, Method: "rebase"})
+	rs, _ := Sweep(context.Background(), Options{Forge: gh, Method: "rebase"})
 	got := byNumber(rs)
 	if got[10].Action != Blocked || !strings.Contains(got[10].Reason, "head moved") {
 		t.Fatalf("#10: %+v", got[10])
@@ -258,7 +290,7 @@ func TestSweepMethodAndMergeFailure(t *testing.T) {
 	if got[11].Action != Waiting || !strings.Contains(got[11].Reason, "stacked on #10") {
 		t.Fatalf("#11 must not be retargeted when its parent failed to merge: %+v", got[11])
 	}
-	if m := gh.mutating(); !slices.Equal(m, []string{"pr merge 10 --rebase --match-head-commit sha10"}) {
+	if m := gh.mutating(); !slices.Equal(m, []string{"merge 10 rebase sha10"}) {
 		t.Fatalf("mutating calls %q", m)
 	}
 }
@@ -266,7 +298,7 @@ func TestSweepMethodAndMergeFailure(t *testing.T) {
 func TestSweepDryRunMakesNoMutatingCalls(t *testing.T) {
 	risky := pr(13, "saddle/t4-d", "main")
 	risky.Files = append(risky.Files, File{Path: "go.sum"})
-	gh := &fakeGH{
+	gh := &fakeForge{
 		open: []PR{
 			pr(10, "saddle/t1-a", "main"),
 			pr(11, "saddle/t2-b", "saddle/t1-a"),
@@ -275,7 +307,7 @@ func TestSweepDryRunMakesNoMutatingCalls(t *testing.T) {
 		},
 		merged: map[string]int{"saddle/t0-old": 9},
 	}
-	rs, err := Sweep(context.Background(), Options{GH: gh.run, DryRun: true})
+	rs, err := Sweep(context.Background(), Options{Forge: gh, DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,8 +336,8 @@ func TestSweepDryRunMakesNoMutatingCalls(t *testing.T) {
 }
 
 func TestSweepListError(t *testing.T) {
-	gh := &fakeGH{fail: map[string]error{"pr list": fmt.Errorf("not logged in")}}
-	if _, err := Sweep(context.Background(), Options{GH: gh.run}); err == nil {
+	gh := &fakeForge{fail: map[string]error{"list": fmt.Errorf("not logged in")}}
+	if _, err := Sweep(context.Background(), Options{Forge: gh}); err == nil {
 		t.Fatal("want error")
 	}
 }

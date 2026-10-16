@@ -62,10 +62,10 @@ func healthy(t *testing.T) *fakeEnv {
 			"api repos/{owner}/{repo}/branches/main/protection": {out: protectionJSON},
 		},
 		exec: map[string]res{
-			"gh --version":     {out: "gh version 2.101.0 (2026-09-15)\nhttps://github.com/cli/cli"},
-			"gh auth status":   {out: "github.com\n  ✓ Logged in to github.com account me (keyring)\n  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'"},
-			"tmux -V":          {out: "tmux 3.7c"},
-			"claude --version": {out: "2.1.284 (Claude Code)"},
+			"gh --version":                         {out: "gh version 2.101.0 (2026-09-15)\nhttps://github.com/cli/cli"},
+			"gh auth status --hostname github.com": {out: "github.com\n  ✓ Logged in to github.com account me (keyring)\n  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'"},
+			"tmux -V":                              {out: "tmux 3.7c"},
+			"claude --version":                     {out: "2.1.284 (Claude Code)"},
 		},
 		paths: map[string]bool{
 			"gh": true, "tmux": true, "claude": true, "go": true, "systemd-inhibit": true, "caffeinate": true,
@@ -196,18 +196,18 @@ func TestChecks(t *testing.T) {
 			delete(f.git, "symbolic-ref --short refs/remotes/origin/HEAD")
 		}, Warn, "git remote set-head origin --auto"},
 
-		{"gh missing", CheckGH, func(f *fakeEnv) { f.paths["gh"] = false }, Fail, "cli.github.com"},
+		{"gh missing", CheckGH, func(f *fakeEnv) { f.paths["gh"] = false }, Warn, "cli.github.com"},
 		{"gh logged out", CheckGH, func(f *fakeEnv) {
-			f.exec["gh auth status"] = res{out: "You are not logged into any GitHub hosts.", err: errors.New("exit status 1")}
-		}, Fail, "gh auth login"},
+			f.exec["gh auth status --hostname github.com"] = res{out: "You are not logged into any GitHub hosts.", err: errors.New("exit status 1")}
+		}, Warn, "gh auth login --hostname github.com"},
 		{"gh lacks repo scope", CheckGH, func(f *fakeEnv) {
-			f.exec["gh auth status"] = res{out: "  ✓ Logged in\n  - Token scopes: 'gist', 'workflow'"}
+			f.exec["gh auth status --hostname github.com"] = res{out: "  ✓ Logged in\n  - Token scopes: 'gist', 'workflow'"}
 		}, Fail, "gh auth refresh -s repo"},
 		{"gh lacks workflow scope", CheckGH, func(f *fakeEnv) {
-			f.exec["gh auth status"] = res{out: "  ✓ Logged in\n  - Token scopes: 'repo', 'read:org'"}
+			f.exec["gh auth status --hostname github.com"] = res{out: "  ✓ Logged in\n  - Token scopes: 'repo', 'read:org'"}
 		}, Warn, "gh auth refresh -s workflow"},
 		{"gh scopes unlisted", CheckGH, func(f *fakeEnv) {
-			f.exec["gh auth status"] = res{out: "  ✓ Logged in to github.com account me (GH_TOKEN)"}
+			f.exec["gh auth status --hostname github.com"] = res{out: "  ✓ Logged in to github.com account me (GH_TOKEN)"}
 		}, OK, ""},
 
 		{"merge commits allowed", CheckMergeSettings, func(f *fakeEnv) {
@@ -219,7 +219,7 @@ func TestChecks(t *testing.T) {
 		{"merge settings unreadable", CheckMergeSettings, func(f *fakeEnv) {
 			f.gh["api repos/{owner}/{repo}"] = res{out: `{"full_name":"o/r"}`}
 		}, Warn, "admin or push"},
-		{"merge settings skipped without gh", CheckMergeSettings, func(f *fakeEnv) { f.paths["gh"] = false }, Warn, "gh"},
+		{"merge settings skipped without gh", CheckMergeSettings, func(f *fakeEnv) { f.paths["gh"] = false }, Warn, "git provider"},
 
 		{"base unprotected", CheckProtection, func(f *fakeEnv) {
 			f.gh["api repos/{owner}/{repo}/branches/main/protection"] = res{err: errors.New("gh: Branch not protected (HTTP 404)")}

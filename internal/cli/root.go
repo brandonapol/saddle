@@ -19,8 +19,6 @@ import (
 
 	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
-	"github.com/brandonapol/saddle/internal/banner"
-	"github.com/brandonapol/saddle/internal/ciwatch"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/doctor"
 	"github.com/brandonapol/saddle/internal/gitx"
@@ -101,33 +99,6 @@ func resolveTask(a *app.App, flag string) (string, error) {
 	return t.ID, nil
 }
 
-func initCmd() *cobra.Command {
-	var quiet, trusted bool
-	cmd := &cobra.Command{
-		Use:   "init",
-		Short: "Create .saddle/ with a config template",
-		Long: `Creates .saddle/ with a config template and installs saddle's git hooks.
-The first time in a repo it asks whether you trust it, before writing anything.
-Without a terminal, pass --trust (or set SADDLE_TRUST=1).`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			banner.Print(cmd.OutOrStdout(), banner.Options{Quiet: quiet, IsTTY: stdoutIsTTY})
-			if err := gateTrust(cmd.OutOrStdout(), cmd.InOrStdin(), trusted); err != nil {
-				return err
-			}
-			return withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
-				if err := a.Init(); err != nil {
-					return err
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "initialized %s/.saddle (edit .saddle/config.toml)\n", a.Root)
-				return nil
-			})(cmd, args)
-		},
-	}
-	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "don't print the howdy banner")
-	cmd.Flags().BoolVar(&trusted, "trust", false, "trust this repo without asking (remembered; see saddle trust)")
-	return cmd
-}
-
 func upCmd() *cobra.Command {
 	var skipDoctor, trusted, traceStartup bool
 	var wantsRC func(*app.App) bool
@@ -163,6 +134,10 @@ keep the CLI they were spawned with.
 			}
 			err = upTrustErr(gateTrust(cmd.OutOrStdout(), cmd.InOrStdin(), trusted))
 			trace.Mark("args, trust")
+			if err == nil && harness == "" {
+				// An agent named on the command line is used as asked.
+				err = applyUpFallback(cmd.OutOrStdout())
+			}
 			return err
 		},
 		RunE: withScratch(func(cmd *cobra.Command, a *app.App, args []string) error {
@@ -270,7 +245,7 @@ func startWatchers(ctx context.Context, a *app.App) (stop func()) {
 	wg.Go(func() { remote.RunManaged(ctx, a, nil) })     // serves remote control only when [remote] is enabled in the user config (#251); problems are events
 	if !a.Cfg.CI.Disabled {
 		wg.Go(func() { _ = sentinel.NewCIRed(a).Run(ctx) }) // holds layers above red CI; errors are events
-		if ci, err := a.NewCIWatcher(ciwatch.ExecRunner(a.Root)); err == nil {
+		if ci, err := a.NewCIWatcher(nil); err == nil {
 			wg.Go(func() { ci.Run(ctx) }) // gh errors are recorded as events
 		}
 	}

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -438,7 +439,7 @@ func (a *App) ParkRepairCap(task string, after time.Duration) error {
 		return err
 	}
 	if t.PR != "" {
-		if _, err := gh(a.Root, "pr", "edit", t.PR, "--add-label", automerge.NeedsHuman); err != nil {
+		if err := a.Forge().AddLabel(context.Background(), t.PR, automerge.NeedsHuman); err != nil {
 			return fmt.Errorf("label %s %s: %w", t.PR, automerge.NeedsHuman, err)
 		}
 	}

@@ -18,10 +18,11 @@ func doctorCmd() *cobra.Command {
 	var asJSON, fix, trusted, predict bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Check the repo, gh, tools and hooks saddle needs, with a fix for each problem",
-		Long: `Runs saddle's preflight checks: git remote and default branch, gh login and
-scopes, repo merge settings, branch protection, test.cmd, tmux and claude, the
-ref guard hooks, .saddle/ being ignored, state.db, stale worktrees, and the
+		Short: "Check the repo, gh or glab, tools and hooks saddle needs, with a fix for each problem",
+		Long: `Runs saddle's preflight checks: git remote and default branch, the git
+provider and its CLI (gh, or glab for GitLab; [forge] in config overrides the
+detection) with its login and scopes, repo merge settings, branch protection,
+test.cmd, tmux, claude and which agent CLIs can run, the ref guard hooks, .saddle/ being ignored, state.db, stale worktrees, and the
 skills and slash commands the orchestrator sees (from a short claude session
 that makes no model call).
 

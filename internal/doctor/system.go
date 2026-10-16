@@ -1,7 +1,7 @@
 package doctor
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,8 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/store"
@@ -39,17 +41,18 @@ func (s system) Trust() (trust.Report, bool, error) {
 }
 
 func (s system) GH(args ...string) (string, error) {
-	cmd := exec.Command("gh", args...)
-	cmd.Dir = string(s)
-	var out, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &stderr
-	if err := cmd.Run(); err != nil {
-		return out.String(), fmt.Errorf("gh %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	out, stderr, err := forge.Output(context.Background(), string(s), forge.GH, args...)
+	if err != nil {
+		return out, fmt.Errorf("gh %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr))
 	}
-	return strings.TrimSpace(out.String()), nil
+	return strings.TrimSpace(out), nil
 }
 
 func (s system) Exec(name string, args ...string) (string, error) {
+	if forge.IsCLI(name) {
+		out, err := forge.CombinedOutput(context.Background(), string(s), name, args...)
+		return strings.TrimSpace(out), err
+	}
 	cmd := exec.Command(name, args...)
 	cmd.Dir = string(s)
 	out, err := cmd.CombinedOutput()
@@ -84,6 +87,10 @@ func (s system) ClaudeAllow() []string {
 		}
 	}
 	return out
+}
+
+func (s system) Agents(cfg config.Config) []agent.Status {
+	return agent.Availability(AgentCmds(cfg))
 }
 
 func (s system) Exists(path string) bool {
