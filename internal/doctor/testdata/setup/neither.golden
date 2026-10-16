@@ -1,11 +1,11 @@
 STATUS  CHECK         DETAIL
-warn    git provider  GitHub (github.com): gh is not installed; glab is not installed, so saddle runs local-only: no PRs (saddle prs, publish and auto-merge are off) and no merge-settings, branch-protection or gh-stack checks; agents, claims and the merge train still work
+warn    git provider  GitHub (github.com): gh is not installed, so saddle runs local-only: no PRs (saddle prs, publish and auto-merge are off) and no merge-settings, branch-protection or gh-stack checks; agents, claims and the merge train still work
 ok      claude        claude 1.0.0 (fake)
 ok      agent CLIs    harness claude is ready; usable: claude
 
 Optional:
   - git provider (where the repo is hosted (GitHub or GitLab) and its CLI, gh or glab, logged in, which saddle uses to open and merge PRs)
-      GitHub (github.com): gh is not installed; glab is not installed, so saddle runs local-only: no PRs (saddle prs, publish and auto-merge are off) and no merge-settings, branch-protection or gh-stack checks; agents, claims and the merge train still work
+      GitHub (github.com): gh is not installed, so saddle runs local-only: no PRs (saddle prs, publish and auto-merge are off) and no merge-settings, branch-protection or gh-stack checks; agents, claims and the merge train still work
       fix: install the GitHub CLI (https://cli.github.com), then gh auth login --hostname github.com
 
 Next steps:

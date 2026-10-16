@@ -118,6 +118,7 @@ type run struct {
 	repo   string // owner/repo on GitHub, "" when unknown
 	url    string // the remote's URL
 	gh     bool   // gh is installed and logged in, and saddle drives PRs with it
+	gitlab bool   // glab is, and saddle drives the repo's MRs with it (#645)
 	local  bool   // RunLocal: no GitHub calls
 	// agents is AgentsEnv's answer, read once when agentsRead.
 	agents     []agent.Status
@@ -356,11 +357,10 @@ func (r *run) ghAuth() Result {
 	case f.CLI == "" && f.Fix == "":
 		return ok(CheckGH, f.Detail)
 	case f.LocalOnly():
-		fix := f.Fix
-		if fix == "" {
-			fix = `nothing to do until GitLab support lands; set cli = "none" under [forge] in .saddle/config.toml to silence this`
-		}
-		return warn(CheckGH, f.Detail, fix)
+		return warn(CheckGH, f.Detail, f.Fix)
+	case f.CLI == config.ForgeGlab:
+		r.gitlab = true
+		return ok(CheckGH, f.Detail)
 	}
 	r.gh = true
 	scopes, listed := tokenScopes(f.Status)
@@ -394,7 +394,14 @@ func tokenScopes(status string) (map[string]bool, bool) {
 
 const skippedFix = "fix git provider above, then run saddle doctor again"
 
+// onGitLab is what the GitHub-only checks say on a GitLab repo: they read
+// GitHub's API through gh, and moving them onto the forge is #648.
+const onGitLab = "skipped on GitLab: saddle checks this through gh only so far (#648); see docs/gitlab.md for the settings to make by hand"
+
 func (r *run) mergeSettings() Result {
+	if r.gitlab {
+		return ok(CheckMergeSettings, onGitLab)
+	}
 	if !r.gh {
 		return warn(CheckMergeSettings, "skipped: gh unavailable", skippedFix)
 	}
@@ -430,6 +437,13 @@ func (r *run) ghStack() Result {
 	}
 	want := backend == config.StackBackendGhStack
 	tail := fmt.Sprintf("stack_backend = %q", backend)
+	if r.gitlab {
+		if want {
+			return warn(CheckGhStack, "gh-stack is GitHub-only and this repo is on GitLab; "+tail,
+				`set stack_backend = "saddle" under [train]; saddle chains MR targets itself`)
+		}
+		return ok(CheckGhStack, "skipped on GitLab: gh-stack is GitHub-only; "+tail+" doesn't need it")
+	}
 	if !r.gh {
 		if want {
 			return warn(CheckGhStack, "skipped: gh unavailable; "+tail, skippedFix)
@@ -465,6 +479,9 @@ func (r *run) ghStack() Result {
 }
 
 func (r *run) protection() Result {
+	if r.gitlab {
+		return ok(CheckProtection, onGitLab)
+	}
 	if !r.gh {
 		return warn(CheckProtection, "skipped: gh unavailable", skippedFix)
 	}

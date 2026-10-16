@@ -100,16 +100,20 @@ merge train from moving Saddle's branches.
 Last, init says what it found for the two CLIs Saddle drives:
 
 - **Git provider.** It reads the host of the `origin` remote: GitHub uses
-  `gh`, GitLab uses `glab`. When that CLI is missing or logged out, it falls
-  back to the other one if it is installed and logged in for the same host.
-  It prints the provider, the CLI, whether it is logged in and the exact
-  install or `auth login --hostname <host>` command. With no usable CLI,
-  Saddle runs local-only: agents, claims and the merge train work, but
-  `saddle prs`, publish and auto-merge are off. GitLab isn't supported yet
-  (#644, #645): a GitLab remote with `glab` reports "GitLab detected, glab
-  found, GitLab support is not available yet" and runs local-only. To
-  override detection, set `[forge]` in `.saddle/config.toml`:
-  `provider = "github" | "gitlab"` and `cli = "gh" | "glab" | "none"`.
+  `gh`, GitLab uses `glab`. It prints the provider, the CLI, whether it is
+  logged in and the exact install or `auth login --hostname <host>` command.
+  Each provider needs its own CLI: `glab` can't drive a GitHub repo, nor
+  `gh` a GitLab one. With no usable CLI, Saddle runs local-only: agents,
+  claims and the merge train work, but `saddle prs`, publish and auto-merge
+  are off. To override detection, set `[forge]` in `.saddle/config.toml`:
+  `provider = "github" | "gitlab"`, `cli = "gh" | "glab" | "none"` and, for
+  a self-hosted GitLab, `host`.
+- **On GitLab.** Saddle opens stacked merge requests, watches pipelines,
+  auto-merges and posts stack notes through `glab` (#645). A gitlab.com
+  remote, or any host with "gitlab" in its name, is detected; for another
+  self-hosted host set `provider = "gitlab"` and `host` under `[forge]`. Set
+  the project's merge method to "Fast-forward merge" first: Saddle needs
+  linear history. See [GitLab](gitlab.md).
 - **Agent CLIs.** It checks which of `claude`, `codex` and `grok` are
   installed and logged in. When `claude` can't run but another can, init
   says so and writes that one as `harness` in `.saddle/config.toml`, unless
@@ -143,7 +147,8 @@ blocks, it shows the next steps. `--fix` asks for trust first, like init.
 It checks the git remote and the repo's default branch (detected, not assumed
 to be `main`), the git provider with its CLI (gh or glab), login and token
 scopes, repo merge settings (merge commits off, squash on), branch
-protection, `test.cmd`, tmux, claude and which agent CLIs can run, the ref guard
+protection (on GitLab these last two are skipped for now, #648; check them
+by hand as [GitLab](gitlab.md) says), `test.cmd`, tmux, claude and which agent CLIs can run, the ref guard
 hooks, that `.saddle/` is ignored, that `state.db` opens and migrates, how
 many stale worktrees and branches `saddle gc` could clean up, and whether
 you trust the repo. It exits

@@ -1,6 +1,6 @@
 // Package forge is saddle's one interface over its git host: GitHub through
-// gh today, GitLab through glab next (#645). It is the only package that
-// starts a forge CLI. See docs/adr/0001-forge-layer.md.
+// gh, GitLab through glab (#645). It is the only package that starts a
+// forge CLI. See docs/adr/0001-forge-layer.md.
 package forge
 
 import (
@@ -225,15 +225,20 @@ type Forge interface {
 	ReopenIssue(ctx context.Context, n int) error
 }
 
-// New is the forge fc selects for the repo at dir: GitHub through gh unless
-// [forge] names GitLab, glab or none, which run without one until #645.
-// It starts no process.
+// New is the forge fc selects for the repo at dir: GitLab through glab when
+// [forge] names gitlab or glab, GitHub through gh when it names github or
+// gh, none when cli = "none". With neither set it goes by the origin
+// remote's host, as doctor does: a host naming GitLab selects GitLab, any
+// other GitHub. It starts no process: the remote is read from git's config
+// file.
 func New(fc config.Forge, dir string) Forge {
 	switch {
 	case fc.CLI == config.ForgeNone:
 		return Unsupported{Name: fc.Provider, Reason: `[forge] cli = "none": saddle runs local-only`}
 	case fc.Provider == config.ForgeGitLab || fc.CLI == config.ForgeGlab:
-		return Unsupported{Name: config.ForgeGitLab, Reason: "GitLab support is not available yet (#645)"}
+		return &GitLab{Run: CLI(dir, Glab), Host: fc.Host}
+	case fc.Provider == "" && fc.CLI == "" && HostProvider(RemoteHost(OriginURL(dir))) == config.ForgeGitLab:
+		return &GitLab{Run: CLI(dir, Glab), Host: fc.Host}
 	}
 	return &GitHub{Run: CLI(dir, GH)}
 }

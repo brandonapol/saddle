@@ -55,3 +55,23 @@ in `[run_queue]`; the repo's `.saddle/runq.toml` and then
 a free slot, its weight fits in the budget, and every check passes. The load
 checks give up after `gate_max_wait` (10m), and `saddle run --max-wait` or
 `--no-queue` bound the rest.
+
+## The git provider: `[forge]`
+
+Saddle drives its git host through a CLI: `gh` for GitHub, `glab` for GitLab
+(docs/gitlab.md). With `[forge]` unset it goes by the origin remote's host: a
+host naming GitLab selects GitLab, any other GitHub. `saddle init` and
+`saddle doctor` say what they found and the command that fixes a missing or
+logged-out CLI.
+
+```toml
+[forge]
+# provider = "github"        # github | gitlab
+# cli = "gh"                 # gh | glab | none (none: local-only, no PRs)
+# host = "gitlab.example.com"  # a self-hosted GitLab: glab --hostname
+```
+
+Set `provider = "gitlab"` for a self-hosted GitLab whose host name doesn't
+say "gitlab", and `host` when it differs from the remote's host (glab also
+reads `GITLAB_HOST`). Each provider takes its own CLI, so `provider =
+"github"` with `cli = "glab"` (or the reverse) is a config error.

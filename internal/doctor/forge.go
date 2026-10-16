@@ -2,10 +2,10 @@ package doctor
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 // Runner runs the git provider CLIs. Env is one.
@@ -32,41 +32,51 @@ type Forge struct {
 	Fix string
 }
 
-// LocalOnly reports whether saddle can't open PRs: no CLI, or one saddle
-// doesn't drive yet.
-func (f Forge) LocalOnly() bool { return f.CLI != config.ForgeGH }
+// LocalOnly reports whether saddle can't open PRs: no CLI it can drive the
+// repo's provider with.
+func (f Forge) LocalOnly() bool { return f.CLI == "" }
 
 // localOnly is what running without a provider CLI turns off.
 const localOnly = "saddle runs local-only: no PRs (saddle prs, publish and auto-merge are off) and no merge-settings, " +
 	"branch-protection or gh-stack checks; agents, claims and the merge train still work"
 
-// gitlabPending is said whenever glab is the CLI, until #644 and #645 land.
-const gitlabPending = "GitLab support is not available yet (#644, #645)"
+// setGitLab is the fix when glab works but nothing tells saddle the repo is
+// on GitLab.
+const setGitLab = `set provider = "gitlab" under [forge] in .saddle/config.toml (and host, for a self-hosted GitLab; see docs/gitlab.md)`
 
 var providerNames = map[string]string{config.ForgeGitHub: "GitHub", config.ForgeGitLab: "GitLab"}
 
-// cliProvider is the provider each CLI drives.
-var cliProvider = map[string]string{config.ForgeGH: config.ForgeGitHub, config.ForgeGlab: config.ForgeGitLab}
+// cliProvider is the provider each CLI drives, and providerCLI the CLI
+// each provider is driven with.
+var (
+	cliProvider = map[string]string{config.ForgeGH: config.ForgeGitHub, config.ForgeGlab: config.ForgeGitLab}
+	providerCLI = map[string]string{config.ForgeGitHub: config.ForgeGH, config.ForgeGitLab: config.ForgeGlab}
+)
 
-// DetectForge picks the provider from remoteURL's host (or fc.Provider) and
-// the CLI for it: gh for GitHub, glab for GitLab, else the other one when it
-// is installed and logged in for the host. fc.CLI names the only CLI to try;
-// "none" runs local-only.
+// DetectForge picks the provider from fc ([forge] provider, else the
+// provider its cli drives) or remoteURL's host, and checks the CLI for it:
+// gh for GitHub, glab for GitLab, logged in for the host (fc.Host when set).
+// When neither says, it tries gh and then glab; glab alone isn't enough
+// there, since at run time an unknown host means GitHub (forge.New), so
+// the fix is to name GitLab in [forge]. "none" runs local-only.
 func DetectForge(x Runner, remoteURL string, fc config.Forge) Forge {
-	f := Forge{Host: remoteHost(remoteURL), Provider: fc.Provider}
+	f := Forge{Host: forge.RemoteHost(remoteURL), Provider: fc.Provider}
+	if fc.Host != "" {
+		f.Host = fc.Host
+	}
 	if f.Provider == "" {
-		f.Provider = hostProvider(f.Host)
+		f.Provider = cliProvider[fc.CLI]
+	}
+	if f.Provider == "" {
+		f.Provider = forge.HostProvider(f.Host)
 	}
 	if fc.CLI == config.ForgeNone {
 		f.Detail = fmt.Sprintf("%s, local-only ([forge] cli = \"none\"): %s", f.label(), localOnly)
 		return f
 	}
 	order := []string{config.ForgeGH, config.ForgeGlab}
-	switch {
-	case fc.CLI != "":
-		order = []string{fc.CLI}
-	case f.Provider == config.ForgeGitLab:
-		order = []string{config.ForgeGlab, config.ForgeGH}
+	if c := providerCLI[f.Provider]; c != "" {
+		order = []string{c}
 	}
 	var why []string
 	for i, cli := range order {
@@ -79,18 +89,17 @@ func DetectForge(x Runner, remoteURL string, fc config.Forge) Forge {
 			f.Fix = fix
 		}
 	}
-	if f.Provider == "" && f.CLI != "" {
-		f.Provider = cliProvider[f.CLI]
-	}
 	switch {
 	case f.CLI == "":
 		f.Detail = fmt.Sprintf("%s: %s, so %s", f.label(), strings.Join(why, "; "), localOnly)
-	case f.CLI == config.ForgeGlab && f.Provider == config.ForgeGitLab:
-		f.Fix = ""
-		f.Detail = fmt.Sprintf("GitLab detected, glab found, %s: %s, %s; %s", gitlabPending, f.Version, f.loggedIn(), localOnly)
-	case f.CLI == config.ForgeGlab:
-		f.Detail = fmt.Sprintf("%s: %s; %s found, but %s, so %s", f.label(), strings.Join(why, "; "), f.Version, gitlabPending, localOnly)
+	case f.Provider == "" && f.CLI == config.ForgeGlab:
+		f.Detail = fmt.Sprintf("%s: %s; %s is %s, but nothing says the repo is on GitLab, so %s",
+			f.label(), strings.Join(why, "; "), f.Version, f.loggedIn(), localOnly)
+		f.Provider, f.CLI, f.Fix = config.ForgeGitLab, "", setGitLab
 	default:
+		if f.Provider == "" {
+			f.Provider = cliProvider[f.CLI]
+		}
 		f.Fix = ""
 		f.Detail = fmt.Sprintf("%s via %s, %s", f.label(), f.Version, f.loggedIn())
 	}
@@ -150,36 +159,4 @@ func (f Forge) loggedIn() string {
 		return "logged in"
 	}
 	return "logged in to " + f.Host
-}
-
-// hostProvider guesses the provider from a remote's host.
-func hostProvider(host string) string {
-	switch h := strings.ToLower(host); {
-	case strings.Contains(h, "github"):
-		return config.ForgeGitHub
-	case strings.Contains(h, "gitlab"):
-		return config.ForgeGitLab
-	}
-	return ""
-}
-
-// remoteHost is the host of a git remote URL: scheme://[user@]host[:port]/…
-// or the scp-like [user@]host:path. A local path has none.
-func remoteHost(remote string) string {
-	remote = strings.TrimSpace(remote)
-	if strings.Contains(remote, "://") {
-		u, err := url.Parse(remote)
-		if err != nil || u.Scheme == "file" {
-			return ""
-		}
-		return u.Hostname()
-	}
-	before, _, found := strings.Cut(remote, ":")
-	if !found || strings.Contains(before, "/") {
-		return ""
-	}
-	if _, h, ok := strings.Cut(before, "@"); ok {
-		return h
-	}
-	return before
 }

@@ -49,7 +49,7 @@ func TestInitSetup(t *testing.T) {
 		{"gh and claude", github, config.Template, []string{"gh", "claude"}, "claude",
 			[]string{"git provider: GitHub (github.com) via gh", "agent: claude"}, []string{"wrote harness", "fix:"}, nil},
 		{"glab only", gitlab, config.Template, []string{"glab", "claude"}, "claude",
-			[]string{"GitLab detected, glab found, GitLab support is not available yet", "local-only"}, nil, nil},
+			[]string{"git provider: GitLab (gitlab.com) via glab", "agent: claude"}, []string{"local-only", "not available", "fix:"}, nil},
 		{"no provider CLI", github, config.Template, []string{"claude"}, "claude",
 			[]string{"local-only", "fix: install the GitHub CLI (https://cli.github.com), then gh auth login --hostname github.com"}, nil, nil},
 		{"claude missing, codex present", github, config.Template, []string{"gh", "codex"}, "codex",
