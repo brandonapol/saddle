@@ -181,3 +181,34 @@ func TestDigestLineRoundTrips(t *testing.T) {
 		t.Fatalf("self-merge = %q, %v", again, ok)
 	}
 }
+
+// #681: a digest of merged GitLab MRs says "MRs", not "PRs", and the line
+// reads back and folds with a GitHub one.
+func TestDigestSaysMRsOnGitLab(t *testing.T) {
+	t.Parallel()
+	d := newDigest("10:15")
+	d.n[TopicMerged] = 2
+	d.ids[TopicMerged] = []string{"!12", "!13"}
+	got := d.String()
+	if want := "Since 10:15: 2 MRs merged (!12 !13)."; got != want {
+		t.Fatalf("digest = %q, want %q", got, want)
+	}
+	d.n[TopicMerged], d.ids[TopicMerged] = 1, []string{"!12"}
+	got = d.String()
+	if want := "Since 10:15: 1 MR merged (!12)."; got != want {
+		t.Fatalf("digest = %q, want %q", got, want)
+	}
+	back, ok := parseDigest(got)
+	if !ok || back.n[TopicMerged] != 1 || len(back.ids[TopicMerged]) != 1 || back.ids[TopicMerged][0] != "!12" {
+		t.Fatalf("parseDigest(%q) = %+v, %v", got, back, ok)
+	}
+	merged, ok := MergeDigests("Since 10:15: 2 MRs merged (!12 !13).", "Since 10:30: 1 MR merged (!14).")
+	if !ok || !strings.Contains(merged, "3 MRs merged (!12 !13 !14)") {
+		t.Fatalf("MergeDigests = %q, %v", merged, ok)
+	}
+	// GitHub keeps its wording.
+	d.ids[TopicMerged] = []string{"#12"}
+	if got := d.String(); !strings.Contains(got, "1 PR merged (#12)") {
+		t.Fatalf("github digest = %q", got)
+	}
+}

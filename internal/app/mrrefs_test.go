@@ -71,7 +71,7 @@ func TestDigestNamesGitLabMRs(t *testing.T) {
 	}
 	sent, err := a.FlushDigest(time.Now().Add(16 * time.Minute))
 	must(t, err)
-	if !strings.Contains(sent, "2 PRs merged (!12 !13)") {
+	if !strings.Contains(sent, "2 MRs merged (!12 !13)") {
 		t.Fatalf("digest %q doesn't name the MRs !12 !13", sent)
 	}
 }

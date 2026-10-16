@@ -218,3 +218,14 @@ func TestCIRedRepairSkipsMissingStackBase(t *testing.T) {
 		t.Fatal("a red head that has its base got no repair")
 	}
 }
+
+// #681: a GitLab job complaining about the MR description is a PR-meta
+// failure too.
+func TestPRMetaReMatchesGitLabWording(t *testing.T) {
+	t.Parallel()
+	for _, s := range []string{"MR description contains an attribution footer", "merge request title is wrong", "PR body bad"} {
+		if !prMetaRe.MatchString(s) {
+			t.Errorf("prMetaRe misses %q", s)
+		}
+	}
+}
