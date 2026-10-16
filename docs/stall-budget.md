@@ -12,6 +12,7 @@ moving. It never picks a destructive default.
 budget = "30m"      # how long any card waits for an answer (default 30m)
 idle_alarm = "45m"  # the no-progress watchdog's threshold (default 45m)
 done_orphan = "20m" # how long a done-orphaned worker sits still per step (default 20m)
+hung_after = "20m"  # how long a running worker makes no progress per step (default 20m; negative: off)
 
 [stall.kinds]       # per-kind budgets override budget
 stuck-stack = "1h"
@@ -97,6 +98,18 @@ Any screen change means the agent is alive: the watch starts over and the
 card closes. A done gate the train cancelled by rebasing the branch onto a
 newer landing restarts on the rebased tree by itself (up to three times),
 so the agent never has to call done again for it.
+
+## Hung workers
+
+A worker that stops moving mid-task (silent after a compaction, parked on a
+model call that never returns, under a gate that never ends) is the
+hung-worker watch's (#625). `StallTick` runs `HungTick` each cycle: a
+running worker, or an idle one with unread notices, whose screen words,
+branch head and working tree sat still for `hung_after` is nudged, then
+pressed Enter at, then relaunched in place on a hooked adapter, one step
+per window. A gate in its worktree past twice its timeout is stopped
+first. It never discards work and never kills a task the owner asked to
+keep. See [hung-workers.md](hung-workers.md).
 
 ## Issues
 

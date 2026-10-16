@@ -57,6 +57,7 @@ var ToolScopes = map[string]Scope{
 	"queue_release": ScopeAct,
 	"automerge":     ScopeAct,
 	"concurrency":   ScopeAct,
+	"keep":          ScopeAct, // only ever stops saddle killing a task (#625)
 	"unstack":       ScopeAct,
 	"requeue":       ScopeAct,
 	"publish":       ScopeAct,

@@ -851,6 +851,12 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, OK{Message: "killed " + strings.TrimSpace(in.Task)}, a.Kill(in.Task, false)
 		})
 
+	mcp.AddTool(s, &mcp.Tool{Name: "keep", Description: "Tell saddle never to kill a task's agent when it looks hung (#625): it is still nudged when it stops making progress, but never relaunched. Use it when the owner says not to kill a task."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in TaskIn) (*mcp.CallToolResult, OK, error) {
+			task := strings.TrimSpace(in.Task)
+			return nil, OK{Message: "kept " + task + ": saddle nudges it if it hangs, never kills it"}, a.KeepWorker(task, "the orchestrator asked")
+		})
+
 	return s
 }
 
