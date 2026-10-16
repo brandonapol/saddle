@@ -18,6 +18,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/brandonapol/saddle/internal/procreap"
 	"github.com/brandonapol/saddle/internal/scratch"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -460,7 +461,9 @@ func (a *App) gateOnce(ctx context.Context, base string, run GateRun, lease *gat
 
 // gateTemp makes a fresh per-run temp dir under base for one gate run, the
 // train's or done's (#320). env points TMPDIR and GOTMPDIR at it; done
-// removes it, and base too when nothing else is left in it. When the dir
+// kills whatever the run left alive under it (tmux servers and agents a
+// test daemonized out of the gate's group, #663), removes it, and base too
+// when nothing else is left in it. When the dir
 // can't be made, out is the gate output to classify: that is the
 // environment too.
 func gateTemp(base string) (env []string, done func(), out string, err error) {
@@ -472,6 +475,7 @@ func gateTemp(base string) (env []string, done func(), out string, err error) {
 		return nil, nil, "cannot create temp dir: " + err.Error(), err
 	}
 	return scratch.Env(dir), func() {
+		procreap.Reap(dir, gateKillGrace, procreap.Match{Env: true})
 		_ = os.RemoveAll(dir)
 		_ = os.Remove(base) // only if empty: the default lives in the user's cache dir
 	}, "", nil
