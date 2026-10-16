@@ -47,12 +47,12 @@ const fixInit = "run `saddle doctor --fix` (or saddle init)"
 // about explains each check in plain words.
 var about = map[string]string{
 	CheckConfig:        "saddle's settings for this repo, in .saddle/config.toml",
-	CheckRemote:        "the GitHub remote saddle pushes branches to and opens PRs on",
+	CheckRemote:        "the GitHub or GitLab remote saddle pushes branches to and opens PRs (MRs) on",
 	CheckDefaultBranch: "the branch PRs land on; saddle's base must match it",
 	CheckGH:            "where the repo is hosted (GitHub or GitLab) and its CLI, gh or glab, logged in, which saddle uses to open and merge PRs",
-	CheckMergeSettings: "the repo's merge options on GitHub; stacked PRs need squash merges, not merge commits",
-	CheckProtection:    "GitHub rules that keep red or unreviewed work off the base branch",
-	CheckGhStack:       "GitHub's optional native Stacked PRs",
+	CheckMergeSettings: "the repo's merge options on GitHub or GitLab; stacked PRs need squash or fast-forward merges, not merge commits",
+	CheckProtection:    "branch protection (GitHub) or protected branches (GitLab) that keep red or unreviewed work off the base branch",
+	CheckGhStack:       "GitHub's optional native Stacked PRs; not offered on other forges",
 	CheckTestCmd:       "the command the merge train runs before it lands a branch",
 	CheckTmux:          "runs each agent in its own hidden terminal",
 	CheckClaude:        "the Claude Code CLI the agents run in",
@@ -130,8 +130,14 @@ func repoSlug(url string) string {
 	return m[1]
 }
 
-// protectionSteps is the repo-specific way to protect base on GitHub.
+// protectionSteps is the repo-specific way to protect base.
 func (r *run) protectionSteps() string {
+	if r.gitlab() {
+		return fmt.Sprintf("open %s and protect %s with \"Allowed to push and merge\" set to No one or Maintainers, so only merge requests change it; "+
+			"then tick \"Pipelines must succeed\" in %s",
+			r.gitlabSettings("repository", "Settings -> Repository -> Protected branches"), r.base,
+			r.gitlabSettings("merge_requests", "Settings -> Merge requests"))
+	}
 	where := "Settings -> Branches"
 	if r.repo != "" {
 		where = "https://github.com/" + r.repo + "/settings/branches"

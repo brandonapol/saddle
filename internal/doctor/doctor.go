@@ -5,6 +5,8 @@
 package doctor
 
 import (
+	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +21,7 @@ import (
 	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/ghstack"
 	"github.com/brandonapol/saddle/internal/lintgate"
 	"github.com/brandonapol/saddle/internal/refguard"
@@ -78,9 +81,11 @@ type Env interface {
 	// Root is the repo's main checkout.
 	Root() string
 	Config() (config.Config, error)
-	// Git and GH run in Root and return trimmed stdout.
+	// Git, GH and Glab run in Root and return trimmed stdout. Doctor
+	// reaches gh and glab only through a forge.Forge over them (#648).
 	Git(args ...string) (string, error)
 	GH(args ...string) (string, error)
+	Glab(args ...string) (string, error)
 	// Exec runs a program in Root and returns its trimmed combined output.
 	Exec(name string, args ...string) (string, error)
 	LookPath(name string) (string, error)
@@ -115,11 +120,16 @@ type run struct {
 	cfg    config.Config
 	remote string
 	base   string // the detected default branch, else cfg.Base
-	repo   string // owner/repo on GitHub, "" when unknown
+	repo   string // owner/repo (group/project on GitLab), "" when unknown
+	web    string // the repo's web page, "" when unknown
 	url    string // the remote's URL
-	gh     bool   // gh is installed and logged in, and saddle drives PRs with it
-	gitlab bool   // glab is, and saddle drives the repo's MRs with it (#645)
-	local  bool   // RunLocal: no GitHub calls
+	// provider is the forge saddle drives: forge.Select's pick from [forge]
+	// and the remote, then DetectForge's (#646). ready means its CLI is
+	// installed and logged in.
+	provider string
+	ready    bool
+	fg       forge.Forge // over Env's gh and glab; see forge()
+	local    bool        // RunLocal: no forge calls
 	// agents is AgentsEnv's answer, read once when agentsRead.
 	agents     []agent.Status
 	agentsRead bool
@@ -314,6 +324,7 @@ func (r *run) gitRemote() Result {
 	url, _ := r.env.Git("remote", "get-url", r.remote)
 	r.url = url
 	r.repo = repoSlug(url)
+	r.provider = forge.Select(r.cfg.Forge, url)
 	return ok(CheckRemote, strings.TrimSpace(r.remote+" "+url))
 }
 
@@ -328,7 +339,7 @@ func (r *run) defaultBranch() Result {
 		}
 	}
 	if def == "" && !r.local {
-		if b, err := r.env.GH("repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"); err == nil {
+		if b, err := forge.ReadDefaultBranch(context.Background(), r.forge()); err == nil {
 			def = strings.TrimSpace(b)
 		}
 	}
@@ -353,16 +364,19 @@ func (r *run) defaultBranch() Result {
 // Without a usable CLI saddle runs local-only, so this only warns.
 func (r *run) ghAuth() Result {
 	f := DetectForge(r.env, r.url, r.cfg.Forge)
+	if f.Provider != r.provider {
+		r.provider, r.fg = f.Provider, nil
+	}
 	switch {
 	case f.CLI == "" && f.Fix == "":
 		return ok(CheckGH, f.Detail)
 	case f.LocalOnly():
 		return warn(CheckGH, f.Detail, f.Fix)
-	case f.CLI == config.ForgeGlab:
-		r.gitlab = true
+	}
+	r.ready = true
+	if f.CLI == config.ForgeGlab {
 		return ok(CheckGH, f.Detail)
 	}
-	r.gh = true
 	scopes, listed := tokenScopes(f.Status)
 	switch {
 	case !listed:
@@ -394,31 +408,85 @@ func tokenScopes(status string) (map[string]bool, bool) {
 
 const skippedFix = "fix git provider above, then run saddle doctor again"
 
-// onGitLab is what the GitHub-only checks say on a GitLab repo: they read
-// GitHub's API through gh, and moving them onto the forge is #648.
-const onGitLab = "skipped on GitLab: saddle checks this through gh only so far (#648); see docs/gitlab.md for the settings to make by hand"
+// forge is the repo's forge over Env's gh and glab, for the provider
+// doctor settled on: what forge.New would build at run time.
+func (r *run) forge() forge.Forge {
+	if r.fg == nil {
+		fc := r.cfg.Forge
+		if r.provider == config.ForgeGitHub || r.provider == config.ForgeGitLab {
+			fc.Provider, fc.CLI = r.provider, ""
+		}
+		r.fg = forge.Over(fc, r.url, runner(r.env.GH), runner(r.env.Glab))
+	}
+	return r.fg
+}
+
+func (r *run) gitlab() bool { return r.provider == config.ForgeGitLab }
+
+// providerName is the provider in prose.
+func (r *run) providerName() string {
+	if n := providerNames[r.provider]; n != "" {
+		return n
+	}
+	return "this forge"
+}
+
+// skipped is a forge check that can't run: no logged-in CLI, or a forge
+// that doesn't report what it reads.
+func (r *run) skipped(name string, err error, fix string) (Result, bool) {
+	switch {
+	case !r.ready:
+		return warn(name, "skipped: no logged-in "+r.cliName(), skippedFix), true
+	case errors.Is(err, forge.ErrUnsupported):
+		return warn(name, "skipped: "+r.providerName()+" doesn't report it ("+err.Error()+")", fix), true
+	}
+	return Result{}, false
+}
+
+func (r *run) cliName() string {
+	if r.gitlab() {
+		return config.ForgeGlab
+	}
+	return config.ForgeGH
+}
 
 func (r *run) mergeSettings() Result {
-	if r.gitlab {
-		return ok(CheckMergeSettings, onGitLab)
+	byHand := "check by hand that merge commits are off and squash is on"
+	if r.gitlab() {
+		byHand = "check Settings -> Merge requests by hand: Fast-forward merge, squash allowed"
 	}
-	if !r.gh {
-		return warn(CheckMergeSettings, "skipped: gh unavailable", skippedFix)
+	if res, skip := r.skipped(CheckMergeSettings, nil, byHand); skip {
+		return res
 	}
-	out, err := r.env.GH("api", "repos/{owner}/{repo}")
-	cached := func(...string) (string, error) { return out, err }
-	s, err := app.ReadMergeSettings(cached)
+	s, err := r.forge().MergeSettings(context.Background())
+	if res, skip := r.skipped(CheckMergeSettings, err, byHand); skip {
+		return res
+	}
 	if err != nil {
-		return warn(CheckMergeSettings, "could not read: "+err.Error(),
-			"use a gh login with admin or push access, or check by hand that merge commits are off and squash is on")
+		access := "use a gh login with admin or push access, or "
+		if r.gitlab() {
+			access = "use a glab login with Maintainer access, or "
+		}
+		return warn(CheckMergeSettings, "could not read: "+err.Error(), access+byHand)
 	}
 	if s.Repo != "" {
 		r.repo = s.Repo
 	}
+	r.web = s.URL
+	if r.gitlab() {
+		where := r.gitlabSettings("merge_requests", "Settings -> Merge requests")
+		switch {
+		case s.Merge:
+			return fail(CheckMergeSettings, "the merge method makes merge commits; stacked MRs need linear history",
+				"in "+where+` set Merge method to "Fast-forward merge", then run saddle again; saddle will not change this setting for you`)
+		case !s.Squash:
+			return warn(CheckMergeSettings, `fast-forward merge, but squash is "Do not allow", so saddle merges each MR's commits as they are`,
+				"in "+where+` set "Squash commits when merging" to Allow, Encourage or Require`)
+		}
+		return ok(CheckMergeSettings, "fast-forward merge, squash allowed")
+	}
 	if s.Merge {
-		// CheckRepoMergeSettings words the refusal saddle up, land and prs give.
-		e := app.CheckRepoMergeSettings(cached, io.Discard)
-		return fail(CheckMergeSettings, "merge commits are allowed; stacked PRs need linear history", e.Error())
+		return fail(CheckMergeSettings, "merge commits are allowed; stacked PRs need linear history", githubMergeFix(s))
 	}
 	if !s.Squash {
 		return warn(CheckMergeSettings, "squash merging is off; saddle sweep and auto-merge squash by default",
@@ -427,9 +495,35 @@ func (r *run) mergeSettings() Result {
 	return ok(CheckMergeSettings, "merge commits off, squash on")
 }
 
+// githubMergeFix is how to turn merge commits off, as saddle up, land and
+// prs word their refusal.
+func githubMergeFix(s forge.MergeSettings) string {
+	repo, settings := cmp.Or(s.Repo, "{owner}/{repo}"), "the repo's GitHub settings"
+	if s.URL != "" {
+		settings = s.URL + "/settings"
+	}
+	squash, squashFlag := "", ""
+	if !s.Squash {
+		squash, squashFlag = ` (and check "Allow squash merging")`, " -F allow_squash_merge=true"
+	}
+	return fmt.Sprintf(`in %s: Settings -> General -> Pull Requests, uncheck "Allow merge commits"%s; `+
+		"or: gh api -X PATCH repos/%s -F allow_merge_commit=false%s. Saddle will not change this setting for you",
+		settings, squash, repo, squashFlag)
+}
+
+// gitlabSettings is the project's settings page named page, else what to
+// open by hand.
+func (r *run) gitlabSettings(page, byHand string) string {
+	if r.web == "" {
+		return byHand
+	}
+	return r.web + "/-/settings/" + page
+}
+
 // ghStack checks the gh-stack extension and whether the repo has Stacked
 // PRs (a private preview, enabled per repo), read-only, against [train]
 // stack_backend. Nothing here fails: without them saddle chains PR bases.
+// gh-stack is GitHub-only, so on any other forge it isn't probed (#648).
 func (r *run) ghStack() Result {
 	backend := r.cfg.Train.StackBackend
 	if backend == "" {
@@ -437,20 +531,27 @@ func (r *run) ghStack() Result {
 	}
 	want := backend == config.StackBackendGhStack
 	tail := fmt.Sprintf("stack_backend = %q", backend)
-	if r.gitlab {
-		if want {
-			return warn(CheckGhStack, "gh-stack is GitHub-only and this repo is on GitLab; "+tail,
-				`set stack_backend = "saddle" under [train]; saddle chains MR targets itself`)
-		}
-		return ok(CheckGhStack, "skipped on GitLab: gh-stack is GitHub-only; "+tail+" doesn't need it")
+	on := ""
+	switch {
+	case r.cfg.Forge.CLI == config.ForgeNone:
+		on = `[forge] cli = "none"`
+	case r.provider != "" && r.provider != config.ForgeGitHub:
+		on = "this repo is on " + r.providerName()
 	}
-	if !r.gh {
+	if on != "" {
+		if want {
+			return warn(CheckGhStack, "gh-stack is GitHub-only and "+on+"; "+tail,
+				`set stack_backend = "saddle" under [train]; saddle chains PR and MR targets itself`)
+		}
+		return ok(CheckGhStack, "skipped: gh-stack is GitHub-only and "+on+"; "+tail+" doesn't need it")
+	}
+	if !r.ready {
 		if want {
 			return warn(CheckGhStack, "skipped: gh unavailable; "+tail, skippedFix)
 		}
 		return ok(CheckGhStack, "skipped: gh unavailable; "+tail+" doesn't need it")
 	}
-	c := ghstack.Client{Run: r.env.GH}
+	c := ghstack.For(r.forge(), r.env.GH)
 	ver, err := c.Available()
 	if err != nil {
 		if want {
@@ -478,51 +579,68 @@ func (r *run) ghStack() Result {
 	return ok(CheckGhStack, detail)
 }
 
+// protection reads base's protection through the forge's optional
+// BranchProtection; a forge without it warns (#648).
 func (r *run) protection() Result {
-	if r.gitlab {
-		return ok(CheckProtection, onGitLab)
+	byHand := "check Settings -> Branches by hand"
+	if r.gitlab() {
+		byHand = "check Settings -> Repository -> Protected branches by hand"
 	}
-	if !r.gh {
-		return warn(CheckProtection, "skipped: gh unavailable", skippedFix)
+	if res, skip := r.skipped(CheckProtection, nil, byHand); skip {
+		return res
 	}
-	out, err := r.env.GH("api", "repos/{owner}/{repo}/branches/"+r.base+"/protection")
-	if err != nil {
-		if msg := err.Error(); strings.Contains(msg, "404") || strings.Contains(msg, "not protected") {
-			return warn(CheckProtection, r.base+" is not protected, so red or unreviewed work can merge", r.protectionSteps())
-		}
-		return warn(CheckProtection, "could not read: "+err.Error(), "needs admin access to the repo; check Settings -> Branches by hand")
+	p, err := forge.ReadBranchProtection(context.Background(), r.forge(), r.base)
+	if res, skip := r.skipped(CheckProtection, err, byHand); skip {
+		return res
 	}
-	var p struct {
-		Checks *struct {
-			Contexts []string          `json:"contexts"`
-			Checks   []json.RawMessage `json:"checks"`
-		} `json:"required_status_checks"`
-		Reviews *struct {
-			Count int `json:"required_approving_review_count"`
-		} `json:"required_pull_request_reviews"`
-		Admins struct {
-			Enabled bool `json:"enabled"`
-		} `json:"enforce_admins"`
+	switch {
+	case err != nil && r.gitlab():
+		return warn(CheckProtection, "could not read: "+err.Error(), "needs Maintainer access to the project; "+byHand)
+	case err != nil:
+		return warn(CheckProtection, "could not read: "+err.Error(), "needs admin access to the repo; "+byHand)
+	case !p.Protected:
+		return warn(CheckProtection, r.base+" is not protected, so red or unreviewed work can merge", r.protectionSteps())
 	}
-	if err := json.Unmarshal([]byte(out), &p); err != nil {
-		return warn(CheckProtection, "could not parse gh api output: "+err.Error(), "check Settings -> Branches by hand")
+	if r.gitlab() {
+		return r.gitlabProtection(p)
 	}
-	checks := 0
-	if p.Checks != nil {
-		checks = max(len(p.Checks.Contexts), len(p.Checks.Checks))
-	}
-	reviews := 0
-	if p.Reviews != nil {
-		reviews = p.Reviews.Count
-	}
-	detail := fmt.Sprintf("%s: %d required checks, %d approvals", r.base, checks, reviews)
-	if p.Admins.Enabled {
+	detail := fmt.Sprintf("%s: %d required checks, %d approvals", r.base, len(p.Checks), p.Approvals)
+	if p.Admins {
 		detail += ", admins included"
 	}
-	if checks == 0 {
+	if !p.RequireCI {
 		return warn(CheckProtection, detail+"; auto-merge can't tell green from red", r.protectionSteps())
 	}
 	return ok(CheckProtection, detail)
+}
+
+// gitlabProtection words a protected branch on GitLab: who may push and
+// merge, and whether pipelines must succeed. Saddle's auto-merge waits for
+// a green pipeline itself, so without that setting only people can merge
+// red work.
+func (r *run) gitlabProtection(p forge.Protection) Result {
+	detail := r.base + ": protected"
+	var who []string
+	if len(p.Push) > 0 {
+		who = append(who, "push: "+strings.Join(p.Push, ", "))
+	}
+	if len(p.Merge) > 0 {
+		who = append(who, "merge: "+strings.Join(p.Merge, ", "))
+	}
+	if len(who) > 0 {
+		detail += " (" + strings.Join(who, "; ") + ")"
+	}
+	if p.Approvals > 0 {
+		detail += fmt.Sprintf(", %d approvals", p.Approvals)
+	}
+	if p.ForcePush {
+		detail += ", force push allowed"
+	}
+	if !p.RequireCI {
+		return warn(CheckProtection, detail+`; "Pipelines must succeed" is off, so a person can merge a red MR`,
+			"in "+r.gitlabSettings("merge_requests", "Settings -> Merge requests")+` tick "Pipelines must succeed"`)
+	}
+	return ok(CheckProtection, detail+", pipelines must succeed")
 }
 
 func (r *run) testCmd() Result {

@@ -1,11 +1,13 @@
 package doctor
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/agent/agenttest"
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 // #646: fake gh and glab binaries on a fake PATH decide which CLI saddle
@@ -65,13 +67,30 @@ func TestDetectForge(t *testing.T) {
 	}
 }
 
-// #645: on GitLab through glab the provider check passes, and the checks
-// that still read GitHub's API through gh (#648) say they are skipped there
-// instead of blaming the provider.
-func TestDoctorOnGitLab(t *testing.T) {
+const gitlabProject = `{"path_with_namespace":"g/r","web_url":"https://gitlab.com/g/r","merge_method":"ff","squash_option":"default_on",` +
+	`"default_branch":"main","only_allow_merge_if_pipeline_succeeds":true}`
+
+const gitlabProtected = `{"name":"main","push_access_levels":[{"access_level_description":"No one"}],` +
+	`"merge_access_levels":[{"access_level_description":"Maintainers"}],"allow_force_push":false}`
+
+// onGitLab is a healthy fake repo on gitlab.com whose glab (a fake binary
+// on PATH) is logged in, answering glab api from f.glab.
+func onGitLab(t *testing.T) *fakeEnv {
 	agenttest.Path(t, []string{"glab", "claude"}, []string{"glab", "claude"})
 	f := healthy(t)
 	f.git["remote get-url origin"] = res{out: "git@gitlab.com:g/r.git"}
+	f.glab = map[string]res{
+		"api projects/:id": {out: gitlabProject},
+		"api projects/:id/protected_branches/main": {out: gitlabProtected},
+	}
+	return f
+}
+
+// #648: on GitLab through glab doctor reads the merge settings and the
+// protected branch through the forge, never calls gh, and doesn't offer
+// gh-stack.
+func TestDoctorOnGitLab(t *testing.T) {
+	f := onGitLab(t)
 	got := map[string]Result{}
 	for _, r := range Run(pathEnv{f, System(f.root)}) {
 		got[r.Name] = r
@@ -79,9 +98,74 @@ func TestDoctorOnGitLab(t *testing.T) {
 	if r := got[CheckGH]; r.Status != OK || !strings.Contains(r.Detail, "GitLab (gitlab.com) via glab") {
 		t.Fatalf("git provider = %+v", r)
 	}
-	for _, name := range []string{CheckMergeSettings, CheckProtection, CheckGhStack} {
-		if r := got[name]; r.Status != OK || !strings.Contains(r.Detail, "skipped on GitLab") {
-			t.Errorf("%s = %+v, want skipped on GitLab", name, r)
+	for name, want := range map[string]string{
+		CheckMergeSettings: "fast-forward merge, squash allowed",
+		CheckProtection:    "main: protected (push: No one; merge: Maintainers), pipelines must succeed",
+		CheckGhStack:       "gh-stack is GitHub-only and this repo is on GitLab",
+	} {
+		if r := got[name]; r.Status != OK || !strings.Contains(r.Detail, want) {
+			t.Errorf("%s = %+v, want ok with %q", name, r, want)
 		}
+	}
+	if len(f.ghCalls) > 0 {
+		t.Errorf("doctor called gh on a GitLab repo: %q", f.ghCalls)
+	}
+}
+
+// #648: what doctor says about a GitLab project's settings when they need
+// work, and when the forge can't tell.
+func TestDoctorOnGitLabProblems(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		check  string
+		break_ func(f *fakeEnv)
+		status Status
+		want   string // substring of Detail + " / " + Fix
+	}{
+		{"merge commits", CheckMergeSettings, func(f *fakeEnv) {
+			f.glab["api projects/:id"] = res{out: strings.Replace(gitlabProject, `"ff"`, `"merge"`, 1)}
+		}, Fail, `https://gitlab.com/g/r/-/settings/merge_requests set Merge method to "Fast-forward merge"`},
+		{"squash never", CheckMergeSettings, func(f *fakeEnv) {
+			f.glab["api projects/:id"] = res{out: strings.Replace(gitlabProject, `"default_on"`, `"never"`, 1)}
+		}, Warn, "Squash commits when merging"},
+		{"merge settings unreadable", CheckMergeSettings, func(f *fakeEnv) {
+			f.glab["api projects/:id"] = res{err: errors.New("glab api: 403 Forbidden")}
+		}, Warn, "Maintainer access"},
+		{"unprotected", CheckProtection, func(f *fakeEnv) {
+			f.glab["api projects/:id/protected_branches/main"] = res{err: errors.New("glab api: 404 Not Found")}
+		}, Warn, "https://gitlab.com/g/r/-/settings/repository and protect main"},
+		{"pipelines needn't succeed", CheckProtection, func(f *fakeEnv) {
+			f.glab["api projects/:id"] = res{out: strings.Replace(gitlabProject, `"only_allow_merge_if_pipeline_succeeds":true`, `"only_allow_merge_if_pipeline_succeeds":false`, 1)}
+		}, Warn, `tick "Pipelines must succeed"`},
+		{"protection unreadable", CheckProtection, func(f *fakeEnv) {
+			f.glab["api projects/:id/protected_branches/main"] = res{err: errors.New("glab api: 403 Forbidden")}
+		}, Warn, "Protected branches by hand"},
+		{"gh-stack wanted", CheckGhStack, func(f *fakeEnv) { f.cfg.Train.StackBackend = config.StackBackendGhStack }, Warn, `stack_backend = "saddle"`},
+		{"default branch from glab", CheckDefaultBranch, func(f *fakeEnv) {
+			delete(f.git, "symbolic-ref --short refs/remotes/origin/HEAD")
+		}, OK, "main (matches base)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := onGitLab(t)
+			tc.break_(f)
+			r := find(t, Run(pathEnv{f, System(f.root)}), tc.check)
+			text := r.Detail + " / " + r.Fix
+			if r.Status != tc.status || !strings.Contains(text, tc.want) {
+				t.Fatalf("%s = %s %q, want %s with %q", tc.check, r.Status, text, tc.status, tc.want)
+			}
+			if len(f.ghCalls) > 0 {
+				t.Errorf("doctor called gh on a GitLab repo: %q", f.ghCalls)
+			}
+		})
+	}
+}
+
+// #648: a forge that doesn't report branch protection degrades to a
+// warning, not a failure.
+func TestProtectionUnsupportedWarns(t *testing.T) {
+	r := &run{env: healthy(t), base: "main", ready: true, provider: config.ForgeGitHub, fg: forge.Unsupported{Name: "github", Reason: "test"}}
+	res := r.protection()
+	if res.Status != Warn || !strings.Contains(res.Detail, "doesn't report it") || !strings.Contains(res.Fix, "by hand") {
+		t.Fatalf("protection on an unsupporting forge = %+v", res)
 	}
 }

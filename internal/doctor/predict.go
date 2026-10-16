@@ -2,7 +2,7 @@ package doctor
 
 import (
 	"cmp"
-	"encoding/json"
+	"context"
 	"fmt"
 	"io"
 	"regexp"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 // saddle doctor --predict (#408). Cheap probes for what is likely to stop
@@ -108,8 +109,13 @@ type Disk struct {
 // PredictSystem is the real one; tests use fakes.
 type PredictEnv interface {
 	Config() (config.Config, error)
-	// GH runs gh in the repo and returns trimmed stdout.
+	// GH and Glab run gh and glab in the repo and return trimmed stdout.
+	// The probes reach them only through a forge.Forge (#648).
 	GH(args ...string) (string, error)
+	Glab(args ...string) (string, error)
+	// OriginURL is the origin remote's URL, which picks the forge as
+	// forge.New does.
+	OriginURL() string
 	// Exec runs a program in the repo and returns trimmed combined output.
 	Exec(name string, args ...string) (string, error)
 	// WorkflowFiles reports whether the repo has .github/workflows files.
@@ -144,10 +150,11 @@ func Predict(env PredictEnv, now time.Time) []Risk {
 	if err != nil {
 		cfg = config.Default()
 	}
-	p := &predict{env: env, cfg: cfg}
+	p := &predict{env: env, cfg: cfg,
+		fg: forge.Over(cfg.Forge, env.OriginURL(), runner(env.GH), runner(env.Glab))}
 	var rs []Risk
 	rs = append(rs, p.protection()...)
-	rs = append(rs, p.gh()...)
+	rs = append(rs, p.credentials()...)
 	rs = append(rs, p.rateLimit()...)
 	rs = append(rs, p.disks()...)
 	rs = append(rs, p.load()...)
@@ -159,7 +166,8 @@ func Predict(env PredictEnv, now time.Time) []Risk {
 type predict struct {
 	env  PredictEnv
 	cfg  config.Config
-	auth bool // gh is logged in
+	fg   forge.Forge
+	auth bool // the forge CLI is logged in
 }
 
 // externalChecks match required checks run by an outside service with its
@@ -168,49 +176,28 @@ var externalChecks = regexp.MustCompile(`(?i)\b(?:codecov|snyk|vercel|netlify|so
 
 func (p *predict) protection() []Risk {
 	base := cmp.Or(p.cfg.Base, "main")
-	out, err := p.env.GH("api", "repos/{owner}/{repo}/branches/"+base+"/protection")
-	if err != nil {
-		return nil // not protected or unreadable: saddle doctor says which
-	}
-	var pr struct {
-		Checks *struct {
-			Contexts []string `json:"contexts"`
-			Checks   []struct {
-				Context string `json:"context"`
-			} `json:"checks"`
-		} `json:"required_status_checks"`
-		Reviews *struct {
-			Count int `json:"required_approving_review_count"`
-		} `json:"required_pull_request_reviews"`
-		Signatures struct {
-			Enabled bool `json:"enabled"`
-		} `json:"required_signatures"`
-	}
-	if json.Unmarshal([]byte(out), &pr) != nil {
-		return nil
+	pr, err := forge.ReadBranchProtection(context.Background(), p.fg, base)
+	if err != nil || !pr.Protected {
+		return nil // not protected, unreadable or unsupported: saddle doctor says which
 	}
 	var rs []Risk
-	if pr.Reviews != nil && pr.Reviews.Count > 0 && p.env.AutoMerge() {
+	if pr.Approvals > 0 && p.env.AutoMerge() {
+		where := "in Settings -> Branches"
+		if p.fg.Provider() == config.ForgeGitLab {
+			where = "in the project's approval rules"
+		}
 		rs = append(rs, Risk{Severity: High, Class: ClassBranchProtection,
-			What: fmt.Sprintf("%s requires %d approving review(s) but auto-merge is on, and saddle can't approve its own PRs, so nothing will merge", base, pr.Reviews.Count),
-			Fix:  "review saddle's PRs yourself and run `saddle automerge off`, or exempt saddle's PRs from the review rule in Settings -> Branches"})
+			What: fmt.Sprintf("%s requires %d approving review(s) but auto-merge is on, and saddle can't approve its own PRs, so nothing will merge", base, pr.Approvals),
+			Fix:  "review saddle's PRs yourself and run `saddle automerge off`, or exempt saddle's PRs from the review rule " + where})
 	}
-	if pr.Signatures.Enabled {
+	if pr.Signed {
 		if v, _ := p.env.Exec("git", "config", "--get", "commit.gpgsign"); strings.TrimSpace(v) != "true" {
 			rs = append(rs, Risk{Severity: High, Class: ClassBranchProtection,
 				What: base + " requires signed commits and commits here aren't signed",
 				Fix:  "set git config commit.gpgsign true with a key agent that never prompts, or drop the rule"})
 		}
 	}
-	var checks []string
-	if pr.Checks != nil {
-		checks = slices.Clone(pr.Checks.Contexts)
-		for _, c := range pr.Checks.Checks {
-			if !slices.Contains(checks, c.Context) {
-				checks = append(checks, c.Context)
-			}
-		}
-	}
+	checks := pr.Checks
 	var hist, ext []string
 	for _, c := range checks {
 		switch {
@@ -239,8 +226,23 @@ func (p *predict) protection() []Risk {
 	return rs
 }
 
-func (p *predict) gh() []Risk {
-	out, err := p.env.Exec("gh", "auth", "status")
+// credentials checks the forge CLI's login: gh's, with its token's
+// workflow scope, or glab's.
+func (p *predict) credentials() []Risk {
+	switch p.fg.Provider() {
+	case config.ForgeGitLab:
+		if _, err := p.env.Exec(forge.Glab, forge.AuthStatusArgs(p.cfg.Forge.Host)...); err != nil {
+			return []Risk{{Severity: High, Class: ClassCredentials,
+				What: "glab is not logged in (or its token expired), so saddle can't open, watch or merge MRs",
+				Fix:  "glab auth login"}}
+		}
+		p.auth = true
+		return nil
+	case config.ForgeGitHub:
+	default:
+		return nil // local-only
+	}
+	out, err := p.env.Exec(forge.GH, forge.AuthStatusArgs("")...)
 	if err != nil {
 		return []Risk{{Severity: High, Class: ClassCredentials,
 			What: "gh is not logged in (or its token expired), so saddle can't open, watch or merge PRs",
@@ -261,33 +263,22 @@ func (p *predict) gh() []Risk {
 		Fix:  "gh auth refresh -s workflow"}}
 }
 
+// rateLimit warns when little of GitHub's API quota is left. Only GitHub
+// has one (forge.ReadRateLimit is ErrUnsupported elsewhere).
 func (p *predict) rateLimit() []Risk {
 	if !p.auth {
 		return nil
 	}
-	out, err := p.env.GH("api", "rate_limit")
-	if err != nil {
+	c, err := forge.ReadRateLimit(context.Background(), p.fg)
+	if err != nil || c.Limit == 0 {
 		return nil
 	}
-	var rl struct {
-		Resources struct {
-			Core struct {
-				Limit     int   `json:"limit"`
-				Remaining int   `json:"remaining"`
-				Reset     int64 `json:"reset"`
-			} `json:"core"`
-		} `json:"resources"`
-	}
-	if json.Unmarshal([]byte(out), &rl) != nil || rl.Resources.Core.Limit == 0 {
-		return nil
-	}
-	c := rl.Resources.Core
 	if c.Remaining*100 >= c.Limit*rateLowPercent {
 		return nil
 	}
 	return []Risk{{Severity: Medium, Class: ClassRateLimit,
 		What: fmt.Sprintf("only %d of %d GitHub API calls are left this hour, and every agent's PR watch spends them", c.Remaining, c.Limit),
-		Fix:  fmt.Sprintf("wait for the reset at %s, or lower concurrency until then", time.Unix(c.Reset, 0).Format("15:04"))}}
+		Fix:  fmt.Sprintf("wait for the reset at %s, or lower concurrency until then", c.Reset.Format("15:04"))}}
 }
 
 func (p *predict) disks() []Risk {

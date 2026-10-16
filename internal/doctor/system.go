@@ -40,10 +40,16 @@ func (s system) Trust() (trust.Report, bool, error) {
 	return rep, trust.Inherited(), err
 }
 
-func (s system) GH(args ...string) (string, error) {
-	out, stderr, err := forge.Output(context.Background(), string(s), forge.GH, args...)
+func (s system) GH(args ...string) (string, error)   { return s.cli(forge.GH, args...) }
+func (s system) Glab(args ...string) (string, error) { return s.cli(forge.Glab, args...) }
+
+// OriginURL is the origin remote's URL, read as forge.New reads it.
+func (s system) OriginURL() string { return forge.OriginURL(string(s)) }
+
+func (s system) cli(name string, args ...string) (string, error) {
+	out, stderr, err := forge.Output(context.Background(), string(s), name, args...)
 	if err != nil {
-		return out, fmt.Errorf("gh %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr))
+		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(stderr))
 	}
 	return strings.TrimSpace(out), nil
 }
