@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/usage"
 )
 
@@ -64,8 +65,7 @@ func (l Launch) codexExecArgs() []string {
 	args := []string{
 		"-c", "mcp_servers.saddle.command=" + strconv.Quote(l.Bin),
 		"-c", `mcp_servers.saddle.args=["mcp"]`,
-		"-c", fmt.Sprintf("mcp_servers.saddle.env={SADDLE_ROOT=%s,SADDLE_TASK=%s}",
-			strconv.Quote(env["SADDLE_ROOT"]), strconv.Quote(env["SADDLE_TASK"])),
+		"-c", codexMCPEnv(env),
 	}
 	if l.Model != "" {
 		args = append(args, "-m", l.Model)
@@ -83,6 +83,17 @@ func (l Launch) codexExecArgs() []string {
 		}
 	}
 	return append(args, extra...)
+}
+
+// codexMCPEnv is the -c override that sets the saddle MCP server's env.
+// Codex hands MCP servers only the variables their config names, so
+// saddle up's harness choice (#150, #646) rides along when it is set (#668).
+func codexMCPEnv(env map[string]string) string {
+	s := fmt.Sprintf("mcp_servers.saddle.env={SADDLE_ROOT=%s,SADDLE_TASK=%s", strconv.Quote(env["SADDLE_ROOT"]), strconv.Quote(env["SADDLE_TASK"]))
+	if h := env[config.HarnessEnv]; h != "" {
+		s += fmt.Sprintf(",%s=%s", config.HarnessEnv, strconv.Quote(h))
+	}
+	return s + "}"
 }
 
 // codexExecExtra keeps the [adapters.codex] args exec and exec resume both

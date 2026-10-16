@@ -121,8 +121,7 @@ func (Codex) Launch(l Launch) (string, error) {
 	argv = append(argv,
 		"-c", shellQuote("mcp_servers.saddle.command="+strconv.Quote(l.Bin)),
 		"-c", shellQuote(`mcp_servers.saddle.args=["mcp"]`),
-		"-c", shellQuote(fmt.Sprintf("mcp_servers.saddle.env={SADDLE_ROOT=%s,SADDLE_TASK=%s}",
-			strconv.Quote(env["SADDLE_ROOT"]), strconv.Quote(env["SADDLE_TASK"]))))
+		"-c", shellQuote(codexMCPEnv(env)))
 	argv = append(argv, quoteAll(codexApproval(l.Mode, l.Args))...)
 	argv = append(argv, quoteAll(l.Args)...)
 	argv = append(argv, `"$(cat "$run/prompt.md")"`)
