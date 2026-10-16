@@ -57,6 +57,10 @@ type StallConfig struct {
 	// unqueued with a still screen before the watchdog heals it, and how
 	// long each healing step waits (#467).
 	DoneOrphan time.Duration `toml:"done_orphan"`
+	// HungAfter is how long a running worker may make no progress before
+	// the hung-worker watch acts, and how long each recovery step waits
+	// (#625). A negative value turns the watch off.
+	HungAfter time.Duration `toml:"hung_after"`
 }
 
 // set is the budget config sets for kind, if any.
@@ -102,6 +106,9 @@ func (a *App) StallConfig() StallConfig {
 		if f.Stall.DoneOrphan > 0 {
 			c.DoneOrphan = f.Stall.DoneOrphan
 		}
+		if f.Stall.HungAfter != 0 {
+			c.HungAfter = f.Stall.HungAfter
+		}
 		for k, d := range f.Stall.Kinds {
 			c.Kinds[k] = d
 		}
@@ -111,6 +118,9 @@ func (a *App) StallConfig() StallConfig {
 	}
 	if c.DoneOrphan <= 0 {
 		c.DoneOrphan = DefaultDoneOrphan
+	}
+	if c.HungAfter == 0 {
+		c.HungAfter = DefaultHungAfter
 	}
 	return c
 }
@@ -186,6 +196,9 @@ func (a *App) StallTick(now time.Time) ([]DecisionCard, error) {
 	}
 	if _, err := a.OrphanTick(now); err != nil {
 		errs = append(errs, fmt.Errorf("done-orphan watch: %w", err))
+	}
+	if _, err := a.HungTick(now); err != nil {
+		errs = append(errs, fmt.Errorf("hung-worker watch: %w", err))
 	}
 	if _, _, err := a.WatchdogTick(now); err != nil {
 		errs = append(errs, fmt.Errorf("watchdog: %w", err))

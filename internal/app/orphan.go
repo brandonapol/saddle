@@ -338,41 +338,47 @@ func (a *App) nudgeOrphan(t store.Task, o *DoneOrphan, now time.Time) error {
 	if err := a.Store.Notify(t.ID, store.NoticeAction, orphanNudge); err != nil {
 		return err
 	}
-	how := "no window to type into"
-	if a.ownWindow(t) {
-		ad := a.taskAdapter(t)
-		line := ad.Inject("")
-		if !ad.Hooks() {
-			ns, _ := a.Store.TakeNotices(t.ID, false)
-			line = ad.Inject(store.FormatNotices(ns))
-		}
-		screen, err := a.Tmux.Capture(t.Window, 30)
-		switch {
-		case err == nil && promptShown(screen):
-			how = a.answerPrompt(t, screen)
-		default:
-			in := tmux.InputEmpty
-			if err == nil {
-				in = tmux.ReadInput(screen)
-			}
-			if in != tmux.InputEmpty {
-				_ = a.Tmux.SendKeys(t.Window, "C-u") // nobody is typing into a hung session
-			}
-			ok, err := tmux.Submit(a.Tmux, t.Window, line)
-			switch {
-			case err != nil:
-				how = "typing failed: " + err.Error()
-			case !ok:
-				how = "typed, but the input box never emptied"
-			default:
-				how = "typed and submitted"
-			}
-		}
-	}
+	how := a.typeWake(t)
 	// What the nudge itself drew is not the agent moving.
 	o.Screen = a.screenHash(t)
 	a.Store.Event(t.ID, EventOrphanNudge, how)
 	return nil
+}
+
+// typeWake types the wake line into t's pane, with its notices for an
+// agent without hooks, and checks its submit: the input box must empty. A
+// draft in the box is cleared first, since nobody types into a hung
+// session; a prompt on screen is handled by answerPrompt instead. It says
+// what it did.
+func (a *App) typeWake(t store.Task) string {
+	if !a.ownWindow(t) {
+		return "no window to type into"
+	}
+	ad := a.taskAdapter(t)
+	line := ad.Inject("")
+	if !ad.Hooks() {
+		ns, _ := a.Store.TakeNotices(t.ID, false)
+		line = ad.Inject(store.FormatNotices(ns))
+	}
+	screen, err := a.Tmux.Capture(t.Window, 30)
+	if err == nil && promptShown(screen) {
+		return a.answerPrompt(t, screen)
+	}
+	in := tmux.InputEmpty
+	if err == nil {
+		in = tmux.ReadInput(screen)
+	}
+	if in != tmux.InputEmpty {
+		_ = a.Tmux.SendKeys(t.Window, "C-u")
+	}
+	ok, err := tmux.Submit(a.Tmux, t.Window, line)
+	switch {
+	case err != nil:
+		return "typing failed: " + err.Error()
+	case !ok:
+		return "typed, but the input box never emptied"
+	}
+	return "typed and submitted"
 }
 
 // answerPrompt handles a prompt found where the nudge would type (#496),
