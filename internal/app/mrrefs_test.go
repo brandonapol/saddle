@@ -75,3 +75,20 @@ func TestDigestNamesGitLabMRs(t *testing.T) {
 		t.Fatalf("digest %q doesn't name the MRs !12 !13", sent)
 	}
 }
+
+// #652: a task's text that names an earlier layer's MR as "!12" names that
+// layer, as "#12" does a GitHub PR.
+func TestNamesGitLabMR(t *testing.T) {
+	t.Parallel()
+	mr := store.Task{ID: "t1", PR: "https://gitlab.com/g/r/-/merge_requests/12"}
+	if got, ok := names("build on !12 first", mr); !ok || got != "!12" {
+		t.Errorf("names(!12) = %q, %v; want !12", got, ok)
+	}
+	if _, ok := names("see !120", mr); ok {
+		t.Error("!120 named !12")
+	}
+	pr := store.Task{ID: "t1", PR: "https://github.com/o/r/pull/12"}
+	if got, ok := names("needs #12", pr); !ok || got != "#12" {
+		t.Errorf("names(#12) = %q, %v; want #12", got, ok)
+	}
+}
