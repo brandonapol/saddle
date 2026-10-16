@@ -259,7 +259,18 @@ type Orchestrator struct {
 	// RemoteControl runs the orchestrator as an interactive Claude Code
 	// session under Remote Control, as saddle up --rc does (#409).
 	RemoteControl bool `toml:"remote_control"`
+	// Adapter is the CLI the orchestrator runs on: one of
+	// OrchestratorAdapters. Empty keeps Claude Code when it is installed and
+	// otherwise picks the first headless agent that can run (#668).
+	Adapter string `toml:"adapter"`
+	// Model is the orchestrator's model. Empty falls back to the adapter's
+	// own key: [claude] or [grok] orchestrator_model, [adapters.codex] model.
+	Model string `toml:"model"`
 }
+
+// OrchestratorAdapters are the adapters the orchestrator can run on: the
+// ones with a headless session saddle can drive (#506, #668).
+func OrchestratorAdapters() []string { return []string{HarnessClaude, HarnessCodex, HarnessGrok} }
 
 // Adapter is how saddle launches an agent CLI. An empty Cmd means the
 // adapter's default binary.
@@ -1114,6 +1125,9 @@ func Load(root string) (Config, error) {
 	if c := cfg.Orchestrator.CompactAt; c <= 0 || c > 1 {
 		return cfg, fmt.Errorf("orchestrator.compact_at %v: want a fraction above 0 and at most 1", c)
 	}
+	if o := cfg.Orchestrator.Adapter; o != "" && !slices.Contains(OrchestratorAdapters(), o) {
+		return cfg, fmt.Errorf("orchestrator.adapter %q: want one of %s", o, strings.Join(OrchestratorAdapters(), ", "))
+	}
 	if cfg.Notices.WakeAfter <= 0 {
 		cfg.Notices.WakeAfter = Default().Notices.WakeAfter
 	}
@@ -1249,6 +1263,13 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # Run the orchestrator as an interactive Claude Code session with Remote
 # Control on, so you can steer it from the Claude app (saddle up --rc).
 # remote_control = false
+# The CLI the orchestrator runs on: "claude", "codex" or "grok". Unset keeps
+# Claude Code when it is installed, else the first of these that can run.
+# saddle init writes it when Claude Code can't run.
+# adapter = "codex"
+# The orchestrator's model; unset is [claude] orchestrator_model,
+# [grok] orchestrator_model or [adapters.codex] model.
+# model = "gpt-5-codex"
 
 # The CPU and RAM gauge above the orchestrator box (docs/config.md). It says
 # whether this machine can take another terminal that uses an AI. On unless

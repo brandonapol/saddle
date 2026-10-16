@@ -975,3 +975,32 @@ func TestForgeOverride(t *testing.T) {
 		}
 	}
 }
+
+// #668: [orchestrator] adapter picks the orchestrator's CLI; model is optional.
+func TestOrchestratorAdapter(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Orchestrator.Adapter != "" || cfg.Orchestrator.Model != "" {
+		t.Fatalf("default orchestrator = %+v, want no adapter or model", cfg.Orchestrator)
+	}
+	root := t.TempDir()
+	for _, a := range []string{"claude", "codex", "grok"} {
+		writeConfig(t, root, "[orchestrator]\nadapter = \""+a+"\"\nmodel = \"m-"+a+"\"\n")
+		cfg, err := Load(root)
+		if err != nil || cfg.Orchestrator.Adapter != a || cfg.Orchestrator.Model != "m-"+a {
+			t.Fatalf("adapter = %s: got %+v, %v", a, cfg.Orchestrator, err)
+		}
+	}
+	for _, bad := range []string{"gemini", "opencode", "gpt"} {
+		writeConfig(t, root, "[orchestrator]\nadapter = \""+bad+"\"\n")
+		if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "orchestrator.adapter") {
+			t.Errorf("adapter = %s: err %v, want an orchestrator.adapter error", bad, err)
+		}
+	}
+	if !strings.Contains(Template, `# adapter = "codex"`) {
+		t.Error("template doesn't document orchestrator.adapter")
+	}
+}
