@@ -104,6 +104,33 @@ func stepCopyCursor(u *TUI, before []string, key string) {
 	})
 }
 
+// settledRow waits for the chat view to stop moving (the "copied" toast gone,
+// two captures apart equal) and returns where s sits on that settled screen.
+// Right after copy mode ends the toast comes and goes and the chat reflows, so
+// a row taken from the first capture can be one off by the time a mouse report
+// lands: the drag then selects the line above the message.
+func settledRow(t *testing.T, u *TUI, s string) (x, y int) {
+	t.Helper()
+	var prev string
+	Eventually(t, fmt.Sprintf("the screen to settle with %q on it", s), func() error {
+		cur := u.Screen()
+		was := prev
+		prev = cur
+		switch {
+		case strings.Contains(cur, "COPY ·") || strings.Contains(cur, "copied"):
+			return errorf("copy mode or its toast still on screen")
+		case cur != was:
+			return errorf("screen still changing")
+		}
+		x, y = rowAlone(strings.Split(strings.TrimRight(cur, "\n "), "\n"), s)
+		if y < 1 {
+			return errorf("%q not on screen:\n%s", s, cur)
+		}
+		return nil
+	})
+	return x, y
+}
+
 // TestJourneyCopyToClipboard copies chat lines out of the TUI (#217): in
 // copy mode, the cursor moves to a message, V and k select it and its
 // header, y copies; then a mouse drag over the same rows copies them again.
@@ -153,10 +180,7 @@ func TestJourneyCopyToClipboard(t *testing.T) {
 	must(t, os.Remove(clip))
 	_, err := w.Tmux.Run("delete-buffer")
 	must(t, err)
-	x, y := rowAlone(u.Lines(), msg)
-	if y < 1 {
-		t.Fatalf("%q not on screen:\n%s", msg, u.Screen())
-	}
+	x, y := settledRow(t, u, msg)
 	// SGR mouse reports are 1-based: press, motion with the button held, release.
 	u.sendHex(hexOf(fmt.Sprintf("\x1b[<0;%d;%dM", x+1, y+1))...)
 	u.sendHex(hexOf(fmt.Sprintf("\x1b[<32;%d;%dM", x+1, y))...)
