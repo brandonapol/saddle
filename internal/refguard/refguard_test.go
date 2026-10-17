@@ -45,6 +45,11 @@ func setup(t *testing.T) *repo {
 	root := t.TempDir()
 	r := &repo{t: t, root: root}
 	r.git("", "init", "-q", "-b", "main")
+	// A commit can start a detached `git maintenance run --auto` (or gc)
+	// that keeps writing into .git/objects after the test returns, which
+	// races t.TempDir cleanup (#650). Keep the repo free of background git.
+	r.git("", "config", "gc.auto", "0")
+	r.git("", "config", "maintenance.auto", "false")
 	r.git("", "commit", "-q", "--allow-empty", "-m", "one")
 	r.git("", "commit", "-q", "--allow-empty", "-m", "two")
 	st, err := store.Open(filepath.Join(root, ".saddle", "state.db"))

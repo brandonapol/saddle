@@ -3,6 +3,7 @@ package refguard
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -76,6 +77,18 @@ func TestReinstallWhileCommitting(t *testing.T) {
 	for i := range 40 {
 		if err := r.run("", "commit", "-q", "--allow-empty", "-m", "c"); err != nil {
 			t.Fatalf("commit %d while hooks were reinstalled: %v", i, err)
+		}
+	}
+}
+
+// TestSetupDisablesBackgroundGit: setup turns off auto gc and maintenance, so
+// no detached git process outlives a test and races its TempDir cleanup (#650).
+func TestSetupDisablesBackgroundGit(t *testing.T) {
+	r := setup(t)
+	for key, want := range map[string]string{"gc.auto": "0", "maintenance.auto": "false"} {
+		got, err := gitx.Run(r.root, "config", "--get", key)
+		if err != nil || strings.TrimSpace(got) != want {
+			t.Errorf("%s = %q, %v; want %q", key, got, err, want)
 		}
 	}
 }
