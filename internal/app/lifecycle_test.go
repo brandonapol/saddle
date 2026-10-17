@@ -1,10 +1,12 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
@@ -479,5 +481,47 @@ func TestGCCountsMatchGC(t *testing.T) {
 	}
 	if remove, kept, err = a.GCCounts(); err != nil || remove != 0 || kept != 1 {
 		t.Fatalf("after gc: %d removable, %d kept, %v; want 0, 1", remove, kept, err)
+	}
+}
+
+// #638: doctor and down must not wait on a slow count. Past its deadline the
+// scan starts no checks and keeps what it hasn't looked at.
+func TestLeftoversDeadlineKeepsUnchecked(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	for i := range 6 {
+		killedWithWork(t, a, fmt.Sprintf("b%d", i), fmt.Sprintf("f%d.txt", i))
+	}
+	start := time.Now()
+	ls, err := a.leftovers(time.Now().Add(-time.Second))
+	must(t, err)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("expired deadline still took %v", d)
+	}
+	branches := 0
+	for _, l := range ls {
+		if l.Kind == "branch" {
+			branches++
+			if l.Keep != notChecked {
+				t.Fatalf("%s: Keep = %q, want %q", l.Name, l.Keep, notChecked)
+			}
+		}
+	}
+	if branches != 6 {
+		t.Fatalf("found %d branches, want 6", branches)
+	}
+}
+
+// #638: with many branches the answer is the same as the serial scan's.
+func TestLeftoversManyBranchesParallel(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	for i := range 12 {
+		killedWithWork(t, a, fmt.Sprintf("m%d", i), fmt.Sprintf("m%d.txt", i))
+	}
+	remove, kept, err := a.GCCounts()
+	must(t, err)
+	if remove != 0 || kept != 12 {
+		t.Fatalf("GCCounts = %d removable, %d kept; want 0, 12", remove, kept)
 	}
 }

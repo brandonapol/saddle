@@ -7,8 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
@@ -271,6 +274,61 @@ func ancestor(dir, a, b string) bool {
 // a branch whose PR is still in the stack, and worktrees with uncommitted
 // changes are listed with why gc keeps them. It reads the last fetched refs.
 func (a *App) Leftovers() ([]Leftover, error) {
+	return a.leftovers(time.Time{})
+}
+
+// notChecked is why a leftover is kept when the deadline ran out before its
+// checks finished.
+const notChecked = "not checked yet; run saddle gc --dry-run"
+
+// parallel runs fn(0..n-1) on a few workers. With a deadline it stops
+// starting new work once it passes and returns without waiting for calls in
+// flight; ok[i] says whether fn(i) finished, and fn must publish its result
+// under mu so a late finisher can't race the caller.
+func parallel(n int, deadline time.Time, mu *sync.Mutex, fn func(i int)) (ok []bool) {
+	ok = make([]bool, n)
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for range min(gcWorkers, n) {
+		wg.Go(func() {
+			for i := range jobs {
+				fn(i)
+				mu.Lock()
+				ok[i] = true
+				mu.Unlock()
+			}
+		})
+	}
+	go func() {
+		defer close(jobs)
+		for i := range n {
+			if !deadline.IsZero() && time.Now().After(deadline) {
+				return
+			}
+			jobs <- i
+		}
+	}()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	if deadline.IsZero() {
+		<-done
+	} else {
+		select {
+		case <-done:
+		case <-time.After(time.Until(deadline)):
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return slices.Clone(ok)
+}
+
+const gcWorkers = 8
+
+// leftovers is Leftovers with a deadline (zero for none). Work that hasn't
+// finished by then is reported as kept, so the list errs toward keeping.
+func (a *App) leftovers(deadline time.Time) ([]Leftover, error) {
+	var mu sync.Mutex
 	ts, err := a.Store.Tasks()
 	if err != nil {
 		return nil, err
@@ -305,6 +363,16 @@ func (a *App) Leftovers() ([]Leftover, error) {
 		return nil, err
 	}
 	var out []Leftover
+	var wtBranch []string
+	// pending are the unmerged checks to run together: tip, task, and the
+	// leftover to mark. Kept reasons are set after the checks finish.
+	type pendingCheck struct {
+		at   int
+		tip  string
+		t    store.Task
+		keep func(why string) string
+	}
+	var pending []pendingCheck
 	inUse := map[string]bool{} // branches checked out in worktrees gc keeps
 	wts, err := gitx.Run(a.Root, "worktree", "list", "--porcelain")
 	if err != nil {
@@ -324,12 +392,25 @@ func (a *App) Leftovers() ([]Leftover, error) {
 			inUse[branch] = true
 			continue
 		}
-		l := Leftover{Kind: "worktree", Name: path}
-		if dirty, _ := gitx.Dirty(path); len(dirty) > 0 {
-			l.Keep = "uncommitted changes"
-			inUse[branch] = true
+		out = append(out, Leftover{Kind: "worktree", Name: path})
+		wtBranch = append(wtBranch, branch)
+	}
+	dirty := make([]bool, len(out))
+	checked := parallel(len(out), deadline, &mu, func(i int) {
+		d, _ := gitx.Dirty(out[i].Name)
+		mu.Lock()
+		dirty[i] = len(d) > 0
+		mu.Unlock()
+	})
+	for i := range out {
+		switch {
+		case !checked[i]:
+			out[i].Keep = notChecked
+			inUse[wtBranch[i]] = true
+		case dirty[i]:
+			out[i].Keep = "uncommitted changes"
+			inUse[wtBranch[i]] = true
 		}
-		out = append(out, l)
 	}
 	brs, err := gitx.Run(a.Root, "for-each-ref", "--format=%(refname:short)", "refs/heads/saddle/")
 	if err != nil {
@@ -340,9 +421,8 @@ func (a *App) Leftovers() ([]Leftover, error) {
 			continue
 		}
 		l := Leftover{Kind: "branch", Name: b}
-		if why := a.unmerged("refs/heads/"+b, task(strings.TrimPrefix(b, "saddle/")), base); why != "" {
-			l.Keep = why + "; delete with git branch -D"
-		}
+		pending = append(pending, pendingCheck{len(out), "refs/heads/" + b, task(strings.TrimPrefix(b, "saddle/")),
+			func(why string) string { return why + "; delete with git branch -D" }})
 		out = append(out, l)
 	}
 	if r := a.remote(); r != "" {
@@ -359,8 +439,8 @@ func (a *App) Leftovers() ([]Leftover, error) {
 			t := task(name)
 			if stacked[t.ID] {
 				l.Keep = "its PR is still in the stack"
-			} else if why := a.unmerged("refs/remotes/"+rb, t, base); why != "" {
-				l.Keep = why
+			} else {
+				pending = append(pending, pendingCheck{len(out), "refs/remotes/" + rb, t, func(why string) string { return why }})
 			}
 			out = append(out, l)
 		}
@@ -374,20 +454,38 @@ func (a *App) Leftovers() ([]Leftover, error) {
 			l := Leftover{Kind: "ref", Name: r}
 			// A snapshot of uncommitted work (#254) stays until that work lands.
 			if strings.HasPrefix(r, wipRef("")) {
-				if why := a.unmerged(r, task(filepath.Base(r)), base); why != "" {
-					l.Keep = "snapshot of uncommitted work; delete with git update-ref -d"
-				}
+				pending = append(pending, pendingCheck{len(out), r, task(filepath.Base(r)),
+					func(string) string { return "snapshot of uncommitted work; delete with git update-ref -d" }})
 			}
 			out = append(out, l)
+		}
+	}
+	whys := make([]string, len(pending))
+	checked = parallel(len(pending), deadline, &mu, func(i int) {
+		why := a.unmerged(pending[i].tip, pending[i].t, base)
+		mu.Lock()
+		whys[i] = why
+		mu.Unlock()
+	})
+	for i, p := range pending {
+		switch {
+		case !checked[i]:
+			out[p.at].Keep = notChecked
+		case whys[i] != "":
+			out[p.at].Keep = p.keep(whys[i])
 		}
 	}
 	return out, nil
 }
 
+// gcCountsBudget bounds GCCounts so doctor and down never wait on a big repo.
+// Leftovers it hasn't checked by then count as kept.
+const gcCountsBudget = 5 * time.Second
+
 // GCCounts counts what gc would remove and what it would keep. Doctor uses
 // it, so its warning matches gc and clears once gc has run.
 func (a *App) GCCounts() (remove, kept int, err error) {
-	ls, err := a.Leftovers()
+	ls, err := a.leftovers(time.Now().Add(gcCountsBudget))
 	for _, l := range ls {
 		if l.Keep != "" {
 			kept++
