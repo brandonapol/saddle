@@ -49,7 +49,7 @@ func RepoSlug(remote string) string {
 	if host == "" {
 		return ""
 	}
-	path := remote
+	var path string
 	if strings.Contains(remote, "://") {
 		u, err := url.Parse(strings.TrimSpace(remote))
 		if err != nil {
