@@ -43,6 +43,26 @@ func RemoteHost(remote string) string {
 	return before
 }
 
+// RepoSlug is the owner/name path of a git remote URL, "" for a local path.
+func RepoSlug(remote string) string {
+	host := RemoteHost(remote)
+	if host == "" {
+		return ""
+	}
+	path := remote
+	if strings.Contains(remote, "://") {
+		u, err := url.Parse(strings.TrimSpace(remote))
+		if err != nil {
+			return ""
+		}
+		path = u.Path
+	} else {
+		_, path, _ = strings.Cut(remote, ":")
+	}
+	path = strings.Trim(path, "/")
+	return strings.TrimSuffix(path, ".git")
+}
+
 // OriginURL is the URL of the origin remote (else the first remote) of the
 // checkout dir is in, read from its git config file so that it starts no
 // process. "" when there is none or it can't be read.

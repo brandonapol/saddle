@@ -326,3 +326,41 @@ func TestFileBlockersCommentsStallRouted(t *testing.T) {
 		t.Errorf("unrelated route-around touched issues: %+v", g.comments)
 	}
 }
+
+// Blocker issues land in saddle's repo, not the one saddle was working on,
+// so the issue names that repo and qualifies its PR, and a repeat from
+// another repo says which.
+func TestBlockerIssueNamesSourceRepo(t *testing.T) {
+	t.Parallel()
+	f, g := blockerFiler(t)
+	ctx := context.Background()
+	b := Blocker{Kind: BlockerStuckStack, Cause: "prepublish", Subject: "prepublish at layer t3 with nobody fixing it",
+		Task: "t3", PR: "3101", Repo: "autobutler-org/quark", At: f.now()}
+	_, err := f.FileBlocker(ctx, b)
+	must(t, err)
+	body := g.issues[0].Body
+	for _, want := range []string{"- Repo: autobutler-org/quark\n", "- PR: autobutler-org/quark#3101\n"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body lacks %q:\n%s", want, body)
+		}
+	}
+	b.Repo, b.PR = "o/other", "#7"
+	_, err = f.FileBlocker(ctx, b)
+	must(t, err)
+	if cs := g.comments[g.issues[0].Number]; len(cs) != 1 || !strings.Contains(cs[0], "Seen again 2026-10-12, o/other, t3, o/other#7") {
+		t.Errorf("comments = %q", cs)
+	}
+	b.Repo, b.PR = "", "https://github.com/o/r/pull/9"
+	if got := blockerLinks(b); got != "- Task: t3\n- PR: https://github.com/o/r/pull/9\n" {
+		t.Errorf("links without a repo = %q", got)
+	}
+}
+
+func TestBlockerRepoFollowsConfig(t *testing.T) {
+	t.Parallel()
+	a, _ := meterApp(t)
+	a.Cfg.Issues.Repo = "o/saddle"
+	if got := a.BlockerRepo(); got != "o/saddle" {
+		t.Errorf("BlockerRepo = %q", got)
+	}
+}

@@ -162,7 +162,14 @@ func checkRunQueue(r RunQueue) error {
 type Issues struct {
 	// AutoFile files blocker issues. On by default; false opts out.
 	AutoFile bool `toml:"auto_file"`
+	// Repo is the owner/name blocker issues are filed in. A blocker is a
+	// gap in saddle, not in the repo it was working on, so the default is
+	// SaddleRepo; "" files them in the repo saddle runs in.
+	Repo string `toml:"repo"`
 }
+
+// SaddleRepo is saddle's own repo, where its blocker issues go by default.
+const SaddleRepo = "brandonapol/saddle"
 
 // Tmp is [tmp]: where saddle keeps its scratch and when it sweeps it
 // (#322). Zero values mean scratch's defaults; Load expands ~ in Dir and
@@ -907,7 +914,7 @@ func Default() Config {
 		Integration:   "saddle/integration",
 		Concurrency:   5,
 		CloseOnLand:   true,
-		Issues:        Issues{AutoFile: true},
+		Issues:        Issues{AutoFile: true, Repo: SaddleRepo},
 		Claims:        Claims{Granularity: GranularityFile},
 		Harness:       HarnessClaude,
 		AdapterOrder:  []string{HarnessClaude, HarnessGrok, HarnessCodex, AdapterOpenCode},
