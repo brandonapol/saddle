@@ -15,7 +15,7 @@ func TestTmuxEnvCarriesE2ETag(t *testing.T) {
 		return
 	}
 	t.Setenv(procreap.EnvE2EDir, "")
-	os.Unsetenv(procreap.EnvE2EDir)
+	_ = os.Unsetenv(procreap.EnvE2EDir)
 	x := &Tmux{Dir: "/x/e2etmux1"}
 	if !slices.Contains(x.env(), procreap.EnvE2EDir+"=/x/e2etmux1") {
 		t.Errorf("env = %v, want the tag naming the socket dir", x.env())
