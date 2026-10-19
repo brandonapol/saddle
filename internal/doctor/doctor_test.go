@@ -47,6 +47,8 @@ const repoJSON = `{"full_name":"o/r","html_url":"https://github.com/o/r","allow_
 const protectionJSON = `{"required_status_checks":{"contexts":["test"]},"required_pull_request_reviews":{"required_approving_review_count":1},"enforce_admins":{"enabled":true}}`
 
 func healthy(t *testing.T) *fakeEnv {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // no user runq.toml
+	t.Setenv("SADDLE_RUNQ", "enforce")
 	cfg := config.Default()
 	cfg.Test.Cmd = "go test ./..."
 	root := t.TempDir()
@@ -150,7 +152,7 @@ func TestHealthyRepoAllOK(t *testing.T) {
 		t.Fatal("Failed on a healthy repo")
 	}
 	want := []string{CheckConfig, CheckRemote, CheckDefaultBranch, CheckGH, CheckMergeSettings, CheckProtection, CheckGhStack,
-		CheckTestCmd, CheckTmux, CheckClaude, CheckHooks, CheckPush, CheckOrchAllow, CheckGate, CheckIgnored, CheckStateDB, CheckLeftovers, CheckInhibit, CheckOrchestrator}
+		CheckTestCmd, CheckTmux, CheckClaude, CheckHooks, CheckPush, CheckOrchAllow, CheckGate, CheckIgnored, CheckStateDB, CheckLeftovers, CheckInhibit, CheckRunq, CheckOrchestrator}
 	if len(rs) != len(want) {
 		t.Fatalf("got %d checks, want %d", len(rs), len(want))
 	}
@@ -558,5 +560,32 @@ func TestDoctorRepoHooks(t *testing.T) {
 		if r.Name == CheckRepoHooks {
 			t.Fatal("repo hooks checked without RepoHooksEnv")
 		}
+	}
+}
+
+// TestRunqObserveModeWarns: the heavy-run queue defaults to observe, which
+// never waits, so budget, slots and load gate do nothing (#664). Doctor says
+// so and how to enforce.
+func TestRunqObserveModeWarns(t *testing.T) {
+	f := healthy(t)
+	t.Setenv("SADDLE_RUNQ", "")
+	r := find(t, Run(f), CheckRunq)
+	if r.Status != Warn || !strings.Contains(r.Detail, "observe") || !strings.Contains(r.Fix, "mode = \"enforce\"") {
+		t.Fatalf("default mode: %+v", r)
+	}
+	// An explicit enforce in the repo's runq.toml is fine.
+	if err := os.MkdirAll(filepath.Join(f.root, ".saddle"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.root, ".saddle", "runq.toml"), []byte("mode = \"enforce\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if r := find(t, Run(f), CheckRunq); r.Status != OK || !strings.Contains(r.Detail, "enforce") {
+		t.Fatalf("enforce: %+v", r)
+	}
+	// Off is a deliberate choice, not a warning.
+	t.Setenv("SADDLE_RUNQ", "off")
+	if r := find(t, Run(f), CheckRunq); r.Status != OK {
+		t.Fatalf("off: %+v", r)
 	}
 }

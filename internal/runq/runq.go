@@ -124,7 +124,7 @@ type Options struct {
 	PollMax      time.Duration                // longest wait between attempts (Heartbeat/2)
 	AgingStep    time.Duration                // waiting this long adds one priority (30s)
 	Gate         Gate                         // optional load gate consulted before a grant
-	GateMaxWait  time.Duration                // admit anyway after the gate held a run this long (10m)
+	GateMaxWait  time.Duration                // start one run anyway after the gate held it this long (10m)
 	Nice         int                          // run children at this nice increment (0: as is)
 	IOIdle       bool                         // run children in the idle I/O class (Linux, ionice -c3)
 	Scope        string                       // ScopeSystemd runs children in a user systemd scope
@@ -753,6 +753,16 @@ func (q *Queue) try(l *Lease, req Request, gatedSince *time.Time) (granted bool,
 				}
 				if now.Sub(*gatedSince) < q.opts.GateMaxWait {
 					w.Gated = why
+					return nil
+				}
+				// Past gate_max_wait keep a floor: one heavy run may start
+				// anyway, but not a second while it holds (#664).
+				var running int
+				if err := tx.QueryRow(`SELECT COUNT(*) FROM leases WHERE state='running'`).Scan(&running); err != nil {
+					return err
+				}
+				if running > 0 {
+					w.Gated = why + "; one run already started past gate_max_wait"
 					return nil
 				}
 			}

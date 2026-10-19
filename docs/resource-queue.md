@@ -65,8 +65,32 @@ The load gate already holds the head of a class while load per core is over
 now also holds while available RAM (`MemAvailable` as a percent of
 `MemTotal`) is under `min_free_ram_pct`. That is the reading the gauge shows,
 and the default (10%) is the gauge's `busy_ram_pct`, the point where it says
-"Overloaded: don't". It still fails open on an unreadable probe and gives up
-after `gate_max_wait` (10m).
+"Overloaded: don't". It still fails open on an unreadable probe.
+
+After `gate_max_wait` (10m) the gate stops holding, but it keeps a floor: one
+heavy run may start anyway, and no second one does while it holds (the wait is
+still bounded by `wait_max`). A persistently overloaded box therefore runs one
+heavy run at a time instead of everything at once.
+
+### Observe mode and `saddle doctor`
+
+The queue's default mode is `observe`: it records runs but never makes one
+wait, so slots, budget and the load gate are inert. `saddle doctor` warns
+while the queue is observing; set `mode = "enforce"` in `.saddle/runq.toml`
+(this repo) or `~/.config/saddle/runq.toml` (the machine) when you are done
+measuring.
+
+### Compound commands and `make` targets
+
+A gate's `test.cmd` is classified per segment: it is split on `&&`, `||` and
+`;` (outside quotes), each segment is matched against the `[classes.*]`
+`match` patterns, and the command takes the heaviest class among its segments
+(by `weight`, then name). `flutter pub get && make check` is a flutter class
+run, not `default`. A `make <target>` segment is classified by what the
+Makefile recipe for that target (and its prerequisites, and `$(MAKE)` calls)
+runs, when that matches a class; otherwise the `match` patterns apply as
+before. A repo that wants an explicit mapping lists the command in that
+class's `match`.
 
 ### Config
 
