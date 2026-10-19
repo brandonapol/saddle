@@ -17,20 +17,9 @@ type Forge interface {
 	MergePR(ctx context.Context, ref, method, head string) error
 }
 
-// Runner runs gh with args and returns its stdout.
-type Runner func(args ...string) (string, error)
-
-// ExecRunner runs the gh CLI in dir.
-func ExecRunner(dir string) Runner {
-	gh := forge.CLI(dir, forge.GH)
-	return func(args ...string) (string, error) { return gh(context.Background(), args...) }
-}
-
-// GH is the watcher's GitHub: the repo's forge. Run is gh, for callers that
-// have a gh runner rather than a forge; it is used when Forge is nil.
+// GH is the watcher's GitHub: the repo's forge.
 type GH struct {
 	Forge  Forge
-	Run    Runner
 	method string // cached once read
 }
 
@@ -43,12 +32,7 @@ func (g *GH) Provider() string {
 	return config.ForgeGitHub
 }
 
-func (g *GH) forge() Forge {
-	if g.Forge != nil {
-		return g.Forge
-	}
-	return &forge.GitHub{Run: func(_ context.Context, args ...string) (string, error) { return g.Run(args...) }}
-}
+func (g *GH) forge() Forge { return g.Forge }
 
 // prFields are the fields PR reads.
 const prFields = forge.PRURL | forge.PRState | forge.PRDraft | forge.PRMergeable | forge.PRMergeState |

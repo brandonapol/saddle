@@ -3,7 +3,6 @@ package automerge
 import (
 	"context"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/forge"
@@ -65,31 +64,5 @@ func TestGHMergeMethodAndMerge(t *testing.T) {
 	}
 	if _, err := (&GH{Forge: &fakeForge{settings: forge.MergeSettings{Merge: true}}}).MergeMethod(); err == nil {
 		t.Fatal("merge-commit-only repo: want error")
-	}
-}
-
-// TestGHRunIsGitHub: a GH built from a gh runner, without a forge, makes
-// the gh calls auto-merge always made.
-func TestGHRunIsGitHub(t *testing.T) {
-	var calls []string
-	g := &GH{Run: func(args ...string) (string, error) {
-		calls = append(calls, strings.Join(args, " "))
-		if args[0] == "api" {
-			return `{"allow_squash_merge":true,"allow_rebase_merge":true,"allow_merge_commit":false}`, nil
-		}
-		return `{"url":"u","state":"OPEN","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}`, nil
-	}}
-	if pr, err := g.PR("u"); err != nil || pr.Checks != ChecksPass {
-		t.Fatalf("pr = %+v, %v", pr, err)
-	}
-	m, _ := g.MergeMethod()
-	_ = g.Merge("u", m, "abc")
-	want := []string{
-		"pr view u --json url,state,isDraft,mergeable,mergeStateStatus,baseRefName,headRefName,headRefOid,labels,statusCheckRollup",
-		"api repos/{owner}/{repo}",
-		"pr merge u --squash --match-head-commit abc",
-	}
-	if !slices.Equal(calls, want) {
-		t.Fatalf("calls\n got %q\nwant %q", calls, want)
 	}
 }

@@ -34,7 +34,7 @@ func TestRefusalNamesForge(t *testing.T) {
 	}{
 		{&GH{Forge: providerForge{config.ForgeGitLab}}, "GitLab"},
 		{&GH{Forge: providerForge{config.ForgeGitHub}}, "GitHub"},
-		{&GH{Run: func(...string) (string, error) { return "", nil }}, "GitHub"},
+		{&GH{}, "GitHub"},
 	} {
 		w := &Watcher{Base: "main", GH: tc.gh}
 		for _, n := range nodes {
