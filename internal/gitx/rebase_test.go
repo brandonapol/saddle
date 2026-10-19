@@ -104,3 +104,27 @@ func TestReplayFrom(t *testing.T) {
 		t.Fatalf("no reflog: ReplayFrom = %q, %d, %v; want LandedPrefix's nothing", c, n, err)
 	}
 }
+
+// #643: integration once pointed at the task's base, then a restack dropped
+// that work without landing it. The fork point still names it, but onto holds
+// none of its content, so ReplayFrom must replay it rather than skip it.
+func TestReplayFromKeepsRemovedWork(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	gitT(t, dir, "init", "-q", "-b", "main")
+	commitFile(t, dir, "base.txt", "base\n")
+	gitT(t, dir, "checkout", "-qb", "integ")
+	commitFile(t, dir, "x.txt", "x\n")
+	gitT(t, dir, "checkout", "-qb", "task")
+	commitFile(t, dir, "b.txt", "b\n")
+	gitT(t, dir, "checkout", "-q", "main")
+	commitFile(t, dir, "other.txt", "other\n")
+	gitT(t, dir, "update-ref", "refs/heads/integ", "main") // x.txt dropped, not landed
+	gitT(t, dir, "checkout", "-q", "task")
+
+	if c, n, err := ReplayFrom(dir, "integ", "integ"); err != nil || c != "" || n != 0 {
+		t.Fatalf("ReplayFrom = %q, %d, %v; want a plain rebase (nothing skipped)", c, n, err)
+	}
+}

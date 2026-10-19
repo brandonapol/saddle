@@ -149,6 +149,12 @@ func ReplayFrom(dir, onto, track string) (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
+	// The reflog only says onto once pointed at fp. Skip those commits only
+	// if onto still carries their content; a restack that dropped them
+	// without landing them must have them replayed (#643).
+	if !holdsContent(dir, mb, fp, onto) {
+		return from, n, nil
+	}
 	c, err := Run(dir, "rev-list", "--count", "--first-parent", mb+".."+fp)
 	if err != nil {
 		return "", 0, err
@@ -162,4 +168,28 @@ func ReplayFrom(dir, onto, track string) (string, int, error) {
 func isAncestor(dir, a, b string) bool {
 	_, err := Run(dir, "merge-base", "--is-ancestor", a, b)
 	return err == nil
+}
+
+// holdsContent reports whether onto has changed every file that mb..fp
+// changed, so fp's work is plausibly in onto under rewritten SHAs (a squash,
+// possibly edited). A file onto never touched means that work is gone.
+func holdsContent(dir, mb, fp, onto string) bool {
+	mine, err := Run(dir, "diff", "--name-only", mb, fp)
+	if err != nil {
+		return false
+	}
+	theirs, err := Run(dir, "diff", "--name-only", mb, onto)
+	if err != nil {
+		return false
+	}
+	changed := map[string]bool{}
+	for _, f := range strings.Split(theirs, "\n") {
+		changed[f] = true
+	}
+	for _, f := range strings.Split(mine, "\n") {
+		if f != "" && !changed[f] {
+			return false
+		}
+	}
+	return true
 }
