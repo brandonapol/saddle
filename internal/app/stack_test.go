@@ -1,9 +1,12 @@
 package app
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
@@ -259,6 +262,60 @@ func TestRestackKeepsKilledUnpublishedTask(t *testing.T) {
 // conflict already resolved and staged. Restack used to read that as an
 // empty commit, skip it, and mark the task merged; it must stop on it as a
 // conflict, which with t1's agent gone means a repair task.
+// removeWorktree force-removes a scratch worktree. A git process the last
+// command left behind (auto maintenance, an index refresh) can still be
+// writing into the directory, so "Directory not empty" is retried: it clears
+// as soon as the straggler exits.
+func removeWorktree(t *testing.T, root, wt string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, err := gitx.Run(root, "worktree", "remove", "--force", wt)
+		if err == nil {
+			return
+		}
+		if strings.Contains(err.Error(), "not a working tree") {
+			// The failed attempt already dropped git's record of it.
+			if err := os.RemoveAll(wt); err == nil {
+				return
+			}
+		} else if !strings.Contains(err.Error(), "not empty") {
+			t.Fatalf("git worktree remove %s: %v", wt, err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("git worktree remove %s: %v", wt, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A straggler writing into a worktree while it is removed must not fail
+// the removal (#714).
+func TestRemoveWorktreeWaitsOutStraggler(t *testing.T) {
+	t.Parallel()
+	a := trainSetup(t)
+	wt := filepath.Join(t.TempDir(), "scratch")
+	git(t, a.Root, "worktree", "add", "-q", "--detach", wt, "HEAD")
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = os.MkdirAll(filepath.Join(wt, "late"), 0o755)
+			_ = os.WriteFile(filepath.Join(wt, "late", fmt.Sprint(i)), nil, 0o644)
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	time.AfterFunc(150*time.Millisecond, func() { close(stop) })
+	removeWorktree(t, a.Root, wt)
+	<-done
+}
+
 func TestRestackDoesNotSkipRerereResolvedPick(t *testing.T) {
 	t.Parallel()
 	a := trainSetup(t)
@@ -278,7 +335,7 @@ func TestRestackDoesNotSkipRerereResolvedPick(t *testing.T) {
 	write(t, wt, "shared.txt", "main\none\n")
 	git(t, wt, "add", "shared.txt")
 	git(t, wt, "-c", "core.editor=true", "cherry-pick", "--continue")
-	git(t, a.Root, "worktree", "remove", "--force", wt)
+	removeWorktree(t, a.Root, wt)
 
 	// t1's agent is gone, so the conflict goes to a repair task (#172).
 	res, err := a.Restack()
