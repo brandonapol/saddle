@@ -11,6 +11,9 @@ import (
 // #692: the tmux server (and so its panes and fake agents) is tagged with
 // the test's dir, whether the env is os.Environ or a world's own list.
 func TestTmuxEnvCarriesE2ETag(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	t.Setenv(procreap.EnvE2EDir, "")
 	os.Unsetenv(procreap.EnvE2EDir)
 	x := &Tmux{Dir: "/x/e2etmux1"}
