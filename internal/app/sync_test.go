@@ -135,7 +135,11 @@ func TestSyncNeverStacksOnARebaseInProgress(t *testing.T) {
 // are told to sync.
 func TestLandAutoRebasesLiveWorktrees(t *testing.T) {
 	t.Parallel()
-	a, _ := setup(t)
+	a, ft := setup(t)
+	// The pane never echoes what is typed into it, so no delivery is ever
+	// confirmed: otherwise the confirm goroutine marks an action notice
+	// delivered, racing the TakeNotices below, and wins under load (#709).
+	ft.frozen = true
 	spawn := func(title string) store.Task {
 		tk, err := a.Spawn(SpawnReq{Title: title})
 		must(t, err)
