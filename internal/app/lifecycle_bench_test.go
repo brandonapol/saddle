@@ -27,10 +27,19 @@ func benchSetup() (*App, string, error) {
 
 	// Create initial files
 	billMeterPath := filepath.Join(tmpDir, "billing", "meter.go")
-	os.MkdirAll(filepath.Dir(billMeterPath), 0755)
-	os.WriteFile(billMeterPath, []byte("package billing\n\nfunc Meter() {}\n"), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "billing", "invoice.go"), []byte("package billing\n\nfunc Invoice() int { return 1 }\n"), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "README.md"), []byte("hi\n"), 0644)
+	if err := os.MkdirAll(filepath.Dir(billMeterPath), 0o755); err != nil {
+		return nil, "", err
+	}
+	files := map[string]string{
+		billMeterPath: "package billing\n\nfunc Meter() {}\n",
+		filepath.Join(tmpDir, "billing", "invoice.go"): "package billing\n\nfunc Invoice() int { return 1 }\n",
+		filepath.Join(tmpDir, "README.md"):             "hi\n",
+	}
+	for path, body := range files {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			return nil, "", err
+		}
+	}
 
 	// Commit initial state
 	cmd = exec.Command("git", "-C", tmpDir, "add", "-A")
@@ -74,7 +83,7 @@ func BenchmarkGCCounts(b *testing.B) {
 	if err != nil {
 		b.Fatalf("benchmark setup failed: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 	defer a.Close()
 
 	// Build a repo with ~50 task branches and worktrees.
