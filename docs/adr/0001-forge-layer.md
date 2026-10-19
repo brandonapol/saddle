@@ -176,8 +176,8 @@ users:
   watching, no labels or stack comments). `forge.GitHub` issues the same gh
   subcommands, flags and values those packages did; the only difference is
   that `--json` field lists come in forge's fixed order, which gh ignores.
-  `automerge.GH` keeps a `Run` field (a gh runner) as a compatibility seam for
-  callers that have no forge; it runs through `forge.GitHub`.
+  `automerge.GH` is built from `App.Forge()` everywhere (its old `Run` gh-runner
+  seam is gone, #649).
 - `TestNoGHArgsOutsideForge` parses the repo and fails when a package outside
   `internal/forge` builds gh arguments. It allows only GitHub-only code with
   no provider-neutral meaning: `internal/ghstack` (the gh-stack extension,

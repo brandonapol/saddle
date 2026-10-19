@@ -175,7 +175,7 @@ func TestJourneyAutomergeHoldDuringCheckSticks(t *testing.T) {
 	w := world(t, Options{})
 	landThree(t, w)
 	a := w.App()
-	gh := &pausingGH{GitHub: &automerge.GH{Run: automerge.ExecRunner(a.Root)}, started: make(chan struct{}), proceed: make(chan struct{})}
+	gh := &pausingGH{GitHub: &automerge.GH{Forge: a.Forge()}, started: make(chan struct{}), proceed: make(chan struct{})}
 	done := make(chan error, 1)
 	go func() {
 		_, err := a.NewAutomerge(gh).Check()
