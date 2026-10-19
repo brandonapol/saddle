@@ -50,4 +50,3 @@ func TestReapTaggedKillsGoneAndStaleSparesLive(t *testing.T) {
 		}
 	}
 }
-
