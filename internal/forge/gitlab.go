@@ -329,6 +329,39 @@ func (g *GitLab) ListPRs(ctx context.Context, q PRQuery, f PRFields) ([]PR, erro
 	return prs, nil
 }
 
+// openPRPage is how many merge requests one list page asks for. A short
+// page is the last.
+const openPRPage = 100
+
+// OpenPRs lists open merge requests and their head pipelines in one list
+// per page (#711). The list carries the pipeline's status, which is the
+// pass, fail or pending the jobs fold into, so this does not read each MR.
+func (g *GitLab) OpenPRs(ctx context.Context) ([]PR, error) {
+	var all []PR
+	for page := 1; page <= 50; page++ {
+		var ms []mrJSON
+		ep := query("projects/:id/merge_requests",
+			"state", "opened",
+			"with_merge_status_recheck", "true",
+			"order_by", "updated_at",
+			"sort", "desc",
+			"per_page", strconv.Itoa(openPRPage),
+			"page", strconv.Itoa(page))
+		if err := g.apiJSON(ctx, &ms, "", ep); err != nil {
+			return nil, err
+		}
+		for _, m := range ms {
+			p := m.pr()
+			p.Checks = pipelineChecks(m)
+			all = append(all, p)
+		}
+		if len(ms) < openPRPage {
+			return all, nil
+		}
+	}
+	return nil, fmt.Errorf("glab api: open merge requests did not finish paging")
+}
+
 func (g *GitLab) updateMR(ctx context.Context, ref string, fields ...string) error {
 	iid, err := g.iid(ctx, ref)
 	if err != nil {

@@ -43,6 +43,34 @@ func (g *GH) PR(url string) (PR, error) {
 	if err != nil {
 		return PR{}, err
 	}
+	pr := forgePR(p)
+	if pr.URL == "" {
+		pr.URL = url
+	}
+	return pr, nil
+}
+
+// OpenPRs lists open PRs and their checks in one forge query (#711).
+func (g *GH) OpenPRs() ([]PR, error) {
+	lister, ok := g.Forge.(interface {
+		OpenPRs(context.Context) ([]forge.PR, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("list open PRs: %w", forge.ErrUnsupported)
+	}
+	raw, err := lister.OpenPRs(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PR, len(raw))
+	for i, p := range raw {
+		out[i] = forgePR(p)
+	}
+	return out, nil
+}
+
+// forgePR maps a forge PR onto the watcher's PR, folding its check rollup.
+func forgePR(p forge.PR) PR {
 	pr := PR{URL: p.URL, State: p.State, Draft: p.Draft, Mergeable: p.Mergeable, MergeState: p.MergeState,
 		Base: p.Base, Head: p.Head, HeadSHA: p.HeadSHA, Labels: p.Labels}
 	rollup := make([]Check, len(p.Checks))
@@ -50,10 +78,7 @@ func (g *GH) PR(url string) (PR, error) {
 		rollup[i] = Check{Status: c.Status, Conclusion: c.Conclusion, State: c.State}
 	}
 	pr.Checks = summarize(rollup)
-	if pr.URL == "" {
-		pr.URL = url
-	}
-	return pr, nil
+	return pr
 }
 
 // MergeMethod is squash when the repo allows it, else rebase. Saddle needs

@@ -184,6 +184,9 @@ type Forge interface {
 	CreatePR(ctx context.Context, p NewPR) (string, error)
 	PR(ctx context.Context, ref string, f PRFields) (PR, error)
 	ListPRs(ctx context.Context, q PRQuery, f PRFields) ([]PR, error)
+	// OpenPRs lists this repo's open pull requests and their check rollup in
+	// one query (#711): GraphQL on GitHub, one merge-request list on GitLab.
+	OpenPRs(ctx context.Context) ([]PR, error)
 	SetPRBase(ctx context.Context, ref, base string) error
 	SetPRBody(ctx context.Context, ref, body string) error
 	ClosePR(ctx context.Context, ref string) error
@@ -349,6 +352,9 @@ func (u Unsupported) PR(context.Context, string, PRFields) (PR, error) {
 }
 func (u Unsupported) ListPRs(context.Context, PRQuery, PRFields) ([]PR, error) {
 	return nil, u.err("list PRs")
+}
+func (u Unsupported) OpenPRs(context.Context) ([]PR, error) {
+	return nil, u.err("list open PRs")
 }
 func (u Unsupported) SetPRBase(context.Context, string, string) error { return u.err("retarget PR") }
 func (u Unsupported) SetPRBody(context.Context, string, string) error { return u.err("edit PR") }

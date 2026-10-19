@@ -592,7 +592,48 @@ func (c *call) graphql(fields map[string]string, jq string) error {
 		}
 		return fail("GraphQL: Could not resolve to a node with the global id of '%s'", fields["id"])
 	}
+	// Open PRs and their check rollup, one query (#711).
+	if strings.Contains(q, "pullRequests") && strings.Contains(q, "statusCheckRollup") {
+		return c.openPRsGraphQL(jq)
+	}
 	return fail("fakegh: unsupported graphql query: %s", q)
+}
+
+// openPRsGraphQL is the open-PR page forge.GitHub.OpenPRs asks for.
+func (c *call) openPRsGraphQL(jq string) error {
+	var nodes []any
+	for _, p := range c.s.PRs {
+		if p.State != "OPEN" {
+			continue
+		}
+		j := c.prJSON(p)
+		var contexts []any
+		for _, ch := range j["statusCheckRollup"].([]map[string]any) {
+			node := map[string]any{"__typename": "CheckRun", "name": ch["name"], "status": ch["status"],
+				"conclusion": ch["conclusion"], "startedAt": ""}
+			if wf, _ := ch["workflowName"].(string); wf != "" {
+				node["checkSuite"] = map[string]any{"workflowRun": map[string]any{"workflow": map[string]any{"name": wf}}}
+			}
+			contexts = append(contexts, node)
+		}
+		var rollup any
+		if len(contexts) > 0 {
+			rollup = map[string]any{"contexts": map[string]any{"nodes": contexts}}
+		}
+		nodes = append(nodes, map[string]any{
+			"number": j["number"], "url": j["url"], "state": j["state"], "isDraft": j["isDraft"],
+			"mergeable": j["mergeable"], "mergeStateStatus": j["mergeStateStatus"],
+			"baseRefName": j["baseRefName"], "headRefName": j["headRefName"], "headRefOid": j["headRefOid"],
+			"labels": map[string]any{"nodes": j["labels"]}, "statusCheckRollup": rollup,
+		})
+	}
+	if nodes == nil {
+		nodes = []any{}
+	}
+	return c.print(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequests": map[string]any{
+		"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
+		"nodes":    nodes,
+	}}}}, jq)
 }
 
 // pick keeps only the comma-separated fields of v; gh --json does the same.

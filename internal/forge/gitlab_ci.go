@@ -44,6 +44,32 @@ func pipelineBucket(status string) string {
 	return "pending" // created, waiting_for_resource, preparing, pending, running, scheduled
 }
 
+// pipelineChecks is the head pipeline as one check-rollup entry. A merge
+// request list carries the pipeline's status and not its jobs, and that
+// status is what the jobs fold into (#711). No pipeline is no checks.
+func pipelineChecks(m mrJSON) []CheckRun {
+	if m.HeadPipeline == nil {
+		return nil
+	}
+	c := CheckRun{Kind: KindJob, Name: "pipeline", Status: "COMPLETED"}
+	switch pipelineBucket(m.HeadPipeline.Status) {
+	case "pass":
+		c.Conclusion = "SUCCESS"
+	case "fail":
+		c.Conclusion = "FAILURE"
+	case "cancel":
+		c.Conclusion = "CANCELLED"
+	case "skipping":
+		c.Conclusion = "SKIPPED"
+	default:
+		c.Status = "QUEUED"
+		if m.HeadPipeline.Status == "running" {
+			c.Status = "IN_PROGRESS"
+		}
+	}
+	return []CheckRun{c}
+}
+
 // bucket is j's CICheck bucket: a failure the job allows passes.
 func (j jobJSON) bucket() string {
 	b := pipelineBucket(j.Status)
