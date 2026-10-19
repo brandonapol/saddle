@@ -100,7 +100,7 @@ func resolveTask(a *app.App, flag string) (string, error) {
 }
 
 func upCmd() *cobra.Command {
-	var skipDoctor, trusted, traceStartup bool
+	var skipDoctor, trusted, traceStartup, takeover bool
 	var wantsRC func(*app.App) bool
 	var trace *startupTrace
 	cmd := &cobra.Command{
@@ -160,6 +160,12 @@ keep the CLI they were spawned with.
 			}
 			trace.Mark("doctor (local checks)")
 			rc := wantsRC(a)
+			// One session per repo; a dead holder's lock is taken over (#665).
+			releaseUp, err := acquireUpLock(a.Root, takeover, cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			defer releaseUp()
 			release, err := a.AcquireLock(upLock(rc))
 			if err != nil {
 				return err
@@ -216,6 +222,7 @@ keep the CLI they were spawned with.
 		}),
 	}
 	cmd.Flags().BoolVar(&skipDoctor, "skip-doctor", false, "start without running the doctor checks")
+	cmd.Flags().BoolVar(&takeover, "takeover", false, "stop another saddle up running for this repo and take its place")
 	cmd.Flags().BoolVar(&trusted, "trust", false, "trust this repo without asking (remembered; see saddle trust)")
 	cmd.Flags().BoolVar(&traceStartup, "trace-startup", false, "print how long each startup stage took when up exits ("+traceStartupEnv+"=1 too; ="+"<path> also appends each stage to that file as it happens)")
 	wantsRC = addRCFlag(cmd)
