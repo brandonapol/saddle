@@ -512,6 +512,8 @@ const EventGateSwept = "gate_swept"
 type GateSweep struct {
 	Dirs   []string // the gate-* dirs removed
 	Killed int      // processes killed under them
+	E2E    int      // leaked e2e processes killed by their SADDLE_E2E_DIR tag (#692)
+	Socks  []string // e2etmux socket dirs removed
 }
 
 // gateBases are the dirs gate-* dirs live in: the current one and the
@@ -551,16 +553,67 @@ func (a *App) SweepStaleGates(maxAge time.Duration) GateSweep {
 				continue
 			}
 			dir := filepath.Join(base, e.Name())
-			res.Killed += procreap.Reap(dir, gateKillGrace, procreap.Match{})
+			res.Killed += procreap.Reap(dir, gateKillGrace, procreap.Match{Env: true})
 			if removeTree(dir) == nil {
 				res.Dirs = append(res.Dirs, dir)
 			}
 		}
 	}
-	if len(res.Dirs) > 0 {
-		a.Store.Event("", EventGateSwept, fmt.Sprintf("%d stale gate dirs, %d processes killed", len(res.Dirs), res.Killed))
+	res.E2E = procreap.ReapTagged(cutoff, gateKillGrace)
+	res.Socks = sweepE2ETmuxDirs(time.Now().Add(-e2eSockAge))
+	if len(res.Dirs) > 0 || res.E2E > 0 || len(res.Socks) > 0 {
+		a.Store.Event("", EventGateSwept, fmt.Sprintf("%d stale gate dirs, %d processes killed, %d leaked e2e processes killed, %d e2e tmux socket dirs removed",
+			len(res.Dirs), res.Killed, res.E2E, len(res.Socks)))
 	}
 	return res
+}
+
+// e2eSockAge is how long an e2etmux dir must sit untouched before it can be
+// taken for abandoned: a test makes it just before its server starts.
+const e2eSockAge = 10 * time.Minute
+
+// e2eTmuxDirs lists the e2etmux* socket dirs the harness makes under
+// $XDG_RUNTIME_DIR (a deep TMPDIR falls back to it, #663).
+func e2eTmuxDirs() []string {
+	rd := os.Getenv("XDG_RUNTIME_DIR")
+	if rd == "" {
+		return nil
+	}
+	ds, _ := filepath.Glob(filepath.Join(rd, "e2etmux*"))
+	return ds
+}
+
+// sweepE2ETmuxDirs removes the e2etmux* dirs untouched since cutoff that no
+// process names any more (a live server's command line has -S <dir>/…). It
+// returns the dirs it removed.
+func sweepE2ETmuxDirs(cutoff time.Time) []string {
+	var removed []string
+	for _, d := range e2eTmuxDirs() {
+		fi, err := os.Stat(d)
+		if err != nil || !fi.IsDir() || !fi.ModTime().Before(cutoff) {
+			continue
+		}
+		if len(procreap.Find(d, procreap.Match{})) > 0 {
+			continue
+		}
+		if removeTree(d) == nil {
+			removed = append(removed, d)
+		}
+	}
+	return removed
+}
+
+// E2ELeaks counts what saddle doctor reports (#692): leaked e2e processes
+// (tagged SADDLE_E2E_DIR, dir gone or stale) and abandoned e2etmux dirs.
+func E2ELeaks(maxAge time.Duration) (procs, socks int) {
+	procs = len(procreap.FindTagged(time.Now().Add(-maxAge)))
+	for _, d := range e2eTmuxDirs() {
+		if fi, err := os.Stat(d); err == nil && fi.IsDir() && fi.ModTime().Before(time.Now().Add(-e2eSockAge)) &&
+			len(procreap.Find(d, procreap.Match{})) == 0 {
+			socks++
+		}
+	}
+	return procs, socks
 }
 
 // removeTree removes dir, making its read-only dirs (Go's module cache)

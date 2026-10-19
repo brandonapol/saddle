@@ -178,7 +178,7 @@ func Fork(t *testing.T) bool {
 	// The race runtime sleeps a second at exit unless told not to.
 	gorace := strings.TrimSpace(os.Getenv("GORACE") + " atexit_sleep_ms=0")
 	cmd.Env = append(os.Environ(), envFork+"="+t.Name(), envBins+"="+forkBins, "GORACE="+gorace,
-		"TMPDIR="+dir, "GOTMPDIR="+dir)
+		"TMPDIR="+dir, "GOTMPDIR="+dir, procreap.EnvE2EDir+"="+dir)
 	out, err := cmd.CombinedOutput()
 	t.Logf("journey %s ran in its own process (%s):\n%s", t.Name(), time.Since(start).Round(time.Millisecond), out)
 	leaked := reapJourney(dir)

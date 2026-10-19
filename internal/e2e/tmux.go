@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/brandonapol/saddle/internal/procreap"
 )
 
 // Tmux is a private tmux server: its socket lives under Dir, which saddle
@@ -120,6 +122,11 @@ func (x *Tmux) env() []string {
 		}
 	}
 	env = slices.DeleteFunc(slices.Clone(env), func(kv string) bool { return strings.HasPrefix(kv, "TMUX=") })
+	// Tag the server, and so its panes and fake agents, so a sweep finds
+	// them by the tag even once their dir is gone (#692).
+	if !slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, procreap.EnvE2EDir+"=") }) {
+		env = append(env, procreap.EnvE2EDir+"="+x.Dir)
+	}
 	return append(env, "TMUX_TMPDIR="+x.Dir)
 }
 
