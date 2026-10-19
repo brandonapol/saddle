@@ -184,3 +184,85 @@ func within(root, p string) bool {
 func nulFields(b []byte) []string {
 	return strings.FieldsFunc(string(b), func(r rune) bool { return r == 0 })
 }
+
+// EnvE2EDir tags every process the e2e harness starts (test tmux servers,
+// their panes, fake agents) with the test's temp dir (#692). Unlike a dir,
+// the tag outlives the dir: a process whose dir was already removed is still
+// found by it.
+const EnvE2EDir = "SADDLE_E2E_DIR"
+
+// FindTagged lists the pids of this user's processes tagged with EnvE2EDir
+// whose dir is gone or was last modified before cutoff, sorted. It skips
+// this process and its ancestors.
+func FindTagged(cutoff time.Time) []int {
+	ents, err := os.ReadDir(procRoot)
+	if err != nil {
+		return nil
+	}
+	skip := ancestors()
+	uid := os.Getuid()
+	var pids []int
+	for _, e := range ents {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 1 || skip[pid] {
+			continue
+		}
+		base := filepath.Join(procRoot, strconv.Itoa(pid))
+		var st syscall.Stat_t
+		if syscall.Stat(base, &st) != nil || int(st.Uid) != uid {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(base, "environ"))
+		if err != nil {
+			continue
+		}
+		for _, kv := range nulFields(b) {
+			if dir, ok := strings.CutPrefix(kv, EnvE2EDir+"="); ok && staleDir(dir, cutoff) {
+				pids = append(pids, pid)
+				break
+			}
+		}
+	}
+	slices.Sort(pids)
+	return pids
+}
+
+// staleDir reports whether a tag's dir is gone or older than cutoff. A
+// relative or top-level dir is no test's temp dir: it is left alone.
+func staleDir(dir string, cutoff time.Time) bool {
+	dir, ok := safeDir(dir)
+	if !ok {
+		return false
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	return fi.ModTime().Before(cutoff)
+}
+
+// ReapTagged kills what FindTagged finds: SIGTERM, then SIGKILL for what
+// still matches after grace. It returns how many it signalled.
+func ReapTagged(cutoff time.Time, grace time.Duration) int {
+	seen := map[int]bool{}
+	for range 3 {
+		pids := FindTagged(cutoff)
+		if len(pids) == 0 {
+			break
+		}
+		for _, p := range pids {
+			seen[p] = true
+			_ = syscall.Kill(p, syscall.SIGTERM)
+		}
+		deadline := time.Now().Add(grace)
+		for time.Now().Before(deadline) && len(FindTagged(cutoff)) > 0 {
+			time.Sleep(20 * time.Millisecond)
+		}
+		for _, p := range FindTagged(cutoff) {
+			seen[p] = true
+			_ = syscall.Kill(p, syscall.SIGKILL)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return len(seen)
+}

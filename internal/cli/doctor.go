@@ -74,7 +74,7 @@ runs it too and shows what it finds as one card. See docs/FAILURE-MODES.md.`,
 			} else {
 				rs = doctor.Run(env)
 			}
-			rs = append(rs, shimCheck(filepath.Join(root, ".saddle", "shims"), os.Getenv), versionCheck(root, buildInfo()))
+			rs = append(rs, shimCheck(filepath.Join(root, ".saddle", "shims"), os.Getenv), versionCheck(root, buildInfo()), runE2ELeakCheck())
 			return reportDoctor(cmd.OutOrStdout(), rs, asJSON)
 		},
 	}
