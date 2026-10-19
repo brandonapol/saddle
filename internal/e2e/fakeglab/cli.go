@@ -277,7 +277,8 @@ func (c *call) listMRs(q url.Values) []map[string]any {
 		if b := q.Get("source_branch"); b != "" && m.Source != b {
 			continue
 		}
-		out = append(out, c.mrJSON(m, false))
+		// The list includes head_pipeline, as GitLab's does (#711).
+		out = append(out, c.mrJSON(m, true))
 	}
 	return out
 }

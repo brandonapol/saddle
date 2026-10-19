@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -290,6 +291,55 @@ func TestGitLabComments(t *testing.T) {
 	}
 	if err := f.gitlab().EditComment(context.Background(), "IC_1", "x"); err == nil {
 		t.Fatal("EditComment took a GitHub comment id")
+	}
+}
+
+// TestGitLabOpenPRs is one merge-request list: the head pipeline's status
+// is the check rollup, and a full page is followed by the next (#711).
+func TestGitLabOpenPRs(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeGH{replies: []string{`[
+		{"iid":4,"web_url":"https://gitlab.com/g/r/-/merge_requests/4","title":"T","state":"opened","draft":false,
+		 "has_conflicts":false,"detailed_merge_status":"mergeable","target_branch":"main","source_branch":"saddle/t1",
+		 "sha":"abc","labels":["needs-human"],"head_pipeline":{"id":77,"status":"success"}},
+		{"iid":5,"web_url":"https://gitlab.com/g/r/-/merge_requests/5","state":"opened","detailed_merge_status":"mergeable",
+		 "target_branch":"saddle/t1","source_branch":"saddle/t2","sha":"def","head_pipeline":{"id":78,"status":"running"}},
+		{"iid":6,"web_url":"https://gitlab.com/g/r/-/merge_requests/6","state":"opened","detailed_merge_status":"mergeable",
+		 "target_branch":"main","source_branch":"saddle/t3","sha":"eee","head_pipeline":{"id":79,"status":"failed"}}
+	]`}}
+	prs, err := f.gitlab().OpenPRs(ctx)
+	want := []PR{
+		{Number: 4, URL: "https://gitlab.com/g/r/-/merge_requests/4", Title: "T", State: StateOpen, Mergeable: Mergeable,
+			MergeState: "CLEAN", Base: "main", Head: "saddle/t1", HeadSHA: "abc", Labels: []string{"needs-human"},
+			Checks: []CheckRun{{Kind: KindJob, Name: "pipeline", Status: "COMPLETED", Conclusion: "SUCCESS"}}},
+		{Number: 5, URL: "https://gitlab.com/g/r/-/merge_requests/5", State: StateOpen, Mergeable: Mergeable,
+			MergeState: "BLOCKED", Base: "saddle/t1", Head: "saddle/t2", HeadSHA: "def",
+			Checks: []CheckRun{{Kind: KindJob, Name: "pipeline", Status: "IN_PROGRESS"}}},
+		{Number: 6, URL: "https://gitlab.com/g/r/-/merge_requests/6", State: StateOpen, Mergeable: Mergeable,
+			MergeState: "UNSTABLE", Base: "main", Head: "saddle/t3", HeadSHA: "eee",
+			Checks: []CheckRun{{Kind: KindJob, Name: "pipeline", Status: "COMPLETED", Conclusion: "FAILURE"}}},
+	}
+	if err != nil || !reflect.DeepEqual(prs, want) {
+		t.Fatalf("OpenPRs = %+v, %v\nwant %+v", prs, err, want)
+	}
+	f.want(t, "api projects/:id/merge_requests?order_by=updated_at&page=1&per_page=100&sort=desc&state=opened&with_merge_status_recheck=true")
+
+	var page strings.Builder
+	page.WriteByte('[')
+	for i := 1; i <= openPRPage; i++ {
+		if i > 1 {
+			page.WriteByte(',')
+		}
+		fmt.Fprintf(&page, `{"iid":%d,"web_url":"https://gitlab.com/g/r/-/merge_requests/%d","state":"opened","detailed_merge_status":"mergeable","target_branch":"main","source_branch":"b%d","sha":"s"}`, i, i, i)
+	}
+	page.WriteByte(']')
+	f = &fakeGH{replies: []string{page.String(), `[]`}}
+	got, err := f.gitlab().OpenPRs(ctx)
+	if err != nil || len(got) != openPRPage {
+		t.Fatalf("paged OpenPRs = %d, %v", len(got), err)
+	}
+	if len(f.calls) != 2 || !strings.Contains(strings.Join(f.calls[1], " "), "page=2") {
+		t.Fatalf("pages = %q, want a second page", f.calls)
 	}
 }
 

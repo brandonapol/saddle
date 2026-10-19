@@ -200,6 +200,31 @@ func TestChecksFlipAndExitCodes(t *testing.T) {
 	}
 }
 
+// The open-PR GraphQL page is what automerge polls: checks, and no merged PR.
+func TestOpenPRsGraphQL(t *testing.T) {
+	f := newFixture(t)
+	f.branch("feat", "a", "a\n")
+	f.must("pr", "create", "--base", "main", "--head", "feat", "--title", "t")
+	if err := f.gh.SetChecks(1, Check{Name: "test", Workflow: "CI", State: Fail}); err != nil {
+		t.Fatal(err)
+	}
+	q := "query { repository { pullRequests { nodes { statusCheckRollup { contexts { nodes { __typename } } } } } } }"
+	out := f.must("api", "graphql", "-f", "query="+q, "-F", "owner={owner}", "-F", "name={repo}")
+	if !strings.Contains(out, `"conclusion":"FAILURE"`) || !strings.Contains(out, `"name":"CI"`) || !strings.Contains(out, `"hasNextPage":false`) {
+		t.Fatalf("open PRs = %s", out)
+	}
+	if err := f.gh.Update(func(s *State) error {
+		s.PR(1).State = "MERGED"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out = f.must("api", "graphql", "-f", "query="+q)
+	if strings.Contains(out, "/pull/1") {
+		t.Fatalf("merged PR still listed: %s", out)
+	}
+}
+
 func TestLabelsCommentsAndEdit(t *testing.T) {
 	f := newFixture(t)
 	f.branch("feat", "a", "a\n")

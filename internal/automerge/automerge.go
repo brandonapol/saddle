@@ -1,8 +1,9 @@
 // Package automerge merges ready PR stacks bottom-up when the owner turns it
 // on (#152). It is off by default: [train] auto_merge sets the default and
-// `saddle automerge on|off` overrides it at runtime. Each tick it reads every
-// stacked task's PR, builds the stacks as a graph from the PRs' bases, and
-// merges the bottom PR of the first stack that is ready (checks green,
+// `saddle automerge on|off` overrides it at runtime. Each tick it reads the
+// open PRs and their checks in one query, builds the stacks as a graph from
+// the PRs' bases, and merges the bottom PR of the first stack that is ready
+// (checks green,
 // GitHub mergeable and CLEAN, not a draft, not labeled needs-human, not under
 // a stack-at-risk flag, based on base, no PR in it above max_tier unless
 // approved; see policy.go), then runs restack so the next PR retargets to
@@ -125,6 +126,13 @@ type GitHub interface {
 	// Merge merges url with method, only if its head is still head. It must
 	// never bypass branch protection.
 	Merge(url, method, head string) error
+}
+
+// openPRer is a GitHub that lists every open PR and its checks in one call
+// (#711). The watcher uses it. A GitHub without it is read one PR at a time,
+// which the tests that count per-PR reads still cover.
+type openPRer interface {
+	OpenPRs() ([]PR, error)
 }
 
 // Node is one PR in a stack graph.
@@ -510,19 +518,26 @@ func (w *Watcher) status(s State, nodes []Node) Status {
 	return st
 }
 
-// read reads every entry's PR from GitHub; merged and closed ones are left
-// out.
+// read reads every entry's PR; merged and closed ones are left out. A forge
+// that can list open PRs does it in one call per tick (#711).
 func (w *Watcher) read() ([]Node, error) {
 	es, err := w.Entries()
 	if err != nil {
 		return nil, err
 	}
+	if batch, ok := w.GH.(openPRer); ok {
+		return w.readOpen(es, batch)
+	}
+	return w.readEach(es)
+}
+
+// readEach reads each due PR on its own.
+func (w *Watcher) readEach(es []Entry) ([]Node, error) {
 	nodes := []Node{}
 	for _, e := range es {
 		if e.PR == "" {
 			continue
 		}
-		n := Node{Task: e.Task, Branch: e.Branch, PR: e.PR}
 		pr, hit, finished := w.cached(e.PR)
 		if finished {
 			continue
@@ -533,21 +548,104 @@ func (w *Watcher) read() ([]Node, error) {
 				w.remember(e.PR, pr)
 			}
 		}
-		if err != nil {
-			n.Error = err.Error()
-		} else if pr.State != "" && pr.State != "OPEN" {
-			continue // merged or closed: out of the stack
-		} else {
-			n.Base, n.Draft, n.Checks, n.Mergeable, n.MergeState, n.Labels, n.head =
-				pr.Base, pr.Draft, pr.Checks, pr.Mergeable, pr.MergeState, pr.Labels, pr.HeadSHA
-			w.assess(&n)
-		}
-		if w.AtRisk != nil {
-			n.AtRisk = w.AtRisk(e.Task)
+		n, closed := w.apply(e, pr, err)
+		if closed {
+			continue
 		}
 		nodes = append(nodes, n)
 	}
 	return nodes, nil
+}
+
+// readOpen reads every open PR in one call and matches entries to it. A tick
+// whose PRs are all inside their poll gap makes no call. An entry the list
+// doesn't have is merged or closed.
+func (w *Watcher) readOpen(es []Entry, batch openPRer) ([]Node, error) {
+	type slot struct {
+		e        Entry
+		pr       PR
+		hit      bool
+		finished bool
+	}
+	var slots []slot
+	due := false
+	for _, e := range es {
+		if e.PR == "" {
+			continue
+		}
+		pr, hit, finished := w.cached(e.PR)
+		if !finished && !hit {
+			due = true
+		}
+		slots = append(slots, slot{e, pr, hit, finished})
+	}
+	var byURL map[string]PR
+	var batchErr error
+	if due {
+		prs, err := batch.OpenPRs()
+		if errors.Is(err, forge.ErrUnsupported) {
+			return w.readEach(es)
+		}
+		if err != nil {
+			batchErr = err
+		} else {
+			byURL = make(map[string]PR, len(prs))
+			for _, p := range prs {
+				if p.URL != "" {
+					byURL[p.URL] = p
+				}
+			}
+		}
+	}
+	var nodes []Node
+	for _, s := range slots {
+		if s.finished {
+			continue
+		}
+		var (
+			pr  PR
+			err error
+		)
+		switch {
+		case batchErr != nil && !s.hit:
+			err = batchErr
+		case byURL != nil:
+			p, ok := byURL[s.e.PR]
+			if !ok {
+				w.remember(s.e.PR, PR{URL: s.e.PR, State: "CLOSED"})
+				continue
+			}
+			pr = p
+			w.remember(s.e.PR, pr)
+		default:
+			pr = s.pr
+		}
+		n, closed := w.apply(s.e, pr, err)
+		if closed {
+			continue
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes, nil
+}
+
+// apply fills a node from a read. closed is true when the PR is merged or
+// closed and drops out of the stack.
+func (w *Watcher) apply(e Entry, pr PR, err error) (n Node, closed bool) {
+	n = Node{Task: e.Task, Branch: e.Branch, PR: e.PR}
+	if err != nil {
+		n.Error = err.Error()
+	} else if pr.State != "" && pr.State != "OPEN" {
+		return n, true
+	} else {
+		n.Base, n.Draft, n.Checks, n.Mergeable, n.MergeState, n.Labels, n.head =
+			pr.Base, pr.Draft, pr.Checks, pr.Mergeable, pr.MergeState, pr.Labels, pr.HeadSHA
+		w.assess(&n)
+	}
+	if w.AtRisk != nil {
+		n.AtRisk = w.AtRisk(e.Task)
+	}
+	return n, false
 }
 
 // graph groups nodes into stacks: a PR whose base is another open PR's

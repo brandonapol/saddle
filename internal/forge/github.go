@@ -133,6 +133,166 @@ func (g *GitHub) ListPRs(ctx context.Context, q PRQuery, f PRFields) ([]PR, erro
 	return prs, nil
 }
 
+// openPRsQuery is one GraphQL read of the repo's open PRs and their check
+// rollup (#711). gh expands {owner} and {repo} in -F values. first:100 is
+// gh's own page size for a rollup; a further page follows endCursor.
+const openPRsQuery = "query($owner:String!,$name:String!,$endCursor:String){" +
+	"repository(owner:$owner,name:$name){" +
+	"pullRequests(states:OPEN,first:100,after:$endCursor,orderBy:{field:UPDATED_AT,direction:DESC}){" +
+	"pageInfo{hasNextPage endCursor}" +
+	"nodes{number url state isDraft mergeable mergeStateStatus baseRefName headRefName headRefOid " +
+	"labels(first:100){nodes{name}}" +
+	"statusCheckRollup{contexts(first:100){nodes{" +
+	"__typename " +
+	"... on CheckRun{name status conclusion startedAt checkSuite{workflowRun{workflow{name}}}} " +
+	"... on StatusContext{context state}" +
+	"}}}}}}}"
+
+// OpenPRs lists open PRs and their check rollup in one GraphQL query per
+// page (#711). One page covers a hundred PRs, which is a tick's usual cost.
+func (g *GitHub) OpenPRs(ctx context.Context) ([]PR, error) {
+	var all []PR
+	seen := map[string]bool{}
+	var cursor string
+	for page := 0; page < 50; page++ {
+		args := []string{"api", "graphql", "-f", "query=" + openPRsQuery, "-F", "owner={owner}", "-F", "name={repo}"}
+		if cursor != "" {
+			args = append(args, "-f", "endCursor="+cursor)
+		}
+		out, err := g.Run(ctx, args...)
+		if err != nil {
+			return nil, err
+		}
+		prs, next, err := parseOpenPRs(out)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range prs {
+			if p.URL != "" && seen[p.URL] {
+				continue
+			}
+			if p.URL != "" {
+				seen[p.URL] = true
+			}
+			all = append(all, p)
+		}
+		if next == "" || next == cursor {
+			return all, nil
+		}
+		cursor = next
+	}
+	return nil, fmt.Errorf("gh api graphql: open pull requests did not finish paging")
+}
+
+// gqlOpenPRs is the GraphQL response of openPRsQuery.
+type gqlOpenPRs struct {
+	Data struct {
+		Repository *struct {
+			PullRequests struct {
+				PageInfo struct {
+					HasNextPage bool   `json:"hasNextPage"`
+					EndCursor   string `json:"endCursor"`
+				} `json:"pageInfo"`
+				Nodes []*gqlPR `json:"nodes"`
+			} `json:"pullRequests"`
+		} `json:"repository"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type gqlPR struct {
+	Number           int    `json:"number"`
+	URL              string `json:"url"`
+	State            string `json:"state"`
+	IsDraft          bool   `json:"isDraft"`
+	Mergeable        string `json:"mergeable"`
+	MergeStateStatus string `json:"mergeStateStatus"`
+	BaseRefName      string `json:"baseRefName"`
+	HeadRefName      string `json:"headRefName"`
+	HeadRefOid       string `json:"headRefOid"`
+	Labels           struct {
+		Nodes []struct {
+			Name string `json:"name"`
+		} `json:"nodes"`
+	} `json:"labels"`
+	Rollup *struct {
+		Contexts struct {
+			Nodes []*gqlCheck `json:"nodes"`
+		} `json:"contexts"`
+	} `json:"statusCheckRollup"`
+}
+
+type gqlCheck struct {
+	Typename   string `json:"__typename"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	StartedAt  string `json:"startedAt"`
+	Context    string `json:"context"`
+	State      string `json:"state"`
+	CheckSuite *struct {
+		WorkflowRun *struct {
+			Workflow *struct {
+				Name string `json:"name"`
+			} `json:"workflow"`
+		} `json:"workflowRun"`
+	} `json:"checkSuite"`
+}
+
+func (c gqlCheck) check() CheckRun {
+	kind := map[string]string{"CheckRun": KindJob, "StatusContext": KindStatus}[c.Typename]
+	run := CheckRun{Kind: kind, Name: c.Name, Context: c.Context, Status: c.Status, Conclusion: c.Conclusion,
+		State: c.State, StartedAt: c.StartedAt}
+	if c.CheckSuite != nil && c.CheckSuite.WorkflowRun != nil && c.CheckSuite.WorkflowRun.Workflow != nil {
+		run.Workflow = c.CheckSuite.WorkflowRun.Workflow.Name
+	}
+	return run
+}
+
+// parseOpenPRs reads one page. next is the cursor of the following page, or
+// "" when this page is the last.
+func parseOpenPRs(out string) ([]PR, string, error) {
+	var resp gqlOpenPRs
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		return nil, "", fmt.Errorf("gh api graphql: %w", err)
+	}
+	if len(resp.Errors) > 0 {
+		return nil, "", fmt.Errorf("gh api graphql: %s", resp.Errors[0].Message)
+	}
+	if resp.Data.Repository == nil {
+		return nil, "", fmt.Errorf("gh api graphql: no repository in the response")
+	}
+	var prs []PR
+	for _, n := range resp.Data.Repository.PullRequests.Nodes {
+		if n == nil || n.URL == "" {
+			continue
+		}
+		pr := PR{Number: n.Number, URL: n.URL, State: n.State, Draft: n.IsDraft, Mergeable: n.Mergeable,
+			MergeState: n.MergeStateStatus, Base: n.BaseRefName, Head: n.HeadRefName, HeadSHA: n.HeadRefOid}
+		for _, l := range n.Labels.Nodes {
+			if l.Name != "" {
+				pr.Labels = append(pr.Labels, l.Name)
+			}
+		}
+		if n.Rollup != nil {
+			for _, c := range n.Rollup.Contexts.Nodes {
+				if c == nil || (c.Typename == "" && c.Name == "" && c.Context == "") {
+					continue
+				}
+				pr.Checks = append(pr.Checks, c.check())
+			}
+		}
+		prs = append(prs, pr)
+	}
+	page := resp.Data.Repository.PullRequests.PageInfo
+	if !page.HasNextPage || page.EndCursor == "" {
+		return prs, "", nil
+	}
+	return prs, page.EndCursor, nil
+}
+
 func (g *GitHub) SetPRBase(ctx context.Context, ref, base string) error {
 	_, err := g.Run(ctx, "pr", "edit", ref, "--base", base)
 	return err

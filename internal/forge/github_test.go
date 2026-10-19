@@ -346,6 +346,54 @@ func TestGitHubMergedPRs(t *testing.T) {
 	}
 }
 
+// TestGitHubOpenPRs is one GraphQL query per page of open PRs and their
+// check rollup (#711). A page that says it has another is followed; the
+// rollup is the same checks a single PR read returns.
+func TestGitHubOpenPRs(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeGH{replies: []string{
+		`{"data":{"repository":{"pullRequests":{"pageInfo":{"hasNextPage":true,"endCursor":"c1"},"nodes":[` +
+			`{"number":4,"url":"https://github.com/o/r/pull/4","state":"OPEN","isDraft":true,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","baseRefName":"main","headRefName":"saddle/t1","headRefOid":"abc",` +
+			`"labels":{"nodes":[{"name":"needs-human"}]},` +
+			`"statusCheckRollup":{"contexts":{"nodes":[` +
+			`{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-01-01T00:00:00Z","checkSuite":{"workflowRun":{"workflow":{"name":"CI"}}}},` +
+			`{"__typename":"StatusContext","context":"ext","state":"PENDING"}` +
+			`]}}}` +
+			`]}}}}`,
+		`{"data":{"repository":{"pullRequests":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[` +
+			`{"number":5,"url":"https://github.com/o/r/pull/5","state":"OPEN","isDraft":false,"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","baseRefName":"main","headRefName":"saddle/t2","headRefOid":"def","labels":{"nodes":[]},"statusCheckRollup":null}` +
+			`]}}}}`,
+	}}
+	prs, err := f.github().OpenPRs(ctx)
+	want := []PR{
+		{Number: 4, URL: "https://github.com/o/r/pull/4", State: StateOpen, Draft: true, Mergeable: Mergeable, MergeState: "CLEAN",
+			Base: "main", Head: "saddle/t1", HeadSHA: "abc", Labels: []string{"needs-human"}, Checks: []CheckRun{
+				{Kind: KindJob, Name: "test", Workflow: "CI", Status: "COMPLETED", Conclusion: "SUCCESS", StartedAt: "2026-01-01T00:00:00Z"},
+				{Kind: KindStatus, Context: "ext", State: "PENDING"}}},
+		{Number: 5, URL: "https://github.com/o/r/pull/5", State: StateOpen, Mergeable: Conflicting, MergeState: "DIRTY",
+			Base: "main", Head: "saddle/t2", HeadSHA: "def"},
+	}
+	if err != nil || !reflect.DeepEqual(prs, want) {
+		t.Fatalf("OpenPRs = %+v, %v\nwant %+v", prs, err, want)
+	}
+	f.want(t,
+		"api graphql -f query="+openPRsQuery+" -F owner={owner} -F name={repo}",
+		"api graphql -f query="+openPRsQuery+" -F owner={owner} -F name={repo} -f endCursor=c1",
+	)
+
+	boom := errors.New("gh api graphql: HTTP 502")
+	if _, err := (&GitHub{Run: func(context.Context, ...string) (string, error) { return "", boom }}).OpenPRs(ctx); !errors.Is(err, boom) {
+		t.Fatalf("OpenPRs error = %v, want gh's", err)
+	}
+	bad := &fakeGH{replies: []string{`{"errors":[{"message":"Something went wrong"}]}`}}
+	if _, err := bad.github().OpenPRs(ctx); err == nil || !strings.Contains(err.Error(), "Something went wrong") {
+		t.Fatalf("OpenPRs graphql error = %v", err)
+	}
+	if _, err := (Unsupported{Reason: "local-only"}).OpenPRs(ctx); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("unsupported OpenPRs = %v, want ErrUnsupported", err)
+	}
+}
+
 // Listing merged PRs is optional: GitLab and a local-only forge refuse it
 // with ErrUnsupported, which saddle changelog turns into a clear message.
 func TestReadMergedPRsUnsupported(t *testing.T) {
