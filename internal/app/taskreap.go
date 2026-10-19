@@ -30,6 +30,7 @@ const layoutPrefix = "layout-"
 // cleanRunDir reaps the processes under task id's run dir and removes it.
 // A dir a process still holds after the reap is kept, with a note.
 func (a *App) cleanRunDir(id string) {
+	a.reapTask(id)
 	dir := a.stateDir("run", id)
 	if _, err := os.Stat(dir); err != nil {
 		return

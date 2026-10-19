@@ -264,6 +264,7 @@ func (a *App) finishNoChange(t store.Task, summary, why string) error {
 		return err
 	}
 	a.Store.Event(t.ID, "no_change", why)
+	a.reapTask(t.ID)
 	msg := fmt.Sprintf("%s %q finished with no change: %s, so there is nothing to land. It is out of the merge train and the PR stack.", t.ID, t.Title, why)
 	if summary != "" {
 		msg += "\nSummary: " + summary
@@ -286,6 +287,7 @@ func (a *App) finishDone(t store.Task, summary string) error {
 		return err
 	}
 	a.Store.Event(task, "done", summary)
+	a.reapTask(task)
 	advisory := ""
 	if !a.taskAdapter(t).Hooks() {
 		advisory = a.advisoryClaims(t)
