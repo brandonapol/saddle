@@ -70,7 +70,7 @@ func TestMain(m *testing.M) {
 		if _, err := Acquire(p, Options{}); err != nil {
 			os.Exit(2)
 		}
-		os.Stdout.WriteString("READY\n")
+		_, _ = os.Stdout.WriteString("READY\n")
 		time.Sleep(time.Minute)
 		os.Exit(0)
 	}
