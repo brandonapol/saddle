@@ -292,7 +292,14 @@ type Watcher struct {
 	RestackBackoff []time.Duration
 	// BusyRetry is how soon Run checks again after a tick found the train busy.
 	BusyRetry time.Duration
-	Now       func() time.Time
+	// QuietAfter is how long a PR must be unchanged before it is read less
+	// often; MaxPollGap caps the wait between reads of a quiet PR. Zero
+	// means the defaults.
+	QuietAfter time.Duration
+	MaxPollGap time.Duration
+	Now        func() time.Time
+
+	poll pollCache
 }
 
 func (w *Watcher) interval() time.Duration {
@@ -516,7 +523,16 @@ func (w *Watcher) read() ([]Node, error) {
 			continue
 		}
 		n := Node{Task: e.Task, Branch: e.Branch, PR: e.PR}
-		pr, err := w.GH.PR(e.PR)
+		pr, hit, finished := w.cached(e.PR)
+		if finished {
+			continue
+		}
+		var err error
+		if !hit {
+			if pr, err = w.GH.PR(e.PR); err == nil {
+				w.remember(e.PR, pr)
+			}
+		}
 		if err != nil {
 			n.Error = err.Error()
 		} else if pr.State != "" && pr.State != "OPEN" {
@@ -864,6 +880,7 @@ func (w *Watcher) merge(s *State, st *Status, stack Stack) {
 		return
 	}
 	st.Merged = n.PR
+	w.resetPolls()
 	w.event(n.Task, EventMerged, fmt.Sprintf("%s by %s: checks %s, mergeable, CLEAN", n.PR, method, n.Checks))
 	delete(s.Logged, n.PR)
 	switch err := w.restackRetry(); {
@@ -958,6 +975,7 @@ func (w *Watcher) collapse(s *State, st *Status, stack Stack) {
 		w.notify(true, fmt.Sprintf("Auto-merge stopped: %s. It won't retry; fix it (or `saddle stack collapse %s` by hand), then `saddle automerge on` to resume.", why, stack.ID))
 		return
 	}
+	w.resetPolls()
 	if pr == "" {
 		return
 	}
