@@ -27,11 +27,12 @@ var ghCommands = map[string][]string{
 
 // ghArgsAllowed are the paths, relative to the module root, that may still
 // build gh arguments, and why. A directory covers everything under it.
+// #649 moved automerge and the e2e queue journey onto the forge. gh-stack,
+// the fake gh and the bench driver do not build the argument lists this
+// test recognizes, so they are not exempt.
 var ghArgsAllowed = map[string]string{
-	"internal/forge":   "the forge layer itself",
-	"internal/ghstack": "the gh-stack extension, GitHub-only by design (no GitLab equivalent): ghstack.For gates it on the forge's provider",
-	"internal/e2e":     "the fake gh binary and the journeys that drive it",
-	"internal/bench":   "drives the fake gh",
+	// The forge layer is the one place that builds gh arguments.
+	"internal/forge": "the forge layer itself",
 }
 
 // ghArgs lists where f builds gh arguments: two string literals in a row in
@@ -99,10 +100,10 @@ func ghArgsAllowedAt(rel string) bool {
 	return false
 }
 
-// TestNoGHArgsOutsideForge enforces #647: only internal/forge (and the
-// GitHub-only exceptions in ghArgsAllowed) builds gh arguments. Everything
-// else calls a forge.Forge operation, so [forge] applies everywhere and a
-// GitLab forge can stand in.
+// TestNoGHArgsOutsideForge enforces #647: only internal/forge builds gh
+// arguments. Everything else calls a forge.Forge operation, so [forge]
+// applies everywhere and a GitLab forge can stand in. ghArgsAllowed names
+// each remaining exemption and why.
 func TestNoGHArgsOutsideForge(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
