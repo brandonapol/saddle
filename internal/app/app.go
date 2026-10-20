@@ -703,7 +703,7 @@ func (a *App) Kill(task string, keep bool) error {
 	}
 	// Dead before its window goes, so the resume watcher won't bring it back.
 	// The ref guard won't delete a live task's branch either.
-	if err := errors.Join(a.Store.Release(task), a.Store.SetStatus(task, store.Killed)); err != nil {
+	if err := errors.Join(a.Store.Release(task), a.Store.DequeuePending(task), a.Store.SetStatus(task, store.Killed)); err != nil {
 		return err
 	}
 	if t.Window != "" && a.Tmux.Alive(t.Window) {

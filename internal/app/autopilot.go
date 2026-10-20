@@ -293,6 +293,9 @@ func (e *autopilotEnv) Snapshot(time.Time) (autopilot.Snapshot, error) {
 	}
 	for i := len(train) - 1; i >= 0; i-- { // newest first
 		en := train[i]
+		if byID[en.Task].Status == store.Killed {
+			continue // a dead task's leftover record is not live work (#721)
+		}
 		pr := ""
 		if n := prShort(byID[en.Task].PR); n != "" {
 			pr = " (PR " + n + ")"

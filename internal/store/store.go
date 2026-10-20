@@ -167,6 +167,8 @@ ALTER TABLE tasks ADD COLUMN adapter TEXT NOT NULL DEFAULT '';
 `, `
 CREATE TABLE symbol_claims(task TEXT NOT NULL, path TEXT NOT NULL, symbol TEXT NOT NULL, kind TEXT NOT NULL, PRIMARY KEY(task, path, symbol, kind));
 CREATE INDEX symbol_claims_path ON symbol_claims(path);
+`, `
+DELETE FROM train WHERE state IN ('queued', 'conflict', 'test_failed', 'on_hold') AND task IN (SELECT id FROM tasks WHERE status = 'killed');
 `}
 
 // Open opens (creating if needed) the database at path and applies migrations,
@@ -553,6 +555,14 @@ func (s *Store) SetNarratorSpend(day string, usd float64) error {
 // Dequeue takes task out of the merge train altogether: no entry, no note.
 func (s *Store) Dequeue(task string) error {
 	_, err := s.db.Exec(`DELETE FROM train WHERE task = ?`, task)
+	return err
+}
+
+// DequeuePending drops task's train entry unless it landed or was superseded:
+// those rows record work that is on integration and must outlive a kill.
+func (s *Store) DequeuePending(task string) error {
+	_, err := s.db.Exec(`DELETE FROM train WHERE task = ? AND state IN (?, ?, ?, ?)`,
+		task, Queued, TrainError, TestFailed, OnHold)
 	return err
 }
 
