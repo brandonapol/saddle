@@ -179,12 +179,14 @@ users:
   `automerge.GH` is built from `App.Forge()` everywhere (its old `Run` gh-runner
   seam is gone, #649).
 - `TestNoGHArgsOutsideForge` parses the repo and fails when a package outside
-  `internal/forge` builds gh arguments. It allows only GitHub-only code with
-  no provider-neutral meaning: `internal/ghstack` (the gh-stack extension,
-  which stays optional and GitHub-only; `ghstack.For` gates it on the
-  forge's provider), plus the e2e fake gh and its harness. `saddle
-  changelog` lists merged PRs through the optional `ReadMergedPRs` and
-  refuses clearly on a forge without it (#648).
+  `internal/forge` builds gh arguments. Its allowlist is only
+  `internal/forge`, the layer that builds them. #649 moved automerge and the
+  e2e queue journey onto the forge; `internal/ghstack`, `internal/e2e` and
+  `internal/bench` are no longer exempt, so a gh argument list there fails
+  the test. `internal/ghstack` stays optional and GitHub-only (`ghstack.For`
+  gates it on the forge's provider). `saddle changelog` lists merged PRs
+  through the optional `ReadMergedPRs` and refuses clearly on a forge
+  without it (#648).
 - `internal/e2e/fakegh` stays as is: it is a fake `gh` binary on `PATH`, so it
   fakes the GitHub implementation end to end. #645 added
   `internal/e2e/fakeglab`, a fake `glab` the same way: a stateful GitLab
