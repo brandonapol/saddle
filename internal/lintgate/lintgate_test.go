@@ -236,3 +236,26 @@ func TestShippedHooks(t *testing.T) {
 		t.Fatalf("none: %+v", got)
 	}
 }
+
+// #691: saddle's own wrappers in a hooks dir inside the checkout aren't hooks
+// the repo ships.
+func TestShippedHooksSkipsSaddleWrittenFiles(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "git/hooks")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"reference-transaction": "#!/bin/sh\n" + GuardMarker + ": x.\n",
+		"commit-msg":            "#!/bin/sh\n" + RepoHookMarker + ": x.\n",
+		"pre-commit":            "#!/bin/sh\nmake check\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hs := ShippedHooks(root)
+	if len(hs) != 1 || hs[0].Name != "pre-commit" {
+		t.Fatalf("ShippedHooks = %+v, want only pre-commit", hs)
+	}
+}
