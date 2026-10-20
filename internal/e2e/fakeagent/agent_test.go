@@ -193,7 +193,10 @@ func TestCommitWaitsOutIndexLock(t *testing.T) {
 	if err == nil {
 		t.Fatal("commit of a clean tree succeeded")
 	}
-	if time.Since(start) > time.Second {
+	// A retrying commit sleeps 100 x 50ms (about 5s) before giving up, so
+	// anything well under that did not retry. A tighter bound only measures
+	// how loaded the machine is: two git spawns can take over a second.
+	if time.Since(start) > 4*time.Second {
 		t.Fatalf("a real git error retried for %s: %v", time.Since(start), err)
 	}
 }
