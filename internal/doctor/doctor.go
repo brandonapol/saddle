@@ -60,6 +60,8 @@ const (
 	CheckStateDB       = "state.db"
 	CheckLeftovers     = "leftovers"
 	CheckTrust         = "trust"
+	// CheckRunq is the heavy-run queue's mode (#664).
+	CheckRunq = "heavy-run queue"
 )
 
 // Result is one check's outcome. Fix is set whenever Status isn't OK.
@@ -168,6 +170,7 @@ func runChecks(env Env, local bool) []Result {
 		{CheckClaude, r.claude},
 		{CheckHooks, r.hooks}, {CheckPush, r.push}, {CheckOrchAllow, r.orchAllow}, {CheckGate, r.gate}, {CheckIgnored, r.ignored},
 		{CheckStateDB, r.stateDB}, {CheckLeftovers, r.leftovers}, {CheckInhibit, r.inhibitor},
+		{CheckRunq, r.runq},
 	}
 	var rs []Result
 	// A check that doesn't apply to this run returns a zero Result.

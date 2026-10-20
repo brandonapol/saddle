@@ -292,3 +292,57 @@ func TestRunGateEnvUnqueuedWhenQueueBroken(t *testing.T) {
 		t.Fatal("exported a lease it doesn't hold")
 	}
 }
+
+func TestGateClassCompound(t *testing.T) {
+	t.Parallel()
+	cfg := runq.Config{Classes: map[string]runq.ClassConfig{
+		"go-test":      {Weight: 2, Match: []string{"go test*", "make check"}},
+		"flutter-test": {Weight: 4, Match: []string{"flutter test*", "flutter pub get*"}},
+		"lint":         {Match: []string{"golangci-lint run*"}},
+	}}
+	for cmd, want := range map[string]string{
+		"flutter pub get && make check":                             "flutter-test", // heaviest segment wins
+		"mkdir -p x && export A=1 && flutter pub get && make check": "flutter-test",
+		"mkdir -p x && go test ./...":                               "go-test",
+		"golangci-lint run; go test ./...":                          "go-test",
+		"golangci-lint run && go test ./... && flutter test":        "flutter-test",
+		"mkdir -p x && echo hi":                                     DefaultGateClass,
+		"echo 'a && b' && go test ./...":                            "go-test",
+		"go test ./... || true":                                     "go-test",
+	} {
+		if got := GateClass(cfg, cmd); got != want {
+			t.Errorf("GateClass(%q) = %q, want %q", cmd, got, want)
+		}
+	}
+}
+
+func TestGateClassMakeTargetResolvesToWhatItRuns(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	mk := "check: lint\n\t@flutter test\n\nlint:\n\tgolangci-lint run ./...\n\nall:\n\t$(MAKE) check\n\nnoop:\n\techo hi\n"
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte(mk), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := runq.Config{Classes: map[string]runq.ClassConfig{
+		"go-test":      {Weight: 2, Match: []string{"go test*", "make check"}},
+		"flutter-test": {Weight: 4, Match: []string{"flutter test*"}},
+		"lint":         {Match: []string{"golangci-lint run*"}},
+	}}
+	for cmd, want := range map[string]string{
+		"make check":     "flutter-test", // not go-test: the recipe runs flutter
+		"make lint":      "lint",
+		"make all":       "flutter-test", // recursion through $(MAKE)
+		"make noop":      DefaultGateClass,
+		"make missing":   DefaultGateClass,
+		"make -j4 check": "flutter-test",
+		"make a=b check": "flutter-test",
+	} {
+		if got := GateClassIn(cfg, cmd, root); got != want {
+			t.Errorf("GateClassIn(%q) = %q, want %q", cmd, got, want)
+		}
+	}
+	// Without a Makefile the pattern still applies.
+	if got := GateClassIn(cfg, "make check", t.TempDir()); got != "go-test" {
+		t.Errorf("no Makefile: %q", got)
+	}
+}

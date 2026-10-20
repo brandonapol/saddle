@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -29,23 +31,158 @@ var gateLeaseLost = GateEnvProblem{
 	Free:      "the queue: the gate's lease was killed or reaped (saddle runq status shows the queue)",
 }
 
-// GateClass is the heavy-run class of a gate running cmd: the class of the
-// first [classes] pattern cmd matches, classes taken in name order, else
-// DefaultGateClass.
-func GateClass(cfg runq.Config, cmd string) string {
+// GateClass is the heavy-run class of a gate running cmd: see GateClassIn.
+func GateClass(cfg runq.Config, cmd string) string { return GateClassIn(cfg, cmd, "") }
+
+// GateClassIn is the heavy-run class of a gate running cmd in root. cmd is
+// split on &&, || and ; and each segment classified; the cmd takes the
+// heaviest class among its segments (by weight, then name), so
+// "flutter pub get && make check" is a flutter class run. A segment is
+// classified by the first [classes] pattern it matches, classes taken in
+// name order. A "make <target>" segment is classified by what root's Makefile
+// recipe for the target runs when that resolves to a class, else by the
+// patterns as above. Segments matching nothing, and commands matching no
+// segment, are DefaultGateClass.
+func GateClassIn(cfg runq.Config, cmd, root string) string {
 	names := make([]string, 0, len(cfg.Classes))
 	for name := range cfg.Classes {
 		names = append(names, name)
 	}
 	slices.Sort(names)
+	best := ""
+	for _, seg := range splitCompound(cmd) {
+		c := classifySegment(cfg, names, seg, root, 0)
+		if c == "" {
+			continue
+		}
+		if best == "" || classWeight(cfg, c) > classWeight(cfg, best) {
+			best = c
+		}
+	}
+	if best == "" {
+		return DefaultGateClass
+	}
+	return best
+}
+
+func classWeight(cfg runq.Config, class string) int {
+	return max(cfg.Classes[class].Weight, 1)
+}
+
+// matchPatterns is the first class (in name order) with a pattern matching
+// seg, or "".
+func matchPatterns(cfg runq.Config, names []string, seg string) string {
 	for _, name := range names {
 		for _, p := range cfg.Classes[name].Match {
-			if matchCmd(p, cmd) {
+			if matchCmd(p, seg) {
 				return name
 			}
 		}
 	}
-	return DefaultGateClass
+	return ""
+}
+
+func classifySegment(cfg runq.Config, names []string, seg, root string, depth int) string {
+	if root != "" && depth < 4 {
+		if target, ok := makeTarget(seg); ok {
+			if c := classifyMakeTarget(cfg, names, root, target, depth); c != "" {
+				return c
+			}
+		}
+	}
+	return matchPatterns(cfg, names, seg)
+}
+
+// splitCompound splits cmd on the shell operators &&, || and ; outside
+// quotes.
+func splitCompound(cmd string) []string {
+	var segs []string
+	var cur strings.Builder
+	var quote byte
+	flush := func() {
+		if s := strings.TrimSpace(cur.String()); s != "" {
+			segs = append(segs, s)
+		}
+		cur.Reset()
+	}
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+			cur.WriteByte(c)
+		case c == '\'' || c == '"':
+			quote = c
+			cur.WriteByte(c)
+		case c == ';':
+			flush()
+		case (c == '&' || c == '|') && i+1 < len(cmd) && cmd[i+1] == c:
+			flush()
+			i++
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	flush()
+	return segs
+}
+
+// makeTarget returns the target of a "make [flags] target" segment.
+func makeTarget(seg string) (string, bool) {
+	f := strings.Fields(seg)
+	if len(f) < 2 || filepath.Base(f[0]) != "make" {
+		return "", false
+	}
+	for _, w := range f[1:] {
+		if strings.HasPrefix(w, "-") || strings.Contains(w, "=") {
+			continue
+		}
+		return w, true
+	}
+	return "", false
+}
+
+// classifyMakeTarget classifies the recipe lines of target in root's
+// Makefile, and of the targets it depends on, taking the heaviest class.
+func classifyMakeTarget(cfg runq.Config, names []string, root, target string, depth int) string {
+	b, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		return ""
+	}
+	best := ""
+	consider := func(c string) {
+		if c != "" && (best == "" || classWeight(cfg, c) > classWeight(cfg, best)) {
+			best = c
+		}
+	}
+	in := false
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "\t") {
+			if !in {
+				continue
+			}
+			rec := strings.TrimLeft(line, "\t @-+")
+			rec = strings.ReplaceAll(rec, "$(MAKE)", "make")
+			for _, seg := range splitCompound(rec) {
+				consider(classifySegment(cfg, names, seg, root, depth+1))
+			}
+			continue
+		}
+		head, deps, ok := strings.Cut(line, ":")
+		in = false
+		if !ok || strings.TrimSpace(head) != target || strings.HasPrefix(deps, "=") {
+			continue
+		}
+		in = true
+		for _, d := range strings.Fields(deps) {
+			if d != target && !strings.ContainsAny(d, "$%|") {
+				consider(classifyMakeTarget(cfg, names, root, d, depth+1))
+			}
+		}
+	}
+	return best
 }
 
 // matchCmd reports whether cmd matches pattern p, where * matches any run
@@ -119,7 +256,7 @@ func (a *App) gateLease(ctx context.Context, task string, train bool) *gateLease
 		a.Store.Event(task, EventRunQueued, "gate runs unqueued: "+err.Error())
 		return nil
 	}
-	class := GateClass(cfg, a.Cfg.Test.Cmd)
+	class := GateClassIn(cfg, a.Cfg.Test.Cmd, a.Root)
 	wait := DefaultWaitMax
 	if cfg.WaitMax.D > 0 {
 		wait = cfg.WaitMax.D

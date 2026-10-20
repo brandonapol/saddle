@@ -69,6 +69,7 @@ var about = map[string]string{
 	CheckScratch:       "the one dir saddle keeps its temp files in, how full it is, and whether anything still writes to /tmp",
 	CheckRemoteControl: "whether other Claude sessions can drive saddle over remote control, on what address, with which tokens",
 	CheckSkills:        "the skills and slash commands the orchestrator can use",
+	CheckRunq:          "whether the heavy-run queue limits concurrent tests and builds (enforce) or only records them (observe)",
 	"runq shims":       "wrappers that queue heavy commands (tests, builds) so agents take turns",
 }
 

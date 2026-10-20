@@ -666,3 +666,36 @@ func TestLockNewSurvivesSweeperProbe(t *testing.T) {
 		t.Fatalf("lockNew holds a lock on an unlinked file: %v", err)
 	}
 }
+
+// TestGateMaxWaitKeepsAFloor: past gate_max_wait a closed gate lets one heavy
+// run start anyway, not every waiting run: a second run (even in another
+// class) keeps waiting while the first holds, and starts once it is done.
+func TestGateMaxWaitKeepsAFloor(t *testing.T) {
+	o := testOpts(t)
+	o.Gate = LoadGate{Source: &fakeLoad{l: Load{Load1: 100, CPUs: 1}}, MaxLoadPerCPU: 1}
+	o.GateMaxWait = 200 * time.Millisecond
+	o.PollMax = 20 * time.Millisecond
+	q := open(t, o)
+	first := acquire(t, q, Request{Class: "go-test"})
+
+	got := make(chan *Lease, 1)
+	go func() {
+		l, err := q.Acquire(context.Background(), Request{Class: "flutter-test"})
+		if err != nil {
+			t.Error(err)
+		}
+		got <- l
+	}()
+	select {
+	case <-got:
+		t.Fatal("a second heavy run started past gate_max_wait while the floor run held")
+	case <-time.After(800 * time.Millisecond):
+	}
+	_ = first.Release()
+	select {
+	case l := <-got:
+		_ = l.Release()
+	case <-time.After(5 * time.Second):
+		t.Fatal("second run never started after the floor run finished")
+	}
+}
