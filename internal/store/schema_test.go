@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,5 +90,35 @@ func TestBackupCopiesData(t *testing.T) {
 	}
 	if err := Backup(filepath.Join(dir, "state.db"), dst); err == nil {
 		t.Fatal("Backup overwrote an existing file")
+	}
+}
+
+// #721: the migration drops train entries that belong to killed tasks.
+func TestMigrationClearsKilledTrainEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"t1", "t2"} {
+		if _, err := s.db.Exec(`INSERT INTO tasks(id, title, status, created_at, updated_at) VALUES(?, 'x', ?, 0, 0)`, id, map[string]string{"t1": Killed, "t2": Running}[id]); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Enqueue(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Roll back to before the cleanup migration and reopen.
+	if _, err := s.db.Exec(`PRAGMA user_version = ` + fmt.Sprint(len(migrations)-1)); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	es, err := s.Train()
+	if err != nil || len(es) != 1 || es[0].Task != "t2" {
+		t.Fatalf("train = %+v, %v", es, err)
 	}
 }

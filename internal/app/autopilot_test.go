@@ -289,3 +289,38 @@ func TestAutopilotSnapshotFromRecords(t *testing.T) {
 		t.Errorf("merged %q, open %q, queue %q", s.Merged, s.OpenPRs, s.Queue)
 	}
 }
+
+// #721: a killed task's stale train conflict is not a live queue entry.
+func TestAutopilotSnapshotSkipsKilledTrainEntries(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	for _, tk := range []store.Task{
+		{ID: "t21", Title: "dead", Role: store.RoleWorker, Status: store.Killed},
+		{ID: "t22", Title: "live", Role: store.RoleWorker, Status: store.Conflict},
+	} {
+		must(t, a.Store.CreateTask(tk))
+		must(t, a.Store.Enqueue(tk.ID))
+		must(t, a.Store.SetTrain(tk.ID, store.TrainError, "rebase failed", true))
+	}
+	s, err := (&autopilotEnv{a: a}).Snapshot(time.Now())
+	must(t, err)
+	if !slices.Equal(s.Queue, []string{"t22 conflict"}) {
+		t.Errorf("queue = %q, want only the live conflict", s.Queue)
+	}
+}
+
+// #721: killing a task takes it out of the merge train.
+func TestKillClearsTrainEntry(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	tk, err := a.Spawn(SpawnReq{Title: "doomed", Claims: []string{"doomed/**"}})
+	must(t, err)
+	must(t, a.Store.Enqueue(tk.ID))
+	must(t, a.Store.SetTrain(tk.ID, store.TrainError, "rebase failed", true))
+	must(t, a.Kill(tk.ID, true))
+	es, err := a.Store.Train()
+	must(t, err)
+	if len(es) != 0 {
+		t.Errorf("train after kill: %+v", es)
+	}
+}
