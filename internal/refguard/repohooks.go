@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -55,6 +56,9 @@ func RepoHooks(root string) ([]RepoHook, error) {
 	}
 	var out []RepoHook
 	for _, s := range shipped {
+		if s.Rel != "" && sameFile(filepath.Join(root, s.Rel), filepath.Join(hooks, s.Name)) {
+			continue // core.hooksPath is this directory: the slot is saddle's, not the repo's (#691)
+		}
 		h := RepoHook{Shipped: s, Path: repoHookPath(hooks, s.Name)}
 		if b, err := os.ReadFile(h.Path); err == nil {
 			h.Active = true
@@ -105,6 +109,7 @@ func repoHookScript(s lintgate.Shipped) string {
 	fmt.Fprintf(&b, "#!/bin/sh\n%s: runs the repo's %s %s hook in every worktree.\n", lintgate.RepoHookMarker, s.Source, s.Name)
 	b.WriteString("# Written by saddle init; reinstalling overwrites it. Delete it to stop.\n")
 	b.WriteString("# The merge train runs the repo's gate itself.\n")
+	b.WriteString(recursionGuard(s.Name))
 	b.WriteString("[ \"$SADDLE_TRAIN\" = 1 ] && exit 0\n")
 	b.WriteString("top=$(git rev-parse --show-toplevel) || exit 0\n")
 	b.WriteString("cd \"$top\" || exit 0\n")
@@ -148,4 +153,86 @@ fi
 fi
 `)
 	return b.String()
+}
+
+// hookDepthEnv counts the saddle hooks running inside one another, as
+// ":name:" per hook.
+const hookDepthEnv = "SADDLE_HOOK_DEPTH"
+
+// maxHookDepth is how many times one hook name may already be running before
+// a saddle script refuses to start another. The ref guard and a repo-hook
+// wrapper legitimately stack for one name, and a hook may run git, so the
+// limit leaves room; a loop between scripts (#691) still stops in a few
+// processes instead of thousands.
+const maxHookDepth = 4
+
+// recursionGuard is the shell every script saddle writes starts with: it
+// exits when hook name is already nested maxHookDepth deep.
+func recursionGuard(name string) string {
+	pat := "*"
+	for i := 0; i < maxHookDepth; i++ {
+		pat += ":" + name + ":*"
+	}
+	return "case \"$" + hookDepthEnv + "\" in " + pat + ") echo \"saddle: hook recursion in " + name + ", see saddle doctor\" >&2; exit 1 ;; esac\n" +
+		hookDepthEnv + "=\"$" + hookDepthEnv + ":" + name + ":\"; export " + hookDepthEnv + "\n"
+}
+
+func sameFile(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
+}
+
+var wrapperTargetRe = regexp.MustCompile(`runs the repo's (\S+) (\S+) hook`)
+
+// cyclic reports whether pre-saddle, a hook's chained slot, is a repo-hook
+// wrapper that runs saddle's own ref guard (or the hook it is chained from),
+// which would run the wrapper again.
+func cyclic(root, hooks, name string) bool {
+	b, err := os.ReadFile(filepath.Join(hooks, name+lintgate.ChainSuffix))
+	if err != nil || !strings.Contains(string(b), lintgate.RepoHookMarker) {
+		return false
+	}
+	m := wrapperTargetRe.FindStringSubmatch(string(b))
+	if m == nil {
+		return false
+	}
+	target := filepath.Join(root, m[1])
+	if sameFile(target, filepath.Join(hooks, name)) {
+		return true
+	}
+	tb, err := os.ReadFile(target)
+	return err == nil && strings.Contains(string(tb), lintgate.GuardMarker)
+}
+
+// Cycles lists the hooks whose chained wrapper runs saddle's ref guard, which
+// runs the wrapper again (#691).
+func Cycles(root string) ([]string, error) {
+	hooks, err := hooksDir(root)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, name := range lintgate.GitHooks {
+		if cyclic(root, hooks, name) {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
+// removeCycles deletes the wrappers Cycles reports; an install from before
+// #691 left them behind.
+func removeCycles(root, hooks string) error {
+	for _, name := range lintgate.GitHooks {
+		if cyclic(root, hooks, name) {
+			if err := os.Remove(filepath.Join(hooks, name+lintgate.ChainSuffix)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

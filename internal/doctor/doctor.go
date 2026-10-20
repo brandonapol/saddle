@@ -700,6 +700,10 @@ func (r *run) hooks() Result {
 	if err != nil {
 		return warn(CheckHooks, "could not read: "+err.Error(), "run saddle init inside the repo")
 	}
+	if cs := r.hookCycles(); len(cs) > 0 {
+		return local(fail(CheckHooks, "saddle's hooks call each other forever in "+strings.Join(cs, ", ")+": the <name>.pre-saddle wrapper runs saddle's own ref guard (#691)",
+			fixInit+" deletes the wrapper; if processes are looping now, kill them (pkill -x reference-trans) first"))
+	}
 	var names []string
 	for _, h := range hs {
 		switch {
@@ -719,6 +723,23 @@ func (r *run) hooks() Result {
 		names = append(names, name)
 	}
 	return ok(CheckHooks, strings.Join(names, ", ")+"; operator recovery: SADDLE_REFGUARD=off git ... (outside a task; logged)")
+}
+
+// CycleEnv is an Env that can find hooks saddle's wrappers loop through. Envs
+// without it are asked through refguard directly.
+type CycleEnv interface {
+	HookCycles() ([]string, error)
+}
+
+// hookCycles lists the hooks whose chained wrapper runs saddle's ref guard.
+func (r *run) hookCycles() []string {
+	var cs []string
+	if ce, ok := r.env.(CycleEnv); ok {
+		cs, _ = ce.HookCycles()
+	} else {
+		cs, _ = refguard.Cycles(r.env.Root())
+	}
+	return cs
 }
 
 // pushScratch is the ref the push check pretends to create. --dry-run never

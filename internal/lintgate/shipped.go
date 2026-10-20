@@ -95,6 +95,11 @@ func dirHooks(root, dir, kind string) []Shipped {
 			continue
 		}
 		rel := dir + "/" + e.Name()
+		// saddle's own wrappers are not the repo's hooks: with core.hooksPath
+		// in the checkout they sit in the same directory (#691).
+		if b, err := os.ReadFile(filepath.Join(root, rel)); err == nil && isRepoHook(string(b)) {
+			continue
+		}
 		out = append(out, Shipped{Name: e.Name(), Rel: rel, Kind: kind, Source: rel})
 	}
 	return out

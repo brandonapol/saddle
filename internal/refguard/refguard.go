@@ -91,6 +91,9 @@ func Install(root, bin string) error {
 	if err != nil {
 		return err
 	}
+	if err := removeCycles(root, hooks); err != nil {
+		return err
+	}
 	// run is the saddle command a hook runs; own, when set, is shell that
 	// runs instead and needs no binary.
 	scripts := []struct{ name, why, guard, run, own string }{
@@ -138,6 +141,7 @@ func Install(root, bin string) error {
 			body := "#!/bin/sh\n" + marker + ": " + sc.why + ".\n" +
 				"# Written by saddle; reinstalling overwrites it. A repo hook that was\n" +
 				"# here lives at " + filepath.Base(path) + lintgate.ChainSuffix + " and runs after it.\n" +
+				recursionGuard(sc.name) +
 				"orig=" + shellQuote(path+lintgate.ChainSuffix) + "\n" +
 				sc.own +
 				"[ -x \"$orig\" ] || exit 0\n" +
@@ -150,6 +154,7 @@ func Install(root, bin string) error {
 		body := "#!/bin/sh\n" + marker + ": " + sc.why + ".\n" +
 			"# Written by saddle; reinstalling overwrites it. A repo hook that was\n" +
 			"# here lives at " + filepath.Base(path) + lintgate.ChainSuffix + " and runs after saddle's check.\n" +
+			recursionGuard(sc.name) +
 			"bin=" + shellQuote(bin) + "\n" +
 			"orig=" + shellQuote(path+lintgate.ChainSuffix) + "\n" +
 			"input=$(cat)\n" +
