@@ -55,17 +55,43 @@ func eventWith(t *testing.T, a *App, task, kind, text string) bool {
 	})
 }
 
-// #358: t2's issue is the follow-up to t1's and says so. Their files are
-// disjoint and t2's tests fail without t1, yet nothing declared the edge.
-// prs reads it from the issue text, records it, and stacks t2 on t1.
-func TestPRsStacksTaskWhoseIssueNamesAnother(t *testing.T) {
+// #734: quark's issues cite each other as context ("follow-up to #3093",
+// "related: #3552"), and reading each citation as a dependency chained a
+// dozen unrelated PRs into one stack. A citation of an earlier task's issue,
+// in t2's issue body or its own prompt, records no edge: t2 goes on main,
+// where the pre-publish gate is what catches a real dependency (see
+// TestPRsGateFailsDependentAgainstItsBase).
+func TestPRsDoesNotStackOnIssueCitation(t *testing.T) {
+	t.Parallel()
+	a := trainSetup(t)
+	_, ghLog := originWithGh(t, a)
+	setIssue(t, 3094, "Drop reconnect listeners", "Follow-up to #3093: once the client resyncs on reconnect, the listeners are redundant.")
+	t1 := landSpec(t, a, SpawnReq{ID: "t1", Title: "resync on reconnect", Issue: 3093}, map[string]string{"one.txt": "one\n"})
+	t2 := landSpec(t, a, SpawnReq{ID: "t2", Title: "drop reconnect listeners", Issue: 3094,
+		Prompt: "Context: #3093 made the client resync on reconnect."}, map[string]string{"two.txt": "two\n"})
+
+	if _, err := a.PRs(); err != nil {
+		t.Fatal(err)
+	}
+	bases := prBases(ghLog())
+	if bases[t1.Branch] != "main" || bases[t2.Branch] != "main" {
+		t.Fatalf("PR bases = %v, want t1 and t2 both on main", bases)
+	}
+	if after := a.TaskAfter("t2"); len(after) != 0 {
+		t.Fatalf("t2's after edges = %v, want none from an issue citation", after)
+	}
+}
+
+// #358, as narrowed by #734: t2's prompt names t1 by its task id, which only
+// a spawner writes on purpose. prs records the edge and stacks t2 on t1.
+func TestPRsStacksTaskWhosePromptNamesAnother(t *testing.T) {
 	t.Parallel()
 	a := trainSetup(t)
 	a.Cfg.Test.Cmd = needsOne
 	_, ghLog := originWithGh(t, a)
-	setIssue(t, 3094, "Drop reconnect listeners", "Follow-up to #3093: once the client resyncs on reconnect, the listeners are redundant.")
-	t1 := landSpec(t, a, SpawnReq{ID: "t1", Title: "resync on reconnect", Issue: 3093}, map[string]string{"one.txt": "one\n"})
-	t2 := landSpec(t, a, SpawnReq{ID: "t2", Title: "drop reconnect listeners", Issue: 3094}, map[string]string{"two.txt": "two\n"})
+	t1 := landSpec(t, a, SpawnReq{ID: "t1", Title: "resync on reconnect"}, map[string]string{"one.txt": "one\n"})
+	t2 := landSpec(t, a, SpawnReq{ID: "t2", Title: "drop reconnect listeners",
+		Prompt: "Builds on t1's resync: drop the listeners it made redundant."}, map[string]string{"two.txt": "two\n"})
 
 	if _, err := a.PRs(); err != nil {
 		t.Fatal(err)
@@ -74,11 +100,11 @@ func TestPRsStacksTaskWhoseIssueNamesAnother(t *testing.T) {
 	if bases[t1.Branch] != "main" || bases[t2.Branch] != t1.Branch {
 		t.Fatalf("PR bases = %v, want t1 on main and t2 on %s", bases, t1.Branch)
 	}
-	if !slices.Contains(a.TaskAfter("t2"), "t1") {
-		t.Fatalf("t2's after edges = %v, want t1 recorded", a.TaskAfter("t2"))
-	}
-	if !eventWith(t, a, "t2", EventDependsOn, "#3093") {
+	if !eventWith(t, a, "t2", EventDependsOn, "names t1") {
 		t.Fatal("no depends_on event naming how the edge was found")
+	}
+	if !eventWith(t, a, "t2", EventPRStacked, "t2 runs after t1") {
+		t.Fatal("no pr_stacked event saying why t2 isn't on main")
 	}
 }
 
@@ -282,9 +308,9 @@ func TestNamesNeedsAWholeReference(t *testing.T) {
 	dep := store.Task{ID: "t1", Issue: 31, PR: "https://github.com/o/r/pull/40", Branch: "saddle/t1-resync"}
 	for text, want := range map[string]bool{
 		"Builds on t1's resync.":               true,
-		"follow-up to #31":                     true,
+		"follow-up to #31":                     false,
 		"see https://github.com/o/r/pull/40":   true,
-		"needs #40 first":                      true,
+		"needs #40 first":                      false,
 		"on top of saddle/t1-resync":           true,
 		"t12 and t10 only":                     false,
 		"closes #312":                          false,

@@ -128,7 +128,7 @@ func (a *App) Publish(req PublishReq) (PublishResult, error) {
 		return res, err
 	}
 	defer func() { _ = gitx.WorktreeRemove(a.Root, dir) }()
-	head, ok, err := replayOnto(dir, base, from, to)
+	head, ok, err := replayRegen(dir, base, from, to, a.Cfg.Regen)
 	if err != nil {
 		return res, err
 	}

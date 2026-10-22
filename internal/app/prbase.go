@@ -8,10 +8,8 @@ import (
 	"os"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 
-	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -69,44 +67,18 @@ func (a *App) saveBase(task, base string) error {
 	return os.Rename(tmp, a.prBasesPath())
 }
 
-// issueText is issue n's title and body, as gh reports them. Tests replace it.
-var issueText = func(a *App, n int) (string, error) {
-	is, err := a.Forge().Issue(context.Background(), "", n, forge.IssueTitle|forge.IssueBody)
-	if err != nil {
-		return "", err
-	}
-	return is.Title + "\n" + is.Body, nil
+// taskText is what a task's spawner wrote about its work: its title and
+// prompt. Its issue's body is not read: issues cite each other as context
+// ("see #3543", "related: #3552"), and reading every citation as a
+// dependency stacked unrelated work into one long stack (#734).
+func taskText(t store.Task) string {
+	return t.Title + "\n" + t.Prompt
 }
 
-// cachedIssueText is issueText, kept under .saddle/issues so each issue is
-// asked for once. "" when GitHub can't be asked.
-func (a *App) cachedIssueText(n int) string {
-	p := a.stateDir("issues", strconv.Itoa(n))
-	if b, err := os.ReadFile(p); err == nil {
-		return string(b)
-	}
-	s, err := issueText(a, n)
-	if err != nil {
-		return ""
-	}
-	if os.MkdirAll(a.stateDir("issues"), 0o755) == nil {
-		_ = os.WriteFile(p, []byte(s), 0o644)
-	}
-	return s
-}
-
-// taskText is what a task says about its work: title, prompt and issue.
-func (a *App) taskText(t store.Task) string {
-	s := t.Title + "\n" + t.Prompt
-	if t.Issue > 0 {
-		s += "\n" + a.cachedIssueText(t.Issue)
-	}
-	return s
-}
-
-// names reports what of t's text names: its id, issue, PR or branch. Ids,
-// issue and PR numbers must stand alone, so t1 doesn't match t12 and #31
-// doesn't match #312.
+// names reports what of t's text names: its id, PR URL or branch. An id must
+// stand alone, so t1 doesn't match t12. A short reference such as #31 or !31
+// doesn't count: it can't be told apart from an issue cited for context, and
+// an issue or PR number is how task text cites background work (#734).
 func names(text string, t store.Task) (string, bool) {
 	word := func(w string) bool {
 		re := regexp.MustCompile(`(^|[^\w-])` + regexp.QuoteMeta(w) + `($|[^\w])`)
@@ -115,12 +87,8 @@ func names(text string, t store.Task) (string, bool) {
 	switch {
 	case t.ID != "" && word(t.ID):
 		return t.ID, true
-	case t.Issue > 0 && word("#"+strconv.Itoa(t.Issue)):
-		return "#" + strconv.Itoa(t.Issue), true
 	case t.PR != "" && strings.Contains(text, t.PR):
 		return t.PR, true
-	case t.PR != "" && forge.PRShort(t.PR) != t.PR && word(forge.PRShort(t.PR)):
-		return forge.PRShort(t.PR), true
 	case t.Branch != "" && strings.Contains(text, t.Branch):
 		return t.Branch, true
 	}
@@ -128,7 +96,8 @@ func names(text string, t store.Task) (string, bool) {
 }
 
 // noteDependencies records the after edges of stack's layers that saddle can
-// see but nobody declared: an earlier layer the task's text names (#358), and
+// see but nobody declared: an earlier layer the task's title or prompt names
+// by id, PR URL or branch (#358, #734), and
 // a stacked branch someone retargeted the task's PR onto outside saddle
 // (#359). info is what GitHub said about each open PR (see ReconcileStack).
 func (a *App) noteDependencies(stack []landedTask, info map[string]PRInfo) error {
@@ -142,7 +111,7 @@ func (a *App) noteDependencies(stack []landedTask, info map[string]PRInfo) error
 				continue
 			}
 			if text == "" {
-				text = a.taskText(l.Task)
+				text = taskText(l.Task)
 			}
 			if what, ok := names(text, e.Task); ok {
 				_, err := a.addAfter(l.ID, e.ID, fmt.Sprintf("inferred: %s's task text names %s", l.ID, what))

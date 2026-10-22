@@ -101,3 +101,27 @@ func TestRegenFailureReturnsToProducer(t *testing.T) {
 		t.Fatalf("notice = %+v", ns)
 	}
 }
+
+// #734: two unrelated tasks both regenerate gen.txt, as backend tasks in
+// quark each regenerate the Swagger spec. Neither needs the other, so prs
+// publishes both on main: replaying t2 alone keeps main's gen.txt and reruns
+// the regen command, rather than stacking t2 on t1 because gen.txt
+// conflicts. Same files, so clustering mustn't link them either.
+func TestPRsKeepsTasksSharingOnlyDerivedFilesApart(t *testing.T) {
+	t.Parallel()
+	a := regenSetup(t)
+	origin, ghLog := originWithGh(t, a)
+	t1 := landSpec(t, a, SpawnReq{ID: "t1", Title: "one"}, map[string]string{"a.txt": "A\n", "gen.txt": "A\nb\n"})
+	t2 := landSpec(t, a, SpawnReq{ID: "t2", Title: "two"}, map[string]string{"b.txt": "B\n", "gen.txt": "a\nB\n"})
+
+	if _, err := a.PRs(); err != nil {
+		t.Fatal(err)
+	}
+	bases := prBases(ghLog())
+	if bases[t1.Branch] != "main" || bases[t2.Branch] != "main" {
+		t.Fatalf("PR bases = %v, want t1 and t2 both on main", bases)
+	}
+	if got := git(t, origin, "show", t2.Branch+":gen.txt"); got != "a\nB" {
+		t.Fatalf("gen.txt on t2's PR head = %q, want it regenerated without t1", got)
+	}
+}

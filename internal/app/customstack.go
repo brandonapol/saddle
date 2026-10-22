@@ -432,15 +432,20 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 		l, err := a.prLayout(stack)
 		return l, identity, err
 	}
+	linearWhy := ""
 	linear := func() ([]prLayer, []int, error) {
 		out := make([]prLayer, n)
 		for i, l := range stack {
 			out[i] = prLayer{Below: i - 1, Head: l.To}
+			if i > 0 {
+				out[i].Why = "every landed task is published as one linear stack: " + linearWhy
+			}
 		}
 		return out, identity, nil
 	}
 	for _, l := range stack {
 		if l.Lost != "" || l.From == "" || l.To == "" {
+			linearWhy = fmt.Sprintf("%s's landed commits can't be found to replay", l.ID)
 			return linear() // nothing reliable to replay
 		}
 	}
@@ -448,6 +453,7 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 	for i, l := range stack {
 		f, err := gitx.ChangedFiles(a.Root, l.From, l.To)
 		if err != nil {
+			linearWhy = fmt.Sprintf("can't tell what %s changed: %v", l.ID, err)
 			return linear() //nolint:nilerr // can't tell what it changed: publish the safe layout
 		}
 		files[i] = f
@@ -463,7 +469,13 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 		}
 		return parent[i]
 	}
-	union := func(i, j int) {
+	why := map[int]string{} // layer -> why it joined a stack
+	union := func(i, j int, reason string) {
+		for _, k := range []int{i, j} {
+			if _, ok := why[k]; !ok {
+				why[k] = reason
+			}
+		}
 		ri, rj := find(i), find(j)
 		if ri > rj {
 			ri, rj = rj, ri
@@ -488,7 +500,8 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 			}
 		}
 		if len(rest) >= 2 {
-			if err := a.clusterLayers(rest, restFiles, func(i, j int) { union(at[i], at[j]) }); err != nil {
+			if err := a.clusterLayers(rest, restFiles, func(i, j int, why string) { union(at[i], at[j], why) }); err != nil {
+				linearWhy = "clustering failed: " + err.Error()
 				return linear() //nolint:nilerr // bad planner input: publish the safe layout
 			}
 		}
@@ -496,7 +509,7 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 	ordered := make([]bool, len(customs))
 	for c, g := range customs {
 		for _, i := range g[1:] {
-			union(g[0], i)
+			union(g[0], i, "custom stack")
 		}
 		ordered[c] = !slices.IsSorted(g)
 	}
@@ -534,6 +547,9 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 				tip = out[below].Head
 			}
 			out[i] = prLayer{Below: below, Head: l.To, Group: g}
+			if below >= 0 {
+				out[i].Why = why[i]
+			}
 			if tip == l.From {
 				continue
 			}
@@ -560,9 +576,10 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 		}
 		j, ok := needs(conflict, files, find)
 		if !ok {
+			linearWhy = "its commits don't apply on any layer below it alone"
 			return linear()
 		}
-		union(conflict, j)
+		union(conflict, j, fmt.Sprintf("its commits don't apply on base without %s's work", stack[j].ID))
 	}
 }
 

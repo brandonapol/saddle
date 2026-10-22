@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/planner"
 )
@@ -26,6 +27,7 @@ type prLayer struct {
 	Below int    // index of the layer its PR targets; -1 targets base
 	Head  string // the commit its PR branch is published at
 	Group int    // the stack it is in, as the index of its bottom layer
+	Why   string // why it is stacked rather than on base; "" when it isn't
 }
 
 // prLayout lays out stack, in train order, as PR stacks under
@@ -47,17 +49,27 @@ func (a *App) prLayout(stack []landedTask) ([]prLayer, error) {
 		}
 		return parent[i]
 	}
-	union := func(i, j int) {
+	why := map[int]string{} // layer -> why it joined a stack
+	union := func(i, j int, reason string) {
+		for _, k := range []int{i, j} {
+			if _, ok := why[k]; !ok {
+				why[k] = reason
+			}
+		}
 		ri, rj := find(i), find(j)
 		if ri > rj {
 			ri, rj = rj, ri
 		}
 		parent[rj] = ri // the lower layer roots the group
 	}
+	linearWhy := "output = \"single\""
 	linear := func() []prLayer {
 		out := make([]prLayer, n)
 		for i, l := range stack {
 			out[i] = prLayer{Below: i - 1, Head: l.To}
+			if i > 0 {
+				out[i].Why = "every landed task is published as one linear stack: " + linearWhy
+			}
 		}
 		return out
 	}
@@ -66,6 +78,7 @@ func (a *App) prLayout(stack []landedTask) ([]prLayer, error) {
 	}
 	for _, l := range stack {
 		if l.Lost != "" || l.From == "" || l.To == "" {
+			linearWhy = fmt.Sprintf("%s's landed commits can't be found to replay", l.ID)
 			return linear(), nil // nothing reliable to replay
 		}
 	}
@@ -73,12 +86,14 @@ func (a *App) prLayout(stack []landedTask) ([]prLayer, error) {
 	for i, l := range stack {
 		f, err := gitx.ChangedFiles(a.Root, l.From, l.To)
 		if err != nil {
+			linearWhy = fmt.Sprintf("can't tell what %s changed: %v", l.ID, err)
 			return linear(), nil //nolint:nilerr // can't tell what it changed: publish the safe layout
 		}
 		files[i] = f
 	}
 	if a.Cfg.Train.Output != "per-task" {
 		if err := a.clusterLayers(stack, files, union); err != nil {
+			linearWhy = "clustering failed: " + err.Error()
 			return linear(), nil //nolint:nilerr // bad planner input: publish the safe layout
 		}
 	}
@@ -105,6 +120,9 @@ func (a *App) prLayout(stack []landedTask) ([]prLayer, error) {
 				tip = out[below].Head
 			}
 			out[i] = prLayer{Below: below, Head: l.To, Group: g}
+			if below >= 0 {
+				out[i].Why = why[i]
+			}
 			if tip == l.From {
 				continue
 			}
@@ -123,9 +141,10 @@ func (a *App) prLayout(stack []landedTask) ([]prLayer, error) {
 		}
 		j, ok := needs(conflict, files, find)
 		if !ok {
+			linearWhy = "its commits don't apply on any layer below it alone"
 			return linear(), nil
 		}
-		union(conflict, j)
+		union(conflict, j, fmt.Sprintf("its commits don't apply on base without %s's work", stack[j].ID))
 	}
 }
 
@@ -162,8 +181,9 @@ const hubTasks = 3
 // that changed the same files (serial files aside), a task and the stacked
 // task that spawned it, a task and those it was spawned to run after (#193),
 // and tasks for the same issue. files holds what each layer changed; hub
-// files don't count as overlap.
-func (a *App) clusterLayers(stack []landedTask, files [][]string, union func(i, j int)) error {
+// files and derived files ([[regen]] paths) don't count as overlap: two
+// tasks that both regenerate an API spec share no topic (#734).
+func (a *App) clusterLayers(stack []landedTask, files [][]string, union func(i, j int, why string)) error {
 	idx := make(map[string]int, len(stack))
 	for i, l := range stack {
 		idx[l.ID] = i
@@ -176,7 +196,9 @@ func (a *App) clusterLayers(stack []landedTask, files [][]string, union func(i, 
 	}
 	tasks := make([]planner.Task, len(stack))
 	for i, l := range stack {
-		own := slices.DeleteFunc(slices.Clone(files[i]), func(f string) bool { return touched[f] >= hubTasks })
+		own := slices.DeleteFunc(slices.Clone(files[i]), func(f string) bool {
+			return touched[f] >= hubTasks || regenMatch(a.Cfg.Regen, f)
+		})
 		pt := planner.Task{ID: l.ID, Title: l.Title, Claims: own}
 		if j, ok := idx[l.Parent]; ok && j < i {
 			pt.After = []string{l.Parent}
@@ -197,7 +219,7 @@ func (a *App) clusterLayers(stack []landedTask, files [][]string, union func(i, 
 	}
 	for _, s := range stacks {
 		for _, id := range s.Tasks[1:] {
-			union(idx[s.Tasks[0]], idx[id])
+			union(idx[s.Tasks[0]], idx[id], s.Reason)
 		}
 	}
 	return nil
@@ -207,6 +229,16 @@ func (a *App) clusterLayers(stack []landedTask, files [][]string, union func(i, 
 // dir and returns the new head. ok is false when one conflicts; dir is left
 // clean either way.
 func replayOnto(dir, tip, from, to string) (head string, ok bool, err error) {
+	return replayRegen(dir, tip, from, to, nil)
+}
+
+// replayRegen is replayOnto that settles conflicts confined to derived files
+// the way the train does: it takes tip's copy of them, and once every commit
+// is replayed it reruns their [[regen]] commands and commits the result. Two
+// unrelated tasks that both regenerate the same file (an API spec, generated
+// queries) then publish side by side on base, not stacked one on the other
+// (#734).
+func replayRegen(dir, tip, from, to string, regen []config.Regen) (head string, ok bool, err error) {
 	settleLayout(dir)
 	if _, err := trainGit(dir, "checkout", "-q", "--detach", tip); err != nil {
 		return "", false, err
@@ -215,9 +247,22 @@ func replayOnto(dir, tip, from, to string) (head string, ok bool, err error) {
 	if err != nil {
 		return "", false, err
 	}
+	var taken []string
+	last := ""
 	for _, c := range strings.Fields(commits) {
-		ok, err := pickStable(dir, c)
+		ok, files, err := pickStable(dir, c, regen)
 		if err != nil || !ok {
+			return "", false, err
+		}
+		for _, f := range files {
+			if !slices.Contains(taken, f) {
+				taken = append(taken, f)
+			}
+		}
+		last = c
+	}
+	if len(taken) > 0 {
+		if err := regenStable(dir, regen, taken, last); err != nil {
 			return "", false, err
 		}
 	}
@@ -225,17 +270,52 @@ func replayOnto(dir, tip, from, to string) (head string, ok bool, err error) {
 	return head, err == nil, err
 }
 
+// regenStable reruns the regen commands covering files in dir and commits
+// what they change with c's author and committer, so the same replay gives
+// the same commit every time.
+func regenStable(dir string, regen []config.Regen, files []string, c string) error {
+	for _, r := range regenFor(regen, files) {
+		if out, err := runShell(dir, r.Cmd); err != nil {
+			return fmt.Errorf("regen `%s`: %w: %s", r.Cmd, err, tail(out, 20))
+		}
+	}
+	if _, err := trainGit(dir, "add", "-A"); err != nil {
+		return err
+	}
+	if _, err := gitx.Run(dir, "diff", "--cached", "--quiet"); err == nil {
+		return nil // tip's copy was already right
+	}
+	meta, err := gitx.Run(dir, "log", "-1", "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI", c)
+	if err != nil {
+		return err
+	}
+	who := strings.Split(meta, "\x00")
+	if len(who) != 6 {
+		return fmt.Errorf("can't read the author and committer of %s", c)
+	}
+	cmd := exec.Command("git", "-C", dir, "commit", "-q", "--no-verify", "-m", "saddle: regenerate "+strings.Join(files, ", "))
+	cmd.Env = append(os.Environ(), "SADDLE_TRAIN=1",
+		"GIT_AUTHOR_NAME="+who[0], "GIT_AUTHOR_EMAIL="+who[1], "GIT_AUTHOR_DATE="+who[2],
+		"GIT_COMMITTER_NAME="+who[3], "GIT_COMMITTER_EMAIL="+who[4], "GIT_COMMITTER_DATE="+who[5])
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("commit regenerated files: %w: %s", err, out)
+	}
+	return nil
+}
+
 // pickStable cherry-picks c in dir as the train, keeping c's committer and
 // date so replaying the same commit onto the same tip gives the same SHA. A
-// commit that comes out empty is skipped; ok is false on conflict.
-func pickStable(dir, c string) (ok bool, err error) {
+// commit that comes out empty is skipped; ok is false on conflict. A
+// conflict only in files regen covers keeps HEAD's copy of them and goes on;
+// taken lists those files, for the caller to regenerate.
+func pickStable(dir, c string, regen []config.Regen) (ok bool, taken []string, err error) {
 	meta, err := gitx.Run(dir, "log", "-1", "--format=%cn%x00%ce%x00%cI", c)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	who := strings.SplitN(meta, "\x00", 3)
 	if len(who) != 3 {
-		return false, fmt.Errorf("can't read committer of %s", c)
+		return false, nil, fmt.Errorf("can't read committer of %s", c)
 	}
 	cmd := exec.Command("git", "-C", dir, "-c", "merge.directoryRenames=true", "-c", "merge.renames=true",
 		"-c", "core.editor=true", "cherry-pick", "--allow-empty-message", c)
@@ -244,15 +324,47 @@ func pickStable(dir, c string) (ok bool, err error) {
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err == nil {
-		return true, nil
+		return true, nil, nil
 	}
 	if conf, _ := gitx.Run(dir, "diff", "--name-only", "--diff-filter=U"); conf != "" {
-		_, _ = trainGit(dir, "cherry-pick", "--abort")
-		return false, nil
+		files := strings.Split(conf, "\n")
+		if !allRegen(regen, files) {
+			_, _ = trainGit(dir, "cherry-pick", "--abort")
+			return false, nil, nil
+		}
+		ok, err := takeOurs(dir, files, who)
+		if err != nil || !ok {
+			_, _ = trainGit(dir, "cherry-pick", "--abort")
+			return false, nil, err
+		}
+		return true, files, nil
 	}
 	if _, e := gitx.RevParse(dir, "CHERRY_PICK_HEAD"); e == nil {
 		_, err := trainGit(dir, "cherry-pick", "--skip")
+		return err == nil, nil, err
+	}
+	return false, nil, fmt.Errorf("cherry-pick %s: %s", short(c), strings.TrimSpace(out.String()))
+}
+
+// takeOurs settles a cherry-pick stopped on files by keeping HEAD's copy of
+// them, then commits as committer who, or skips the pick if nothing else
+// changed.
+func takeOurs(dir string, files, who []string) (bool, error) {
+	if _, err := trainGit(dir, append([]string{"checkout", "--ours", "--"}, files...)...); err != nil {
+		return false, err
+	}
+	if _, err := trainGit(dir, append([]string{"add", "--"}, files...)...); err != nil {
+		return false, err
+	}
+	if _, e := gitx.Run(dir, "diff", "--cached", "--quiet", "HEAD"); e == nil {
+		_, err := trainGit(dir, "cherry-pick", "--skip") // the commit only changed derived files
 		return err == nil, err
 	}
-	return false, fmt.Errorf("cherry-pick %s: %s", short(c), strings.TrimSpace(out.String()))
+	cmd := exec.Command("git", "-C", dir, "-c", "core.editor=true", "cherry-pick", "--continue")
+	cmd.Env = append(os.Environ(), "SADDLE_TRAIN=1",
+		"GIT_COMMITTER_NAME="+who[0], "GIT_COMMITTER_EMAIL="+who[1], "GIT_COMMITTER_DATE="+who[2])
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("cherry-pick --continue: %w: %s", err, out)
+	}
+	return true, nil
 }
