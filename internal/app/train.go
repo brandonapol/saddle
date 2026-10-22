@@ -883,10 +883,17 @@ func (a *App) publishMode(pushOnly bool) (published, error) {
 			res.urls = append(res.urls, t.Branch)
 			continue
 		}
-		if layout[i].Head != l.To {
-			a.Store.Event(t.ID, "pr_layout", fmt.Sprintf("%s published as %s on %s", short(l.To), short(layout[i].Head), a.prBase(landed, layout, i)))
-		}
 		prBase := a.prBase(landed, layout, i)
+		if layout[i].Head != l.To {
+			msg := fmt.Sprintf("%s published as %s on %s", short(l.To), short(layout[i].Head), prBase)
+			if layout[i].Why != "" {
+				msg += " (" + layout[i].Why + ")"
+			}
+			a.Store.Event(t.ID, "pr_layout", msg)
+		}
+		if t.PR == "" && layout[i].Why != "" {
+			a.Store.Event(t.ID, EventPRStacked, fmt.Sprintf("on %s: %s", prBase, layout[i].Why))
+		}
 		if t.PR == "" {
 			url, err := a.Forge().CreatePR(context.Background(), forge.NewPR{Base: prBase, Head: t.Branch, Title: t.Title, Body: withTaskTrailer(a.stackPRBody(l), t.ID)})
 			if err != nil {

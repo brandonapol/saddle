@@ -18,6 +18,10 @@ import (
 // learns later, with how it learned it (see addAfter).
 const EventDependsOn = "depends_on"
 
+// EventPRStacked is the events-table kind recording why prs opened a task's
+// PR on another layer's branch instead of base (#734).
+const EventPRStacked = "pr_stacked"
+
 // A task spawned with after builds on those tasks' unmerged work (#193):
 // a CI job that runs a make target another task adds, say. Their files need
 // not overlap, so clustering would otherwise publish them as unrelated PRs on

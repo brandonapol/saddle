@@ -97,7 +97,7 @@ func (a *App) layoutReplay(dir *string, tip, from, to string) (string, bool, err
 		}
 		*dir = d
 	}
-	head, ok, err := replayOnto(*dir, tip, from, to)
+	head, ok, err := replayRegen(*dir, tip, from, to, a.Cfg.Regen)
 	if err == nil {
 		return head, ok, nil
 	}
@@ -109,7 +109,7 @@ func (a *App) layoutReplay(dir *string, tip, from, to string) (string, bool, err
 		return "", false, fmt.Errorf("%w (rebuilding the layout worktree: %v)", err, oerr)
 	}
 	*dir = d
-	return replayOnto(d, tip, from, to)
+	return replayRegen(d, tip, from, to, a.Cfg.Regen)
 }
 
 // settleLayout aborts a cherry-pick left in progress in dir, so the next
