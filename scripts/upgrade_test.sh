@@ -52,8 +52,8 @@ out="$(bash "$script" 2>&1)"; rc=$?
 
 d="$(setup notmain)"; advance "$d"; cd "$d/work"; git switch -q -c feature; old="$(git rev-parse HEAD)"
 out="$(bash "$script" 2>&1)"; rc=$?
-[ $rc -ne 0 ] && [ "$(git rev-parse HEAD)" = "$old" ] && [ "$(git branch --show-current)" = feature ] \
-    && grep -q "'feature', not 'main'" <<<"$out" && [ ! -f installed.marker ] \
-    && ok not-on-main-refuses || fail not-on-main-refuses "rc=$rc $out"
+[ $rc -eq 0 ] && [ "$(git rev-parse HEAD)" = "$old" ] && [ "$(git branch --show-current)" = feature ] \
+    && grep -q "skipping the fast-forward" <<<"$out" && [ -f installed.marker ] \
+    && ok not-on-main-installs || fail not-on-main-installs "rc=$rc $out"
 
 exit $((fails > 0))

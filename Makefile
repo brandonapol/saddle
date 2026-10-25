@@ -133,7 +133,7 @@ install: ## Install saddle into $GOBIN and put it on PATH (NO_PATH=1 leaves your
 	NO_PATH='$(NO_PATH)' ./scripts/install-path.sh '$(GOBIN)'
 
 .PHONY: upgrade
-upgrade: ## Fast-forward main from origin and reinstall (refuses if not on a clean main)
+upgrade: ## Fast-forward main from origin and reinstall (off main, just reinstalls)
 	./scripts/upgrade.sh
 
 .PHONY: run
