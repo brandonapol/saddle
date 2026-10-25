@@ -22,6 +22,17 @@ advance() { # push a new commit to origin from a second clone
     git clone -q "$1/origin.git" "$1/other" && (cd "$1/other" && echo 2 >g && git add g && git commit -qm two && git push -q origin main)
 }
 
+# upgrade.sh runs a bare `make install`, which on macOS is Apple's 3.81 even
+# when you ran gmake. The Makefile must accept 3.81 for install but still
+# refuse the multi-line recipes.
+repo="$(cd "$(dirname "$script")/.." && pwd)"
+gnumake="$(command -v gmake || command -v make)"
+out="$(cd "$repo" && "$gnumake" -n install MAKE_VERSION=3.81 2>&1)" \
+    && ok old-make-installs || fail old-make-installs "$out"
+out="$(cd "$repo" && "$gnumake" -n check/format MAKE_VERSION=3.81 2>&1)"
+[ $? -ne 0 ] && grep -q "too old for 'check/format'" <<<"$out" \
+    && ok old-make-refuses-oneshell || fail old-make-refuses-oneshell "$out"
+
 d="$(setup uptodate)"; cd "$d/work"
 out="$(bash "$script" 2>&1)"; rc=$?
 [ $rc -eq 0 ] && grep -q "Already up to date" <<<"$out" && [ -f installed.marker ] \

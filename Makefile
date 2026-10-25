@@ -4,13 +4,17 @@ SHELL := bash
 .ONESHELL:
 .SILENT:
 
-# .ONESHELL needs GNU Make 3.82+. macOS ships 3.81, which silently ignores it, so
-# every recipe line runs in its own shell and multi-line `if` blocks fail with
-# confusing syntax errors.
+# .ONESHELL and .SHELLFLAGS need GNU Make 3.82+. macOS ships 3.81, which silently
+# ignores them, so every recipe line runs in its own shell without pipefail and
+# multi-line `if` blocks fail with confusing syntax errors. The goals in
+# OLD_MAKE_OK are single-line recipes that work either way, so 3.81 may run them.
 MIN_MAKE := 3.82
+OLD_MAKE_OK := build install upgrade run clean
 ifneq ($(firstword $(sort $(MAKE_VERSION) $(MIN_MAKE))),$(MIN_MAKE))
-$(error GNU Make $(MAKE_VERSION) is too old; this Makefile needs $(MIN_MAKE)+. \
+ifneq ($(filter-out $(OLD_MAKE_OK),$(or $(MAKECMDGOALS),help)),)
+$(error GNU Make $(MAKE_VERSION) is too old for '$(or $(MAKECMDGOALS),help)'; it needs $(MIN_MAKE)+. \
   On macOS run `brew install make` and use `gmake`)
+endif
 endif
 
 # Saddle runs from git hooks and inside agent worktrees. Don't let git's
