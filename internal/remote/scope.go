@@ -59,6 +59,7 @@ var ToolScopes = map[string]Scope{
 	"concurrency":   ScopeAct,
 	"keep":          ScopeAct, // only ever stops saddle killing a task (#625)
 	"unstack":       ScopeAct,
+	"after":         ScopeAct,
 	"requeue":       ScopeAct,
 	"publish":       ScopeAct,
 	// pause is the panic button (remote-only); see PauseTool
