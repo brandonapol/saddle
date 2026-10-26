@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/autopilot"
+	"github.com/brandonapol/saddle/internal/claims"
+	"github.com/brandonapol/saddle/internal/forecast"
 	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/usage"
@@ -343,4 +345,39 @@ func (a *App) ghReadyIssues(label string) ([]autopilot.Issue, error) {
 		is[i] = autopilot.Issue{Number: r.Number, Title: r.Title, Body: r.Body, Created: r.Created, HasPR: closed[r.Number]}
 	}
 	return is, nil
+}
+
+// ShareClaims lets autopilot start a ticket whose claims overlap live
+// tasks' when claims are symbol-granular (#627): the edit-time rules then
+// arbitrate the shared files, and the forecaster (rule 4) says whether the
+// pair is safe to run side by side. A pair rated medium or worse waits, as
+// does anything in file mode. free is want less the globs another task holds,
+// so the spawn isn't refused for them; it is never nil.
+func (e *autopilotEnv) ShareClaims(want, with []string) ([]string, bool, error) {
+	a := e.a
+	if !a.SymbolMode() {
+		return nil, false, nil
+	}
+	held, err := a.Store.Claims()
+	if err != nil {
+		return nil, false, err
+	}
+	const candidate = "candidate"
+	f, err := a.forecastWith([]forecast.Task{{ID: candidate, Claims: want}})
+	if err != nil {
+		return nil, false, err
+	}
+	for _, p := range f.Result.Pairs {
+		if (p.A == candidate || p.B == candidate) && p.Level >= forecast.Medium {
+			return nil, false, nil
+		}
+	}
+	conflicts := claims.Conflicts(held, "", want)
+	free := []string{}
+	for _, w := range want {
+		if _, taken := conflicts[w]; !taken {
+			free = append(free, w)
+		}
+	}
+	return free, true, nil
 }

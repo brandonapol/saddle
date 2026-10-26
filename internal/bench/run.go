@@ -8,14 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/autopilot"
-	"github.com/brandonapol/saddle/internal/claims"
 	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/e2e"
 	fa "github.com/brandonapol/saddle/internal/e2e/fakeagent"
@@ -332,7 +330,7 @@ func (r *runner) releaseHeld() {
 		ready := true
 		for _, want := range tk.WaitFor {
 			w := r.issueOf(want)
-			if !r.finished(w) && !heldBack(r.o.Granularity, r.task[w], r.skipped[w]) {
+			if !r.finished(w) && !heldBack(r.task[w], r.skipped[w]) {
 				ready = false
 				break
 			}
@@ -347,11 +345,11 @@ func (r *runner) releaseHeld() {
 }
 
 // heldBack reports whether autopilot keeps an unspawned ticket from
-// starting because its claims overlap a live task's. Under file claims that
-// lasts until the live task lands, so a hold waiting for the ticket would
-// never release; under symbol claims openGate lifts it on the next tick.
-func heldBack(granularity, task, why string) bool {
-	return granularity == config.GranularityFile && task == "" && strings.Contains(why, " overlaps ")
+// starting because its claims overlap a live task's. That lasts until the
+// live task lands (under symbol claims, unless the forecaster rates the pair
+// below medium), so a hold waiting for the ticket would never release.
+func heldBack(task, why string) bool {
+	return task == "" && strings.Contains(why, " overlaps ")
 }
 
 // releaseStarts messages each agent held by start_after once the agents of
@@ -453,55 +451,6 @@ type benchEnv struct {
 	r *runner
 }
 
-// Tasks is the wrapped Env's, with the symbol-mode gate: see openGate.
-func (e *benchEnv) Tasks() ([]autopilot.Task, error) {
-	ts, err := e.Env.Tasks()
-	if err != nil || e.r.o.Granularity != config.GranularitySymbol {
-		return ts, err
-	}
-	return openGate(ts, e.r.benchIssues()), nil
-}
-
-// benchIssues are the issues filed for the scenario's tickets.
-func (r *runner) benchIssues() map[int]bool {
-	out := map[int]bool{}
-	for n := range r.ticket {
-		out[n] = true
-	}
-	return out
-}
-
-// openGate is the spawn gate under symbol claims. Autopilot keeps tickets
-// whose path claims overlap a live task's apart; with symbol claims the
-// edit-time rules decide instead (docs/symbol-claims.md, rules 1-3), so the
-// bench shows autopilot its own tickets' tasks as holding no claims. They
-// stay non-nil: nil would mean "declared none, runs alone". Tasks that are
-// not bench tickets keep theirs.
-func openGate(ts []autopilot.Task, bench map[int]bool) []autopilot.Task {
-	out := slices.Clone(ts)
-	for i := range out {
-		if bench[out[i].Issue] {
-			out[i].Claims = []string{}
-		}
-	}
-	return out
-}
-
-// freeClaims is want without the globs another task in held already
-// covers, so a symbol-mode spawn isn't refused for a shared file. The
-// dropped files stay its owner's; writes to them go through rule 1. The
-// result is never nil.
-func freeClaims(held map[string][]string, want []string) []string {
-	c := claims.Conflicts(held, "", want)
-	out := []string{}
-	for _, w := range want {
-		if _, taken := c[w]; !taken {
-			out = append(out, w)
-		}
-	}
-	return out
-}
-
 // Route keeps the provider preview of the Env it wraps.
 func (e *benchEnv) Route(req autopilot.SpawnReq) (string, string, string, error) {
 	if rt, ok := e.Env.(autopilot.Router); ok {
@@ -515,16 +464,6 @@ func (e *benchEnv) Spawn(req autopilot.SpawnReq) (string, error) {
 	tk := r.ticket[req.Issue]
 	if tk == nil {
 		return "", fmt.Errorf("issue #%d is not a bench ticket", req.Issue)
-	}
-	if r.o.Granularity == config.GranularitySymbol && len(req.Claims) > 0 {
-		held, err := r.a.Store.Claims()
-		if err != nil {
-			return "", err
-		}
-		if free := freeClaims(held, req.Claims); len(free) < len(req.Claims) {
-			fmt.Fprintf(r.o.Progress, "#%d shares a claimed file with a live task: spawned with claims %v of %v\n", req.Issue, free, req.Claims)
-			req.Claims = free
-		}
 	}
 	c := Apply(SpawnBase(r.a.Root, r.a.Cfg.Integration, r.a.Cfg.Base), tk.Edits)
 	script := fa.Script{Steps: steps(tk, c)}

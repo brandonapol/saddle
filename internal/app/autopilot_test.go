@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/autopilot"
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/usage"
 )
@@ -322,5 +323,59 @@ func TestKillClearsTrainEntry(t *testing.T) {
 	must(t, err)
 	if len(es) != 0 {
 		t.Errorf("train after kill: %+v", es)
+	}
+}
+
+func shareTick(t *testing.T, mode string, edit bool) (*App, autopilot.Report) {
+	t.Helper()
+	a, _ := setup(t)
+	a.Cfg.Claims.Granularity = mode
+	write(t, a.Root, "alpha/x.go", "package alpha\n\nfunc X() {}\n")
+	commitAll(t, a.Root, "add alpha")
+	must(t, a.Init())
+	must(t, a.ensureIntegration())
+	t1, err := a.Spawn(SpawnReq{ID: "t1", Title: "one", Claims: []string{"alpha/**"}})
+	must(t, err)
+	if edit {
+		write(t, t1.Worktree, "alpha/x.go", "package alpha\n\nfunc X() { println() }\n")
+	}
+	d := a.NewAutopilot(readyQueue(apIssue(2, "claims: alpha/x.go")))
+	_, err = d.Enable(autopilot.Options{})
+	must(t, err)
+	rep, err := d.Tick()
+	must(t, err)
+	return a, rep
+}
+
+// #627: file mode keeps an overlapping ticket waiting.
+func TestAutopilotOverlapWaitsInFileMode(t *testing.T) {
+	_, rep := shareTick(t, config.GranularityFile, false)
+	if len(rep.Spawned) != 0 || !strings.Contains(rep.Skipped[2], "overlaps") {
+		t.Fatalf("report = %+v, want #2 waiting on the overlap", rep)
+	}
+}
+
+// #627: symbol mode spawns it when the forecaster rates the pair low; the
+// task takes no claim on the file t1 holds.
+func TestAutopilotOverlapSharesInSymbolModeWhenLow(t *testing.T) {
+	a, rep := shareTick(t, config.GranularitySymbol, false)
+	if len(rep.Spawned) != 1 || rep.Spawned[0].Issue != 2 {
+		t.Fatalf("report = %+v, want #2 spawned", rep)
+	}
+	cl, err := a.Store.Claims()
+	must(t, err)
+	if got := cl[rep.Spawned[0].Task]; len(got) != 0 {
+		t.Errorf("shared ticket holds claims %v, want none", got)
+	}
+	if got := cl["t1"]; !slices.Equal(got, []string{"alpha/**"}) {
+		t.Errorf("t1 claims = %v, want untouched", got)
+	}
+}
+
+// #627: once the live task edits the file, the pair is medium and waits.
+func TestAutopilotOverlapWaitsInSymbolModeWhenMedium(t *testing.T) {
+	_, rep := shareTick(t, config.GranularitySymbol, true)
+	if len(rep.Spawned) != 0 || !strings.Contains(rep.Skipped[2], "overlaps") {
+		t.Fatalf("report = %+v, want #2 waiting", rep)
 	}
 }

@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brandonapol/saddle/internal/autopilot"
-	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/forecast"
 )
 
@@ -145,53 +143,22 @@ func TestCompareTable(t *testing.T) {
 	}
 }
 
-func TestSymbolGateHidesBenchClaims(t *testing.T) {
-	tasks := []autopilot.Task{
-		{ID: "t1", Issue: 1, Claims: []string{"shapes/shapes.go"}, Live: true},
-		{ID: "t2", Issue: 2, Live: true},                              // spawned with its shared claims dropped
-		{ID: "t9", Issue: 9, Claims: []string{"docs/**"}, Live: true}, // not a bench ticket
-	}
-	got := openGate(tasks, map[int]bool{1: true, 2: true})
-	if got[0].Claims == nil || len(got[0].Claims) != 0 || got[1].Claims == nil || len(got[1].Claims) != 0 {
-		t.Errorf("bench tasks still gate: %+v", got)
-	}
-	if !slices.Equal(got[2].Claims, []string{"docs/**"}) {
-		t.Errorf("a task outside the bench lost its claims: %+v", got[2])
-	}
-	if !slices.Equal(tasks[0].Claims, []string{"shapes/shapes.go"}) {
-		t.Error("openGate changed its input")
-	}
-}
-
 // A wait_for hold on a ticket autopilot keeps back for overlapping claims
-// would never release under file claims; under symbol claims the gate lifts
-// that wait on the next tick, so the hold stands.
-func TestHeldBackOnlyUnderFileClaims(t *testing.T) {
+// would never release while the live task runs, so the hold stands.
+func TestHeldBack(t *testing.T) {
 	overlap := "its claim shapes/shapes.go overlaps t1's shapes/shapes.go"
 	for _, c := range []struct {
-		granularity, task, why string
-		want                   bool
+		task, why string
+		want      bool
 	}{
-		{config.GranularityFile, "", overlap, true},
-		{config.GranularitySymbol, "", overlap, false},
-		{config.GranularityFile, "t2", overlap, false},
-		{config.GranularityFile, "", "at the cap (2 running)", false},
-		{config.GranularityFile, "", "", false},
+		{"", overlap, true},
+		{"t2", overlap, false},
+		{"", "at the cap (2 running)", false},
+		{"", "", false},
 	} {
-		if got := heldBack(c.granularity, c.task, c.why); got != c.want {
-			t.Errorf("heldBack(%q, %q, %q) = %v, want %v", c.granularity, c.task, c.why, got, c.want)
+		if got := heldBack(c.task, c.why); got != c.want {
+			t.Errorf("heldBack(%q, %q) = %v, want %v", c.task, c.why, got, c.want)
 		}
-	}
-}
-
-func TestFreeClaimsDropsHeldGlobs(t *testing.T) {
-	held := map[string][]string{"t1": {"shapes/shapes.go"}, "t3": {"units/**"}}
-	got := freeClaims(held, []string{"shapes/shapes.go", "shapes/extra.go", "units/scale.go"})
-	if !slices.Equal(got, []string{"shapes/extra.go"}) {
-		t.Errorf("freeClaims = %v", got)
-	}
-	if got := freeClaims(held, []string{"shapes/**"}); got == nil || len(got) != 0 {
-		t.Errorf("all held = %#v, want empty and non-nil", got)
 	}
 }
 

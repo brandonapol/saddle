@@ -125,6 +125,16 @@ type Env interface {
 	Snapshot(now time.Time) (Snapshot, error)
 }
 
+// Sharer is an Env that can let a ticket start despite claims overlapping
+// live tasks' (#627). In symbol mode the edit-time rules arbitrate shared
+// files, so it returns ok when the forecaster rates the ticket against each
+// task in with below medium; free is want without the globs those tasks
+// hold (never nil), which is what the ticket spawns with. File mode returns
+// ok false.
+type Sharer interface {
+	ShareClaims(want, with []string) (free []string, ok bool, err error)
+}
+
 // Driver runs autopilot ticks against Env. Tests call Tick with an injected clock.
 type Driver struct {
 	Path       string // the state file
@@ -327,6 +337,12 @@ type occupant struct {
 	claims []string // nil: everything
 }
 
+// pathOverlap reports whether the overlap is between declared claims, the
+// only kind a Sharer may lift: a claimless side runs alone.
+func (o occupant) pathOverlap(want []string) bool {
+	return o.claims != nil && want != nil
+}
+
 func (o occupant) overlap(want []string) string {
 	if o.claims == nil {
 		return o.id + " declares no claims, so it runs alone"
@@ -443,10 +459,29 @@ func (d *Driver) Tick() (Report, error) {
 			why = exclusive + " declares no claims, so it runs alone"
 		}
 		want, inferred := TicketClaims(is.Body, repo)
+		var shared []string // want less the globs a live task holds, when sharing lifted an overlap
 		if why == "" {
+			var with []string // the occupants whose claims overlap, when all of them could share
+			shareable := true
 			for _, o := range occupied {
-				if why = o.overlap(want); why != "" {
-					break
+				w := o.overlap(want)
+				if w == "" {
+					continue
+				}
+				if why == "" {
+					why = w
+				}
+				shareable = shareable && o.pathOverlap(want)
+				with = append(with, o.id)
+			}
+			if why != "" && shareable {
+				if sh, ok := env.(Sharer); ok {
+					free, ok, err := sh.ShareClaims(want, with)
+					if err != nil {
+						env.Event(EventError, fmt.Sprintf("#%d: sharing claims: %v", is.Number, err))
+					} else if ok {
+						why, shared = "", free
+					}
 				}
 			}
 			if why == "" && want == nil && len(occupied) > 0 {
@@ -458,6 +493,9 @@ func (d *Driver) Tick() (Report, error) {
 			continue
 		}
 		ready++
+		if shared != nil {
+			want = shared
+		}
 		req := ticketReq(is, d.Rules, d.DoneWhen, want, after)
 		route := d.route(env, req)
 		if route != "" {

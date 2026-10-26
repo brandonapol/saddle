@@ -53,7 +53,11 @@ type ForecastView struct {
 // claims, the files and symbols their worktrees changed, renames, landed
 // history and the serial globs. It never fails on a worktree: one whose
 // snapshot errors or misses ForecastBudget contributes its claims alone.
-func (a *App) Forecast() (Forecast, error) {
+func (a *App) Forecast() (Forecast, error) { return a.forecastWith(nil) }
+
+// forecastWith is Forecast with extra, not-yet-spawned tasks scored beside
+// the live ones; they carry claims alone.
+func (a *App) forecastWith(extra []forecast.Task) (Forecast, error) {
 	ts, err := a.Store.Tasks()
 	if err != nil {
 		return Forecast{}, err
@@ -70,6 +74,10 @@ func (a *App) Forecast() (Forecast, error) {
 			dirs = append(dirs, t.Worktree)
 		}
 	}
+	for range extra {
+		dirs = append(dirs, "")
+	}
+	in.Tasks = append(in.Tasks, extra...)
 	type snap struct {
 		i  int
 		ok bool
