@@ -156,8 +156,8 @@ func TestPublishExistingPRPrintsURL(t *testing.T) {
 	if !res.Existing || res.URL != "https://github.com/o/r/pull/7" {
 		t.Fatalf("publish with a PR open: %+v", res)
 	}
-	if r := remoteRev(t, origin, "saddle/one"); r != "" || len(ghLog()) > 0 {
-		t.Fatal("publish pushed or called gh when the PR exists")
+	if r := remoteRev(t, origin, "saddle/one"); r != "" || strings.Contains(strings.Join(ghLog(), "\n"), "pr create") {
+		t.Fatal("publish pushed or opened a PR when one is open")
 	}
 }
 
@@ -246,5 +246,67 @@ func TestPublishReloadsLintCmd(t *testing.T) {
 	}
 	if remoteRev(t, origin, res.Branch) == "" {
 		t.Fatal("publish did not push once the reloaded gate was green")
+	}
+}
+
+// #693: a PR closed by hand is not the task's open PR; publish opens a fresh
+// one instead of answering "PR already open".
+func TestPublishClosedPRIsNotOpen(t *testing.T) {
+	t.Parallel()
+	for _, state := range []string{"CLOSED", "MERGED"} {
+		t.Run(state, func(t *testing.T) {
+			t.Parallel()
+			a, _, ghLog := publishSetup(t)
+			landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+			first, err := a.Publish(PublishReq{Target: "t1"})
+			must(t, err)
+			setPR(t, first.URL, state, a.Cfg.Base)
+
+			res, err := a.Publish(PublishReq{Target: "t1", BranchName: "fix/one-again"})
+			must(t, err)
+			if res.Existing || res.URL == first.URL {
+				t.Fatalf("publish kept the %s PR: %+v", state, res)
+			}
+			if prCreate(ghLog(), "fix/one-again") == "" {
+				t.Fatal("publish didn't open a fresh PR")
+			}
+			tk, err := a.Store.Task("t1")
+			must(t, err)
+			if tk.PR != res.URL {
+				t.Fatalf("task PR = %q, want %q", tk.PR, res.URL)
+			}
+		})
+	}
+}
+
+// #693: restack keeps a published task's PR on its own published branch, and
+// pushes that branch's new head when the task's commits are re-cut; it neither
+// retargets the PR onto the stack nor pushes the task's stack branch.
+func TestRestackRepushesPublishedBranch(t *testing.T) {
+	t.Parallel()
+	a, origin, ghLog := publishSetup(t)
+	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+	res, err := a.Publish(PublishReq{Target: "t1", BranchName: "fix/one"})
+	must(t, err)
+	setPR(t, res.URL, "OPEN", a.Cfg.Base)
+	was := remoteRev(t, origin, "fix/one")
+	moveMain(t, origin, "news.txt")
+	before := len(ghLog())
+
+	if _, err := a.Restack(); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := baseEdits(ghLog()[before:])[res.URL]; ok {
+		t.Fatalf("restack retargeted the published PR onto %q", got)
+	}
+	now := remoteRev(t, origin, "fix/one")
+	if now == was {
+		t.Fatal("restack left the published PR's head on the old base")
+	}
+	if parent := git(t, origin, "rev-parse", now+"^"); parent != git(t, origin, "rev-parse", a.Cfg.Base) {
+		t.Fatalf("published head sits on %s, want the moved %s", short(parent), a.Cfg.Base)
+	}
+	if r := remoteRev(t, origin, t1.Branch); r != "" {
+		t.Fatalf("restack pushed the stack branch %s of a published task", t1.Branch)
 	}
 }
