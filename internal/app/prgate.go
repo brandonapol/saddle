@@ -51,6 +51,8 @@ type GateRed struct {
 	Since     time.Time `json:"since"`
 	// Held are the stacked layers above it that were not published for it.
 	Held []string `json:"held,omitempty"`
+	// Hint names an after edge that probably explains it (see afterHint).
+	Hint string `json:"hint,omitempty"`
 }
 
 // GateState is what the gate knows, saved under .saddle.
@@ -412,7 +414,7 @@ func (a *App) prGate(landed []landedTask, layout []prLayer, order []int, want fu
 			continue
 		}
 		g := GateRed{Directory: r.dir, Task: landed[i].ID, Head: layout[i].Head, Check: r.check, Tail: tail(r.out, gateTailLines),
-			TimedOut: r.timedOut, Source: GateSourcePRs}
+			TimedOut: r.timedOut, Source: GateSourcePRs, Hint: a.afterHint(landed[i].ID, r.out)}
 		held[i] = g.Task
 		for j := range landed {
 			if j != i && above(layout, j, i) {
@@ -555,6 +557,9 @@ func gateErr(reds []GateRed, landed []landedTask, held map[int]string) error {
 			b.WriteString("It ran past [train] prepublish.timeout.\n")
 		}
 		fmt.Fprintf(&b, "Last %d lines:\n%s\n", gateTailLines, g.Tail)
+		if g.Hint != "" {
+			fmt.Fprintf(&b, "Probably a missing dependency: %s\n", g.Hint)
+		}
 	}
 	if len(pub) > 0 {
 		fmt.Fprintf(&b, "Every other layer was checked and published as usual.\n")

@@ -15,6 +15,14 @@ enforced on every write; Codex and Gemini claims are checked when they
 commit and call done. `saddle status` lists which
 adapters can run here. See [ARCHITECTURE.md](ARCHITECTURE.md#providers-per-task-choice-and-rotation-321).
 
+### after
+An edge saying a task builds on another task's work, so prs stacks its PR on
+that task's even when their files don't overlap. Set at spawn (`after`) or
+later with `saddle after <task> <dep>...` (MCP tool `after`); both write
+`.saddle/deps/<task>`. When a layer fails the pre-publish gate on something a
+sibling adds, prs names the probable edge and the command, but never records
+it by itself.
+
 ### agent
 The coding-agent process (Claude Code, Codex, ...) working a task in its own
 tmux window and worktree. Also called a worker.

@@ -43,7 +43,7 @@ func Root() *cobra.Command {
 		SilenceUsage: true,
 	}
 	root.AddCommand(
-		restackCmd(),
+		restackCmd(), afterCmd(),
 		versionCmd(), migrateCmd(), changelogCmd(), initCmd(), upCmd(), downCmd(), spawnCmd(), withTmux(statusCmd()), catchupCmd(), briefCmd(), claimCmd(), releaseCmd(), doneCmd(),
 		landCmd(), syncCmd(), prsCmd(), peekCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(), repairCmd(), concurrencyCmd(), pluginCmd(), grokBridgeCmd(), codexBridgeCmd(), publishCmd(), noticesCmd(), trustCmd(), untrustCmd(), resumeCmd(), rescueCmd(), heavyRunCmd(), runqCmd(), autopilotCmd(), blockersCmd(), decisionsCmd(), sreCmd(), benchCmd(), remote.Command(open),
 	)
