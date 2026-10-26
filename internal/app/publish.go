@@ -80,8 +80,20 @@ func (a *App) Publish(req PublishReq) (PublishResult, error) {
 	}
 	res.Task = t.ID
 	if isTask && t.PR != "" {
-		res.URL, res.Existing = t.PR, true
-		return res, nil
+		// A PR closed or merged by hand is not the task's open PR (#693).
+		if pr, err := a.ghLookup(t.PR); err == nil && (pr.State == "CLOSED" || pr.State == "MERGED") {
+			if err := a.Store.SetField(t.ID, "pr", ""); err != nil {
+				return res, err
+			}
+			if err := a.forgetPublished(t.ID); err != nil {
+				return res, err
+			}
+			a.Store.Event(t.ID, "pr_detached", t.PR+" is "+strings.ToLower(pr.State))
+			t.PR = ""
+		} else {
+			res.URL, res.Existing = t.PR, true
+			return res, nil
+		}
 	}
 
 	branch := req.BranchName
@@ -405,9 +417,23 @@ func (a *App) publishedPRs() map[string]publishedPR {
 	return out
 }
 
+// forgetPublished drops task's record of an independently published PR.
+func (a *App) forgetPublished(task string) error {
+	m := a.publishedPRs()
+	if _, ok := m[task]; !ok {
+		return nil
+	}
+	delete(m, task)
+	return a.writePublished(m)
+}
+
 func (a *App) recordPublished(task string, p publishedPR) error {
 	m := a.publishedPRs()
 	m[task] = p
+	return a.writePublished(m)
+}
+
+func (a *App) writePublished(m map[string]publishedPR) error {
 	b, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
@@ -417,4 +443,38 @@ func (a *App) recordPublished(task string, p publishedPR) error {
 		return err
 	}
 	return os.Rename(tmp, a.publishedPath())
+}
+
+// republishPublished re-cuts a published task's own commits onto the PR's
+// base and pushes the result to its published branch when the head changed
+// (#693). A re-cut that doesn't apply leaves the branch as it is.
+func (a *App) republishPublished(r restacked, p publishedPR, prBase, baseSHA string) error {
+	base := baseSHA
+	if prBase != "" && prBase != a.Cfg.Base {
+		sha, err := gitx.RevParse(a.Root, "refs/remotes/origin/"+prBase)
+		if err != nil {
+			return nil
+		}
+		base = sha
+	}
+	dir := a.stateDir("publish")
+	_ = os.RemoveAll(dir)
+	_, _ = gitx.Run(a.Root, "worktree", "prune")
+	if _, err := gitx.Run(a.Root, "worktree", "add", "--detach", dir, base); err != nil {
+		return err
+	}
+	defer func() { _ = gitx.WorktreeRemove(a.Root, dir) }()
+	head, ok, err := replayOnto(dir, base, r.NewFrom, r.NewTo)
+	if err != nil {
+		return err
+	}
+	if !ok || head == base || head == p.Head {
+		return nil
+	}
+	if err := a.pushLanded(p.Branch, head); err != nil {
+		return err
+	}
+	p.Head = head
+	a.Store.Event(r.ID, "restack_push", p.Branch+" "+short(head))
+	return a.recordPublished(r.ID, p)
 }

@@ -699,9 +699,18 @@ func (a *App) republishLayout(rs restackPlan, held map[int]string, info map[stri
 	var bases []string
 	var linked []store.Task
 	waiting, queued := map[int]bool{}, map[int]bool{}
+	independent := a.publishedPRs()
 	for _, i := range rs.order {
 		r := rs.live[i]
 		if r.PR == "" {
+			continue
+		}
+		// A task saddle publish put up on its own keeps its PR on the
+		// published branch: re-cut that branch, not the stack's (#693).
+		if p, ok := independent[r.ID]; ok && p.URL == r.PR {
+			if err := a.republishPublished(r, p, info[r.PR].BaseRefName, res.Base); err != nil {
+				return err
+			}
 			continue
 		}
 		if g, ok := held[i]; ok {
