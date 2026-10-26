@@ -66,10 +66,8 @@ func TestBenchRunsControlAndACollision(t *testing.T) {
 // old units.Scale is warned.
 //
 // The symbol rules have time budgets (250ms, 300ms) and fail open past
-// them, which a loaded machine (make check runs suites in parallel) can
-// hit. A symbol-mode run whose check fails is retried, up to three times in
-// all, only when it logged a "budget exceeded" fallback; any other miss
-// fails at once. #630 would let the World raise the budgets instead.
+// them; the World widens them through app.SymbolBudgetEnv (#630), so a
+// loaded machine can't flake these runs and a miss fails at once.
 func TestBenchSymbolGranularity(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("needs tmux")
@@ -78,7 +76,7 @@ func TestBenchSymbolGranularity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	once := func(name, granularity string) (Report, bool) {
+	run := func(name, granularity string) Report {
 		t.Helper()
 		var log strings.Builder
 		res, err := Run(Options{BenchDir: benchDir, Scenario: name, Granularity: granularity, Bins: &bins,
@@ -87,33 +85,22 @@ func TestBenchSymbolGranularity(t *testing.T) {
 			t.Fatalf("bench run %s --granularity %s: %v\n%s", name, granularity, err, log.String())
 		}
 		t.Logf("%s (%s):\n%s\n%s", name, granularity, log.String(), Markdown(res.Report))
-		overBudget := false
 		for _, e := range res.Log.Events {
 			if strings.HasPrefix(e.Kind, "symbol_") || e.Kind == "deny" {
 				t.Logf("  %s %s: %s", e.Task, e.Kind, e.Data)
 			}
-			overBudget = overBudget || e.Kind == "symbol_fallback" && strings.HasSuffix(e.Data, ": budget exceeded")
 		}
 		if res.Report.Granularity != granularity {
 			t.Errorf("%s: report granularity %q, want %q", name, res.Report.Granularity, granularity)
 		}
-		return res.Report, overBudget
+		return res.Report
 	}
-	// check runs name and reports what bad says is wrong with it, retrying
-	// a run that went over a symbol rule's budget.
+	// check runs name and reports what bad says is wrong with it.
 	check := func(name, granularity string, bad func(Report) string) {
 		t.Helper()
-		for attempt := 1; ; attempt++ {
-			r, overBudget := once(name, granularity)
-			why := bad(r)
-			if why == "" {
-				return
-			}
-			if !overBudget || attempt == 3 {
-				t.Errorf("%s, %s claims: %s: %+v", name, granularity, why, r)
-				return
-			}
-			t.Logf("%s, %s claims: %s, after a symbol rule went over its budget; retrying", name, granularity, why)
+		r := run(name, granularity)
+		if why := bad(r); why != "" {
+			t.Errorf("%s, %s claims: %s: %+v", name, granularity, why, r)
 		}
 	}
 	collided := func(r Report) bool { return slices.Contains(r.Forecast.ActualPairs, Pair{A: "#1", B: "#2"}) }
