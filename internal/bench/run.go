@@ -451,6 +451,14 @@ type benchEnv struct {
 	r *runner
 }
 
+// ShareClaims keeps the symbol-mode gate of the Env it wraps (#627).
+func (e *benchEnv) ShareClaims(want, with []string) ([]string, bool, error) {
+	if sh, ok := e.Env.(autopilot.Sharer); ok {
+		return sh.ShareClaims(want, with)
+	}
+	return nil, false, nil
+}
+
 // Route keeps the provider preview of the Env it wraps.
 func (e *benchEnv) Route(req autopilot.SpawnReq) (string, string, string, error) {
 	if rt, ok := e.Env.(autopilot.Router); ok {
