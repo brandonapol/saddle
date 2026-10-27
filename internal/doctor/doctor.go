@@ -550,8 +550,8 @@ func (r *run) ghStack() Result {
 	}
 	if on != "" {
 		if want {
-			return warn(CheckGhStack, "gh-stack is GitHub-only and "+on+"; "+tail,
-				`set stack_backend = "saddle" under [train]; saddle chains PR and MR targets itself`)
+			// The default: saddle falls back to chaining MR targets itself.
+			return ok(CheckGhStack, "skipped: gh-stack is GitHub-only and "+on+", so saddle chains PR and MR targets itself")
 		}
 		return ok(CheckGhStack, "skipped: gh-stack is GitHub-only and "+on+"; "+tail+" doesn't need it")
 	}

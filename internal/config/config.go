@@ -783,8 +783,9 @@ type Train struct {
 	// NoAutoRebase stops the train rebasing live agents' clean worktrees onto
 	// integration after each landing; they are only told to sync.
 	NoAutoRebase bool `toml:"no_auto_rebase"`
-	// Output is how prs lays out PRs: "stack" groups dependent or same-topic
-	// tasks into stacks and puts unrelated ones on base; "single" makes one
+	// Output is how prs lays out PRs: "stack" stacks dependent tasks (spawned
+	// from or after one another, or for the same issue) and puts the rest on
+	// base; "single" makes one
 	// linear stack in train order; "per-task" puts every task on base unless
 	// its work only applies on top of an earlier task's.
 	Output string `toml:"output"`
@@ -793,9 +794,10 @@ type Train struct {
 	// on|off` overrides it at runtime and holds keep single stacks out.
 	AutoMerge bool `toml:"auto_merge"`
 	// StackBackend is how stacks are published: "saddle" chains each PR's
-	// base onto the one below it; "gh-stack" also links every stack on
-	// GitHub as a native stacked PR with the gh-stack extension, falling
-	// back to "saddle" when it is missing or the repo lacks Stacked PRs.
+	// base onto the one below it; "gh-stack", the default, also links every
+	// stack on GitHub as a native stacked PR with the gh-stack extension,
+	// falling back to "saddle" when it is missing, the repo lacks Stacked
+	// PRs, or the repo isn't on GitHub.
 	StackBackend string `toml:"stack_backend"`
 	// Lint is the repo's own pre-commit/lint gate, written `lint.cmd`.
 	Lint Lint `toml:"lint"`
@@ -936,7 +938,7 @@ func Default() Config {
 		TUI: TUI{Resources: TUIResources{
 			Enabled: true, OKLoad: 0.7, BusyLoad: 1.2, OKRAMPct: 20, BusyRAMPct: 10,
 		}},
-		Train: Train{MaxAttempts: 2, Output: "stack", StackBackend: StackBackendSaddle,
+		Train: Train{MaxAttempts: 2, Output: "stack", StackBackend: StackBackendGhStack,
 			Prepublish: Prepublish{Parallel: 1, Timeout: 30 * time.Minute}, StuckAfter: 30 * time.Minute},
 		Usage: Usage{
 			Poll: 15 * time.Second,
@@ -1221,17 +1223,18 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # After each landing the train rebases every live agent's clean worktree onto
 # integration; set this to only tell them to run saddle sync.
 # no_auto_rebase = false
-# PR layout: "stack" stacks dependent or same-topic tasks and puts unrelated
-# ones on base; "single" is one linear stack; "per-task" stacks only when it must.
+# PR layout: "stack" stacks dependent tasks (spawned from or after one another,
+# or for the same issue) and puts the rest on base; "single" is one linear stack; "per-task" stacks only when it must.
 # output = "stack"
 # Merge the bottom PR of a ready stack (green, mergeable, not a draft, not
 # needs-human) and restack, until the stack is empty. Off by default;
 # saddle automerge on|off|hold|release steers it at runtime.
 # auto_merge = false
 # How stacks are published: "saddle" chains each PR's base onto the one below
-# it; "gh-stack" also links each stack on GitHub as native stacked PRs (needs
-# the gh-stack extension and Stacked PRs on the repo, else falls back to saddle).
-# stack_backend = "saddle"
+# it; "gh-stack" (the default) also links each stack on GitHub as native
+# stacked PRs. Without the gh-stack extension or Stacked PRs on the repo, and
+# on any forge but GitHub, it falls back to saddle.
+# stack_backend = "gh-stack"
 # The repo's own pre-commit/lint gate. done runs it in the worktree and the
 # train runs it after [test] cmd; red goes back to the agent like a red test.
 # Unset, saddle detects it (pre-commit hook, pre-commit, lefthook, husky,

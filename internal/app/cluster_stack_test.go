@@ -296,3 +296,38 @@ func TestPRsStacksExplicitDependency(t *testing.T) {
 		t.Fatalf("t3 base = %q, want main", bases[t3.Branch])
 	}
 }
+
+// Sharing a file isn't a dependency. Unrelated tasks that each touch a
+// different part of a file another task touched (a lockfile, a settings
+// page, CI path filters) chained a whole repo's work into one linear stack:
+// t1 and t2 share a.txt, t2 and t3 share b.txt, and t3 landed on t2 on t1.
+// When each one's commits apply on base alone, each gets a PR on base.
+func TestPRsSharedFilesDoNotChainTasks(t *testing.T) {
+	t.Parallel()
+	a := trainSetup(t)
+	lines := make([]string, 30)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i)
+	}
+	edit := func(at int, s string) string {
+		l := slices.Clone(lines)
+		l[at] = s
+		return strings.Join(l, "\n") + "\n"
+	}
+	write(t, a.Root, "a.txt", edit(0, lines[0]))
+	write(t, a.Root, "b.txt", edit(0, lines[0]))
+	commitAll(t, a.Root, "shared files")
+	_, ghLog := originWithGh(t, a)
+	t1 := landTask(t, a, "t1", "vault: quicktype", map[string]string{"vault.go": "v\n", "a.txt": edit(2, "vault")})
+	t2 := landTask(t, a, "t2", "remote access: errors", map[string]string{"remote.go": "r\n", "a.txt": edit(28, "remote"), "b.txt": edit(2, "remote")})
+	t3 := landTask(t, a, "t3", "docs: viewer", map[string]string{"viewer.go": "d\n", "b.txt": edit(28, "viewer")})
+	if _, err := a.PRs(); err != nil {
+		t.Fatal(err)
+	}
+	bases := prBases(ghLog())
+	for _, tk := range []store.Task{t1, t2, t3} {
+		if bases[tk.Branch] != "main" {
+			t.Fatalf("PR bases = %v, want every task on main", bases)
+		}
+	}
+}

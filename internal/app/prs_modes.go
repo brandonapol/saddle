@@ -20,6 +20,8 @@ type PRsLayer struct {
 	Head   string `json:"head"`
 	Recut  bool   `json:"recut"`
 	Group  int    `json:"group"`
+	// Why says why the layer is stacked rather than on base; "" when it isn't.
+	Why string `json:"why,omitempty"`
 }
 
 type PRsPlan struct {
@@ -53,7 +55,7 @@ func (a *App) PreviewPRs() (PRsPlan, error) {
 	}
 	for _, i := range order {
 		l := stack[i]
-		plan.Layers = append(plan.Layers, PRsLayer{Task: l.ID, Title: l.Title, Branch: l.Branch, Base: a.prBase(stack, layout, i), Head: layout[i].Head, Recut: layout[i].Head != l.To, Group: layout[i].Group})
+		plan.Layers = append(plan.Layers, PRsLayer{Task: l.ID, Title: l.Title, Branch: l.Branch, Base: a.prBase(stack, layout, i), Head: layout[i].Head, Recut: layout[i].Head != l.To, Group: layout[i].Group, Why: layout[i].Why})
 	}
 	return plan, nil
 }

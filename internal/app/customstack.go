@@ -490,17 +490,15 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 	}
 	if a.Cfg.Train.Output != "per-task" {
 		var rest []landedTask
-		var restFiles [][]string
 		var at []int
 		for i, l := range stack {
 			if _, ok := inCustom[i]; !ok {
 				rest = append(rest, l)
-				restFiles = append(restFiles, files[i])
 				at = append(at, i)
 			}
 		}
 		if len(rest) >= 2 {
-			if err := a.clusterLayers(rest, restFiles, func(i, j int, why string) { union(at[i], at[j], why) }); err != nil {
+			if err := a.clusterLayers(rest, func(i, j int, why string) { union(at[i], at[j], why) }); err != nil {
 				linearWhy = "clustering failed: " + err.Error()
 				return linear() //nolint:nilerr // bad planner input: publish the safe layout
 			}
@@ -601,6 +599,11 @@ func (a *App) GhStack() ghstack.Client {
 // stackBackend is [train] stack_backend.
 func (a *App) stackBackend() string {
 	if a.Cfg.Train.StackBackend == "" {
+		return config.StackBackendSaddle
+	}
+	// gh-stack is GitHub-only; elsewhere saddle chains MR targets itself.
+	if a.Cfg.Train.StackBackend == config.StackBackendGhStack &&
+		(a.Cfg.Forge.CLI == config.ForgeNone || a.Forge().Provider() != config.ForgeGitHub) {
 		return config.StackBackendSaddle
 	}
 	return a.Cfg.Train.StackBackend

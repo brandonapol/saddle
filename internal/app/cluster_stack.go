@@ -16,9 +16,10 @@ import (
 
 // The train lands every task on one linear integration branch, and that
 // branch stays the record the stack checks validate. What prs publishes is a
-// layout over it (#52): tasks that depend on each other or share a topic form
-// a stack, each PR on the one below it; unrelated tasks get PRs on base that
-// hold only their own work. A task whose commits don't apply without the work
+// layout over it (#52): tasks that depend on each other (spawned from or
+// after one another, or for the same issue) form a stack, each PR on the one
+// below it; every other task gets a PR on base that holds only its own work.
+// Sharing a file is not a dependency (#751). A task whose commits don't apply without the work
 // below it in the train joins that work's stack, so in the worst case the
 // layout is the one linear stack.
 
@@ -92,7 +93,7 @@ func (a *App) prLayout(stack []landedTask) ([]prLayer, error) {
 		files[i] = f
 	}
 	if a.Cfg.Train.Output != "per-task" {
-		if err := a.clusterLayers(stack, files, union); err != nil {
+		if err := a.clusterLayers(stack, union); err != nil {
 			linearWhy = "clustering failed: " + err.Error()
 			return linear(), nil //nolint:nilerr // bad planner input: publish the safe layout
 		}
@@ -171,35 +172,22 @@ func needs(i int, files [][]string, find func(int) int) (j int, ok bool) {
 	return fallback, fallback >= 0
 }
 
-// hubTasks is how many stacked tasks must change a file before it counts as
-// shared infrastructure (docs, registries, central config) rather than a
-// topic. Overlap on a hub doesn't link tasks; if their edits to it really
-// conflict, replay stacks them anyway (#226).
-const hubTasks = 3
-
-// clusterLayers joins the layers planner.Cluster puts in one stack: tasks
-// that changed the same files (serial files aside), a task and the stacked
-// task that spawned it, a task and those it was spawned to run after (#193),
-// and tasks for the same issue. files holds what each layer changed; hub
-// files and derived files ([[regen]] paths) don't count as overlap: two
-// tasks that both regenerate an API spec share no topic (#734).
-func (a *App) clusterLayers(stack []landedTask, files [][]string, union func(i, j int, why string)) error {
+// clusterLayers joins the layers planner.Cluster puts in one stack: a task
+// and the stacked task that spawned it, a task and those it was spawned to
+// run after (#193), and tasks for the same issue. Sharing a file is not a
+// link: two tasks that edit different parts of a lockfile, a settings page
+// or CI path filters are unrelated, and linking them chained a repo's whole
+// queue into one linear stack, since overlap is transitive. Where one
+// task's edits really need another's, its commits don't replay on base
+// alone, and prLayout stacks it on the layer it needs (#226).
+func (a *App) clusterLayers(stack []landedTask, union func(i, j int, why string)) error {
 	idx := make(map[string]int, len(stack))
 	for i, l := range stack {
 		idx[l.ID] = i
 	}
-	touched := map[string]int{}
-	for _, fs := range files {
-		for _, f := range fs {
-			touched[f]++
-		}
-	}
 	tasks := make([]planner.Task, len(stack))
 	for i, l := range stack {
-		own := slices.DeleteFunc(slices.Clone(files[i]), func(f string) bool {
-			return touched[f] >= hubTasks || regenMatch(a.Cfg.Regen, f)
-		})
-		pt := planner.Task{ID: l.ID, Title: l.Title, Claims: own}
+		pt := planner.Task{ID: l.ID, Title: l.Title}
 		if j, ok := idx[l.Parent]; ok && j < i {
 			pt.After = []string{l.Parent}
 		}

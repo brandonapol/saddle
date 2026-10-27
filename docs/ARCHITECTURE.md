@@ -161,13 +161,15 @@ works through these steps and stops at the first one that resolves it:
 None of these steps uses the planner model by default. The TUI shows a counter
 of Opus tokens spent on merges, and the goal is to keep it at zero.
 
-**Output is stacked PRs by default.** Tasks that depend on each other, or that
-the planner clusters as the same topic, form a stack (DAG order, barriers at
-the bottom). Unrelated work gets separate stacks. A file that three or more
-stacked tasks change (docs, registries, central config) is a hub and doesn't
-link them on its own. A task whose commits don't replay without other work
-stacks on the latest earlier task that changed the same files, not on
-whatever landed just before it (#226). Saddle restacks a stack when
+**Output is stacked PRs by default.** Tasks that depend on each other form a
+stack (DAG order, barriers at the bottom): one spawned from another, one
+spawned to run after another, or tasks for the same issue. Every other task
+gets its own PR on base. Sharing a file doesn't link tasks, since overlap is
+transitive and chained a whole queue into one stack (#751). A task whose
+commits don't replay on base without other work stacks on the latest earlier
+task that changed the same files, not on whatever landed just before it
+(#226). On GitHub, stacks are linked as native Stacked PRs with gh-stack
+when it is installed ([train] stack_backend, gh-stack by default). Saddle restacks a stack when
 a lower layer changes and retargets it when a lower layer merges.
 
 **Dependencies stack whatever the file overlap (#193, #358).** A task stacks
