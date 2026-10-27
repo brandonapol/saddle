@@ -1,4 +1,4 @@
-# Adapter parity: claude, codex, grok
+# Adapter parity: claude, codex, grok, opencode
 
 Saddle grew up on Claude Code. This page lists every feature that assumed
 it, how codex and grok behave there, and what was fixed or filed (#480).
@@ -23,6 +23,20 @@ fourth adapter (epic #508), has its own section below.
 | Hung gates, orphaned done | adapter-agnostic | same | same; the orphan nudge types notices in whole |
 | Model in spawn and status | `[claude] model` | `[grok] model` | `[adapters.codex] model` (fixed) |
 | Adapter in status | `adapter` on each task (fixed) | same | same |
+
+opencode (epic #508) is a worker adapter only. Where it differs from codex,
+the hookless worker it otherwise resembles:
+
+| Feature | opencode |
+|---|---|
+| Saddle hooks | no (`Hooks()` is false), but a claims plugin enforces claims on every write (#532); pre-commit and `done` checks stay on as a backstop |
+| Idle / running status | screen watcher; working indicator `esc interrupt` |
+| Approval prompts | `Allow once / Allow always / Reject` row, Enter allows once |
+| Unattended permission mode | `acceptEdits` and `default` add nothing, `plan` is `--agent plan`, anything else `--auto` |
+| Quota | screen panes (retry waits count) and the `opencode.db` error rows, per provider/model (#531, #573) |
+| Usage meter | `opencode.db` sessions run in the worktree (#533) |
+| Model in spawn and status | `[adapters.opencode] model`, `provider/model` |
+| Orchestrator (headless) | no: assessed below (#508) |
 
 ## Fixed in #480
 
@@ -228,17 +242,16 @@ was run in tmux against a scratch repo. Findings:
   a file, committed it through saddle's pre-commit hook, called
   `saddle_status` and went idle.
 
-Not yet (later tickets in #508): screen detectors for these panes
-(`DetectPrompt`, `ReadInput`, working indicator, `DetectLimitBanner`), usage metering (`opencode stats`, or its `opencode.db`
-sessions), and a headless orchestrator (`opencode run` or `opencode
-serve`). Until the detectors land, the hookless idle watcher's working indicator
-(`esc to interrupt`, `esc to cancel`, `Ctrl+c:cancel`) never matches
-opencode's `esc interrupt`; a busy opencode reads as running only while its
-animated footer keeps the screen changing.
-opencode is in `config.AdapterNames` (#520); it is not in the
-orchestrator's rotation (`Providers`). Tests: `TestOpenCodeLaunchRunsFakeBinary`,
-`TestOpenCodeLaunchWithoutModel`, `TestOpenCodeApprovalFlags`,
-`TestOpenCodeAvailability`.
+Landed since this spike (#520, #531, #532, #533, #573): the screen
+detectors (`DetectPrompt` reads the `Allow once / Allow always / Reject` row,
+the hookless working indicator list includes opencode's `esc interrupt`,
+`OpenCodeScreenLimit` reads the quota panes), the claims plugin, usage
+metering and the limit handling, each in its own section below.
+opencode is in `config.AdapterNames` (#520) and the default
+`[adapters] order`; it is not in the orchestrator's rotation (`Providers`)
+and has no headless orchestrator (see the assessment below). Tests:
+`TestOpenCodeLaunchRunsFakeBinary`, `TestOpenCodeLaunchWithoutModel`,
+`TestOpenCodeApprovalFlags`, `TestOpenCodeAvailability`.
 
 ## opencode claims plugin (#532)
 
@@ -353,3 +366,61 @@ current on 2026-10-08), and other providers' limit shapes (Anthropic,
 Google) beyond OpenAI's. Tests: `TestOpenCodeScreenLimitCaptured`,
 `TestOpenCodeDBLimitCaptured`, `TestParseOpenCodeLimitCaptured`,
 `TestReadOpenCodeLimitsCaptured`.
+
+## opencode as a headless orchestrator: assessed, not built (#508)
+
+Verdict: possible, but not a small change, so no `[orchestrator] adapter =
+"opencode"` ships and `config.Load` keeps rejecting it. It would be a
+fourth bridge, a ticket of its own.
+
+What opencode 1.19.0 offers (read from `opencode --help`, `opencode run
+--help`, `opencode serve --help`, and a run against `opencode/big-pickle`):
+
+- **A one-turn headless command exists.** `opencode run --format json
+  [-m provider/model] [-s <session id>] [--dir D] [--agent A] [--auto]
+  <message>` prints one JSON event per line and exits. Events seen:
+  `step_start`, `text` (`part.text`), `tool_use` (`part.tool`,
+  `part.state.input`/`output`), `step_finish` (`part.tokens`, `part.reason`)
+  and `error` (`error.name`, `error.data.message`). Every event carries
+  `sessionID`. `-s <id>` resumed the session and the model recalled the
+  earlier turn, so the codex model (one process per message, resumed) fits.
+- **MCP** reaches `opencode run` through `OPENCODE_CONFIG`, as it does for
+  workers, so the saddle server needs no new mechanism.
+- **A long-lived alternative.** `opencode serve` (`--port`, `--hostname`)
+  and `opencode run --attach <url>` keep one server across turns. The codex
+  and grok bridges chose a process per turn, which survives a crash and
+  needs no port, so the same would be simpler here.
+
+Why it is not small. The codex bridge landed with `codex_bridge.go` (about
+470 lines), a CLI command, `Launch.headlessCodex`, `OrchestratorAdapters`,
+failover in `orchfailover.go`, `OrchIdentity`, the context meter, doctor and
+init, and an e2e journey. opencode needs all of that plus pieces that have
+no codex equivalent:
+
+- Translating opencode's events to the TUI's stream-json (tool names, a
+  `result` line with usage, and a quota error: a failed `run` printed only
+  `UnknownError: Unexpected server error` for a bad model, so the quota
+  words in `error.data.message` and the retry behaviour on Zen limits
+  (#573, retried rather than failed) are unverified for `run`).
+- Compaction: there is no `/compact` in `run`; it would be the codex
+  summary-and-fresh-session emulation.
+- The orchestrator's context window and meter: the session lives in
+  `opencode.db`, which the usage reader already knows, but not as an
+  orchestrator context.
+- A tool deny list: opencode's `permission` config could express it, which
+  codex cannot, but it is new work.
+- Edits to files outside this task's area (`internal/config`,
+  `internal/app`, `internal/doctor`, `internal/cli`).
+
+Given the free-model and many-provider appeal, the next step is a ticket
+that mirrors #506 for opencode (difficulty: standard) with the `run
+--format json` findings above as its starting point.
+
+## opencode e2e
+
+`TestJourneyOpenCodeWorker` (`internal/e2e`) drives a fake `opencode` (no
+real binary or login): a spawn without a login is refused by name with
+"opencode providers login" and leaves no task; with an `auth.json` status
+lists opencode available, the spawn starts the TUI with `--prompt`, and the
+run-dir `OPENCODE_CONFIG` carries the saddle MCP server and the claims
+plugin, with nothing written into the worktree.
