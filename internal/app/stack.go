@@ -696,7 +696,7 @@ func (a *App) republish(plan []restacked, res *RestackResult) error {
 // "gh-stack" the stacks are linked on GitHub again afterwards.
 func (a *App) republishLayout(rs restackPlan, held map[int]string, info map[string]PRInfo, res *RestackResult) error {
 	var groups []int
-	var bases []string
+	var entries []stackEntry
 	var linked []store.Task
 	waiting, queued := map[int]bool{}, map[int]bool{}
 	independent := a.publishedPRs()
@@ -752,7 +752,7 @@ func (a *App) republishLayout(rs restackPlan, held map[int]string, info map[stri
 			a.Store.Event(r.ID, "restack_retarget_skipped", r.PR+": "+a.forgeName()+" didn't report its base; left on "+base)
 			linked = append(linked, r.Task)
 			groups = append(groups, rs.layout[i].Group)
-			bases = append(bases, base)
+			entries = append(entries, stackEntry{Task: r.Task, Group: rs.layout[i].Group, Base: base, Why: rs.layout[i].Why, Head: head})
 			continue
 		}
 		live := info[r.PR].BaseRefName
@@ -774,9 +774,9 @@ func (a *App) republishLayout(rs restackPlan, held map[int]string, info map[stri
 		}
 		linked = append(linked, r.Task)
 		groups = append(groups, rs.layout[i].Group)
-		bases = append(bases, base)
+		entries = append(entries, stackEntry{Task: r.Task, Group: rs.layout[i].Group, Base: base, Why: rs.layout[i].Why, Head: head})
 	}
-	if err := a.updateStackComments(linked, groups, bases); err != nil {
+	if err := a.updateStackComments(entries); err != nil {
 		return err
 	}
 	a.linkStacks(linked, groups)

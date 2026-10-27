@@ -381,6 +381,16 @@ func (g *GitLab) SetPRBody(ctx context.Context, ref, body string) error {
 	return g.updateMR(ctx, ref, "-f", "description="+body)
 }
 
+// SetStatus posts a commit status; GitLab names failure "failed".
+func (g *GitLab) SetStatus(ctx context.Context, sha, name, state, description string) error {
+	if state == StatusFailure {
+		state = "failed"
+	}
+	_, err := g.api(ctx, "POST", "projects/:id/statuses/"+sha,
+		"-f", "state="+state, "-f", "name="+name, "-f", "description="+description)
+	return err
+}
+
 func (g *GitLab) ClosePR(ctx context.Context, ref string) error {
 	return g.updateMR(ctx, ref, "-f", "state_event=close")
 }

@@ -846,7 +846,7 @@ func (a *App) publishMode(pushOnly bool) (published, error) {
 	}
 	var stack []store.Task
 	var groups []int
-	var bases []string
+	var entries []stackEntry
 	done := map[int]bool{}
 	for _, i := range order {
 		if i >= stopAt {
@@ -912,9 +912,9 @@ func (a *App) publishMode(pushOnly bool) (published, error) {
 		done[i] = true
 		stack = append(stack, t)
 		groups = append(groups, layout[i].Group)
-		bases = append(bases, prBase)
+		entries = append(entries, stackEntry{Task: t, Group: layout[i].Group, Base: prBase, Why: layout[i].Why, Head: layout[i].Head})
 	}
-	if err := a.updateStackComments(stack, groups, bases); err != nil {
+	if err := a.updateStackComments(entries); err != nil {
 		return res, err
 	}
 	for _, t := range stack {
