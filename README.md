@@ -148,10 +148,10 @@ on Claude Code for now). `saddle up claude|grok|codex [epic]` picks the
 harness for one run without touching config.
 
 Any orchestrator can still spawn a worker on any adapter that can run here
-(`claude`, `codex`, `gemini`, `grok`: CLI on `PATH` and signed in) by passing
+(`claude`, `codex`, `gemini`, `grok`, `opencode`: CLI on `PATH` and signed in) by passing
 `adapter` to spawn; `saddle status` lists which are available. Claude and
 Grok workers run saddle's hooks, so their claims are enforced on every
-write; Codex and Gemini run none, so a saddle pre-commit hook and `done`
+write, as are opencode's by a plugin; Codex and Gemini run none, so a saddle pre-commit hook and `done`
 check their claims instead (`SADDLE_ALLOW_CLAIMED=1` overrides, and is
 logged).
 
