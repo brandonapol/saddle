@@ -19,6 +19,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -37,6 +38,8 @@ const Version = "1.19.0"
 
 // QuotaMessage is the error a QUOTA turn fails with: Zen's empty balance.
 const QuotaMessage = "Insufficient balance. Manage your billing here: https://opencode.ai/workspace/billing"
+
+var errSessionNotFound = errors.New("session not found")
 
 // Main runs the fake on args and returns its exit code.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -64,7 +67,10 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	msg := strings.TrimSpace(strings.Join(append(r.message, string(b)), "\n"))
 	code, err := r.turn(msg, stdout)
-	if err != nil {
+	switch {
+	case errors.Is(err, errSessionNotFound):
+		fmt.Fprintln(stderr, "Error: Session not found") // opencode's wording
+	case err != nil:
 		fmt.Fprintln(stderr, "Error:", err)
 	}
 	return code
@@ -127,7 +133,7 @@ func (r runArgs) turn(msg string, out io.Writer) (int, error) {
 	sid := r.session
 	if sid != "" {
 		if _, err := os.Stat(filepath.Join(sessions, sid)); err != nil {
-			return 1, fmt.Errorf("Session not found")
+			return 1, errSessionNotFound
 		}
 	} else {
 		n, _ := os.ReadDir(sessions)
