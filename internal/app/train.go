@@ -1339,7 +1339,7 @@ func short(sha string) string {
 func trainGit(dir string, args ...string) (string, error) {
 	args = gitx.RefLogArgs(args)
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(), "SADDLE_TRAIN=1")
+	cmd.Env = gitx.Env("SADDLE_TRAIN=1")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {

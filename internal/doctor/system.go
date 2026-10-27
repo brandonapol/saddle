@@ -67,7 +67,7 @@ func (s system) Exec(name string, args ...string) (string, error) {
 
 func (s system) TrainGit(args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", string(s)}, args...)...)
-	cmd.Env = append(os.Environ(), "SADDLE_TRAIN=1")
+	cmd.Env = gitx.Env("SADDLE_TRAIN=1")
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
