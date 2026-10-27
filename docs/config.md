@@ -98,6 +98,24 @@ CLI and checks what it needs; for codex that includes `exec --json`, a login
 and a sandbox `gh` and `saddle` can work in. Design:
 [ADR 0002](adr/0002-orchestrator-on-any-agent.md).
 
+## SSO for codex: `[sso.<name>]`
+
+Log in once to an OIDC provider (Keycloak, Okta, any issuer with discovery
+and the device grant) and every codex worker, and a codex orchestrator,
+gets a fresh bearer token for the model gateway it fronts. Off unless set.
+See [sso.md](sso.md).
+
+```toml
+[sso.corp]
+issuer = "https://keycloak.example.com/realms/eng"
+client_id = "saddle-cli"
+# scopes = ["openid", "offline_access"]
+# audience = ""            # Okta custom auth servers, Auth0
+# token = "access"         # access | id
+codex_provider = "corp-gw"  # the codex model_provider this login feeds
+# base_url = ""            # set to define the provider here instead of in ~/.codex/config.toml
+```
+
 ## Environment variables
 
 | Variable | Effect |

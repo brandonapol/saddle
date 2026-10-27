@@ -92,6 +92,9 @@ type Config struct {
 	RunQueue RunQueue `toml:"run_queue"`
 	// Forge overrides which git provider and CLI saddle uses (#646).
 	Forge Forge `toml:"forge"`
+	// SSO is [sso.<name>]: OIDC providers saddle logs in to once and whose
+	// tokens feed codex workers (#758). Empty means no SSO.
+	SSO SSOMap `toml:"sso"`
 }
 
 // Forge is [forge]: the git provider and its CLI. Empty fields are detected
@@ -1051,6 +1054,9 @@ func Load(root string) (Config, error) {
 		return cfg, fmt.Errorf("adapters.handoff_wait %s: must not be negative", cfg.AdapterPolicy.HandoffWait)
 	}
 	if err := checkFallback(cfg.Fallback); err != nil {
+		return cfg, err
+	}
+	if err := checkSSO(cfg.SSO); err != nil {
 		return cfg, err
 	}
 	if p := cfg.Forge.Provider; p != "" && p != ForgeGitHub && p != ForgeGitLab {

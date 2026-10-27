@@ -20,6 +20,12 @@ func (a *App) adapterCmd(name string) (string, []string) {
 		return a.Cfg.Claude.Cmd, nil
 	}
 	c := a.Cfg.Adapters[name]
+	if name == usage.Codex {
+		if sa := a.codexSSOArgs(); sa != nil {
+			// The user's own args come last, so they can still override.
+			return c.Cmd, append(append([]string(nil), sa...), c.Args...)
+		}
+	}
 	return c.Cmd, c.Args
 }
 
@@ -66,7 +72,7 @@ func (a *App) adapterStatus() []agent.Status {
 			cmds[n] = c.Cmd
 		}
 	}
-	return agent.Availability(cmds)
+	return a.applySSOStatus(agent.Availability(cmds))
 }
 
 // checkAdapter refuses an adapter that can't run here, naming the reason and
