@@ -4,6 +4,7 @@ package gitx
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -17,11 +18,22 @@ var calls atomic.Int64
 // Calls returns how many git processes this package has started.
 func Calls() int64 { return calls.Load() }
 
+// Env is the environment saddle runs git with: the process's own plus extra,
+// with credential prompts off. Saddle runs unattended and on hosts that may
+// not use the remote's forge at all, so a fetch or push without stored
+// credentials must fail with an error rather than wait on the terminal for a
+// username (GIT_TERMINAL_PROMPT) or open Git Credential Manager's dialog.
+func Env(extra ...string) []string {
+	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
+	return append(env, extra...)
+}
+
 // Run executes git in dir and returns trimmed stdout. Errors carry stderr.
 func Run(dir string, args ...string) (string, error) {
 	args = RefLogArgs(args)
 	calls.Add(1)
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = Env()
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {

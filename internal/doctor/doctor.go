@@ -318,7 +318,7 @@ func (r *run) gitRemote() Result {
 	out, _ := r.env.Git("remote")
 	remotes := strings.Fields(out)
 	if len(remotes) == 0 {
-		return fail(CheckRemote, "no git remote", "git remote add origin <github-url>; saddle pushes branches and opens PRs there")
+		return fail(CheckRemote, "no git remote", "git remote add origin <repo-url>; saddle pushes branches and opens PRs there")
 	}
 	if up, err := r.env.Git("config", "branch."+r.cfg.Base+".remote"); err == nil && up != "" && up != "." {
 		r.remote = up
@@ -751,12 +751,16 @@ const pushScratch = "refs/heads/saddle/doctor-push-check"
 // train so the ref guard's pre-push hook allows it.
 func (r *run) push() Result {
 	if r.remote == "" {
-		return warn(CheckPush, "no remote to push to", "git remote add origin <github-url>")
+		return warn(CheckPush, "no remote to push to", "git remote add origin <repo-url>")
 	}
 	out, err := r.env.TrainGit("push", "--dry-run", r.remote, "HEAD:"+pushScratch)
 	if err != nil {
-		return warn(CheckPush, "a dry-run push to "+r.remote+" failed: "+firstLine(out),
-			"make `git push "+r.remote+"` work from this shell (gh auth setup-git, or an SSH key GitHub accepts); saddle prs, restack and publish push from here")
+		how := "gh auth setup-git, or an SSH key GitHub accepts"
+		if r.provider == config.ForgeGitLab {
+			how = "glab auth login with git credentials, or an SSH key GitLab accepts"
+		}
+		return warn(CheckPush, "a dry-run push to "+r.remote+" ("+r.url+") failed: "+firstLine(out),
+			"make `git push "+r.remote+"` work from this shell without a prompt ("+how+"); saddle prs, restack and publish push from here")
 	}
 	return ok(CheckPush, "dry-run push to "+r.remote+" works; saddle publish can push")
 }

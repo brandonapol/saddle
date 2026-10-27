@@ -181,6 +181,10 @@ func TestChecks(t *testing.T) {
 		{"saddle can't push", CheckPush, func(f *fakeEnv) {
 			f.trainGit["push --dry-run origin HEAD:refs/heads/saddle/doctor-push-check"] = res{out: "Permission denied (publickey).", err: errors.New("exit status 128")}
 		}, Warn, "gh auth setup-git"},
+		{"saddle can't push to gitlab", CheckPush, func(f *fakeEnv) {
+			f.git["remote get-url origin"] = res{out: "https://gitlab.com/acme/widget.git"}
+			f.trainGit["push --dry-run origin HEAD:refs/heads/saddle/doctor-push-check"] = res{out: "fatal: could not read Username for 'https://gitlab.com': terminal prompts disabled", err: errors.New("exit status 128")}
+		}, Warn, "SSH key GitLab accepts"},
 		{"no orchestrator allowlist", CheckOrchAllow, func(f *fakeEnv) { f.allow = []string{"Read"} }, Warn, `"Bash(saddle:*)", "mcp__saddle"`},
 
 		{"config error", CheckConfig, func(f *fakeEnv) { f.cfgErr = errors.New("train.output \"x\"") }, Fail, "config.toml"},
