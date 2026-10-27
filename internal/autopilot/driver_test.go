@@ -560,3 +560,67 @@ func TestReportNamesProviderPerTicket(t *testing.T) {
 		t.Errorf("spawn event doesn't name the provider: %q", r.env.events)
 	}
 }
+
+// sharingEnv is fakeEnv with the symbol-mode gate: it shares claims when
+// symbol is set and the forecaster would rate the pair below medium.
+type sharingEnv struct {
+	*fakeEnv
+	symbol, risky bool
+	asked         [][]string // the occupants each question named
+}
+
+func (s *sharingEnv) ShareClaims(want []string, with []string) ([]string, bool, error) {
+	s.asked = append(s.asked, with)
+	if !s.symbol || s.risky {
+		return nil, false, nil
+	}
+	return []string{}, true, nil
+}
+
+func overlapRig(t *testing.T, e *sharingEnv) *rig {
+	r := newRig(t, 4, claimed(1, "a/**"), claimed(2, "a/x.go"))
+	e.fakeEnv = r.env
+	r.d.Env = e
+	r.on(Options{})
+	return r
+}
+
+// #627: file mode never asks, so overlapping tickets stay apart.
+func TestOverlapWaitsInPathMode(t *testing.T) {
+	e := &sharingEnv{}
+	r := overlapRig(t, e)
+	r.tick()
+	if got := r.env.spawned(); !slices.Equal(got, []int{1}) {
+		t.Fatalf("spawned %v, want only #1", got)
+	}
+}
+
+// #627: in symbol mode a pair the forecaster rates below medium goes through,
+// without the globs the live task already holds.
+func TestOverlapPassesInSymbolModeWhenLowRisk(t *testing.T) {
+	e := &sharingEnv{symbol: true}
+	r := overlapRig(t, e)
+	r.tick()
+	if got := r.env.spawned(); !slices.Equal(got, []int{1, 2}) {
+		t.Fatalf("spawned %v, want #1 and #2", got)
+	}
+	if got := r.env.spawns[1].Claims; got == nil || len(got) != 0 {
+		t.Errorf("#2 spawned with claims %v, want none (non-nil)", got)
+	}
+	if len(e.asked) != 1 || !slices.Equal(e.asked[0], []string{"t1"}) {
+		t.Errorf("asked %v, want one question naming t1", e.asked)
+	}
+}
+
+// #627: a medium-or-worse pair still waits in symbol mode.
+func TestOverlapWaitsInSymbolModeWhenRisky(t *testing.T) {
+	e := &sharingEnv{symbol: true, risky: true}
+	r := overlapRig(t, e)
+	rep := r.tick()
+	if got := r.env.spawned(); !slices.Equal(got, []int{1}) {
+		t.Fatalf("spawned %v, want only #1", got)
+	}
+	if !strings.Contains(rep.Skipped[2], "overlaps") {
+		t.Errorf("why #2 waits = %q", rep.Skipped[2])
+	}
+}

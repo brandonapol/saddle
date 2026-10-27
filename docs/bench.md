@@ -80,7 +80,7 @@ Flags:
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--adapter` | `fake` | `fake` runs the scripted agent. `claude`, `grok` and `codex` are reserved for real-agent runs, not wired yet. |
-| `--granularity` | `file` | `file` is path claims, saddle's default. `symbol` sets `[claims] granularity = "symbol"` in the world's config and opens the bench's spawn gate (see [Symbol claims](#symbol-claims)). |
+| `--granularity` | `file` | `file` is path claims, saddle's default. `symbol` sets `[claims] granularity = "symbol"` in the world's config. |
 | `--out` | `bench/results` | where the JSON and markdown go |
 | `--stall` | `60s` | end the run when no task makes progress for this long |
 | `--timeout` | `10m` | end the run regardless |
@@ -101,15 +101,13 @@ over a symbol that changed on integration since the task's base, and rule 3
 warns when an edit uses a symbol whose signature another live task is
 changing (and denies it once that change has landed).
 
-Autopilot's own spawn gate stays path-based in both modes, so on its own it
-would never start two tickets that claim one file and rule 1 would never
-come into play. Under symbol claims the bench therefore opens the gate for
-its tickets: autopilot sees the scenario's live tasks as holding no claims,
-and a ticket whose claims another live task already holds is spawned
-without those globs. Those files stay their owner's, so each write to them
-is a path-claim deny that the symbol rules then rule on. This models an
-orchestrator that leaves overlap to the edit-time rules; a symbol-aware gate
-in autopilot itself is #627.
+Autopilot's spawn gate honours symbol claims itself (#627). A ticket whose
+claims overlap a live task's waits in file mode. In symbol mode it goes
+through when the collision forecast (rule 4) rates the pair below medium, and
+is spawned without the globs the live task holds. Those files stay their
+owner's, so each write to them is a path-claim deny that the symbol rules
+then rule on. A pair rated medium or worse still waits for the live task to
+land.
 
 `saddle bench compare [scenario…]` runs each scenario (all of them by
 default) once per granularity, writes every run's files like `run`, and
@@ -338,5 +336,3 @@ Tracked in #605.
 - **Real agents.** `--adapter claude|grok|codex` would run real agents on
   the same tickets in an isolated world that still sees the user's adapter
   credentials, and report tokens. Opt-in, manual, never in CI.
-- **A symbol-aware spawn gate in autopilot.** Under symbol claims the
-  bench opens the gate itself (see [Symbol claims](#symbol-claims), #627).
