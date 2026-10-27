@@ -45,7 +45,7 @@ func Root() *cobra.Command {
 	root.AddCommand(
 		restackCmd(), afterCmd(),
 		versionCmd(), migrateCmd(), changelogCmd(), initCmd(), upCmd(), downCmd(), spawnCmd(), withTmux(statusCmd()), catchupCmd(), briefCmd(), claimCmd(), releaseCmd(), doneCmd(),
-		landCmd(), syncCmd(), prsCmd(), peekCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(), repairCmd(), concurrencyCmd(), pluginCmd(), grokBridgeCmd(), codexBridgeCmd(), openCodeBridgeCmd(), publishCmd(), noticesCmd(), trustCmd(), untrustCmd(), resumeCmd(), rescueCmd(), heavyRunCmd(), runqCmd(), autopilotCmd(), blockersCmd(), decisionsCmd(), sreCmd(), benchCmd(), remote.Command(open),
+		landCmd(), syncCmd(), prsCmd(), peekCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(), repairCmd(), concurrencyCmd(), pluginCmd(), grokBridgeCmd(), codexBridgeCmd(), openCodeBridgeCmd(), ssoCmd(), publishCmd(), noticesCmd(), trustCmd(), untrustCmd(), resumeCmd(), rescueCmd(), heavyRunCmd(), runqCmd(), autopilotCmd(), blockersCmd(), decisionsCmd(), sreCmd(), benchCmd(), remote.Command(open),
 	)
 	addGlossaryHelp(root)
 	return root
@@ -159,6 +159,9 @@ keep the CLI they were spawned with.
 				return err
 			}
 			trace.Mark("doctor (local checks)")
+			// One SSO sign-in per session, before agents need it (#758).
+			upSSOLogin(cmd, cmd.OutOrStdout(), a.Cfg, isTerminal(cmd.InOrStdin()))
+			trace.Mark("sso login")
 			rc := wantsRC(a)
 			// One session per repo; a dead holder's lock is taken over (#665).
 			releaseUp, err := acquireUpLock(a.Root, takeover, cmd.ErrOrStderr())
