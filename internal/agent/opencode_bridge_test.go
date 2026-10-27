@@ -257,6 +257,30 @@ func TestOpenCodeBridgeWritesContextLedger(t *testing.T) {
 	}
 }
 
+// The context meter tails the ledger with one cursor for the session's
+// life, so a later turn's reading must not be dropped as a repeat of an
+// earlier one, even when a CLI reuses part ids across turns.
+func TestOpenCodeContextLedgerFollowsEachTurn(t *testing.T) {
+	dir := openCodeBridgeDir(t, openCodeSpec{})
+	ledger := filepath.Join(dir, OpenCodeContextFile)
+	var cur usage.Cursor
+	var out bytes.Buffer
+	if err := RunOpenCodeBridge(dir, userLines("hello"), &out); err != nil {
+		t.Fatal(err)
+	}
+	if recs, err := usage.Tail(ledger, &cur, usage.ParseClaude); err != nil || len(recs) != 2 {
+		t.Fatalf("first turn: %d records, %v", len(recs), err)
+	}
+	t.Setenv("TOKENS", "150000")
+	if err := RunOpenCodeBridge(dir, userLines("again"), &out); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := usage.Tail(ledger, &cur, usage.ParseClaude)
+	if err != nil || len(recs) != 2 || recs[1].Tokens.CacheRead != 150000 {
+		t.Fatalf("second turn: records %+v, %v; want both steps, the last with the 150000-token cache read", recs, err)
+	}
+}
+
 func TestHeadlessOpenCodeWritesSpec(t *testing.T) {
 	run := t.TempDir()
 	l := Launch{

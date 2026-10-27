@@ -289,7 +289,6 @@ func resetWords(d time.Duration) string {
 
 // openCodeStep is one model call's tokens from a step_finish event.
 type openCodeStep struct {
-	ID     string
 	Time   time.Time
 	Model  string
 	Tokens struct {
@@ -311,11 +310,12 @@ func (s openCodeStep) claudeUsage() map[string]any {
 }
 
 // appendContext writes s to the ledger as a Claude transcript line, which
-// usage.ParseClaude reads.
+// usage.ParseClaude reads. It carries no message id: the reader drops a
+// line whose id it has seen, and each line is already one model call.
 func appendContext(path string, s openCodeStep) error {
 	b, err := json.Marshal(map[string]any{
 		"type": "assistant", "timestamp": s.Time.UTC().Format(time.RFC3339Nano),
-		"message": map[string]any{"id": s.ID, "model": s.Model, "usage": s.claudeUsage()},
+		"message": map[string]any{"model": s.Model, "usage": s.claudeUsage()},
 	})
 	if err != nil {
 		return err
@@ -406,7 +406,7 @@ func (t *openCodeTranslator) translate(line []byte) ([]map[string]any, *openCode
 		}
 		out = append(out, assistant(map[string]any{"type": "tool_use", "id": id, "name": openCodeToolName(ev.Part.Tool), "input": input}, t.session))
 	case "step_finish":
-		s := openCodeStep{ID: ev.Part.ID, Time: time.UnixMilli(ev.Timestamp), Model: t.model}
+		s := openCodeStep{Time: time.UnixMilli(ev.Timestamp), Model: t.model}
 		if s.Model == "" {
 			s.Model = OpenCodeContextModel
 		}
