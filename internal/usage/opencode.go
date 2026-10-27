@@ -284,6 +284,19 @@ func openCodeQuotaBody(body string) bool {
 	return slices.Contains(openCodeQuotaTypes, b.Error.Type) || slices.Contains(openCodeQuotaTypes, code)
 }
 
+// OpenCodeErrorLimit reports whether an opencode error, its message and the
+// provider's response body, is a quota or plan limit: one of the limit
+// wordings, or a body naming one of openCodeQuotaTypes.
+func OpenCodeErrorLimit(message, body string) (OpenCodeLimit, bool) {
+	if l, ok := ParseOpenCodeLimit(message); ok {
+		return l, true
+	}
+	if openCodeQuotaBody(body) {
+		return OpenCodeLimit{Message: message}, true
+	}
+	return OpenCodeLimit{}, false
+}
+
 // ReadOpenCodeLimits returns the quota and limit errors that ended
 // opencode turns of the sessions run in dir (all when empty), after the
 // given time in ms, oldest first. Other errors are not limits. A limit
@@ -298,12 +311,9 @@ func ReadOpenCodeLimits(dbPath, dir string, afterMs int64) ([]OpenCodeLimit, err
 			return
 		}
 		d := m.Error.Data
-		l, ok := ParseOpenCodeLimit(d.Message)
-		if !ok && !openCodeQuotaBody(d.ResponseBody) {
-			return
-		}
+		l, ok := OpenCodeErrorLimit(d.Message, d.ResponseBody)
 		if !ok {
-			l = OpenCodeLimit{Message: d.Message}
+			return
 		}
 		if l.ResetIn == 0 {
 			if n, err := strconv.Atoi(strings.TrimSpace(d.ResponseHeaders["retry-after"])); err == nil && n > 0 {

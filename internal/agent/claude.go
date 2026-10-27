@@ -23,13 +23,16 @@ const (
 	KindClaude = "claude"
 	KindGrok   = "grok"
 	KindCodex  = "codex" // headless orchestrator only: workers use the Codex adapter
+	// KindOpenCode is the headless opencode orchestrator (#745); workers use
+	// the OpenCode adapter.
+	KindOpenCode = "opencode"
 )
 
 // Launch describes one agent session to start in a tmux window.
 type Launch struct {
 	Root     string // main checkout
 	Bin      string // absolute path to the saddle binary
-	Kind     string // KindClaude, KindGrok or KindCodex; empty means Claude
+	Kind     string // KindClaude, KindGrok, KindCodex or KindOpenCode; empty means Claude
 	Task     string
 	Title    string
 	Dir      string // working directory (the task worktree, or root for the orchestrator)
@@ -198,13 +201,16 @@ func (l Launch) Write() (string, error) {
 // Headless builds the process the TUI talks to. Claude speaks stream-json on
 // stdin and stdout. Grok has no persistent stdin protocol, so the process is
 // saddle's grok-bridge, which runs one headless grok turn per user message.
-// Codex has none either: its bridge runs one codex exec turn per message.
+// Codex has none either: its bridge runs one codex exec turn per message,
+// and opencode's one opencode run turn (#745).
 func (l Launch) Headless(resume string) (*exec.Cmd, error) {
 	switch l.Kind {
 	case KindGrok:
 		return l.headlessGrok(resume)
 	case KindCodex:
 		return l.headlessCodex(resume)
+	case KindOpenCode:
+		return l.headlessOpenCode(resume)
 	}
 	return l.headlessClaude(resume)
 }

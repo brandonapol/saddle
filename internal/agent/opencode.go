@@ -38,9 +38,7 @@ func (OpenCode) Launch(l Launch) (string, error) {
 	cfg := map[string]any{
 		"$schema": "https://opencode.ai/config.json",
 		"plugin":  []string{plugin},
-		"mcp": map[string]any{"saddle": map[string]any{
-			"type": "local", "command": []string{l.Bin, "mcp"}, "environment": l.env(), "enabled": true,
-		}},
+		"mcp":     openCodeMCP(l),
 	}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
