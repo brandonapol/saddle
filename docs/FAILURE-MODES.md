@@ -75,6 +75,7 @@ Each row says how it is handled, linking the code or issue, or says **gap**.
 | Heavy tests (flutter, e2e) | `load` | **predict** (load) | `internal/runq` (#236) | `make check` isn't timed |
 | Tests needing env secrets | | none | none | **gap** |
 | Flaky tests driving repair loops | `ci_red`, `repair_of_repair` | history weighting | `[ci] flaky` reruns (#234); a repair of a repair is refused: `internal/app/historyscan.go` (#405); CI repair cap card: `internal/app/cired_repair.go` | No flaky history from the train log |
+| Saddle's own hook scripts calling each other forever (a repo hook's `<name>.pre-saddle` wrapper runs saddle's ref guard, which runs the wrapper, ...) | | `saddle doctor` hooks row fails and names the hooks (#691) | Every script saddle writes starts with a guard on `SADDLE_HOOK_DEPTH` and exits with `saddle: hook recursion in <name>` after 4 nested runs: `internal/refguard/repohooks.go`. `saddle init` deletes the looping wrapper. If processes are looping now, `pkill -x reference-trans` | |
 | Lockfile or generated-file conflicts | `train_escalated` | history weighting | The train returns the branch to its agent, then escalates: `internal/app/train.go` | |
 
 ## Saddle

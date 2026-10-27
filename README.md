@@ -202,7 +202,9 @@ directly. It forwards stdin, stdout, signals and the exit code. It starts in
 `observe` mode, which records how long runs take but never makes one wait.
 To enforce the slots, set `mode = "enforce"` in `~/.config/saddle/runq.toml`
 or `.saddle/runq.toml`. `SADDLE_RUNQ=off|observe|enforce` overrides the mode
-for one shell. See [docs/runq.md](docs/runq.md).
+for one shell. `saddle doctor` warns while the queue is only observing, as a
+reminder to switch to `enforce` once you have measured. See
+[docs/runq.md](docs/runq.md).
 
 ### SRE mode: `saddle sre`
 

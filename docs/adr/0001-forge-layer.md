@@ -1,6 +1,6 @@
 # ADR 0001: The forge layer, one interface over gh and glab
 
-- Status: Proposed
+- Status: Accepted
 - Issue: #644 (this layer), #647 (the watchers onto it), #645 (GitLab), #646 (provider and CLI detection)
 
 ## Context

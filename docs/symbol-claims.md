@@ -218,7 +218,9 @@ Trigger: PostToolUse after a write to a supported f in `symbol` mode.
    sync. Live matches stay warnings.
 7. Body-only changes (same `SigHash`): nothing.
 
-Rule 3 has a 300ms budget across all tasks; past it, it emits nothing. A
+Rule 3 has a 300ms budget across all tasks; past it, it emits nothing.
+`SADDLE_SYMBOL_BUDGET=<duration>` replaces every rule's budget (250ms and
+300ms) with that duration; see docs/config.md. A
 missed warning costs a red gate later, not a bad merge.
 
 ### Rule 4: forecaster feed (S6)

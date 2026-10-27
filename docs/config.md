@@ -75,3 +75,36 @@ Set `provider = "gitlab"` for a self-hosted GitLab whose host name doesn't
 say "gitlab", and `host` when it differs from the remote's host (glab also
 reads `GITLAB_HOST`). Each provider takes its own CLI, so `provider =
 "github"` with `cli = "glab"` (or the reverse) is a config error.
+
+## The orchestrator's CLI: `[orchestrator]`
+
+`saddle up` runs the orchestrator on Claude Code when it is installed. Set
+`adapter` to choose another CLI with a headless session (#668); `model` is the
+orchestrator's model on that adapter.
+
+```toml
+[orchestrator]
+# adapter = "codex"        # claude | codex | grok; empty: claude if installed,
+#                          # else the first headless agent that can run
+# model = "gpt-5-codex"    # needs adapter; empty is the adapter's own key
+#                          # ([claude]/[grok] orchestrator_model, [adapters.codex] model)
+# compact_at = 0.7         # context fraction at which it is told to compact
+# remote_control = false   # saddle up --rc (docs/remote-control.md)
+```
+
+Any other adapter name is a config error. A quota failover still wins for the
+run it happens in. `saddle doctor` has an `orchestrator` row that names the
+CLI and checks what it needs; for codex that includes `exec --json`, a login
+and a sandbox `gh` and `saddle` can work in. Design:
+[ADR 0002](adr/0002-orchestrator-on-any-agent.md).
+
+## Environment variables
+
+| Variable | Effect |
+|---|---|
+| `SADDLE_ROOT`, `SADDLE_TASK` | Set by saddle on every agent process: the repo and the task id. `SADDLE_ROOT` wins when saddle looks for the repo. Saddle finds and kills leaked processes by these tags. A `saddle run` without `SADDLE_TASK` shows as foreign. |
+| `SADDLE_RUNQ=off\|observe\|enforce` | Overrides the heavy-run queue's mode for one shell. |
+| `SADDLE_SYMBOL_BUDGET=<duration>` | Replaces the time budget of every symbol-claim rule (250ms for rules 1 and 2, 300ms for rule 3) with a positive Go duration such as `2s`. Past its budget a rule keeps the path verdict, so a loaded machine can deny a share the rules would allow; the e2e worlds raise it. Invalid or non-positive values are ignored. |
+| `SADDLE_E2E_DIR` | Set by the e2e harness on its test processes (tmux servers, fake agents) to the test's temp dir. `saddle doctor` and `saddle up` use it to find leaks. Not for users. |
+| `SADDLE_HOOK_DEPTH` | Internal: saddle's hook scripts count how deeply they nest. See `docs/FAILURE-MODES.md`. |
+| `SADDLE_REFGUARD=off` | Operator recovery for the ref guard, outside a task (logged). |

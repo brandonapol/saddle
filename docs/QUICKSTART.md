@@ -183,7 +183,9 @@ The merge train lands their branches one at a time onto `saddle/integration`
 against your default branch.
 
 Quitting the TUI leaves agents running. `saddle up` reconnects and
-`saddle down` stops them.
+`saddle down` stops them. Only one `saddle up` runs per repo: a second one
+refuses and names the pid of the first; `saddle up --takeover` stops that
+session and takes its place (the agents keep running).
 
 **From your phone.** `saddle up --rc` runs the orchestrator as an
 interactive Claude Code session with Remote Control on, shown in the TUI's

@@ -1,6 +1,6 @@
 # ADR 0002: The orchestrator runs on codex or grok, not only Claude Code
 
-- Status: Proposed
+- Status: Accepted
 - Issue: #668 (this change); builds on #150 (saddle up <agent>), #481 and #506 (orchestrator failover to grok and codex), #646 (worker harness fallback), #637 (codex pricing)
 
 ## Context
