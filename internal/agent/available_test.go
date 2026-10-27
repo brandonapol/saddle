@@ -193,3 +193,26 @@ func TestFallbackHarnessTakesInstalledWhenNoneVerified(t *testing.T) {
 		t.Errorf("a verified CLI must win over an unverified one: got %q", got)
 	}
 }
+
+// Coder's codex build, and codex's keyring store, keep no ~/.codex/auth.json,
+// so saddle called a logged-in codex logged out. When no key or file shows
+// a login, saddle asks codex itself: `codex login status` exits 0 when
+// logged in.
+func TestCodexLoginStatusCountsAsLoggedIn(t *testing.T) {
+	dir := agenttest.Path(t, []string{"codex"}, nil)
+	for _, tc := range []struct {
+		status string // the fake's answer to `codex login status`
+		ok     bool
+	}{
+		{"echo 'Logged in using ChatGPT'", true},
+		{"echo 'Not logged in' >&2; exit 1", false},
+	} {
+		script := "#!/bin/sh\nif [ \"$1 $2\" = \"login status\" ]; then " + tc.status + "; fi\n"
+		if err := os.WriteFile(filepath.Join(dir, "codex"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := Check("codex", ""); (err == nil) != tc.ok {
+			t.Errorf("login status %q: Check = %v, want ok %v", tc.status, err, tc.ok)
+		}
+	}
+}

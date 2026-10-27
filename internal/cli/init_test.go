@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/agent/agenttest"
+	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/config"
 )
 
@@ -93,5 +94,28 @@ func TestInitSetup(t *testing.T) {
 				t.Errorf("harness = %q, want %q", cfg.Harness, tc.harness)
 			}
 		})
+	}
+}
+
+// saddle doctor --fix does what saddle init does, the default harness
+// included: a repo initialized while codex looked logged out gets
+// harness = "codex" once codex can run, without a second saddle init.
+func TestDoctorFixWritesHarness(t *testing.T) {
+	agenttest.Path(t, []string{"gh", "codex"}, []string{"gh", "codex"})
+	root := setupRepo(t, "git@github.com:o/r.git", config.Template)
+	a, err := app.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if err := doctorFixInit(a); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Harness != "codex" {
+		t.Fatalf("harness = %q after doctor --fix, want codex", cfg.Harness)
 	}
 }

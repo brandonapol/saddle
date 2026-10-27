@@ -91,6 +91,11 @@ func script(bin string, loggedIn bool) string {
 		b.WriteString("--version) echo 'codex-cli 1.0.0 (fake)' ;;\n")
 		// saddle's codex orchestrator runs headless turns with exec --json (#668).
 		b.WriteString("exec) echo 'Usage: codex exec [OPTIONS] [PROMPT]'; echo '      --json  Print events to stdout as JSONL' ;;\n")
+		if loggedIn {
+			b.WriteString("login) echo 'Logged in using ChatGPT' ;;\n")
+		} else {
+			b.WriteString("login) echo 'Not logged in' >&2; exit 1 ;;\n")
+		}
 	case "opencode":
 		b.WriteString("--version) echo '1.19.0' ;;\n")
 		// saddle's opencode orchestrator runs headless turns with run --format json (#745).

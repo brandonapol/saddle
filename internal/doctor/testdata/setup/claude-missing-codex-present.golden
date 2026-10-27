@@ -3,10 +3,10 @@ ok      git provider  GitHub (github.com) via gh version 2.101.0 (2026-09-15), l
 ok      claude        claude not on PATH; not used: the orchestrator runs codex and workers run codex
 warn    agent CLIs    harness claude can't run (claude not on PATH); codex can, so saddle up runs codex; usable: codex (no hooks); Codex has no hooks, so claims are checked only at commit and done, not on each edit
 
-Optional:
+Saddle can fix these: run `saddle doctor --fix` (it runs saddle init; your config.toml is kept):
   - agent CLIs (the agent CLIs (claude, codex, grok) installed and logged in, and which one saddle up runs)
       harness claude can't run (claude not on PATH); codex can, so saddle up runs codex; usable: codex (no hooks); Codex has no hooks, so claims are checked only at commit and done, not on each edit
-      fix: make codex the default: set harness = "codex" in .saddle/config.toml (saddle init writes it when claude can't run); or install Claude Code: npm install -g @anthropic-ai/claude-code (https://claude.com/claude-code), then claude /login
+      fix: run `saddle doctor --fix` (or saddle init) to make it the default: it sets harness = "codex" in .saddle/config.toml unless you set harness there yourself; or install Claude Code: npm install -g @anthropic-ai/claude-code (https://claude.com/claude-code), then claude /login
 
 Next steps:
   saddle up           open saddle and tell the orchestrator what to work on
