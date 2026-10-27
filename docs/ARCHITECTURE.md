@@ -32,7 +32,13 @@ saddle land | prs | sync | …         ─┘   CI watcher
 ```
 
 - **`saddle up`** is the TUI. It polls the store, and while it runs it also
-  hosts the long-lived loops: the stack sentinel and the CI watcher.
+  hosts the long-lived loops: the stack sentinel and the CI watcher. One
+  session runs per repo: it holds a flock on `.saddle/up.lock` (the pid
+  inside names the holder). A second `saddle up` refuses and prints that pid
+  (#665); `saddle up --takeover` SIGTERMs the holder (SIGKILL after 10s) and
+  takes its place. A crashed holder never wedges the next one, since the
+  kernel drops the lock. Agents run in tmux and are unaffected by a
+  takeover.
 - **`saddle hook <event>`** is the Claude Code hook entrypoint. It opens the
   store, returns a verdict, and must be fast. It fails open if it can't.
 - **`saddle mcp`** is a stdio MCP server, one per agent. Each knows its task
@@ -54,6 +60,18 @@ saddle land | prs | sync | …         ─┘   CI watcher
   `.saddle/tui.lock`, which records its holder, so only one of them drives
   `t0`. The plugin's hook and MCP server do nothing outside a repo that ran
   `saddle init` or inside saddle's own agents (`SADDLE_TASK` set).
+- **Environment tags.** Every agent process gets `SADDLE_ROOT` (the repo) and
+  `SADDLE_TASK` (its task id); the MCP server and hooks read them to know
+  whose call it is. They are also how saddle finds leaks (#690): when a task
+  ends (landed, killed, done, no change; not on a handoff or takeover, whose
+  successor reuses the task) saddle kills every process still tagged with it,
+  such as a `yes` an agent backgrounded out of its process group. `saddle up`
+  sweeps tasks that ended before that existed, and `saddle doctor` warns
+  "orphaned task processes" until it has. The e2e harness tags its test tmux
+  servers and fake agents with `SADDLE_E2E_DIR` (the test's temp dir) the same
+  way (#692): the tag outlives the dir, so `saddle doctor` ("leaked e2e
+  processes") also counts tagged processes whose dir is gone or stale and
+  abandoned `e2etmux` socket dirs, and `saddle up` kills and removes them.
 
 Concurrent processes coordinate through SQLite transactions, not a socket.
 Scheduling decisions are made in-process, inline in `internal/app`. The
@@ -177,7 +195,10 @@ close PRs and delete branches, and it handles those without anyone editing
   the stack, `ReconcileStack` asks GitHub about each PR. A PR merged into base
   (merge, squash or rebase) moves its train entry to `merged`. A closed PR or
   a killed task moves it to `superseded`. Neither comes back, gets labeled, or
-  is retargeted. Restack doesn't replay a superseded task's commits, so they
+  is retargeted. `saddle publish` applies the same rule to its own PR (#693): a
+  task whose recorded PR is closed or merged by hand is detached (a
+  `pr_detached` event) and publishes a fresh PR, instead of reporting the dead
+  one as existing; `restack` re-cuts a published PR's head the same way. Restack doesn't replay a superseded task's commits, so they
   leave integration and are never bundled into the next task's PR.
 - **Merged into a stacked base.** A PR merged into the branch below it instead
   of base is merged if base has its work anyway (by patch-id or file content).
@@ -340,7 +361,7 @@ no key is tracked with its adapter, as before. Status shows each chain
 The TUI's orchestrator fails over too (#481, `internal/app/orchfailover.go`).
 When a turn fails, retries or exits on a quota error, saddle marks its
 adapter out and restarts the orchestrator on the next adapter with a headless
-session (claude or grok; codex has none), recorded in
+session (claude, codex or grok), recorded in
 `.saddle/orchestrator-adapter`. A conversation can't move across CLIs, so
 the new session's first message is a state summary: the headline, the live
 tasks with their adapters, the last two hours' catch-up and the end of the
@@ -470,8 +491,7 @@ Saddle reaches its git host through `internal/forge` and nowhere else
   arguments saddle always passed. Operations a provider lacks return
   `forge.ErrUnsupported`, and saddle drops the feature instead of failing.
 - **Selection.** `App.Forge()` is `forge.New(cfg.Forge, root)`: GitHub unless
-  `[forge]` says `cli = "none"` (local-only) or GitLab (not supported until
-  #645). It starts no process; detecting the provider and CLI from the
+  `[forge]` says `cli = "none"` (local-only) or GitLab (`glab`, docs/gitlab.md; #645). It starts no process; detecting the provider and CLI from the
   remote is a setup step in `saddle init` and `saddle doctor`
   (`doctor.DetectForge`, #646).
 - **Every caller.** `ciwatch`, `sweeper`, `automerge`, `sentinel` (the stack
@@ -479,10 +499,16 @@ Saddle reaches its git host through `internal/forge` and nowhere else
   slice of `forge.Forge` they use and are built from `App.Forge()`, so
   `[forge]` applies to them too. On `ErrUnsupported` each degrades quietly:
   the CI watchers watch nothing, labels and stack comments are skipped, and
-  auto-merge leaves its PRs unread. `TestNoGHArgsOutsideForge` fails when a
-  package outside `internal/forge` builds gh arguments; its allowlist names
-  the GitHub-only exceptions: `ghstack` (the gh-stack extension), `doctor`
-  (setup-time diagnostics) and the changelog.
+  auto-merge leaves its PRs unread. gh arguments appear only in
+  `internal/forge`: `TestNoGHArgsOutsideForge` fails when any other package
+  builds them (#649; `ghstack`, `e2e` and `bench` are no longer exempt).
+  `ghstack` stays optional and GitHub-only.
+- **Polling cost.** The auto-merge watcher lists every open PR and its checks
+  in one forge query per tick (#711) where the forge can (GitHub), and reads
+  PRs one at a time otherwise. A PR whose state hasn't changed for 5 minutes
+  is read less often, half as often as it has been quiet, capped at 10
+  minutes; any change resets it to every tick, and merged or closed PRs are
+  not read again (#665, `internal/automerge/pollcache.go`).
 - **Tests.** `internal/e2e/fakegh` is a fake `gh` binary on `PATH`, so e2e
   journeys exercise `forge.GitHub` end to end.
 
