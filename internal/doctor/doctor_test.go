@@ -51,6 +51,7 @@ func healthy(t *testing.T) *fakeEnv {
 	t.Setenv("SADDLE_RUNQ", "enforce")
 	cfg := config.Default()
 	cfg.Test.Cmd = "go test ./..."
+	cfg.Train.StackBackend = config.StackBackendSaddle // no gh-stack extension in the fake
 	root := t.TempDir()
 	return &fakeEnv{
 		root: root,

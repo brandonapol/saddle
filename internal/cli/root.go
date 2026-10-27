@@ -662,6 +662,9 @@ func prsCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), plan.Note)
 				for _, layer := range plan.Layers {
 					fmt.Fprintf(cmd.OutOrStdout(), "stack %d: %s (%s) -> %s; head %s; re-cut=%t\n", layer.Group+1, layer.Task, layer.Branch, layer.Base, short(layer.Head), layer.Recut)
+					if layer.Why != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "  stacked because %s\n", layer.Why)
+					}
 				}
 				for _, check := range plan.Checks {
 					fmt.Fprintf(cmd.OutOrStdout(), "gate %s: %s\n", check.Name, check.Cmd)

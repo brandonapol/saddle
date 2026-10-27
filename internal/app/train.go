@@ -748,7 +748,7 @@ func overlaps(wt, base string, files []string) bool {
 }
 
 // PRs pushes every landed branch in the stack and opens or updates its PR,
-// laid out as stacks (see stackLayout): dependent or same-topic tasks stack,
+// laid out as stacks (see stackLayout): dependent tasks stack,
 // each PR on the one below it, and unrelated tasks' PRs target base (#52);
 // the owner's custom stacks stack in the order given (#211). A layer
 // on its train predecessor pushes the commit the train landed, never whatever

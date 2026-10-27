@@ -29,10 +29,26 @@ func landSecond(t *testing.T, a *app.App) {
 	}
 }
 
+// saddleBackend sets [train] stack_backend = "saddle" in the repo's config,
+// since gh-stack is the default and these tests cover saddle's own backend.
+func saddleBackend(t *testing.T, root string) {
+	t.Helper()
+	p := filepath.Join(root, ".saddle", "config.toml")
+	b, err := os.ReadFile(p)
+	if err != nil || !strings.Contains(string(b), "\n[train]\n") {
+		t.Fatalf("config has no [train] table: %v", err)
+	}
+	b = []byte(strings.Replace(string(b), "\n[train]\n", "\n[train]\nstack_backend = \"saddle\"\n", 1))
+	if err := os.WriteFile(p, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // #211: saddle stack create/add/remove/list/show/delete manage custom stacks.
 func TestStackCreateCommands(t *testing.T) {
 	a, log := landedPR(t)
 	landSecond(t, a)
+	saddleBackend(t, a.Root)
 	t.Chdir(a.Root)
 
 	out := run(t, "stack", "create", "ui", "t2", "t1")
@@ -84,6 +100,7 @@ func TestStackCreateRefusesUnlandedTask(t *testing.T) {
 func TestStackLinkAndMergeNeedGhStackBackend(t *testing.T) {
 	a, _ := landedPR(t)
 	landSecond(t, a)
+	saddleBackend(t, a.Root)
 	t.Chdir(a.Root)
 	run(t, "stack", "create", "ui", "t1", "t2")
 	for _, args := range [][]string{{"stack", "link"}, {"stack", "merge", "ui"}} {

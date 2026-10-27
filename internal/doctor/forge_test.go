@@ -143,7 +143,7 @@ func TestDoctorOnGitLabProblems(t *testing.T) {
 		{"protection unreadable", CheckProtection, func(f *fakeEnv) {
 			f.glab["api projects/:id/protected_branches/main"] = res{err: errors.New("glab api: 403 Forbidden")}
 		}, Warn, "Protected branches by hand"},
-		{"gh-stack wanted", CheckGhStack, func(f *fakeEnv) { f.cfg.Train.StackBackend = config.StackBackendGhStack }, Warn, `stack_backend = "saddle"`},
+		{"gh-stack wanted", CheckGhStack, func(f *fakeEnv) { f.cfg.Train.StackBackend = config.StackBackendGhStack }, OK, "saddle chains PR and MR targets itself"},
 		{"default branch from glab", CheckDefaultBranch, func(f *fakeEnv) {
 			delete(f.git, "symbolic-ref --short refs/remotes/origin/HEAD")
 		}, OK, "main (matches base)"},

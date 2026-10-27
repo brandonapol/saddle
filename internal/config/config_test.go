@@ -468,8 +468,8 @@ func TestStackBackend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Train.StackBackend != StackBackendSaddle {
-		t.Fatalf("default stack_backend = %q, want saddle", cfg.Train.StackBackend)
+	if cfg.Train.StackBackend != StackBackendGhStack {
+		t.Fatalf("default stack_backend = %q, want gh-stack", cfg.Train.StackBackend)
 	}
 	root := t.TempDir()
 	writeConfig(t, root, "[train]\nstack_backend = \"gh-stack\"\n")

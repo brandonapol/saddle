@@ -420,6 +420,7 @@ func TestGhStackBackendLinksStacksAfterPRs(t *testing.T) {
 func TestSaddleBackendNeverCallsGhStack(t *testing.T) {
 	t.Parallel()
 	a := trainSetup(t)
+	a.Cfg.Train.StackBackend = config.StackBackendSaddle
 	originWithGh(t, a)
 	f := useFakeStackGH(t, a, nil)
 	landUnrelated(t, a, 2)
@@ -522,6 +523,7 @@ func TestMergeStackUsesGhStackMerge(t *testing.T) {
 func TestMergeStackNeedsGhStack(t *testing.T) {
 	t.Parallel()
 	a := trainSetup(t)
+	a.Cfg.Train.StackBackend = config.StackBackendSaddle
 	originWithGh(t, a)
 	landUnrelated(t, a, 2)
 	_, err := a.CreateStack("ui", []string{"t2", "t1"})
@@ -548,5 +550,25 @@ func TestGhStackOffGitHubNeverCallsGh(t *testing.T) {
 	}
 	if len(f.calls) != 0 {
 		t.Fatalf("gh stack calls on GitLab: %q", f.calls)
+	}
+}
+
+// gh-stack, the default, is GitHub-only: on GitLab, or with no forge CLI,
+// saddle chains PR and MR targets itself and never calls gh stack.
+func TestGhStackBackendOnlyOnGitHub(t *testing.T) {
+	t.Parallel()
+	a := trainSetup(t)
+	a.Cfg.Train.StackBackend = config.StackBackendGhStack
+	a.Cfg.Forge.Provider = config.ForgeGitHub
+	if got := a.stackBackend(); got != config.StackBackendGhStack {
+		t.Fatalf("github: backend = %q, want gh-stack", got)
+	}
+	a.Cfg.Forge.Provider = config.ForgeGitLab
+	if got := a.stackBackend(); got != config.StackBackendSaddle {
+		t.Fatalf("gitlab: backend = %q, want saddle", got)
+	}
+	a.Cfg.Forge = config.Forge{CLI: config.ForgeNone}
+	if got := a.stackBackend(); got != config.StackBackendSaddle {
+		t.Fatalf("cli none: backend = %q, want saddle", got)
 	}
 }
