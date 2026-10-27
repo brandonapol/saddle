@@ -160,6 +160,8 @@ func (m *model) harness() string {
 		return "grok"
 	case agent.KindCodex:
 		return "codex"
+	case agent.KindOpenCode:
+		return "opencode"
 	}
 	return "claude"
 }

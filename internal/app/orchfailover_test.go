@@ -53,7 +53,15 @@ func TestFailOverOrchestrator(t *testing.T) {
 		t.Fatalf("grok out: launch kind %v, orchestrator agent %s", l.Kind, a.orchestratorAgent())
 	}
 
-	// Codex runs out as well: nowhere to go.
+	// Codex runs out: opencode's bridge takes it (#745), though [adapters]
+	// order leaves it out.
+	l, _, err = a.FailOverOrchestrator(usage.LimitBanner{Resets: "in 2 hours"}, nil)
+	must(t, err)
+	if l.Kind != agent.KindOpenCode || a.orchestratorAgent() != usage.OpenCode {
+		t.Fatalf("codex out: launch kind %v, orchestrator agent %s", l.Kind, a.orchestratorAgent())
+	}
+
+	// opencode runs out as well: nowhere to go.
 	if _, _, err := a.FailOverOrchestrator(usage.LimitBanner{Resets: "in 2 hours"}, nil); !errors.Is(err, ErrNoOrchestratorAdapter) {
 		t.Fatalf("all out: err = %v", err)
 	}
@@ -89,6 +97,33 @@ func TestOrchestratorOutOfQuota(t *testing.T) {
 // #506: with claude and grok both out, failover lands the orchestrator on
 // codex: a codex launch, run headless through the codex bridge, with
 // codex's configured model and command, and a brief that names Codex.
+// #745: with claude, grok and codex out, a failover moves the orchestrator
+// to opencode, whose bridge then runs it.
+func TestFailOverOrchestratorToOpenCode(t *testing.T) {
+	a, _, _ := rotationApp(t)
+	a.Cfg.AdapterOrder = []string{"claude", "grok", "codex", "opencode"}
+	a.Cfg.Adapters = map[string]config.Adapter{usage.OpenCode: {Model: "opencode/big-pickle"}}
+	if _, _, err := a.Orchestrator(); err != nil {
+		t.Fatal(err)
+	}
+	must(t, a.MarkExhausted(usage.Grok, time.Now().Add(time.Hour), ""))
+	must(t, a.MarkExhausted(usage.Codex, time.Now().Add(time.Hour), ""))
+
+	l, msg, err := a.FailOverOrchestrator(usage.LimitBanner{Resets: "in 3 hours"}, nil)
+	must(t, err)
+	if l.Kind != agent.KindOpenCode || a.OrchestratorIdentity().Adapter != usage.OpenCode || l.Model != "opencode/big-pickle" {
+		t.Fatalf("launch kind %v model %q, identity %s", l.Kind, l.Model, a.OrchestratorIdentity().Adapter)
+	}
+	if !strings.Contains(msg, "previous session on claude") {
+		t.Errorf("handoff = %q", msg)
+	}
+	cmd, err := l.Headless("")
+	must(t, err)
+	if len(cmd.Args) < 2 || cmd.Args[1] != "opencode-bridge" {
+		t.Fatalf("headless opencode runs %q", cmd.Args)
+	}
+}
+
 func TestFailOverOrchestratorToCodex(t *testing.T) {
 	a, _, _ := rotationApp(t)
 	a.Cfg.AdapterOrder = []string{"claude", "grok", "codex"}

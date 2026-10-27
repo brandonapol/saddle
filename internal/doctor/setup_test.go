@@ -22,7 +22,7 @@ type pathEnv struct {
 	sys Env
 }
 
-var realCLIs = []string{"gh", "glab", "claude", "codex", "grok"}
+var realCLIs = []string{"gh", "glab", "claude", "codex", "grok", "opencode"}
 
 func (p pathEnv) LookPath(name string) (string, error) {
 	if slices.Contains(realCLIs, name) {

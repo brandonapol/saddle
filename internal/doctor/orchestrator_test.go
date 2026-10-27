@@ -33,6 +33,7 @@ func TestOrchestratorGoldens(t *testing.T) {
 		{name: "both-codex-orchestrator", bins: []string{"gh", "claude", "codex"}, adapter: "codex", model: "gpt-5-codex"},
 		{name: "grok-orchestrator", bins: []string{"gh", "claude", "grok"}, adapter: "grok"},
 		{name: "codex-configured-but-missing", bins: []string{"gh", "claude"}, adapter: "codex"},
+		{name: "opencode-orchestrator", bins: []string{"gh", "claude", "opencode"}, adapter: "opencode", model: "opencode/big-pickle"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agenttest.Path(t, tc.bins, tc.bins)
@@ -116,5 +117,40 @@ func TestCodexOrchestratorCheck(t *testing.T) {
 		if r.Name == CheckOrchAllow {
 			t.Errorf("orchestrator allowlist checked for a codex orchestrator: %+v", r)
 		}
+	}
+}
+
+// #745: an opencode orchestrator needs the CLI, run --format json and a
+// login; doctor names a missing login with the command that fixes it.
+func TestOpenCodeOrchestratorCheck(t *testing.T) {
+	for name, tc := range map[string]struct {
+		logins []string
+		old    bool // an opencode whose run has no --format
+		status Status
+		want   string
+		fix    string
+	}{
+		"healthy":       {logins: []string{"gh", "claude", "opencode"}, status: OK, want: "opencode 1.19.0"},
+		"missing login": {logins: []string{"gh", "claude"}, status: Warn, want: "opencode is not logged in", fix: "opencode providers login"},
+		"old opencode":  {logins: []string{"gh", "claude", "opencode"}, old: true, status: Fail, want: "has no --format", fix: "opencode-ai@latest"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := agenttest.Path(t, []string{"gh", "claude", "opencode"}, tc.logins)
+			if tc.old {
+				old := "#!/bin/sh\ncase \"$1\" in\n--version) echo 0.9.0 ;;\nrun) echo 'opencode run [message..]' ;;\nesac\n"
+				if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte(old), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f := healthy(t)
+			f.cfg.Orchestrator.Adapter = "opencode"
+			r := find(t, Run(pathEnv{f, System(f.root)}), CheckOrchestrator)
+			if r.Status != tc.status || !strings.Contains(r.Detail, tc.want) || !strings.Contains(r.Fix, tc.fix) {
+				t.Errorf("%s %q (fix %q), want %s with %q and fix %q", r.Status, r.Detail, r.Fix, tc.status, tc.want, tc.fix)
+			}
+			if tc.status == OK && (!strings.Contains(r.Detail, "OPENCODE_CONFIG") || !strings.Contains(r.Detail, "between turns")) {
+				t.Errorf("healthy detail lacks the MCP route or the no-hooks note: %q", r.Detail)
+			}
+		})
 	}
 }

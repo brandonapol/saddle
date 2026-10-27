@@ -84,10 +84,10 @@ orchestrator's model on that adapter.
 
 ```toml
 [orchestrator]
-# adapter = "codex"        # claude | codex | grok; empty: claude if installed,
+# adapter = "codex"        # claude | codex | grok | opencode; empty: claude if installed,
 #                          # else the first headless agent that can run
 # model = "gpt-5-codex"    # needs adapter; empty is the adapter's own key
-#                          # ([claude]/[grok] orchestrator_model, [adapters.codex] model)
+#                          # ([claude]/[grok] orchestrator_model, [adapters.codex]/[adapters.opencode] model)
 # compact_at = 0.7         # context fraction at which it is told to compact
 # remote_control = false   # saddle up --rc (docs/remote-control.md)
 ```

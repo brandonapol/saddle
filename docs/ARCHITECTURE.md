@@ -270,6 +270,12 @@ close PRs and delete branches, and it handles those without anyone editing
   runs one `grok -p` turn per chat message and resumes the session. Output is
   `streaming-messages-json`, which matches the Claude stream the TUI parses.
   `[adapters.grok]` cmd and args apply here too.
+- **Headless codex and opencode orchestrators** (`[orchestrator] adapter =
+  "codex"|"opencode"`): `saddle codex-bridge` and `saddle opencode-bridge`
+  run one `codex exec --json` or `opencode run --format json` turn per chat
+  message, resume the session by id and translate the CLI's JSONL to the
+  same stream. Both emulate `/compact` with a summary turn and a fresh
+  session (docs/adapter-parity.md).
 - **Codex / one-shot Grok** (`adapter=codex|grok` under the Claude harness):
   hookless, so claims are checked at commit and done (#489) and notices are
   typed in. Hookless launches export `SADDLE_HOOKLESS=1`; the pre-commit

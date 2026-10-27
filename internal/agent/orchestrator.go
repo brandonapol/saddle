@@ -62,6 +62,8 @@ func OrchestratorModel(cfg config.Config, adapter string) string {
 		return cfg.Grok.OrchestratorModel
 	case config.HarnessCodex:
 		return cfg.Adapters[config.HarnessCodex].Model
+	case config.AdapterOpenCode:
+		return cfg.Adapters[config.AdapterOpenCode].Model
 	}
 	return cfg.Claude.OrchestratorModel
 }

@@ -3,8 +3,10 @@ package agent
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,12 +61,19 @@ func (l Launch) headlessOpenCode(resume string) (*exec.Cmd, error) {
 	if err := os.WriteFile(conf, append(b, '\n'), 0o644); err != nil {
 		return nil, err
 	}
+	ledger := filepath.Join(l.RunDir, OpenCodeContextFile)
+	if resume == "" {
+		// A new session starts with an empty context.
+		if err := os.Remove(ledger); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+	}
 	env := l.env()
 	spec := openCodeSpec{
 		Cmd: l.cmdOr("opencode"), Args: append(openCodeApproval(l.Mode), openCodeRunExtra(l.Args)...),
 		Dir: l.Dir, Brief: l.Brief, Model: l.Model, Resume: resume,
 		Env:     append(envList(env), "OPENCODE_CONFIG="+conf, "OPENCODE_DISABLE_AUTOUPDATE=1"),
-		Context: filepath.Join(l.RunDir, OpenCodeContextFile),
+		Context: ledger,
 	}
 	if b, err = json.MarshalIndent(spec, "", "  "); err != nil {
 		return nil, err
