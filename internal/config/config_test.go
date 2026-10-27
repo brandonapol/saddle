@@ -987,14 +987,14 @@ func TestOrchestratorAdapter(t *testing.T) {
 		t.Fatalf("default orchestrator = %+v, want no adapter or model", cfg.Orchestrator)
 	}
 	root := t.TempDir()
-	for _, a := range []string{"claude", "codex", "grok"} {
+	for _, a := range []string{"claude", "codex", "grok", "opencode"} {
 		writeConfig(t, root, "[orchestrator]\nadapter = \""+a+"\"\nmodel = \"m-"+a+"\"\n")
 		cfg, err := Load(root)
 		if err != nil || cfg.Orchestrator.Adapter != a || cfg.Orchestrator.Model != "m-"+a {
 			t.Fatalf("adapter = %s: got %+v, %v", a, cfg.Orchestrator, err)
 		}
 	}
-	for _, bad := range []string{"gemini", "opencode", "gpt"} {
+	for _, bad := range []string{"gemini", "gpt"} {
 		writeConfig(t, root, "[orchestrator]\nadapter = \""+bad+"\"\n")
 		if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "orchestrator.adapter") {
 			t.Errorf("adapter = %s: err %v, want an orchestrator.adapter error", bad, err)

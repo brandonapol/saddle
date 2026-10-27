@@ -1,0 +1,8 @@
+STATUS  CHECK         DETAIL
+ok      claude        claude 1.0.0 (fake)
+ok      agent CLIs    harness claude is ready; usable: claude, opencode (no hooks)
+ok      orchestrator  runs on opencode (model opencode/big-pickle), set by [orchestrator] adapter; opencode 1.19.0; saddle's MCP tools reach every turn through OPENCODE_CONFIG, and its permission config denies edits and history-moving git; no hooks, so [saddle] events reach it between turns, not mid-turn
+
+Next steps:
+  saddle up           open saddle and tell the orchestrator what to work on
+  saddle up epic.md   or hand it an epic: it plans it and shows you the plan first

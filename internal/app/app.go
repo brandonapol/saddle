@@ -526,7 +526,8 @@ func (a *App) ensureOrchestrator(fetch bool) (store.Task, error) {
 }
 
 // Orchestrator ensures the orchestrator task exists and returns the launch
-// for its headless process (Claude Code, grok-bridge or codex-bridge: see
+// for its headless process (Claude Code, grok-bridge, codex-bridge or
+// opencode-bridge: see
 // orchDefault), plus the session to resume (if any). It doesn't fetch base when
 // integration exists: saddle up runs CheckIntegrationBehind after its first
 // frame (#635).
@@ -576,6 +577,13 @@ func (a *App) newLaunch(t store.Task, dir, model, brief, prompt string, allow, d
 		// through the codex bridge.
 		l.Kind = agent.KindCodex
 		l.Cmd, l.Args = a.adapterCmd(usage.Codex)
+		l.Mode = a.Cfg.Claude.PermissionMode
+		return l
+	case usage.OpenCode:
+		// [orchestrator] adapter = "opencode" or a failover (#745): one
+		// opencode run turn per message through the opencode bridge.
+		l.Kind = agent.KindOpenCode
+		l.Cmd, l.Args = a.adapterCmd(usage.OpenCode)
 		l.Mode = a.Cfg.Claude.PermissionMode
 		return l
 	}

@@ -24,8 +24,8 @@ fourth adapter (epic #508), has its own section below.
 | Model in spawn and status | `[claude] model` | `[grok] model` | `[adapters.codex] model` (fixed) |
 | Adapter in status | `adapter` on each task (fixed) | same | same |
 
-opencode (epic #508) is a worker adapter only. Where it differs from codex,
-the hookless worker it otherwise resembles:
+opencode (epic #508) runs workers and, since #745, a headless orchestrator.
+Where it differs from codex, the hookless worker it otherwise resembles:
 
 | Feature | opencode |
 |---|---|
@@ -36,7 +36,10 @@ the hookless worker it otherwise resembles:
 | Quota | screen panes (retry waits count) and the `opencode.db` error rows, per provider/model (#531, #573) |
 | Usage meter | `opencode.db` sessions run in the worktree (#533) |
 | Model in spawn and status | `[adapters.opencode] model`, `provider/model` |
-| Orchestrator (headless) | no: assessed below (#508) |
+| Orchestrator (headless) | opencode bridge: one `opencode run --format json` turn per message, resumed with `-s` (#745) |
+| Orchestrator out of quota | the run's error event; limit wordings are labelled so failover reads them (#745) |
+| Orchestrator context meter | the bridge's ledger of each model call's tokens (#745) |
+| Orchestrator deny list | opencode's `permission` config: edits, subagents and history-moving git denied (#745) |
 
 ## Fixed in #480
 
@@ -248,8 +251,8 @@ the hookless working indicator list includes opencode's `esc interrupt`,
 `OpenCodeScreenLimit` reads the quota panes), the claims plugin, usage
 metering and the limit handling, each in its own section below.
 opencode is in `config.AdapterNames` (#520) and the default
-`[adapters] order`; it is not in the orchestrator's rotation (`Providers`)
-and has no headless orchestrator (see the assessment below). Tests:
+`[adapters] order`; it is not in the orchestrator brief's provider list
+(`Providers`). It has a headless orchestrator since #745 (below). Tests:
 `TestOpenCodeLaunchRunsFakeBinary`, `TestOpenCodeLaunchWithoutModel`,
 `TestOpenCodeApprovalFlags`, `TestOpenCodeAvailability`.
 
@@ -367,56 +370,85 @@ Google) beyond OpenAI's. Tests: `TestOpenCodeScreenLimitCaptured`,
 `TestOpenCodeDBLimitCaptured`, `TestParseOpenCodeLimitCaptured`,
 `TestReadOpenCodeLimitsCaptured`.
 
-## opencode as a headless orchestrator: assessed, not built (#508)
+## opencode headless orchestrator (#745)
 
-Verdict: possible, but not a small change, so no `[orchestrator] adapter =
-"opencode"` ships and `config.Load` keeps rejecting it. It would be a
-fourth bridge, a ticket of its own.
+The #508 assessment (`opencode run --format json` gives resumable one-turn
+JSONL; MCP reaches it through `OPENCODE_CONFIG`) held, so
+`[orchestrator] adapter = "opencode"` now works. Like codex, the TUI's
+orchestrator runs through a bridge, `saddle opencode-bridge`, which runs one
+`opencode run --format json [-m provider/model] [-s <id>] <args>` turn per
+user message, with the message on stdin (opencode appends piped stdin to the
+message, which keeps a long brief off the command line). The loop it shares
+with the codex bridge (`turnBridge`) keeps the session across turns, opens
+each new session with the brief, and starts fresh once when a stored id
+won't resume (`-s` on an unknown id prints "Session not found" and no JSON).
 
-What opencode 1.19.0 offers (read from `opencode --help`, `opencode run
---help`, `opencode serve --help`, and a run against `opencode/big-pickle`):
+- **Events.** As captured from opencode 1.19.0: every event carries
+  `sessionID`, which becomes the init line; `text` parts are assistant text;
+  `tool_use` parts are tool calls, with opencode's tools named as Claude's
+  (`bash` is `Bash`) and saddle's MCP tools (`saddle_status`) as
+  `mcp__saddle__status`; `step_finish` carries one model call's tokens;
+  `error` is the turn's failure. run prints no turn-end event, so the
+  bridge writes the result line, with the last step's usage, when the
+  process exits cleanly.
+- **MCP.** The run-dir `opencode.json` that `OPENCODE_CONFIG` names carries
+  the saddle server with the orchestrator's environment, as for workers.
+  `[adapters.opencode] cmd` and model apply; of its args, only `--agent`,
+  `--variant`, `--log-level`, `--pure` and `--auto` reach run.
+- **Permissions.** The permission mode maps as for workers (`--auto` unless
+  `acceptEdits`, `default` or `plan`). The orchestrator's deny list becomes
+  opencode's `permission` config: `edit` (write, edit and patch) and `task`
+  (subagents) denied, and each `Bash(git push:*)` style rule a denied
+  command pattern. Verified: under `--auto` the model had no write tool, and
+  `git checkout -b` failed with the rule. Claude-only tools have no
+  counterpart. There are no hooks: `[saddle]` events arrive between turns.
+- **Quota.** A failed turn's `error.data.message` (or the stderr of a run
+  that printed no JSON) is the error result. When it is an opencode limit
+  (`usage.OpenCodeErrorLimit`: the wordings, or a quota type in the
+  response body, such as Zen's free tier's bare "Rate limit exceeded")
+  that `DetectLimitBanner` would miss, it is labelled "opencode quota
+  exceeded:" with the reset, so the TUI's failover moves the orchestrator.
+  opencode is in `OrchestratorAdapters`, so it is also a failover target.
+- **Compaction.** `opencode run --command compact` fails with "Unexpected
+  server error", so `/compact` is the codex emulation: a summary turn on the
+  old session, a fresh session opened with the brief and the summary, and a
+  `compact_boundary`.
+- **Context meter.** The bridge appends each `step_finish` to
+  `opencode-context.jsonl` in the run dir as a Claude transcript line
+  (input, cache read and cache write are the prompt), which the compact
+  watcher tails. A new session clears it. The window comes from the model
+  table; models it doesn't know (`big-pickle`) count as 200K.
+- **Doctor.** The orchestrator row checks `opencode --version`, that
+  `opencode run --help` offers `--format`, and the login, warning
+  "opencode is not logged in: run opencode providers login" without one.
 
-- **A one-turn headless command exists.** `opencode run --format json
-  [-m provider/model] [-s <session id>] [--dir D] [--agent A] [--auto]
-  <message>` prints one JSON event per line and exits. Events seen:
-  `step_start`, `text` (`part.text`), `tool_use` (`part.tool`,
-  `part.state.input`/`output`), `step_finish` (`part.tokens`, `part.reason`)
-  and `error` (`error.name`, `error.data.message`). Every event carries
-  `sessionID`. `-s <id>` resumed the session and the model recalled the
-  earlier turn, so the codex model (one process per message, resumed) fits.
-- **MCP** reaches `opencode run` through `OPENCODE_CONFIG`, as it does for
-  workers, so the saddle server needs no new mechanism.
-- **A long-lived alternative.** `opencode serve` (`--port`, `--hostname`)
-  and `opencode run --attach <url>` keep one server across turns. The codex
-  and grok bridges chose a process per turn, which survives a crash and
-  needs no port, so the same would be simpler here.
+Verified by hand with opencode 1.19.0 and `opencode/big-pickle`: a saddle
+`status` call over MCP, a resumed turn recalling the last one, `/compact`
+moving to a fresh session, and a denied `git checkout`.
 
-Why it is not small. The codex bridge landed with `codex_bridge.go` (about
-470 lines), a CLI command, `Launch.headlessCodex`, `OrchestratorAdapters`,
-failover in `orchfailover.go`, `OrchIdentity`, the context meter, doctor and
-init, and an e2e journey. opencode needs all of that plus pieces that have
-no codex equivalent:
-
-- Translating opencode's events to the TUI's stream-json (tool names, a
-  `result` line with usage, and a quota error: a failed `run` printed only
-  `UnknownError: Unexpected server error` for a bad model, so the quota
-  words in `error.data.message` and the retry behaviour on Zen limits
-  (#573, retried rather than failed) are unverified for `run`).
-- Compaction: there is no `/compact` in `run`; it would be the codex
-  summary-and-fresh-session emulation.
-- The orchestrator's context window and meter: the session lives in
-  `opencode.db`, which the usage reader already knows, but not as an
-  orchestrator context.
-- A tool deny list: opencode's `permission` config could express it, which
-  codex cannot, but it is new work.
-- Edits to files outside this task's area (`internal/config`,
-  `internal/app`, `internal/doctor`, `internal/cli`).
-
-Given the free-model and many-provider appeal, the next step is a ticket
-that mirrors #506 for opencode (difficulty: standard) with the `run
---format json` findings above as its starting point.
+Not covered: opencode retries Zen's 429 limits for up to their reset (#573),
+and `run` prints nothing while it waits, so such a turn sits busy until the
+retries run out rather than failing over. `saddle init` doesn't pick an
+opencode orchestrator on a machine with only opencode, since opencode is not
+a worker harness. Tests: `TestOpenCodeBridgeResumesAcrossTurns`,
+`TestOpenCodeBridgeStartsFreshWhenSessionMissing`,
+`TestOpenCodeBridgeReportsQuotaError`, `TestOpenCodeQuotaText`,
+`TestOpenCodeBridgeCompactStartsFreshSessionFromSummary`,
+`TestOpenCodeBridgeWritesContextLedger`,
+`TestOpenCodeContextLedgerFollowsEachTurn`, `TestHeadlessOpenCodeWritesSpec`,
+`TestCodexBridgeFreshRetryCarriesBrief`, `TestOrchestratorRunsOnOpenCode`,
+`TestFailOverOrchestratorToOpenCode`, `TestOpenCodeOrchestratorCheck`,
+`TestOrchestratorGoldens/opencode-orchestrator`, `TestRunTurns`
+(fakeopencode) and `TestJourneyOpenCodeOrchestrator`.
 
 ## opencode e2e
+
+`TestJourneyOpenCodeOrchestrator` (`internal/e2e`) runs saddle up with
+`[orchestrator] adapter = "opencode"` against `fakeopencode`: doctor warns
+of the missing login, then is clean; a turn calls saddle's `status` over the
+MCP server in `OPENCODE_CONFIG`; the next turn resumes the session; a
+`[saddle]` event arrives as a turn; past `compact_at` it is compacted into a
+fresh session; and a quota error moves it to claude.
 
 `TestJourneyOpenCodeWorker` (`internal/e2e`) drives a fake `opencode` (no
 real binary or login): a spawn without a login is refused by name with

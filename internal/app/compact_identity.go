@@ -11,7 +11,7 @@ import (
 // status and the TUI header can name it and leave out hints its harness
 // doesn't have.
 type OrchIdentity struct {
-	Adapter string // usage.Claude, usage.Codex or usage.Grok
+	Adapter string // usage.Claude, usage.Codex, usage.Grok or usage.OpenCode
 	Model   string // the configured model; "" is the adapter's default
 	Workers string // the adapter workers spawned without adapter= use
 	Hooks   bool   // saddle's hooks run in the session
@@ -45,7 +45,7 @@ func (a *App) identity(kind, model string) OrchIdentity {
 		workers = config.HarnessClaude
 	}
 	cmd, _ := CompactCommand(kind)
-	return OrchIdentity{Adapter: kind, Model: model, Workers: workers, Hooks: kind != usage.Codex, Compact: cmd}
+	return OrchIdentity{Adapter: kind, Model: model, Workers: workers, Hooks: kind != usage.Codex && kind != usage.OpenCode, Compact: cmd}
 }
 
 // CLI names the adapter's program for people.
@@ -65,6 +65,8 @@ func adapterCLI(kind string) string {
 		return "the Grok CLI"
 	case usage.Codex:
 		return "Codex"
+	case usage.OpenCode:
+		return "opencode"
 	}
 	return "Claude Code"
 }
@@ -92,7 +94,7 @@ func (id OrchIdentity) compactBrief() string {
 	switch id.Compact {
 	case "":
 		return when + fmt.Sprintf("%s has no compact command: write a short state summary (%s) and ask the owner to start a fresh session.\n", id.CLI(), keep)
-	case "/compact": // codex and grok take no instruction
+	case "/compact": // codex, grok and opencode take no instruction
 		return when + fmt.Sprintf("Write a short state summary first (%s), then run /compact; it takes no instruction. When you are idle and the owner isn't typing, saddle may send the command for you.\n", keep)
 	}
 	return when + fmt.Sprintf("Run /compact and keep a short state summary: %s. When you are idle and the owner isn't typing, saddle may send the command for you.\n", keep)

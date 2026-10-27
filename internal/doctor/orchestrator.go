@@ -24,10 +24,10 @@ func (r *run) orchAdapter() string {
 	return agent.OrchestratorAdapter(r.cfg, r.agentStatus())
 }
 
-// orchestrator reports the orchestrator's adapter and model and, for codex,
-// what its headless turns need: the CLI, a login, exec --json, a saddle MCP
-// server saddle's overrides can replace, and a sandbox gh and saddle can
-// work in.
+// orchestrator reports the orchestrator's adapter and model and, for codex
+// and opencode, what their headless turns need. For codex: the CLI, a
+// login, exec --json, a saddle MCP server saddle's overrides can replace,
+// and a sandbox gh and saddle can work in.
 func (r *run) orchestrator() Result {
 	adapter := r.orchAdapter()
 	model := agent.OrchestratorModel(r.cfg, adapter)
@@ -63,6 +63,8 @@ func (r *run) orchestratorOn(adapter, on string) Result {
 	switch adapter {
 	case config.HarnessCodex:
 		return r.codexOrchestrator(on, st)
+	case config.AdapterOpenCode:
+		return r.openCodeOrchestrator(on, st)
 	case config.HarnessGrok:
 		return ok(CheckOrchestrator, on+"; see "+CheckGrok)
 	}
@@ -109,7 +111,31 @@ func (r *run) codexOrchestrator(on string, st *agent.Status) Result {
 	return ok(CheckOrchestrator, on+"; saddle's MCP tools are passed to every turn; "+orchNoHooksNote)
 }
 
-// orchNoHooksNote is what a codex orchestrator lacks next to Claude Code.
+// openCodeOrchestrator checks what the opencode bridge's turns need (#745):
+// the CLI, `opencode run --format json`, and a login.
+func (r *run) openCodeOrchestrator(on string, st *agent.Status) Result {
+	prog := "opencode"
+	if c := r.cfg.Adapters[config.AdapterOpenCode].Cmd; c != "" {
+		prog = program(c)
+	}
+	ver, err := r.env.Exec(prog, "--version")
+	if err != nil {
+		return fail(CheckOrchestrator, on+", but `"+prog+" --version` fails: "+firstLine(err.Error()),
+			"run `"+prog+" --version` yourself and fix what it reports, or "+agent.InstallHint(config.AdapterOpenCode))
+	}
+	on += "; opencode " + firstLine(ver)
+	if help, err := r.env.Exec(prog, "run", "--help"); err != nil || !strings.Contains(help, "--format") {
+		return fail(CheckOrchestrator, on+", but `"+prog+" run` has no --format, so it can't run headless",
+			"update opencode: npm install -g opencode-ai@latest")
+	}
+	if st != nil && !st.OK {
+		return warn(CheckOrchestrator, on+", but "+st.Reason,
+			"run `opencode providers login`, or set a provider key such as OPENCODE_API_KEY")
+	}
+	return ok(CheckOrchestrator, on+"; saddle's MCP tools reach every turn through OPENCODE_CONFIG, and its permission config denies edits and history-moving git; "+orchNoHooksNote)
+}
+
+// orchNoHooksNote is what a codex or opencode orchestrator lacks next to Claude Code.
 const orchNoHooksNote = "no hooks, so [saddle] events reach it between turns, not mid-turn"
 
 // needsClaude reports whether this run starts Claude Code: as the

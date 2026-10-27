@@ -182,6 +182,20 @@ func TestCodexBridgeStartsFreshWhenResumeFails(t *testing.T) {
 	}
 }
 
+// The fresh session a failed resume falls back to is a new session, so it
+// opens with the brief like any other (#745).
+func TestCodexBridgeFreshRetryCarriesBrief(t *testing.T) {
+	dir := codexBridgeDir(t, codexSpec{Resume: "bad", Brief: "BRIEF"})
+	var out bytes.Buffer
+	if err := RunCodexBridge(dir, userLines("hello"), &out); err != nil {
+		t.Fatal(err)
+	}
+	calls := readCalls(t, dir)
+	if len(calls) != 2 || strings.Contains(calls[0], "BRIEF") || !strings.Contains(calls[1], "BRIEF") {
+		t.Fatalf("want the resume without the brief and the fresh session with it:\n%s", strings.Join(calls, "\n"))
+	}
+}
+
 func TestCodexBridgeReportsQuotaError(t *testing.T) {
 	dir := codexBridgeDir(t, codexSpec{})
 	var out bytes.Buffer

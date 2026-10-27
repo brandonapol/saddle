@@ -1,5 +1,5 @@
 // Package agenttest fakes the CLIs saddle looks for on PATH (claude, codex,
-// grok, gh, glab) and their logins, so setup checks run against a real
+// grok, opencode, gh, glab) and their logins, so setup checks run against a real
 // PATH and home in tests (#646).
 package agenttest
 
@@ -18,6 +18,8 @@ var creds = map[string]string{
 	"claude": ".claude/.credentials.json",
 	"codex":  ".codex/auth.json",
 	"grok":   ".grok/auth.json",
+	// XDG_DATA_HOME is cleared, so opencode's data dir is the default.
+	"opencode": ".local/share/opencode/auth.json",
 }
 
 // authEnv is every variable that would count as a login, cleared so the
@@ -89,6 +91,10 @@ func script(bin string, loggedIn bool) string {
 		b.WriteString("--version) echo 'codex-cli 1.0.0 (fake)' ;;\n")
 		// saddle's codex orchestrator runs headless turns with exec --json (#668).
 		b.WriteString("exec) echo 'Usage: codex exec [OPTIONS] [PROMPT]'; echo '      --json  Print events to stdout as JSONL' ;;\n")
+	case "opencode":
+		b.WriteString("--version) echo '1.19.0' ;;\n")
+		// saddle's opencode orchestrator runs headless turns with run --format json (#745).
+		b.WriteString("run) echo 'opencode run [message..]'; echo '      --format  format: default (formatted) or json (raw JSON events)' ;;\n")
 	default:
 		fmt.Fprintf(&b, "--version) echo '%s 1.0.0 (fake)' ;;\n", bin)
 	}

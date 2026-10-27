@@ -153,7 +153,7 @@ func (u ContextUse) Percent() string {
 // ContextReader tails one transcript and keeps its latest usage record, so
 // repeated reads cost only the new lines.
 type ContextReader struct {
-	Agent      string // usage.Claude, usage.Codex or usage.Grok
+	Agent      string // usage.Claude, usage.Codex, usage.Grok or usage.OpenCode
 	Configured string // the launch model, see NewContextUse
 	path       string
 	cur        usage.Cursor
@@ -195,8 +195,12 @@ func (r *ContextReader) Read(path string) (ContextUse, error) {
 	}
 	parse := usage.ParserFor(r.Agent)
 	readPath := path
-	if r.Agent == usage.Codex {
+	switch r.Agent {
+	case usage.Codex:
 		parse = r.codexParser
+	case usage.OpenCode:
+		// The opencode bridge writes Claude transcript lines (#745).
+		parse = usage.ParseClaude
 	}
 	if r.Agent == usage.Grok && filepath.Base(path) == "usage.json" {
 		// Grok's adapter points at the cumulative usage ledger. The sibling
@@ -325,6 +329,9 @@ func (a *App) orchestratorTranscript() (string, error) {
 		src = agent.Grok{}.Usage()
 	case usage.Codex:
 		src = agent.Codex{}.Usage() // the newest rollout started in its directory
+	case usage.OpenCode:
+		// The bridge's ledger of each model call's tokens (#745).
+		return filepath.Join(a.stateDir("run", t.ID), agent.OpenCodeContextFile), nil
 	default:
 		dir := os.Getenv("CLAUDE_CONFIG_DIR")
 		src = agent.Claude{ConfigDir: dir}.Usage()
@@ -370,8 +377,10 @@ func CompactCommand(agentKind string) (string, bool) {
 	switch agentKind {
 	case usage.Claude:
 		return "/compact Keep a short saddle state summary: " + compactKeep + ".", true
-	case usage.Codex, usage.Grok:
-		return "/compact", true // takes no instruction; grok's also compacts a headless turn (#488)
+	case usage.Codex, usage.Grok, usage.OpenCode:
+		// Takes no instruction; grok's also compacts a headless turn (#488),
+		// and the codex and opencode bridges emulate it (#506, #745).
+		return "/compact", true
 	}
 	return "", false
 }
