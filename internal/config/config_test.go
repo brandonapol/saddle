@@ -1008,3 +1008,25 @@ func TestOrchestratorAdapter(t *testing.T) {
 		t.Error("template doesn't document orchestrator.adapter")
 	}
 }
+
+// Blocker issues are saddle's own bugs, so they go to saddle's repo unless
+// [issues] repo says otherwise; repo = "" files them where saddle runs.
+func TestIssuesRepoDefaultsToSaddle(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Issues.Repo != SaddleRepo || SaddleRepo != "brandonapol/saddle" {
+		t.Fatalf("issues.repo = %q, want %q", cfg.Issues.Repo, SaddleRepo)
+	}
+	root := t.TempDir()
+	writeConfig(t, root, "[issues]\nauto_file = true\n")
+	if cfg, err = Load(root); err != nil || cfg.Issues.Repo != SaddleRepo {
+		t.Fatalf("[issues] without repo dropped the default: %+v, %v", cfg.Issues, err)
+	}
+	writeConfig(t, root, "[issues]\nrepo = \"\"\n")
+	if cfg, err = Load(root); err != nil || cfg.Issues.Repo != "" {
+		t.Fatalf("repo = \"\" not honored: %+v, %v", cfg.Issues, err)
+	}
+}

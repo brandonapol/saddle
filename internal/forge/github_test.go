@@ -403,3 +403,32 @@ func TestReadMergedPRsUnsupported(t *testing.T) {
 		}
 	}
 }
+
+// InRepo points every gh call at another repo, so blocker issues can be
+// filed in saddle's repo from a checkout of the repo saddle works on.
+func TestInRepo(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeGH{replies: []string{"[]", "", "https://github.com/o/saddle/issues/3"}}
+	g := &GitHub{Run: InRepo(f.run, "o/saddle")}
+	_, _ = g.ListIssues(ctx, IssueQuery{Label: "b", State: "all", Limit: 5}, IssueNumber)
+	_ = g.EnsureLabel(ctx, Label{Name: "b"})
+	is, _ := g.CreateIssue(ctx, NewIssue{Title: "t", Body: "x"})
+	_ = g.CommentIssue(ctx, 3, "c")
+	_ = g.EditIssueBody(ctx, 3, "e")
+	_ = g.ReopenIssue(ctx, 3)
+	if is.Number != 3 {
+		t.Fatalf("CreateIssue = %+v", is)
+	}
+	f.want(t,
+		"issue list --label b --state all --limit 5 --json number -R o/saddle",
+		"label create b --force -R o/saddle",
+		"issue create --title t --body x -R o/saddle",
+		"issue comment 3 --body c -R o/saddle",
+		"issue edit 3 --body e -R o/saddle",
+		"issue reopen 3 -R o/saddle",
+	)
+	g = &GitHub{Run: InRepo(f.run, "")}
+	f.calls = nil
+	_ = g.ReopenIssue(ctx, 3)
+	f.want(t, "issue reopen 3")
+}
