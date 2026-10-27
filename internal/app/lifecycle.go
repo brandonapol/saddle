@@ -529,6 +529,49 @@ func (a *App) deleteRemote(name string) error {
 	return err
 }
 
+// retargetDependents moves every open PR based on branch onto base before
+// gc deletes branch: GitHub closes, rather than retargets, a PR whose base
+// branch a push deletes, and that closed about 25 of quark's PRs unmerged
+// (#751). Saddle's own PRs are found by the base it recorded for them; the
+// forge is asked too, best effort, for PRs someone else stacked there.
+func (a *App) retargetDependents(branch string) {
+	ctx, f := context.Background(), a.Forge()
+	done := map[string]bool{}
+	retarget := func(task, pr string) {
+		if pr == "" || done[pr] {
+			return
+		}
+		done[pr] = true
+		if err := f.SetPRBase(ctx, pr, a.Cfg.Base); err != nil {
+			if !strings.Contains(err.Error(), "closed pull request") {
+				a.Store.Event(task, "gc_retarget_failed", pr+": "+err.Error())
+			}
+			return
+		}
+		a.Store.Event(task, "gc_retarget", pr+" "+branch+" → "+a.Cfg.Base+" before "+branch+" was deleted")
+		if task != "" {
+			_ = a.saveBase(task, a.Cfg.Base)
+		}
+	}
+	for task, base := range a.savedBases() {
+		if base != branch {
+			continue
+		}
+		if t, err := a.Store.Task(task); err == nil {
+			retarget(task, t.PR)
+		}
+	}
+	prs, err := f.OpenPRs(ctx)
+	if err != nil {
+		return // no forge to ask; saddle's own PRs are retargeted above
+	}
+	for _, p := range prs {
+		if p.Base == branch {
+			retarget("", p.URL)
+		}
+	}
+}
+
 // GC fetches, then removes every leftover it safely can. It returns what it
 // removed and what it kept, stopping at the first error.
 func (a *App) GC() ([]Leftover, error) {
@@ -549,6 +592,7 @@ func (a *App) GC() ([]Leftover, error) {
 			case "branch":
 				_, err = gitx.Run(a.Root, "branch", "-D", l.Name)
 			case "remote":
+				a.retargetDependents(strings.TrimPrefix(l.Name, a.remote()+"/"))
 				err = a.deleteRemote(l.Name)
 			case "ref":
 				_, err = gitx.Run(a.Root, "update-ref", "-d", l.Name)

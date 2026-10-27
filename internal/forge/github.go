@@ -303,6 +303,12 @@ func (g *GitHub) SetPRBody(ctx context.Context, ref, body string) error {
 	return err
 }
 
+func (g *GitHub) SetStatus(ctx context.Context, sha, name, state, description string) error {
+	_, err := g.Run(ctx, "api", "-X", "POST", "repos/{owner}/{repo}/statuses/"+sha,
+		"-f", "state="+state, "-f", "context="+name, "-f", "description="+description)
+	return err
+}
+
 func (g *GitHub) ClosePR(ctx context.Context, ref string) error {
 	_, err := g.Run(ctx, "pr", "close", ref)
 	return err
