@@ -128,3 +128,85 @@ func TestReplayFromKeepsRemovedWork(t *testing.T) {
 		t.Fatalf("ReplayFrom = %q, %d, %v; want a plain rebase (nothing skipped)", c, n, err)
 	}
 }
+
+// #742: integration once held the task's base x, which edits f.txt, then a
+// restack dropped x without landing it while integration gained unrelated
+// edits to f.txt. Touching the same file is not holding x's change, so
+// ReplayFrom must replay x rather than skip it.
+func TestReplayFromKeepsWorkOnSharedFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	const base = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\n"
+	for _, tc := range []struct{ name, mine, theirs string }{
+		// integration edits another hunk of the same file.
+		{"other hunk", "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nx\n", "y\na\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\n"},
+		// integration adds the same-looking line somewhere else.
+		{"same line elsewhere", "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nx\n", "x\na\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			gitT(t, dir, "init", "-q", "-b", "main")
+			// RebaseOnto commits through gitx.Run, which does not get gitT's
+			// author env. CI has no global identity, so set one in the repo.
+			gitT(t, dir, "config", "user.name", "t")
+			gitT(t, dir, "config", "user.email", "t@example.com")
+			commitFile(t, dir, "f.txt", base)
+			gitT(t, dir, "checkout", "-qb", "integ")
+			commitFile(t, dir, "f.txt", tc.mine)
+			gitT(t, dir, "checkout", "-qb", "task")
+			commitFile(t, dir, "b.txt", "b\n")
+			gitT(t, dir, "checkout", "-q", "main")
+			commitFile(t, dir, "f.txt", tc.theirs)
+			gitT(t, dir, "update-ref", "refs/heads/integ", "main") // x dropped, not landed
+			gitT(t, dir, "checkout", "-q", "task")
+
+			c, n, err := ReplayFrom(dir, "integ", "integ")
+			if err != nil || c != "" || n != 0 {
+				t.Fatalf("ReplayFrom = %q, %d, %v; want a plain rebase (nothing skipped)", c, n, err)
+			}
+			if _, err := RebaseOnto(dir, "integ", c, false); err != nil {
+				t.Fatal(err)
+			}
+			if got := gitT(t, dir, "show", "HEAD:f.txt"); !strings.HasSuffix(got, "l\nx") {
+				t.Fatalf("f.txt after rebase = %q; x's line was dropped", got)
+			}
+		})
+	}
+}
+
+// Content integration genuinely holds is still skipped: a cherry-picked
+// duplicate, and a squash a reviewer edited in another hunk.
+func TestReplayFromSkipsHeldWork(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	const base = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\n"
+	const mine = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nx\n"
+	for _, tc := range []struct{ name, theirs string }{
+		{"duplicate", mine},
+		{"edited squash", "reviewed\na\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nx\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			gitT(t, dir, "init", "-q", "-b", "main")
+			commitFile(t, dir, "f.txt", base)
+			gitT(t, dir, "checkout", "-qb", "integ")
+			commitFile(t, dir, "f.txt", mine)
+			cut := gitT(t, dir, "rev-parse", "HEAD")
+			gitT(t, dir, "checkout", "-qb", "task")
+			commitFile(t, dir, "b.txt", "b\n")
+			gitT(t, dir, "checkout", "-q", "main")
+			if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte(tc.theirs), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			gitT(t, dir, "commit", "-qam", "squash")
+			gitT(t, dir, "update-ref", "refs/heads/integ", "main")
+			gitT(t, dir, "checkout", "-q", "task")
+
+			if c, n, err := ReplayFrom(dir, "integ", "integ"); err != nil || c != cut || n != 1 {
+				t.Fatalf("ReplayFrom = %q, %d, %v; want %s, 1", c, n, err, cut)
+			}
+		})
+	}
+}
