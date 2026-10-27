@@ -28,11 +28,6 @@ type codexSpec struct {
 	Resume string   `json:"resume,omitempty"`
 }
 
-// codexCompactPrompt asks the old session for the summary a fresh one starts from.
-const codexCompactPrompt = "[saddle] This session is being compacted: a fresh session will replace it and see only your reply. " +
-	"Reply with a short summary of where things stand: the owner's open requests, the tasks in flight and anything you promised to do. " +
-	"Reply with the summary only."
-
 func (l Launch) headlessCodex(resume string) (*exec.Cmd, error) {
 	if err := l.record(usage.Codex); err != nil {
 		return nil, err
@@ -155,123 +150,20 @@ func RunCodexBridge(runDir string, r io.Reader, w io.Writer) error {
 	if spec.Cmd == "" {
 		spec.Cmd = "codex"
 	}
-	br := &codexBridge{spec: spec, w: w, resume: spec.Resume}
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 1<<20), 64<<20)
-	for sc.Scan() {
-		text, ok := userText(sc.Bytes())
-		if !ok || strings.TrimSpace(text) == "" {
-			continue
-		}
-		if keep, ok := compactRequest(text); ok {
-			br.compact(keep)
-			continue
-		}
-		br.turn(text)
-	}
-	return sc.Err()
+	cr := codexRunner{spec: spec, w: w}
+	br := &turnBridge{brief: spec.Brief, model: spec.Model, w: w, resume: spec.Resume, run: cr.run}
+	return br.serve(r)
 }
 
-type codexBridge struct {
-	spec    codexSpec
-	w       io.Writer
-	resume  string
-	summary string // carried into the next fresh session after a compaction
-}
-
-// turn runs one user message, starting a fresh session when the stored one
-// can't be resumed.
-func (br *codexBridge) turn(text string) {
-	res := br.run(br.prompt(text), br.resume, true)
-	if res.err != nil && br.resume != "" && res.session == "" {
-		// A session id from another adapter, or a deleted rollout, should
-		// not wedge the chat. One retry starts fresh.
-		res = br.run(br.prompt(text), "", true)
-	}
-	if res.session != "" {
-		if res.session != br.resume {
-			br.summary = ""
-		}
-		br.resume = res.session
-	}
-	if res.err != nil {
-		writeResult(br.w, true, res.err.Error(), br.resume)
-	}
-}
-
-// prompt is text, preceded in a new session by the brief and any summary of
-// the session it replaces.
-func (br *codexBridge) prompt(text string) string {
-	if br.resume != "" {
-		return text
-	}
-	var b strings.Builder
-	if s := strings.TrimSpace(br.spec.Brief); s != "" {
-		b.WriteString(s + "\n\n")
-	}
-	if br.summary != "" {
-		b.WriteString("[saddle] This session continues one that was compacted. Its summary:\n" + br.summary + "\n\n")
-	}
-	b.WriteString(text)
-	return b.String()
-}
-
-// compact asks the session for a summary, then starts a fresh session from
-// it and reports the boundary, as Claude Code does for /compact.
-func (br *codexBridge) compact(keep string) {
-	if br.resume == "" {
-		writeResult(br.w, false, "Nothing to compact yet.", "")
-		return
-	}
-	ask := codexCompactPrompt
-	if keep != "" {
-		ask += " Keep: " + keep
-	}
-	old := br.run(ask, br.resume, false)
-	if old.err != nil {
-		writeResult(br.w, true, "compact: "+old.err.Error(), br.resume)
-		return
-	}
-	br.summary = strings.TrimSpace(old.text)
-	br.resume = ""
-	fresh := br.run(br.prompt("[saddle] Reply with the word ready, then wait for the owner's next message."), "", false)
-	if fresh.err != nil {
-		writeResult(br.w, true, "compact: "+fresh.err.Error(), "")
-		return
-	}
-	br.resume = fresh.session
-	for _, l := range []map[string]any{
-		{"type": "system", "subtype": "init", "session_id": fresh.session, "model": br.spec.Model},
-		{"type": "system", "subtype": "compact_boundary", "session_id": fresh.session,
-			"compact_metadata": map[string]any{"trigger": "manual"}},
-		{"type": "result", "subtype": "success", "is_error": false, "result": "Compacted.", "session_id": fresh.session},
-	} {
-		if writeLine(br.w, l) != nil {
-			return
-		}
-	}
-}
-
-// compactRequest reports whether text is a /compact command, and its
-// instruction.
-func compactRequest(text string) (string, bool) {
-	t := strings.TrimSpace(text)
-	if t != "/compact" && !strings.HasPrefix(t, "/compact ") {
-		return "", false
-	}
-	return strings.TrimSpace(strings.TrimPrefix(t, "/compact")), true
-}
-
-type codexTurn struct {
-	session string // the thread codex ran the turn on; "" when it never started
-	text    string // the last agent message
-	err     error
+type codexRunner struct {
+	spec codexSpec
+	w    io.Writer
 }
 
 // run runs one codex exec turn. With forward set, its events go to the
 // orchestrator as stream-json.
-func (br *codexBridge) run(prompt, resume string, forward bool) codexTurn {
-	spec := br.spec
+func (cr codexRunner) run(prompt, resume string, forward bool) bridgeTurn {
+	spec := cr.spec
 	args := []string{"exec", "--json", "--skip-git-repo-check"}
 	args = append(args, spec.Args...)
 	if resume != "" {
@@ -284,23 +176,16 @@ func (br *codexBridge) run(prompt, resume string, forward bool) codexTurn {
 	cmd.Stdin = strings.NewReader(prompt)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return codexTurn{err: err}
+		return bridgeTurn{err: err}
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return codexTurn{err: err}
+		return bridgeTurn{err: err}
 	}
 	if err := cmd.Start(); err != nil {
-		return codexTurn{err: err}
+		return bridgeTurn{err: err}
 	}
-	errCh := make(chan string, 1)
-	go func() {
-		b, _ := io.ReadAll(stderr)
-		if len(b) > 4096 {
-			b = b[len(b)-4096:]
-		}
-		errCh <- strings.TrimSpace(string(b))
-	}()
+	errCh := stderrTail(stderr)
 	tr := codexTranslator{model: spec.Model}
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 1<<20), 64<<20)
@@ -309,16 +194,16 @@ func (br *codexBridge) run(prompt, resume string, forward bool) codexTurn {
 			if !forward {
 				continue
 			}
-			if err := writeLine(br.w, out); err != nil {
+			if err := writeLine(cr.w, out); err != nil {
 				_ = cmd.Process.Kill()
-				return codexTurn{session: tr.session, err: err}
+				return bridgeTurn{session: tr.session, err: err}
 			}
 		}
 	}
 	scanErr := sc.Err()
 	waitErr := cmd.Wait()
 	tail := <-errCh
-	res := codexTurn{session: tr.session, text: tr.last}
+	res := bridgeTurn{session: tr.session, text: tr.last}
 	switch {
 	case scanErr != nil:
 		res.err = scanErr
