@@ -170,26 +170,97 @@ func isAncestor(dir, a, b string) bool {
 	return err == nil
 }
 
-// holdsContent reports whether onto has changed every file that mb..fp
-// changed, so fp's work is plausibly in onto under rewritten SHAs (a squash,
-// possibly edited). A file onto never touched means that work is gone.
+// holdsContent reports whether onto carries every change mb..fp made, so
+// fp's work is plausibly in onto under rewritten SHAs (a squash, possibly
+// edited elsewhere). Onto merely touching the same files is not enough
+// (#742): each file must match fp's outright, or hold every hunk's
+// post-image (its context and added lines) contiguously. A file fp deleted
+// must be gone from onto too.
 func holdsContent(dir, mb, fp, onto string) bool {
-	mine, err := Run(dir, "diff", "--name-only", mb, fp)
+	mine, err := Run(dir, "diff", "--name-only", "--no-renames", mb, fp)
 	if err != nil {
 		return false
-	}
-	theirs, err := Run(dir, "diff", "--name-only", mb, onto)
-	if err != nil {
-		return false
-	}
-	changed := map[string]bool{}
-	for _, f := range strings.Split(theirs, "\n") {
-		changed[f] = true
 	}
 	for _, f := range strings.Split(mine, "\n") {
-		if f != "" && !changed[f] {
+		if f != "" && !holdsFile(dir, mb, fp, onto, f) {
 			return false
 		}
 	}
 	return true
+}
+
+// holdsFile is holdsContent for one file f that mb..fp changed.
+func holdsFile(dir, mb, fp, onto, f string) bool {
+	want, wErr := Run(dir, "rev-parse", "--verify", "-q", fp+":"+f)
+	got, gErr := Run(dir, "rev-parse", "--verify", "-q", onto+":"+f)
+	switch {
+	case wErr != nil:
+		return gErr != nil
+	case gErr != nil:
+		return false
+	case want == got:
+		return true
+	}
+	diff, err := Run(dir, "diff", "--no-color", "--no-ext-diff", "--no-renames", mb, fp, "--", f)
+	if err != nil {
+		return false
+	}
+	text, err := Run(dir, "cat-file", "-p", got)
+	if err != nil {
+		return false
+	}
+	have := strings.Split(text, "\n")
+	var post []string
+	inHunk := false
+	held := func() bool { return contains(have, trimBlank(post)) }
+	for _, l := range strings.Split(diff, "\n") {
+		switch {
+		case strings.HasPrefix(l, "@@"):
+			if inHunk && !held() {
+				return false
+			}
+			inHunk, post = true, nil
+		case !inHunk:
+			if strings.HasPrefix(l, "Binary files ") {
+				return false
+			}
+		case strings.HasPrefix(l, " "), strings.HasPrefix(l, "+"):
+			post = append(post, l[1:])
+		case l == "":
+			post = append(post, "") // an empty context line trimmed by Run
+		}
+	}
+	return !inHunk || held()
+}
+
+// trimBlank drops leading and trailing blank lines, which Run's trimming
+// may have removed from either side.
+func trimBlank(ls []string) []string {
+	for len(ls) > 0 && strings.TrimSpace(ls[0]) == "" {
+		ls = ls[1:]
+	}
+	for len(ls) > 0 && strings.TrimSpace(ls[len(ls)-1]) == "" {
+		ls = ls[:len(ls)-1]
+	}
+	return ls
+}
+
+// contains reports whether block appears as a contiguous run in lines.
+func contains(lines, block []string) bool {
+	if len(block) == 0 {
+		return true
+	}
+	for i := 0; i+len(block) <= len(lines); i++ {
+		ok := true
+		for j, b := range block {
+			if strings.TrimRight(lines[i+j], " \t\r") != strings.TrimRight(b, " \t\r") {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
 }
