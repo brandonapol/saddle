@@ -1,12 +1,14 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // Status says whether an adapter can run on this machine (#182).
@@ -83,13 +85,18 @@ type auth struct {
 	files    []string // relative to home; any one is enough
 	login    string   // how the user logs in
 	keychain bool     // on darwin credentials are in the keychain, not a file
+	// status asks the CLI itself, when no key or file shows a login: these
+	// args exit 0 when it is logged in.
+	status []string
 }
 
 var auths = map[string]auth{
 	"claude": {bin: "claude", env: []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"},
 		homeEnv: "CLAUDE_CONFIG_DIR", home: ".claude", files: []string{".credentials.json"}, login: "claude /login", keychain: true},
 	"codex": {bin: "codex", env: []string{"OPENAI_API_KEY", "CODEX_API_KEY"},
-		homeEnv: "CODEX_HOME", home: ".codex", files: []string{"auth.json"}, login: "codex login"},
+		homeEnv: "CODEX_HOME", home: ".codex", files: []string{"auth.json"}, login: "codex login",
+		// Its keyring store, and builds such as Coder's, leave no auth.json.
+		status: []string{"login", "status"}},
 	GeminiName: {bin: "gemini", env: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_GCA"},
 		home: ".gemini", files: []string{"oauth_creds.json"}, login: "gemini (sign in), or set GEMINI_API_KEY"},
 	"grok": {bin: "grok", env: []string{"XAI_API_KEY", "GROK_API_KEY"},
@@ -109,11 +116,24 @@ type machine struct {
 	goos     string
 	getenv   func(string) string
 	lookPath func(string) (string, error)
+	// run runs a CLI's login status probe; nil means no probe.
+	run func(name string, args ...string) error
 }
 
 func thisMachine() machine {
 	h, _ := os.UserHomeDir()
-	return machine{home: h, goos: runtime.GOOS, getenv: os.Getenv, lookPath: exec.LookPath}
+	return machine{home: h, goos: runtime.GOOS, getenv: os.Getenv, lookPath: exec.LookPath, run: runStatus}
+}
+
+// statusTimeout caps a login status probe, so a hung CLI can't stall a spawn.
+const statusTimeout = 5 * time.Second
+
+func runStatus(name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), statusTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = nil
+	return cmd.Run()
 }
 
 // Check returns why adapter name can't run here, or nil. cmd is its
@@ -200,6 +220,9 @@ func (m machine) check(name, cmd string) error {
 		if _, err := os.Stat(filepath.Join(home, f)); err == nil {
 			return nil
 		}
+	}
+	if len(a.status) > 0 && m.run != nil && m.run(cmd, a.status...) == nil {
+		return nil
 	}
 	return fmt.Errorf("%s is not logged in: run %s", name, a.login)
 }

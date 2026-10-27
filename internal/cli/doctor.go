@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/doctor"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/runq"
@@ -66,7 +67,7 @@ runs it too and shows what it finds as one card. See docs/FAILURE-MODES.md.`,
 						return err
 					}
 					defer a.Close()
-					return a.Init()
+					return doctorFixInit(a)
 				})
 				if err != nil {
 					return err
@@ -89,6 +90,15 @@ runs it too and shows what it finds as one card. See docs/FAILURE-MODES.md.`,
 	cmd.Flags().BoolVar(&predict, "predict", false, "predict what is likely to stop an unattended run, ranked, each with a fix")
 	cmd.Flags().BoolVar(&trusted, "trust", false, "with --fix, trust this repo without asking (remembered; see saddle trust)")
 	return cmd
+}
+
+// doctorFixInit is saddle init for doctor --fix: .saddle/ and the hooks,
+// then the default harness when claude can't run but another agent CLI can.
+func doctorFixInit(a *app.App) error {
+	if err := a.Init(); err != nil {
+		return err
+	}
+	return initSetup(io.Discard, a.Root)
 }
 
 // reportDoctor prints the results and returns an error when a check failed,
