@@ -174,3 +174,22 @@ func TestAvailabilityOnFakePath(t *testing.T) {
 		})
 	}
 }
+
+// A CLI that is installed but has no credentials file saddle knows may
+// still be logged in (codex's keyring store, an apiKeyHelper). When no CLI
+// is verified, fall back to the first installed one rather than to a
+// harness that isn't installed at all.
+func TestFallbackHarnessTakesInstalledWhenNoneVerified(t *testing.T) {
+	ss := []Status{
+		{Name: "claude", Reason: "claude not on PATH"},
+		{Name: "grok", Reason: "grok not on PATH"},
+		{Name: "codex", Installed: true, Reason: "codex is not logged in: run codex login"},
+	}
+	if got, ok := FallbackHarness("claude", []string{"claude", "grok", "codex"}, ss); got != "codex" || !ok {
+		t.Errorf("FallbackHarness = %q, %v; want codex, true", got, ok)
+	}
+	ss[0].OK, ss[0].Installed = true, true
+	if got, _ := FallbackHarness("codex", []string{"claude", "grok", "codex"}, ss); got != "claude" {
+		t.Errorf("a verified CLI must win over an unverified one: got %q", got)
+	}
+}

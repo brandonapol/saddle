@@ -134,6 +134,10 @@ func TestUpFallback(t *testing.T) {
 		// and the like leave none), so an installed claude still starts.
 		{"claude looks logged out", []string{"claude", "codex"}, []string{"codex"}, "", []string{"claude is not logged in: run claude /login; starting it anyway"}, ""},
 		{"claude looks logged out, nothing else", []string{"claude"}, []string{}, "", []string{"starting it anyway"}, ""},
+		// A codex-only VM whose codex login isn't in ~/.codex/auth.json
+		// (its keyring store, say) still runs codex instead of failing.
+		{"claude missing, codex looks logged out", []string{"codex"}, []string{}, "codex",
+			[]string{"codex is not logged in: run codex login; starting it anyway", "running codex for this run"}, ""},
 		{"nothing", nil, nil, "", nil, "no agent CLI is installed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -70,10 +70,13 @@ func initSetup(out io.Writer, root string) error {
 	ss := agent.Availability(doctor.AgentCmds(cfg))
 	order := doctor.HarnessOrder(cfg)
 	fb, ok := agent.FallbackHarness(cfg.Harness, order, ss)
-	if !ok && installed(ss, cfg.Harness) {
+	if ok && !okIn(ss, fb) {
+		// Installed, but no credentials file saddle knows: say so, and keep going.
 		fmt.Fprintf(out, "agent: %s looks logged out (%s); run %s if it isn't logged in some other way\n",
-			cfg.Harness, reasonOf(ss, cfg.Harness), agent.LoginHint(cfg.Harness))
-		return nil
+			fb, reasonOf(ss, fb), agent.LoginHint(fb))
+		if fb == cfg.Harness {
+			return nil
+		}
 	}
 	if !ok {
 		fmt.Fprintln(out, "no agent CLI is installed and logged in. Install one, then run saddle init again:")
@@ -181,10 +184,11 @@ func originURL(env doctor.Env) string {
 	return ""
 }
 
-func installed(ss []agent.Status, name string) bool {
+// okIn reports whether name can run, verified logged in.
+func okIn(ss []agent.Status, name string) bool {
 	for _, s := range ss {
 		if s.Name == name {
-			return s.Installed
+			return s.OK
 		}
 	}
 	return false

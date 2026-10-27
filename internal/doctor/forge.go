@@ -96,6 +96,11 @@ func DetectForge(x Runner, remoteURL string, fc config.Forge) Forge {
 		}
 	}
 	switch {
+	case f.CLI == "" && f.Provider == config.ForgeGitHub && fc.Provider == "" && fc.CLI == "" && installedCLI(x, config.ForgeGlab):
+		// Only the remote's host said GitHub, and glab is here: the repo may
+		// live on GitLab with a remote that still points at GitHub.
+		f.Detail = fmt.Sprintf("%s: %s; glab is installed, but the remote is on %s, so %s", f.label(), strings.Join(why, "; "), f.Host, localOnly)
+		f.Fix = "if the repo is on GitLab, git remote set-url <remote> <gitlab-url> (or " + setGitLab + "); otherwise " + f.Fix
 	case f.CLI == "":
 		f.Detail = fmt.Sprintf("%s: %s, so %s", f.label(), strings.Join(why, "; "), localOnly)
 	case f.Provider == "" && f.CLI == config.ForgeGlab:
@@ -141,6 +146,11 @@ func (f *Forge) try(x Runner, cli string) (reason, fix string) {
 	}
 	f.CLI, f.Version, f.Status = cli, ver, out
 	return "", ""
+}
+
+func installedCLI(x Runner, cli string) bool {
+	_, err := x.LookPath(cli)
+	return err == nil
 }
 
 func (f Forge) label() string {

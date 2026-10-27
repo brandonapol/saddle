@@ -205,19 +205,24 @@ func (m machine) check(name, cmd string) error {
 }
 
 // FallbackHarness is the harness saddle runs when want is configured: want
-// when it can run, else the first in order that can (#646). ok is false when
-// none can.
+// when it can run, else the first in order that can (#646). When none is
+// verified logged in it takes want, else the first in order, that is at
+// least installed: a missing credentials file is only a guess (codex's
+// keyring store and apiKeyHelper leave none), and an installed CLI beats
+// one that isn't there. ok is false when none is installed.
 func FallbackHarness(want string, order []string, ss []Status) (name string, ok bool) {
-	usable := map[string]bool{}
+	usable, installed := map[string]bool{}, map[string]bool{}
 	for _, s := range ss {
-		usable[s.Name] = s.OK
+		usable[s.Name], installed[s.Name] = s.OK, s.Installed
 	}
-	if usable[want] {
-		return want, true
-	}
-	for _, n := range order {
-		if usable[n] {
-			return n, true
+	for _, have := range []map[string]bool{usable, installed} {
+		if have[want] {
+			return want, true
+		}
+		for _, n := range order {
+			if have[n] {
+				return n, true
+			}
 		}
 	}
 	return "", false
