@@ -28,6 +28,9 @@ func TestDetectForge(t *testing.T) {
 	}{
 		{"github, gh logged in", gh, []string{"gh", "glab"}, []string{"gh", "glab"}, config.Forge{}, "github", "gh", "GitHub (github.com) via gh version 2.101.0", ""},
 		{"github, gh missing", gh, nil, nil, config.Forge{}, "github", "", "gh is not installed", "https://cli.github.com"},
+		// A GitLab-only VM whose remote still points at github.com: say glab is
+		// there, and that the remote (or [forge]) is what to fix.
+		{"github, gh missing, glab installed", gh, []string{"glab"}, []string{"glab"}, config.Forge{}, "github", "", "glab is installed, but the remote is on github.com", "git remote set-url"},
 		{"github, gh logged out", gh, []string{"gh"}, nil, config.Forge{}, "github", "", "gh is not logged in to github.com", "gh auth login --hostname github.com"},
 		// #645: glab can't drive GitHub, nor gh GitLab: no fallback once the host names the provider.
 		{"github, gh logged out, glab logged in", gh, []string{"gh", "glab"}, []string{"glab"}, config.Forge{}, "github", "", "gh is not logged in to github.com", "gh auth login --hostname github.com"},

@@ -31,6 +31,9 @@ func upFallback(out io.Writer, cfg config.Config, ss []agent.Status) (string, er
 	if !ok {
 		return "", fmt.Errorf("no agent CLI is installed and logged in, so saddle up has nothing to run. Install one:\n%s", agent.InstallSteps(order))
 	}
+	if !okIn(ss, fb) {
+		fmt.Fprintf(out, "warning: %s; starting it anyway\n", reasonOf(ss, fb))
+	}
 	fmt.Fprintf(out, "%s can't run (%s); running %s for this run. Set harness = %q in .saddle/config.toml to make it the default, or %s\n",
 		cfg.Harness, reasonOf(ss, cfg.Harness), fb, fb, agent.InstallHint(cfg.Harness))
 	if fb == config.HarnessCodex {

@@ -144,9 +144,17 @@ func (r *run) agentCLIs() Result {
 			strings.Join(hints, "; or "))
 	}
 	detail := fmt.Sprintf("harness %s can't run (%s); %s can, so saddle up runs %s; usable: %s", harness, reason, fb, fb, strings.Join(usable, ", "))
+	fix := fmt.Sprintf("make %s the default: set harness = %q in .saddle/config.toml (saddle init writes it when %s can't run); or %s",
+		fb, fb, harness, agent.InstallHint(harness))
+	for _, s := range ss {
+		if s.Name == fb && !s.OK {
+			// Installed but unverified: no credentials file saddle knows.
+			detail = fmt.Sprintf("harness %s can't run (%s); %s is installed but looks logged out (%s), so saddle up runs it anyway", harness, reason, fb, s.Reason)
+			fix = "run " + agent.LoginHint(fb) + " if it isn't logged in some other way; then " + fix
+		}
+	}
 	if fb == config.HarnessCodex {
 		detail += "; " + NoHooksNote
 	}
-	return warn(CheckAgents, detail, fmt.Sprintf("make %s the default: set harness = %q in .saddle/config.toml (saddle init writes it when %s can't run); or %s",
-		fb, fb, harness, agent.InstallHint(harness)))
+	return warn(CheckAgents, detail, fix)
 }
