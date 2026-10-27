@@ -147,6 +147,10 @@ func TestReplayFromKeepsWorkOnSharedFiles(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			gitT(t, dir, "init", "-q", "-b", "main")
+			// RebaseOnto commits through gitx.Run, which does not get gitT's
+			// author env. CI has no global identity, so set one in the repo.
+			gitT(t, dir, "config", "user.name", "t")
+			gitT(t, dir, "config", "user.email", "t@example.com")
 			commitFile(t, dir, "f.txt", base)
 			gitT(t, dir, "checkout", "-qb", "integ")
 			commitFile(t, dir, "f.txt", tc.mine)
