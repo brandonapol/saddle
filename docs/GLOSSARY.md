@@ -348,6 +348,12 @@ by a different agent (`saddle sre verify`); even then a production action is
 filed in the decision queue as irreversible, not run. `saddle sre incident`
 shows the state; `saddle sre close` lifts the guard.
 
+### sso
+`saddle sso login|status|logout|token`: one OIDC sign-in (Keycloak, Okta)
+whose tokens feed codex agents through codex's command-backed provider auth.
+`saddle up` signs in when needed; a lapsed login sends its sign-in URL to
+the orchestrator. See [sso.md](sso.md).
+
 ### stack
 The landed tasks that have open PRs, chained so each PR's base is the one below.
 `saddle stack` draws them with CI, mergeability, holds and distance behind base.
