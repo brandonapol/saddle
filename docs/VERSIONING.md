@@ -95,7 +95,7 @@ You need a clean checkout of `main` that matches `origin/main`.
 
 ## Upgrading
 
-From a checkout, `make upgrade` fast-forwards `main` from origin and reinstalls.
+From a checkout, `make upgrade` fast-forwards `main` from origin and reinstalls (off `main`, it just reinstalls the checkout).
 It refuses on any other branch or with uncommitted changes. Otherwise rerun
 `go install` with the newer tag.
 

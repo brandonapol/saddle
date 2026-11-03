@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Bring the local saddle harness up to date with origin/main, then reinstall.
+# Off main, installs the current checkout without touching git.
 # Never discards local work: any problem prints what is wrong and exits 1.
 #
 # Overrides (used by tests): UPGRADE_REMOTE (origin), UPGRADE_BRANCH (main),
@@ -19,18 +20,19 @@ git fetch "$remote" || die "git fetch $remote failed"
 old="$(git rev-parse HEAD)"
 cur="$(git symbolic-ref --short -q HEAD || echo "(detached HEAD)")"
 if [ "$cur" != "$branch" ]; then
-    die "checkout is on '$cur', not '$branch'. Switch with 'git switch $branch' (commit or stash any work first), then rerun."
-fi
+    # Off main (a fix branch, say): leave the checkout alone and install it.
+    echo "On '$cur', not '$branch': skipping the fast-forward, installing this checkout."
+else
+    dirty="$(git status --porcelain)"
+    if [ -n "$dirty" ]; then
+        echo "upgrade: working tree has uncommitted changes:" >&2
+        echo "$dirty" | sed 's/^/  /' >&2
+        die "commit or stash them, then rerun. Nothing was changed."
+    fi
 
-dirty="$(git status --porcelain)"
-if [ -n "$dirty" ]; then
-    echo "upgrade: working tree has uncommitted changes:" >&2
-    echo "$dirty" | sed 's/^/  /' >&2
-    die "commit or stash them, then rerun. Nothing was changed."
-fi
-
-if ! git merge --ff-only "$remote/$branch" >/dev/null 2>&1; then
-    die "cannot fast-forward '$branch' to $remote/$branch (local commits not on the remote?). Resolve by hand; nothing was changed."
+    if ! git merge --ff-only "$remote/$branch" >/dev/null 2>&1; then
+        die "cannot fast-forward '$branch' to $remote/$branch (local commits not on the remote?). Resolve by hand; nothing was changed."
+    fi
 fi
 
 new="$(git rev-parse HEAD)"
