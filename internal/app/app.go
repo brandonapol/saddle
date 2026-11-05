@@ -575,7 +575,8 @@ func (a *App) Orchestrator() (agent.Launch, string, error) {
 		return agent.Launch{}, "", err
 	}
 	// It runs headless; a window left from an old tmux-based run is not its own.
-	if err := errors.Join(a.Store.SetStatus(t.ID, store.Running), a.Store.SetField(t.ID, "window", "")); err != nil {
+	// Starting saddle brings the orchestrator back on purpose, even if killed.
+	if err := errors.Join(a.Store.Revive(t.ID, store.Running), a.Store.SetField(t.ID, "window", "")); err != nil {
 		return agent.Launch{}, "", err
 	}
 	a.clearStaleOverride(time.Now())

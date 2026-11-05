@@ -366,7 +366,7 @@ func (a *App) Requeue(id string) error {
 			return err
 		}
 	}
-	if err := errors.Join(a.Store.Enqueue(id), a.Store.SetStatus(id, store.Done)); err != nil {
+	if err := errors.Join(a.Store.Revive(id, store.Done), a.Store.Enqueue(id)); err != nil {
 		return err
 	}
 	a.Store.Event(id, "requeued", landed.rangeNote())
