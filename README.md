@@ -23,11 +23,10 @@ orchestrator explaining a stale base and asking before it acts.*
 ## How Saddle works
 
 ```
-spawn ──▶ work ──▶ done ──▶ land ──▶ prs ──▶ merge
- agent    own      gate     merge    stacked   you (or
- + tree   branch   passes   train    GitHub    automerge)
-                            onto
-                            saddle/integration
+spawn ──▶ work ──▶ done ──▶ land ─────────▶ merge
+ agent    own      gate     merge train,    you (or automerge)
+ + tree   branch   passes   then opens      into main:
+                            the PR          only now is it done
 ```
 
 1. **spawn**: a *task* gets its own branch, git worktree and tmux window, and
@@ -35,12 +34,15 @@ spawn ──▶ work ──▶ done ──▶ land ──▶ prs ──▶ merge
 2. **work, then `done`**: the agent commits; `done` runs the repo's gate (for
    example `make check`) and queues the branch in the *merge train*.
 3. **land**: `saddle land` takes queued branches one at a time: rebase onto the
-   integration branch (`saddle/integration`), run the tests, fast-forward. A
-   conflict goes back to the agent that wrote it. **Land never pushes** and
-   never touches GitHub.
-4. **prs**: `saddle prs` pushes landed branches and opens or updates the *stack*
-   of PRs, each based on the one below, that close your issues.
-5. **merge**: you merge them (or turn on `saddle automerge`).
+   work landed before them, run the tests, fast-forward the train's local
+   base. A conflict goes back to the agent that wrote it. In the same step it
+   pushes each landed task and opens its PR against base, stacked on another
+   task's PR only when it depends on it, closing your issues. Status says
+   *landed locally, PR open* until that PR merges.
+4. **merge**: you merge the PRs (or turn on `saddle automerge`). A task is done
+   only once its PR has merged into base. `saddle prs` refreshes or previews
+   the stack, and the sentinel opens any landed task's PR that is missing
+   ([ADR 0003](docs/adr/0003-landed-means-on-main.md)).
 
 When the world moves, **restack** rebuilds the landed stack on origin's base
 after base moved, a bottom PR merged, or the *sentinel* flagged the stack
