@@ -27,6 +27,10 @@ func TestJourneyRestackKeepsUnpublishedLanded(t *testing.T) {
 		return
 	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n", TestCmd: buildCmd})
+	// prs is blocked from the start: GitHub refuses to retarget a PR in a
+	// native stack. Land's own publish (#819) stops there too.
+	a := w.App()
+	must(t, a.SetFlag(app.StackFlag{Task: "t1", Cause: "Cannot change the base branch because the pull request is part of a stack"}))
 	w.Spawn("t1", "Event bus", []string{"lib/**"},
 		fa.Write("lib/eventbus.sh", "EVENT_RESYNC=resync\n"), fa.Commit("event bus"), fa.Done("Adds the event bus."))
 	w.WaitTask("t1", "queued", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
@@ -42,9 +46,6 @@ func TestJourneyRestackKeepsUnpublishedLanded(t *testing.T) {
 	}
 	landedTip := w.Git(w.Repo, "rev-parse", "saddle/integration")
 
-	// prs is blocked: GitHub refuses to retarget a PR in a native stack.
-	a := w.App()
-	must(t, a.SetFlag(app.StackFlag{Task: "t1", Cause: "Cannot change the base branch because the pull request is part of a stack"}))
 	if r := w.Saddle("prs"); r.Code == 0 {
 		t.Fatalf("prs went ahead on a broken stack: %s", r)
 	}

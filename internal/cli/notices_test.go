@@ -18,7 +18,7 @@ func TestNoticesCommand(t *testing.T) {
 	a.Store.Event(app.OrchestratorID, app.EventNoticeInterrupt, "t7 asks: per-user or global?")
 	a.Store.Event(app.OrchestratorID, app.EventNoticeDigest, `[landed] t1 "alpha" landed on saddle/integration at 0123456789ab.`)
 	a.Store.Event(app.OrchestratorID, app.EventNoticeSilent, "[repeat] The PR stack checks clean again.")
-	if out := run(t, "notices"); !strings.Contains(out, "1 task landed (t1)") {
+	if out := run(t, "notices"); !strings.Contains(out, "1 task landed locally (t1)") {
 		t.Fatalf("digest:\n%s", out)
 	}
 	out := run(t, "notices", "--all")

@@ -49,7 +49,7 @@ func TestJourneyNoticesDigestAutomerges(t *testing.T) {
 	for _, id := range []string{"t1", "t2", "t3"} {
 		prs = append(prs, "#"+itoa(prNumber(t, s, urls[id]).Number))
 	}
-	for _, want := range []string{"3 PRs merged", "3 tasks landed (t1 t2 t3)"} {
+	for _, want := range []string{"3 PRs merged", "3 tasks landed locally (t1 t2 t3)"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("digest %q lacks %q", line, want)
 		}

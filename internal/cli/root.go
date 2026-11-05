@@ -444,6 +444,9 @@ func statusCmd() *cobra.Command {
 			fmt.Fprintln(w, "ID\tSTATUS\tMODEL\tWIN\tTITLE\tCLAIMS\tTRAIN")
 			for _, t := range st.Tasks {
 				status := t.Status
+				if t.Delivery != "" {
+					status = t.Delivery // never "landed" alone: landed isn't on base (#819)
+				}
 				if t.Notices > 0 {
 					status += fmt.Sprintf(" (%d)", t.Notices)
 				}
@@ -635,7 +638,7 @@ func doneCmd() *cobra.Command {
 func landCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "land",
-		Short: "Run the merge train: land queued branches one at a time",
+		Short: "Run the merge train: land queued branches one at a time and open their PRs",
 		RunE: withScratch(func(cmd *cobra.Command, a *app.App, _ []string) error {
 			if err := a.CheckMergeSettings(cmd.ErrOrStderr()); err != nil {
 				return err

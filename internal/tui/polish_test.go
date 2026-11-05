@@ -66,7 +66,7 @@ func TestNarrowHeaderKeepsImportantStatus(t *testing.T) {
 		t.Errorf("header is %d wide", w)
 	}
 	m.app.Cfg.Session = "saddle-repo"
-	if wide := newViewModel(200, 40).viewHeader(); !strings.Contains(wide, "saddle-repo") || !strings.Contains(wide, "main → saddle/integration") {
+	if wide := newViewModel(200, 40).viewHeader(); !strings.Contains(wide, "saddle-repo") || !strings.Contains(wide, "→ main") {
 		t.Errorf("a wide header lost the session or branches: %q", wide)
 	}
 }

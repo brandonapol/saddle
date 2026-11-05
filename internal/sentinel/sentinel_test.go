@@ -619,3 +619,31 @@ func TestSentinelRunRaisesStuckStackAlarm(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// #819: a landed task with no PR is the sentinel's alarm too, and its cycle
+// heals it by opening the PR, so no one has to remember prs.
+func TestSentinelCycleOpensPRsOfLandedTasksWithout(t *testing.T) {
+	a, _ := setup(t)
+	gh := newFakeGH(t)
+	landTask(t, a, "t1", "one")
+	landTask(t, a, "t2", "two")
+	s := New(a)
+	s.cycle(context.Background())
+	n := 0
+	for _, l := range gh.log() {
+		if strings.HasPrefix(l, "pr create") {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("sentinel cycle opened %d PRs, want 2; gh calls %q", n, gh.log())
+	}
+	for _, id := range []string{"t1", "t2"} {
+		if tk, _ := a.Store.Task(id); tk.PR == "" {
+			t.Fatalf("%s still has no PR", id)
+		}
+	}
+	if len(events(t, a, app.EventPROpened)) != 2 {
+		t.Fatalf("pr_opened events = %v", events(t, a, app.EventPROpened))
+	}
+}

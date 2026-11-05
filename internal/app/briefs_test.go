@@ -227,3 +227,22 @@ func TestOrchestratorBriefNamesExcludedModels(t *testing.T) {
 		}
 	}
 }
+
+// #819: the orchestrator told the owner wave one was done while none of it
+// was on main. Its brief now defines done as merged into base, says land
+// opens the PRs itself, and never calls the integration branch a destination.
+func TestOrchestratorBriefDoneMeansMergedIntoBase(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	b := a.orchestratorBrief()
+	for _, want := range []string{"Landing opens each task's PR against " + a.Cfg.Base, "only once its PR has merged into " + a.Cfg.Base, DeliveryPROpen} {
+		if !strings.Contains(b, want) {
+			t.Errorf("orchestrator brief lacks %q", want)
+		}
+	}
+	for _, bad := range []string{"offer to open stacked PRs", "lands branches one at a time on " + a.Cfg.Integration} {
+		if strings.Contains(b, bad) {
+			t.Errorf("orchestrator brief still says %q", bad)
+		}
+	}
+}

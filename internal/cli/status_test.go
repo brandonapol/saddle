@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/triage"
@@ -127,5 +128,48 @@ func TestStatusTmuxFlag(t *testing.T) {
 	}
 	if got := out.String(); got != "0 run · 1 you · 0 queued · am off\n" {
 		t.Errorf("status --tmux: %q", got)
+	}
+}
+
+// #819: status never calls a landed task done or merged before its PR merged
+// into base: it says how far the work has got.
+func TestStatusSaysLandedLocallyUntilMerged(t *testing.T) {
+	a := storeApp(t)
+	addTask(t, a, store.Task{ID: "t1", Title: "no pr", Status: store.Landed})
+	addTask(t, a, store.Task{ID: "t2", Title: "pr open", Status: store.Landed, PR: "https://github.com/o/r/pull/2"})
+	addTask(t, a, store.Task{ID: "t3", Title: "three", Status: store.Landed, PR: "https://github.com/o/r/pull/3"})
+	for id, st := range map[string]string{"t1": store.TrainOK, "t2": store.TrainOK, "t3": app.TrainMerged} {
+		if err := a.Store.Enqueue(id); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.Store.SetTrain(id, st, "", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := runStatus(t, a)
+	for id, want := range map[string]string{"t1": app.DeliveryNoPR, "t2": app.DeliveryPROpen, "t3": app.DeliveryMerged} {
+		line := ""
+		for _, l := range strings.Split(out, "\n") {
+			if strings.HasPrefix(l, id+" ") {
+				line = l
+			}
+		}
+		if !strings.Contains(line, want) {
+			t.Errorf("%s's status line %q lacks %q", id, line, want)
+		}
+		if id != "t3" && (strings.Contains(line, "merged") || strings.Contains(line, " done")) {
+			t.Errorf("%s's status line calls unmerged work finished: %q", id, line)
+		}
+	}
+	var js struct {
+		Tasks []mcpserver.TaskView `json:"tasks"`
+	}
+	if err := json.Unmarshal([]byte(runStatus(t, a, "--json")), &js); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range js.Tasks {
+		if v.ID == "t2" && v.Delivery != app.DeliveryPROpen {
+			t.Errorf("json delivery of t2 = %q", v.Delivery)
+		}
 	}
 }

@@ -1,7 +1,9 @@
 # Previewing and publishing a stack
 
 `saddle prs` checks and pushes landed branches, then creates or updates their
-pull requests. Three mutually exclusive modes let you inspect or run part of
+pull requests. `saddle land` and the sentinel run the same publish themselves
+right after landing (#819), so nobody has to run prs to get work to base; use
+it to refresh or preview the stack and to see why a PR didn't open. Three mutually exclusive modes let you inspect or run part of
 that operation:
 
 - `saddle prs --dry-run` prints every layer's task, branch, PR base, planned

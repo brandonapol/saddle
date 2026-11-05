@@ -167,8 +167,9 @@ type Report struct {
 	PRs    []string `json:"prs,omitempty"`   // PRs labeled needs-human
 }
 
-// Run checks the stack now and then every Interval until ctx ends, and runs
-// the stuck-stack alarm after each check. A failed
+// Run checks the stack now and then every Interval until ctx ends, opens
+// the PRs of landed tasks that have none, and runs the stuck-stack alarm
+// after each check. A failed
 // check is recorded as an event (once per distinct error) and retried on the
 // next tick. A cycle skipped because the train was busy is retried after
 // BusyRetry instead.
@@ -185,28 +186,8 @@ func (s *Sentinel) Run(ctx context.Context) error {
 	defer t.Stop()
 	for {
 		wait := iv
-		if rep, err := s.Check(); deferred(err) {
-			// GitHub's quota is spent: skip the cycle quietly (#764).
-		} else if err != nil {
-			if msg := err.Error(); msg != s.lastErr {
-				s.lastErr = msg
-				s.App.Store.Event("", EventError, msg)
-			}
-		} else {
-			s.lastErr = ""
-			if rep.Busy {
-				wait = min(busy, iv)
-			}
-		}
-		// A stack red or conflicting too long with nobody on it wakes the
-		// orchestrator once (#223).
-		if _, err := s.App.CheckStuck(time.Now().UTC()); err != nil && !deferred(err) {
-			s.App.Store.Event("", EventError, "stuck-stack alarm: "+err.Error())
-		}
-		if s.Blockers != nil {
-			if _, err := s.Blockers.FileBlockers(ctx); err != nil && !deferred(err) {
-				s.App.Store.Event("", EventError, "blocker issues: "+err.Error())
-			}
+		if s.cycle(ctx) {
+			wait = min(busy, iv)
 		}
 		t.Reset(wait)
 		select {
@@ -214,6 +195,47 @@ func (s *Sentinel) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-t.C:
 		}
+	}
+}
+
+// cycle runs one round: the stack check, opening the PRs of landed tasks
+// that have none (#819), the stuck-stack alarm and blocker issues. It
+// reports whether the train was busy, so the check was skipped.
+func (s *Sentinel) cycle(ctx context.Context) (busy bool) {
+	if rep, err := s.Check(); deferred(err) {
+		// GitHub's quota is spent: skip the cycle quietly (#764).
+	} else if err != nil {
+		s.logErr(err.Error())
+	} else {
+		s.lastErr = ""
+		busy = rep.Busy
+	}
+	// Landed means on the way to base: a landed task without a PR gets one
+	// here, so a land whose publish failed, or one an older saddle ran,
+	// heals by itself. Skipped while the train is busy; the next cycle does it.
+	if !busy {
+		if _, err := s.App.PublishLanded(app.PublishBySentinel); err != nil && !deferred(err) {
+			s.logErr("opening landed tasks' PRs: " + err.Error())
+		}
+	}
+	// A stack red or conflicting too long with nobody on it wakes the
+	// orchestrator once (#223).
+	if _, err := s.App.CheckStuck(time.Now().UTC()); err != nil && !deferred(err) {
+		s.App.Store.Event("", EventError, "stuck-stack alarm: "+err.Error())
+	}
+	if s.Blockers != nil {
+		if _, err := s.Blockers.FileBlockers(ctx); err != nil && !deferred(err) {
+			s.App.Store.Event("", EventError, "blocker issues: "+err.Error())
+		}
+	}
+	return busy
+}
+
+// logErr records msg as an event, once per distinct message.
+func (s *Sentinel) logErr(msg string) {
+	if msg != s.lastErr {
+		s.lastErr = msg
+		s.App.Store.Event("", EventError, msg)
 	}
 }
 

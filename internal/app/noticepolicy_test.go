@@ -29,6 +29,7 @@ func TestClassifyNotice(t *testing.T) {
 		{"compact", store.NoticeAction, `Your context is at 71%. At the next natural breakpoint, compact.`, false, NoticeInterrupt, ""},
 		// Digest: routine progress.
 		{"landed", store.NoticeInfo, `t1 "alpha work" landed on saddle/integration at 0123456789ab.`, false, NoticeDigest, TopicLanded},
+		{"landed locally", store.NoticeInfo, `t1 "alpha work" landed locally at 0123456789ab; saddle opens its PR against main now. It is not on main, and not done, until that PR merges.`, false, NoticeDigest, TopicLanded},
 		{"auto-merged", store.NoticeInfo, `Auto-merged https://github.com/o/r/pull/12 (t1) into main and restacked the rest of stack t1.`, true, NoticeDigest, TopicMerged},
 		{"stack merged", store.NoticeInfo, `Merged the stack t1 into main atomically with gh stack merge.`, false, NoticeDigest, TopicMerged},
 		{"collapsed", store.NoticeInfo, `Collapsed stack t1: t3's PR #9 carried t1, t2 into main (squash). Closed #7, #8.`, false, NoticeDigest, TopicMerged},

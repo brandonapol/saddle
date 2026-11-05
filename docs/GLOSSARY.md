@@ -111,13 +111,22 @@ budget; an irreversible one waits for you. `allow <class> [match]` adds a
 `[[preauth]]` rule so a class never waits, and one digest a day
 (`[decisions] digest_at`) lists what waits and what saddle decided.
 
+### delivery
+How far a landed task's work has got toward base, in the words status, the
+TUI, notices and the orchestrator use: `landed locally, no PR yet`, `landed
+locally, PR open`, then `merged`. Only `merged` is done. Shown as `delivery`
+in the status tool and in place of `landed` in `saddle status`. See
+[ADR 0003](adr/0003-landed-means-on-main.md).
+
 ### doctor
 `saddle doctor [--fix]`: preflight checks of the repo, `gh`, tools and hooks,
 grouped by who fixes each problem.
 
 ### done
 `saddle done`: an agent marks its task finished. The repo's gate (e.g. `make
-check`) must pass, then the task is queued in the merge train. Status `done`.
+check`) must pass, then the task is queued in the merge train. Status `done`
+means queued, not delivered: the work counts as done for the owner only once
+its PR has merged into base (see *delivery*).
 
 ### down
 `saddle down`: stops every agent. Running tasks become `paused`; worktrees and
@@ -165,8 +174,12 @@ full plan-limit window *parks* running tasks until it resets.
 ref guard hooks.
 
 ### integration branch
-`saddle/integration` (`integration` in config). Landed work accumulates here,
-one task at a time. It is local until `saddle prs` pushes branches from it.
+`saddle/integration` (`integration` in config): the merge train's internal,
+local base. Each queued branch is rebased and tested on top of the work landed
+before it here, and the stack's landed ranges are recorded on it. It is not a
+destination: work on it is "landed locally", not done, and landing opens the
+task's PR against base right away. See
+[ADR 0003](adr/0003-landed-means-on-main.md).
 
 ### kill
 `saddle kill <task>`: stops the agent, releases its claims and removes its
@@ -178,24 +191,32 @@ A task status: see *kill*. A killed task leaves the PR stack.
 
 ### land
 `saddle land`: runs the merge train. For each queued branch, one at a time:
-rebase onto the integration branch, run the test gate, fast-forward integration.
-Run it after agents call `done` (autopilot does it for you). It **never pushes**
-and never touches GitHub; publishing is `prs`. A conflict goes back to the
-agent that wrote it. Task status becomes `landed`.
+rebase onto the work landed before it, run the test gate, fast-forward the
+train's local base. Then, in the same step, it opens the PR of every landed
+task that has none against base (stacked on another task's PR only when it
+depends on it), the way `prs` does; with auto-merge on, that PR is carried to
+base. Nobody needs to remember `prs`. Run land after agents call `done`
+(autopilot does it for you). A conflict goes back to the agent that wrote it.
+Task status becomes `landed`: landed locally, not done until its PR merges
+(see *delivery*). A repo with no remote lands locally only.
 
 ### landed
-A task status (and train state): its work is on the integration branch. Landed
-tasks form the PR stack. See *land*.
+A task status (and train state): the train landed its work locally and its PR
+is open or opening. Landed is **not done**: only *merged* is. Landed tasks form
+the PR stack. A landed task with no PR is an alarm (`landed_no_pr` event, a
+notice, `saddle doctor`'s "landed without a PR") that saddle heals by opening
+the PR on the next land or sentinel cycle. See *land* and *delivery*.
 
 ### merge train
-The serial pipeline that moves finished branches onto the integration branch:
-rebase, test, fast-forward, one at a time, so conflicts surface once and go to
+The serial pipeline that lands finished branches and opens their PRs:
+rebase onto the work landed before, test, fast-forward, one at a time, so conflicts surface once and go to
 the agent that caused them. Driven by `saddle land`. Inspect with `saddle queue`.
 See [ARCHITECTURE.md](ARCHITECTURE.md#merge-train).
 
 ### merged
 A train entry state: base has the task's work, either its PR merged or restack
-found it there. It leaves the stack and never comes back.
+found it there. It leaves the stack and never comes back. This is the only
+state in which a task's work counts as done.
 
 ### message
 `saddle message <task> <text>`: sends a `[saddle]` message to a task, waking it
@@ -253,10 +274,11 @@ edit and approve (`approve`, `edit`, `push`, `reopen`, `replan`).
 session be the orchestrator (`brief`, `engine`, `wait`, `setup`, `install`).
 
 ### prs
-`saddle prs [--dry-run|--push-only|--gate-only]`: after tasks have landed,
-checks each layer on its PR's base, pushes the branches and opens or updates
-the stack of GitHub PRs in landing order, filling the repo's PR template. This
-is where saddle first pushes. See [prs.md](prs.md).
+`saddle prs [--dry-run|--push-only|--gate-only]`: checks each landed layer on
+its PR's base, pushes the branches and opens or updates the stack of PRs in
+landing order, filling the repo's PR template. Land and the sentinel run the
+same publish themselves, so prs is for refreshing the stack, previewing it,
+and seeing why a PR didn't open. See [prs.md](prs.md).
 
 ### publish
 `saddle publish <task|branch> [--base main] [--draft]`: the escape hatch when

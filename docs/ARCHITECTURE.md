@@ -159,9 +159,25 @@ runs the gate inline.
 
 ## Merge train
 
-There is an integration branch `saddle/epic-<n>`, and branches land on it one
-at a time: rebase → test → fast-forward. When a conflict appears, Saddle
-works through these steps and stops at the first one that resolves it:
+**Landed means on its way to base, and only merged is done (#819, [ADR
+0003](adr/0003-landed-means-on-main.md)).** Branches land one at a time:
+rebase onto the work landed before them → test → fast-forward the train's
+local base, the integration branch (`saddle/integration`). That branch is an
+internal detail of the train, never a destination. In the same step,
+`LandRecorded` (behind `saddle land`, the `land` tool and autopilot) opens
+the PR of every landed task that has none, against base, through the same
+publish as `prs`; with auto-merge on, the PR is carried to base. Each landed
+task's *delivery* (`app.Delivery`) is `landed locally, no PR yet`, `landed
+locally, PR open`, or `merged`, and status, the TUI, notices and the
+orchestrator brief use those words: only `merged` counts as done. A landed
+task with no PR is an alarm: the sentinel retries the publish every cycle
+(`PublishLanded`), raises one `landed_no_pr` event and orchestrator notice
+per task still without one, and `saddle doctor` warns about them. The same
+retry opens the PRs of tasks an older saddle landed without one, so
+upgrading needs no migration step.
+
+When a conflict appears, Saddle works through these steps and stops at the
+first one that resolves it:
 
 1. Rebase with the **rename map**. Renames from every landed commit are
    recorded, applied to every live worktree, rewritten into claim globs, and
