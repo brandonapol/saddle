@@ -20,12 +20,22 @@ func IsCLI(name string) bool { return name == GH || name == Glab }
 
 // Output runs the forge CLI name with args in dir and returns its stdout and
 // stderr as they were printed. It is the one place saddle starts a forge CLI.
+//
+// While GitHub's rate limit is spent it returns a *RateLimitError
+// (errors.Is ErrRateLimited) without running gh; a gh call that hits the
+// limit records it for every saddle process in the repo (see ratelimit.go).
 func Output(ctx context.Context, dir, name string, args ...string) (stdout, stderr string, err error) {
+	if err := held(dir, name); err != nil {
+		return "", "", err
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err = cmd.Run()
+	if err != nil && name == GH && IsRateLimitMessage(errb.String()) {
+		err = tripped(dir, name+" "+strings.Join(args[:min(2, len(args))], " "), err)
+	}
 	return out.String(), errb.String(), err
 }
 
