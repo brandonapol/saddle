@@ -245,3 +245,14 @@ func TestSaddleBaseDoesNotMakeAPRRed(t *testing.T) {
 		t.Fatalf("checks = %s, want pass", pr.Checks)
 	}
 }
+
+// A restack blocked by a repair's push to the branch waits; it never tells
+// a human.
+func TestRemoteMovedRestackIsTransient(t *testing.T) {
+	if !transient(errors.New("push abc to saddle/t2: remote branch moved to commits the restack doesn't have (origin has def)")) {
+		t.Fatal("a moved remote branch isn't transient")
+	}
+	if transient(errors.New("required review missing")) {
+		t.Fatal("a review failure is transient")
+	}
+}

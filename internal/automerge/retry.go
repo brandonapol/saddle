@@ -51,7 +51,7 @@ var transientMarks = []string{
 	"timeout", "timed out", "deadline exceeded",
 	"http 500", "http 502", "http 503", "http 504", "bad gateway", "service unavailable", "internal server error",
 	"connection reset", "connection refused", "unexpected eof", "tls handshake",
-	"stale info", "index.lock", "no such file or directory",
+	"stale info", "remote branch moved", "index.lock", "no such file or directory",
 	"merge queue", "is still merging", "try again",
 }
 
