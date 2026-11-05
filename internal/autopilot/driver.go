@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/claims"
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 // Defaults for a Driver's zero fields.
@@ -315,12 +316,12 @@ func (d *Driver) Run(ctx context.Context) error {
 	defer t.Stop()
 	last := ""
 	for {
-		if _, err := d.Tick(); err != nil {
+		if _, err := d.Tick(); err != nil && !errors.Is(err, forge.ErrRateLimited) {
 			if msg := err.Error(); msg != last {
 				last = msg
 				d.Env.Event(EventError, msg)
 			}
-		} else {
+		} else if err == nil {
 			last = ""
 		}
 		select {
@@ -360,6 +361,14 @@ func (o occupant) overlap(want []string) string {
 	return ""
 }
 
+// logErr logs err from what as EventError, unless it is GitHub's rate
+// limit, which is a wait (#764).
+func logErr(env Env, what string, err error) {
+	if !errors.Is(err, forge.ErrRateLimited) {
+		env.Event(EventError, what+": "+err.Error())
+	}
+}
+
 // Tick runs one step: reconcile, land, check the stop condition and usage,
 // top up to the cap, and nudge the orchestrator on a stall.
 func (d *Driver) Tick() (Report, error) {
@@ -380,12 +389,12 @@ func (d *Driver) Tick() (Report, error) {
 	}
 
 	if res, err := env.Reconcile(); err != nil {
-		env.Event(EventError, "reconcile: "+err.Error())
+		logErr(env, "reconcile", err)
 	} else {
 		rep.Resumed = res
 	}
 	if n, err := env.Land(); err != nil {
-		env.Event(EventError, "land: "+err.Error())
+		logErr(env, "land", err)
 	} else {
 		rep.Landed = n
 	}
@@ -399,9 +408,14 @@ func (d *Driver) Tick() (Report, error) {
 	}
 	use, err := env.Usage(now)
 	if err != nil {
-		env.Event(EventError, "usage: "+err.Error())
+		logErr(env, "usage", err)
 	}
 	issues, err := env.Ready(st.Label())
+	if errors.Is(err, forge.ErrRateLimited) {
+		// GitHub's quota is spent: wait for the reset (#764).
+		rep.Decision = "waiting: " + err.Error()
+		return rep, d.save(&st, gen, &rep)
+	}
 	if err != nil {
 		rep.Decision = "can't read the ready queue: " + err.Error()
 		_ = d.save(&st, gen, &rep)
@@ -635,7 +649,7 @@ func (d *Driver) Tick() (Report, error) {
 func (d *Driver) snapshot(now time.Time) Snapshot {
 	s, err := d.Env.Snapshot(now)
 	if err != nil {
-		d.Env.Event(EventError, "snapshot: "+err.Error())
+		logErr(d.Env, "snapshot", err)
 	}
 	return s
 }
