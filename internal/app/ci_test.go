@@ -270,3 +270,80 @@ func TestCIFailureOnStackedTaskDefersToCIRed(t *testing.T) {
 		t.Fatal("ciwatch handled a ci-red layer's failure")
 	}
 }
+
+func trainRow(t *testing.T, a *App, task, state string) {
+	t.Helper()
+	must(t, a.Store.Enqueue(task))
+	must(t, a.Store.SetTrain(task, state, "", false))
+}
+
+func TestCITargetsSkipsMergedAndSuperseded(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	ciTask(t, a, "t1", store.Landed, "https://github.com/o/r/pull/1")
+	ciTask(t, a, "t2", store.Landed, "https://github.com/o/r/pull/2")
+	ciTask(t, a, "t3", store.Landed, "https://github.com/o/r/pull/3")
+	ciTask(t, a, "t4", store.Running, "https://github.com/o/r/pull/4")
+	ciTask(t, a, "t5", store.Landed, "https://github.com/o/r/pull/5")
+	trainRow(t, a, "t1", TrainMerged)
+	trainRow(t, a, "t2", TrainSuperseded)
+	trainRow(t, a, "t3", TrainRepairing)
+	trainRow(t, a, "t5", TrainFolded)
+
+	ts, err := a.CITargets(context.Background())
+	must(t, err)
+	var got []string
+	for _, tg := range ts {
+		got = append(got, tg.Task)
+	}
+	if fmt.Sprint(got) != "[t3 t4]" {
+		t.Fatalf("targets %v, want [t3 t4]", got)
+	}
+}
+
+func TestCITargetsSkipsPRsTheForgeReportsClosed(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	pr := "https://github.com/o/r/pull/9"
+	ciTask(t, a, "t1", store.Landed, pr)
+	calls := 0
+	a.ciTargetState().state = func(string) (string, error) { calls++; return forge.StateMerged, nil }
+	for range 3 {
+		ts, err := a.CITargets(context.Background())
+		must(t, err)
+		if len(ts) != 0 {
+			t.Fatalf("a merged PR is still a target: %+v", ts)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("forge asked %d times, want 1 (terminal state is cached)", calls)
+	}
+}
+
+func TestCITargetsHighLogsOneEvent(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	a.ciTargetState().state = func(string) (string, error) { return forge.StateOpen, nil }
+	for i := range ciTargetsHigh + 1 {
+		id := fmt.Sprintf("t%d", i+1)
+		ciTask(t, a, id, store.Running, fmt.Sprintf("https://github.com/o/r/pull/%d", i+1))
+	}
+	for range 3 {
+		_, err := a.CITargets(context.Background())
+		must(t, err)
+	}
+	evs, err := a.Store.Events(100)
+	must(t, err)
+	n := 0
+	for _, e := range evs {
+		if e.Kind == EventCITargetsHigh {
+			n++
+			if !strings.Contains(e.Data, fmt.Sprint(ciTargetsHigh+1)) {
+				t.Errorf("event %q doesn't name the count", e.Data)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("got %d ci_targets_high events, want 1", n)
+	}
+}
