@@ -162,7 +162,7 @@ func noProgressCard(rc RootCause, idle time.Duration, st WatchStatus) DecisionCa
 		Blocking: fmt.Sprintf("Everything: %d open tasks and %d queued branches wait.", st.OpenTasks, st.ReadyWork),
 		Options: []DecisionOption{
 			{Label: "Clear the cause", Cost: "you, a minute or two", Action: rc.Fix, Recommended: true},
-			{Label: "Leave it", Cost: "saddle posts again only if the cause changes", Action: "nothing"},
+			{Label: "Leave it", Cost: "saddle posts again only if the cause changes", Action: "nothing", Run: RunNothing},
 		},
 		Default: 2,
 		Timeout: DefaultDecisionTimeout,

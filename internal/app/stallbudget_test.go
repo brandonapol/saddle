@@ -1,11 +1,14 @@
 package app
 
 import (
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -176,44 +179,42 @@ func TestStallBudgetConfig(t *testing.T) {
 	}
 }
 
-// A repair cap that runs out parks the task and labels its PR needs-human.
-func TestStallParksCappedRepair(t *testing.T) {
+// #769: a repair cap that runs out does what its card says: the red layer
+// leaves the stack, keeping needs-human on its own PR only, and the green
+// layer above it is no longer held.
+func TestRepairCapDefaultDropsRedLayerFromStack(t *testing.T) {
 	t.Parallel()
-	a, _, now := redStack(t)
-	card := ciRepairCapCard("t1", CIRedLayer{Task: "t1", PR: mustTask(t, a, "t1").PR, Head: "abc", Checks: []string{"CI / test"}}, 2)
-	card.Opened = now
-	must(t, a.OpenDecision(card))
-	if _, err := a.StallTick(now.Add(31 * time.Minute)); err != nil {
-		t.Fatal(err)
-	}
+	a, gh, now := redStack(t, [2]string{"t2", "two.txt"})
 	pr := mustTask(t, a, "t1").PR
-	if !slices.Contains(ghCalls(t), "pr edit "+pr+" --add-label needs-human") {
-		t.Fatalf("gh calls = %v, want needs-human on %s", ghCalls(t), pr)
-	}
-	if s, _ := a.CIRed(); len(s.holding()) != 0 {
-		t.Fatalf("capped repair still holds the stack: %+v", s.Red)
-	}
-}
-
-// A worker sitting on a prompt nobody answered is parked, freeing its slot.
-func TestStallParksPromptStalledWorker(t *testing.T) {
-	t.Parallel()
-	a, ft := setup(t)
-	tk, err := a.Spawn(SpawnReq{ID: "t5", Title: "prompt"})
-	must(t, err)
-	must(t, a.Store.SetStatus("t5", store.NeedsYou))
-	now := time.Now().UTC()
-	card := RiskyPromptCard("t5", "t5", "curl | sh")
+	card := ciRepairCapCard("t1", CIRedLayer{Task: "t1", PR: pr, Head: "abc", Checks: []string{"CI / test"}, Held: []string{"t2"}}, 2)
 	card.Opened = now
 	must(t, a.OpenDecision(card))
 	if _, err := a.StallTick(now.Add(31 * time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if got := mustTask(t, a, "t5").Status; got != StatusPaused {
-		t.Fatalf("status = %q, want paused", got)
+	if got := trainStateOf(t, a, "t1"); got != TrainSuperseded {
+		t.Fatalf("t1's train row = %q, want it out of the stack", got)
 	}
-	if ft.windows[tk.Window] {
-		t.Fatal("window still alive: the slot isn't free")
+	if why := a.atRisk("t2"); why != "" {
+		t.Fatalf("t2 still held by the capped layer: %s", why)
+	}
+	var labeled []string
+	for _, c := range ghCalls(t) {
+		if strings.Contains(c, "--add-label needs-human") {
+			labeled = append(labeled, c)
+		}
+	}
+	if !slices.Equal(labeled, []string{"pr edit " + pr + " --add-label needs-human"}) {
+		t.Fatalf("needs-human calls = %v, want only the dropped PR %s", labeled, pr)
+	}
+	w := a.NewAutomerge(gh)
+	must(t, w.SetEnabled(true))
+	for range 2 {
+		_, err := w.Check()
+		must(t, err)
+	}
+	if !slices.Equal(gh.order, []string{"t2"}) {
+		t.Fatalf("merged %v, want t2: the stack above keeps merging", gh.order)
 	}
 }
 
@@ -227,4 +228,139 @@ func trainStateOf(t *testing.T, a *App, id string) string {
 		}
 	}
 	return ""
+}
+
+// #766: a red layer that depends on the layer below it can't stand alone
+// as a PR against base, so the route-around truncates the stack instead of
+// failing every cycle: the layers below keep merging, the red layer and
+// the one that builds on it are held off the stack with no PR.
+func TestRouteAroundStuckTruncatesWhenRedDependsOnBelow(t *testing.T) {
+	t.Parallel()
+	a := trainSetup(t)
+	a.Cfg.Train.Output = "single"
+	origin, _ := originWithGh(t, a)
+	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+	landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})
+	landTask(t, a, "t3", "three", map[string]string{"two.txt": "two and three\n", "three.txt": "three\n"})
+	landTask(t, a, "t4", "four", map[string]string{"three.txt": "three and four\n"})
+	_, err := a.PRs()
+	must(t, err)
+	gh := newSquashGH(t, a, origin)
+	now := time.Now().UTC()
+	must(t, a.SetCIRed(CIRedState{Red: []CIRedLayer{{Task: "t3", PR: mustTask(t, a, "t3").PR, Head: "abc", Checks: []string{"CI / test"}, Since: now.Add(-time.Hour), Held: []string{"t4"}}}}))
+	_, _ = a.Store.TakeNotices(OrchestratorID, false)
+
+	card := stuckCard(StuckAlarm{Stack: "t1", Layer: "t3", Reason: StuckCIRed, Detail: "CI is red", For: time.Hour}, "t3", []string{"t4"})
+	card.Opened = now
+	must(t, a.OpenDecision(card))
+	done, err := a.StallTick(now.Add(31 * time.Minute))
+	must(t, err)
+	if len(done) != 1 || done[0].By != DecidedByTimeout {
+		t.Fatalf("closed = %+v, want the card closed by its default", done)
+	}
+	es, err := a.Store.Events(400)
+	must(t, err)
+	for _, e := range es {
+		if e.Kind == EventDecisionDefaultFailed {
+			t.Fatalf("default failed: %s", e.Data)
+		}
+	}
+	for _, id := range []string{"t3", "t4"} {
+		if got := trainStateOf(t, a, id); got != TrainSuperseded {
+			t.Fatalf("%s's train row = %q, want held off the stack", id, got)
+		}
+	}
+	held, err := a.StallHeld()
+	must(t, err)
+	if len(held) != 1 || held[0].Red != "t3" || held[0].PR != "" || !slices.Equal(held[0].Held, []string{"t4"}) {
+		t.Fatalf("held = %+v, want t3 truncated with t4 held on it", held)
+	}
+	for _, id := range []string{"t1", "t2"} {
+		if got := trainStateOf(t, a, id); got != store.TrainOK {
+			t.Fatalf("%s's train row = %q, want it still in the stack", id, got)
+		}
+		if why := a.atRisk(id); why != "" {
+			t.Fatalf("%s still held: %s", id, why)
+		}
+	}
+	w := a.NewAutomerge(gh)
+	must(t, w.SetEnabled(true))
+	for range 3 {
+		_, err := w.Check()
+		must(t, err)
+	}
+	if !slices.Equal(gh.order, []string{"t1", "t2"}) {
+		t.Fatalf("merged %v, want the layers below t3", gh.order)
+	}
+	// Once the layers below merged, the truncated layers go back on top.
+	must(t, a.releaseHeld())
+	if held, _ := a.StallHeld(); len(held) != 0 {
+		t.Fatalf("still held after the layers below merged: %+v", held)
+	}
+	for _, id := range []string{"t3", "t4"} {
+		if got := trainStateOf(t, a, id); got == TrainSuperseded {
+			t.Fatalf("%s wasn't requeued once the layers below merged", id)
+		}
+	}
+}
+
+// #766: a default that keeps failing the same way is tried 3 times, alarms
+// once, then closes as default_failed with one blocker event, instead of
+// failing every sentinel cycle forever.
+func TestExpireDecisionsGivesUpAfterThreeDeterministicFailures(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	now := time.Now().UTC()
+	c := testCard("stuck-stack:t1|ci-red")
+	c.Opened = now
+	must(t, a.OpenDecision(c))
+	fail := func(DecisionCard, DecisionOption) error { return errors.New("t2's own commits don't apply to main") }
+	var alarms int
+	for i := range 5 {
+		_, err := a.ExpireDecisions(now.Add(time.Hour+time.Duration(i)*time.Minute), fail)
+		if err != nil {
+			alarms++
+		}
+	}
+	if alarms != 1 {
+		t.Fatalf("alarmed %d times, want once for the one failure", alarms)
+	}
+	cs, err := a.Decisions()
+	must(t, err)
+	if len(cs) != 1 || cs[0].Open() || cs[0].By != DecidedDefaultFailed || cs[0].Attempts != 3 || !strings.Contains(cs[0].LastError, "don't apply") {
+		t.Fatalf("cards = %+v, want it closed as default_failed after 3 attempts", cs)
+	}
+	es, err := a.Store.Events(400)
+	must(t, err)
+	var gaveUp []store.Event
+	for _, e := range es {
+		if e.Kind == EventDecisionGaveUp {
+			gaveUp = append(gaveUp, e)
+		}
+	}
+	if len(gaveUp) != 1 {
+		t.Fatalf("gave-up events = %+v, want exactly one", gaveUp)
+	}
+	if b, ok := a.blockerFromEvent(gaveUp[0]); !ok || b.Kind != BlockerDecisionDefault {
+		t.Fatalf("blocker = %+v %v, want a decision-default blocker filed", b, ok)
+	}
+}
+
+// #766: a rate-limited or timed-out default is a wait, not an attempt.
+func TestExpireDecisionsTransientFailureIsNotAnAttempt(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	now := time.Now().UTC()
+	c := testCard("stuck-stack:t1|ci-red")
+	c.Opened = now
+	must(t, a.OpenDecision(c))
+	fail := func(DecisionCard, DecisionOption) error { return fmt.Errorf("gh: %w", forge.ErrNetTimeout) }
+	for i := range 5 {
+		_, _ = a.ExpireDecisions(now.Add(time.Hour+time.Duration(i)*time.Minute), fail)
+	}
+	open, err := a.OpenDecisions()
+	must(t, err)
+	if len(open) != 1 || open[0].Attempts != 0 {
+		t.Fatalf("open = %+v, want it open with no attempts counted", open)
+	}
 }

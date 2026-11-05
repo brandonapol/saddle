@@ -521,7 +521,7 @@ func (a *App) openHungCard(t store.Task, h *HungWorker, now time.Time, unread st
 		What:     "Its screen, branch and working tree sat still; saddle is nudging it, then pressing Enter, then relaunching it in place on a hooked adapter.",
 		Blocking: "Its task: nothing moves until it does. Its commits and uncommitted work stay either way.",
 		Options: []DecisionOption{
-			{Label: "Let saddle recover it", Cost: "nothing; each step waits " + fmtDuration(a.StallConfig().HungAfter), Action: "nothing", Recommended: true},
+			{Label: "Let saddle recover it", Cost: "nothing; each step waits " + fmtDuration(a.StallConfig().HungAfter), Action: "nothing", Recommended: true, Run: RunNothing},
 			{Label: "Don't kill it", Cost: "it may stay stuck; saddle only nudges", Action: "nothing more: answering keeps " + t.ID + " (the keep tool does the same)"},
 		},
 		Default: 1,

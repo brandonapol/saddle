@@ -461,7 +461,7 @@ func (a *App) openOrphanCard(t store.Task, o *DoneOrphan, now time.Time) error {
 		What:     "Its done gate was cancelled and nothing re-ran it; saddle is re-running the gate, then nudging the agent, then handing its commits to a finisher.",
 		Blocking: "Its committed work: nothing lands it until it is queued.",
 		Options: []DecisionOption{
-			{Label: "Let saddle recover it", Cost: "nothing; each step waits " + fmtDuration(a.StallConfig().DoneOrphan), Action: "nothing", Recommended: true},
+			{Label: "Let saddle recover it", Cost: "nothing; each step waits " + fmtDuration(a.StallConfig().DoneOrphan), Action: "nothing", Recommended: true, Run: RunNothing},
 			{Label: "Kill it now", Cost: "its session; the branch and commits stay", Action: "saddle kill " + t.ID},
 		},
 		Default: 1,
