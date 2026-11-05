@@ -437,17 +437,3 @@ func TestAutopilotTasksMarkHowTheyEnded(t *testing.T) {
 		t.Errorf("tasks = %+v", got)
 	}
 }
-
-func TestParseUnassignedKeepsMaintainerIssues(t *testing.T) {
-	out := `[
-	 {"number": 1, "title": "bug", "body": "b", "author_association": "OWNER", "labels": [{"name": "bug"}]},
-	 {"number": 2, "title": "drive-by", "author_association": "NONE"},
-	 {"number": 3, "title": "a PR", "author_association": "MEMBER", "pull_request": {}},
-	 {"number": 4, "title": "collab", "author_association": "COLLABORATOR"}
-	]`
-	is, err := parseUnassigned(out, map[int]bool{4: true})
-	must(t, err)
-	if len(is) != 2 || is[0].Number != 1 || !slices.Equal(is[0].Labels, []string{"bug"}) || is[1].Number != 4 || !is[1].HasPR {
-		t.Fatalf("issues = %+v", is)
-	}
-}

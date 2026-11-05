@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -377,58 +376,38 @@ func (a *App) closedByOpenPRs(ctx context.Context, f forge.Forge) map[int]bool {
 	return closed
 }
 
-// maintainer is a GitHub author_association that may open tickets autopilot
-// works on unasked (#733).
-var maintainer = map[string]bool{"OWNER": true, "MEMBER": true, "COLLABORATOR": true}
-
-// ghIssueJSON is an issue from GitHub's REST issues list.
-type ghIssueJSON struct {
-	Number      int       `json:"number"`
-	Title       string    `json:"title"`
-	Body        string    `json:"body"`
-	CreatedAt   time.Time `json:"created_at"`
-	Association string    `json:"author_association"`
-	Labels      []struct {
-		Name string `json:"name"`
-	} `json:"labels"`
-	PullRequest *struct{} `json:"pull_request"`
+// unassignedLister is a forge that can list the open issues nobody is
+// assigned to that a maintainer (owner, member, collaborator) opened (#733).
+// forge.Forge has no author or assignee reads yet (#807), so autopilot asks for it
+// by assertion and scans nothing on a forge without it.
+type unassignedLister interface {
+	UnassignedIssues(ctx context.Context) ([]forge.Issue, error)
 }
 
-// parseUnassigned keeps the maintainer-opened issues of a REST issues list,
-// dropping pull requests, which the endpoint lists too.
-func parseUnassigned(out string, closed map[int]bool) ([]autopilot.Issue, error) {
-	var raw []ghIssueJSON
-	if err := json.Unmarshal([]byte(out), &raw); err != nil {
-		return nil, fmt.Errorf("parse unassigned issues: %w", err)
-	}
-	var is []autopilot.Issue
-	for _, r := range raw {
-		if r.PullRequest != nil || !maintainer[r.Association] {
-			continue
-		}
-		x := autopilot.Issue{Number: r.Number, Title: r.Title, Body: r.Body, Created: r.CreatedAt, HasPR: closed[r.Number]}
-		for _, l := range r.Labels {
-			x.Labels = append(x.Labels, l.Name)
-		}
-		is = append(is, x)
-	}
-	return is, nil
+// issueLabeler is a forge that can label an issue; forge.Forge's AddLabel
+// labels PRs only (#767, #807).
+type issueLabeler interface {
+	AddIssueLabel(ctx context.Context, n int, label string) error
 }
 
-// ghUnassignedIssues lists the open issues nobody is assigned to that a
-// maintainer opened (#733). The forge has no author or assignee reads, so it
-// asks GitHub's REST API through gh; other forges scan nothing.
+// ghUnassignedIssues is the tracker scan through the forge (#733).
 func (a *App) ghUnassignedIssues() ([]autopilot.Issue, error) {
-	g, ok := a.Forge().(*forge.GitHub)
+	f := a.Forge()
+	l, ok := f.(unassignedLister)
 	if !ok {
 		return nil, nil
 	}
 	ctx := context.Background()
-	out, err := g.Run(ctx, "api", "repos/{owner}/{repo}/issues?state=open&assignee=none&per_page=100")
+	raw, err := l.UnassignedIssues(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return parseUnassigned(out, a.closedByOpenPRs(ctx, g))
+	closed := a.closedByOpenPRs(ctx, f)
+	is := make([]autopilot.Issue, len(raw))
+	for i, r := range raw {
+		is[i] = autopilot.Issue{Number: r.Number, Title: r.Title, Body: r.Body, Created: r.Created, HasPR: closed[r.Number], Labels: r.Labels}
+	}
+	return is, nil
 }
 
 // Unassigned is autopilot's tracker scan (#733).
@@ -444,19 +423,14 @@ func (e *autopilotEnv) CloseIssue(n int, comment string) error {
 	return e.a.Forge().CloseIssue(context.Background(), n, comment)
 }
 
-// GiveUp labels an issue needs-human and comments why, once its retries
-// ran out (#767). Labelling an issue goes through gh's issue edit, which the
-// forge's PR-only AddLabel doesn't cover.
+// GiveUp labels an issue needs-human, where the forge can, and comments
+// why, once its retries ran out (#767). Without the label the driver's own
+// record keeps the issue out for the rest of the run.
 func (e *autopilotEnv) GiveUp(n int, comment string) error {
 	ctx, f := context.Background(), e.a.Forge()
 	var lerr error
-	if g, ok := f.(*forge.GitHub); ok {
-		for _, l := range forge.KnownLabels() {
-			if l.Name == autopilot.NeedsHumanLabel {
-				_ = g.EnsureLabel(ctx, l)
-			}
-		}
-		_, lerr = g.Run(ctx, "issue", "edit", strconv.Itoa(n), "--add-label", autopilot.NeedsHumanLabel)
+	if l, ok := f.(issueLabeler); ok {
+		lerr = l.AddIssueLabel(ctx, n, autopilot.NeedsHumanLabel)
 	}
 	return errors.Join(lerr, f.CommentIssue(ctx, n, comment))
 }
