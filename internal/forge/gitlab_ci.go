@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -133,7 +134,7 @@ func (g *GitLab) Checks(ctx context.Context, ref string) ([]CICheck, error) {
 	for i, j := range js {
 		cs[i] = CICheck{Name: j.Name, Workflow: j.Stage, Bucket: j.bucket(), Link: j.WebURL}
 	}
-	return cs, nil
+	return slices.DeleteFunc(cs, func(c CICheck) bool { return c.Name == BaseStatus }), nil
 }
 
 var gitlabJobRe = regexp.MustCompile(`^https?://\S+?/-/jobs/(\d+)`)

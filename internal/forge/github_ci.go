@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -16,7 +17,7 @@ func (g *GitHub) Checks(ctx context.Context, ref string) ([]CICheck, error) {
 	if s := strings.TrimSpace(out); strings.HasPrefix(s, "[") {
 		var cs []CICheck
 		if jerr := json.Unmarshal([]byte(s), &cs); jerr == nil {
-			return cs, nil
+			return slices.DeleteFunc(cs, func(c CICheck) bool { return c.Name == BaseStatus }), nil
 		} else if err == nil {
 			return nil, fmt.Errorf("gh pr checks %s: %w", ref, jerr)
 		}
