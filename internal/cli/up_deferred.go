@@ -174,7 +174,7 @@ func startupCard(kind string, sum []byte, headline, what, fix, check string) app
 		Blocking: "saddle up started anyway; whatever needs the failing check fails on its own until it is fixed.",
 		Options: []app.DecisionOption{
 			{Label: "Fix it now", Cost: "you do it, a few minutes", Action: fix, Recommended: true},
-			{Label: "Carry on", Cost: "saddle keeps running; the check stays red", Action: check},
+			{Label: "Carry on", Cost: "saddle keeps running; the check stays red", Action: check, Run: app.RunNothing},
 		},
 		Default: 2,
 		Timeout: app.DefaultDecisionTimeout,

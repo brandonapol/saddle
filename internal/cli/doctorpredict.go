@@ -125,7 +125,7 @@ func predictedRisksCard(rs []doctor.Risk) (app.DecisionCard, bool) {
 		Blocking: "Nothing yet: agents run as normal. `saddle doctor --predict` lists every risk with its fix.",
 		Options: []app.DecisionOption{
 			{Label: "Fix the top risk now", Cost: "you do it, a few minutes", Action: fix, Recommended: high > 0},
-			{Label: "Carry on and keep an eye on it", Cost: "saddle keeps running; the risk stays", Action: "saddle doctor --predict", Recommended: high == 0},
+			{Label: "Carry on and keep an eye on it", Cost: "saddle keeps running; the risk stays", Action: "saddle doctor --predict", Recommended: high == 0, Run: app.RunNothing},
 		},
 		Default: 2,
 		Timeout: app.DefaultDecisionTimeout,

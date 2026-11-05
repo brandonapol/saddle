@@ -47,7 +47,7 @@ func TestSentinelRunUnderRateLimitLogsNoError(t *testing.T) {
 	must(t, a.OpenDecision(app.DecisionCard{
 		ID: "ci-repair-cap:t1", Kind: app.DecisionCIRepairCap, To: app.OrchestratorID, Task: tk.ID,
 		Headline: "CI repair cap: t1 needs you.", What: "CI stayed red.", Blocking: "the stack.",
-		Options: []app.DecisionOption{{Label: "Fix it", Action: "spawn a fix", Recommended: true}, {Label: "Park it", Action: "label needs-human"}},
+		Options: []app.DecisionOption{{Label: "Fix it", Action: "spawn a fix", Recommended: true}, {Label: "Drop it", Action: "saddle unstack t1", Run: app.RunDropRed}},
 		Default: 2, Timeout: time.Minute, Opened: time.Now().Add(-time.Hour),
 	}))
 	holdGH(t, a)
