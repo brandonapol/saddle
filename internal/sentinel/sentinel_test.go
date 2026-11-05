@@ -194,6 +194,9 @@ func hasCall(calls []string, want string) bool {
 // restacked it checks clean and lifts all of that.
 func TestSentinelFlagsForkedStackUntilRestack(t *testing.T) {
 	a, _ := setup(t)
+	// One linear PR stack, so t6 sits above t4: the flag freezes only the
+	// flagged layer's own stack (#771).
+	a.Cfg.Train.Output = "single"
 	gh := newFakeGH(t)
 	t1 := landTask(t, a, "t1", "usage")
 	t2 := landTask(t, a, "t2", "planner")
