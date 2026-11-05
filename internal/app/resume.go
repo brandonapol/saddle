@@ -391,6 +391,7 @@ func (a *App) Rescue(task string) (Rescued, error) {
 	}
 	// Dead first, so the resume watcher never brings it back.
 	note := "killed with snapshot " + r.Branch
+	a.recordKiller(task, KilledByRescue) // its work is saved: not a decline (#772)
 	if err := errors.Join(a.Store.Release(task), a.Store.SetStatus(task, store.Killed), a.Store.SetField(task, "summary", note)); err != nil {
 		return r, err
 	}

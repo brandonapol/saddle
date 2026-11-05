@@ -128,12 +128,7 @@ func (a *App) CIRedRepair(task string, fails []CIRedFailure) (string, error) {
 		a.Store.Event(task, eventCIRedExplained, sib)
 		return save(fmt.Sprintf("The failure looks explained by %s's work, which isn't merged yet (#193), so no repair was spawned: it should clear once %s merges and the stack restacks.", sib, sib))
 	}
-	n := 0
-	for _, r := range s.Repairs {
-		if r.Task == task && r.State != ciRepairPending {
-			n++
-		}
-	}
+	n := a.ciRepairAttempts(s, task)
 	if n >= a.Cfg.CI.RepairAttempts {
 		if l.Escalated {
 			return save("")
@@ -195,6 +190,23 @@ func (a *App) CIRedRepair(task string, fails []CIRedFailure) (string, error) {
 		note += fmt.Sprintf(" `%s` already fixed some of it (%s).", fixer, short(fixCommit))
 	}
 	return save(note)
+}
+
+// ciRepairAttempts counts task's CI repairs that really tried: a pending
+// one hasn't, and one saddle killed itself (orphan, rescue, watchdog) didn't
+// get the chance (#772).
+func (a *App) ciRepairAttempts(s CIRedState, task string) int {
+	n := 0
+	for _, r := range s.Repairs {
+		if r.Task != task || r.State == ciRepairPending {
+			continue
+		}
+		if r.State == ciRepairKilled && r.Repair != "" && a.internalKill(r.Repair) {
+			continue
+		}
+		n++
+	}
+	return n
 }
 
 // liveCIRepair is the repair of task still working or waiting to be folded.

@@ -62,7 +62,9 @@ func (a *App) orphaned(task string) bool {
 	return err == nil && t.Role == store.RoleWorker && !a.ownWindow(t)
 }
 
-// repairOf finds the live or landed repair task spawned for orig.
+// repairOf finds the live or landed repair task spawned for orig. A repair
+// that was killed, failed or ended no_change will never land, so it doesn't
+// count (#772).
 func (a *App) repairOf(orig string) (store.Task, bool) {
 	es, err := a.Store.Events(-1)
 	if err != nil {
@@ -73,7 +75,7 @@ func (a *App) repairOf(orig string) (store.Task, bool) {
 		if e.Task != orig || e.Kind != eventRepairSpawned {
 			continue
 		}
-		if t, err := a.Store.Task(e.Data); err == nil && t.Status != store.Killed {
+		if t, err := a.Store.Task(e.Data); err == nil && !repairDead(t) {
 			return t, true
 		}
 	}
@@ -143,8 +145,11 @@ func (a *App) spawnRepairs() []string {
 		if l.State != TrainRepairing {
 			continue
 		}
+		if _, live := a.repairOf(l.ID); !live && a.settleNoChange(l) {
+			continue // its no_change repair found its work already in place (#772)
+		}
 		if _, live := a.repairOf(l.ID); !live && a.skipAutoRepair(l.ID) {
-			continue // the owner killed its repair, or the day's cap is spent (#337)
+			continue // the owner killed its repair, it ended no_change twice, or the day's cap is spent (#337, #772)
 		}
 		seed, _ := a.seedOf(l.ID)
 		if r, created, err := a.ensureRepair(l.Task, seed, false); err == nil && created {
@@ -270,6 +275,7 @@ func (a *App) repairPrompt(orig store.Task, s repairSeed) string {
 		fmt.Fprintf(&b, " at %s", short(s.Base))
 	}
 	fmt.Fprintf(&b, " in %s, and its agent is gone, so nobody else will resolve it.\n\n", files)
+	b.WriteString(a.noChangeNote(orig))
 	if strings.TrimSpace(orig.Prompt) != "" {
 		fmt.Fprintf(&b, "What %s was asked to do:\n%s\n\n", orig.ID, strings.TrimSpace(orig.Prompt))
 	}

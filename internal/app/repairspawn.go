@@ -29,14 +29,15 @@ const eventRepairDeclined = "repair_declined"
 const repairDailyCap = 2
 
 // repairDeclined reports the repair of orig the owner killed: the last
-// repair spawned for it, when that one is killed.
+// repair spawned for it, when the owner killed it. Saddle's own kills are
+// not declines (#772).
 func (a *App) repairDeclined(orig string) (string, bool) {
 	r, ok := a.lastEvent(orig, eventRepairSpawned)
 	if !ok {
 		return "", false
 	}
 	t, err := a.Store.Task(r)
-	return r, err == nil && t.Status == store.Killed
+	return r, err == nil && a.ownerKilled(t)
 }
 
 // repairsToday counts the repairs spawned for task in the day before now.
@@ -60,7 +61,11 @@ func (a *App) skipAutoRepair(orig string) bool {
 	}
 	if last, ok := a.lastEvent(orig, eventRepairDeclined); !ok || last != why {
 		a.Store.Event(orig, eventRepairDeclined, why)
-		_ = a.Notify(OrchestratorID, store.NoticeInfo, why)
+		kind := store.NoticeInfo
+		if a.noChangeBlock(orig) != "" {
+			kind = store.NoticeAction // escalated: someone has to decide (#772)
+		}
+		_ = a.Notify(OrchestratorID, kind, why)
 	}
 	return true
 }
@@ -69,7 +74,9 @@ func (a *App) skipAutoRepair(orig string) bool {
 // "" when nothing stops it.
 func (a *App) autoRepairBlock(orig string) string {
 	why := ""
-	if r, ok := a.repairDeclined(orig); ok {
+	if nc := a.noChangeBlock(orig); nc != "" {
+		why = nc
+	} else if r, ok := a.repairDeclined(orig); ok {
 		why = fmt.Sprintf("%s's repair %s was killed, so restack won't spawn another: its work looks superseded. "+
 			"%s stays out of the stack and its PR is left alone. Run `saddle repair %s` if it still needs re-landing, or `saddle unstack %s` to drop it.",
 			orig, r, orig, orig, orig)
