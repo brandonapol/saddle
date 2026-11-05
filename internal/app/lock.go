@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -25,6 +26,11 @@ func SessionWakes(owner string) bool { return owner == LockEngine || owner == Lo
 
 func (a *App) lockPath() string { return a.stateDir("tui.lock") }
 
+// lockPIDPath names the engine lock holder's pid. It is a file of its own,
+// not a second field in tui.lock, so an older saddle still reads the owner
+// (#789).
+func (a *App) lockPIDPath() string { return a.stateDir("tui.lock.pid") }
+
 // AcquireLock takes the engine lock for owner and records the owner in the
 // file, so LockOwner can tell the TUI from the plugin engine. The lock is
 // held until release is called or the process exits.
@@ -44,6 +50,7 @@ func (a *App) AcquireLock(owner string) (release func(), err error) {
 		f.Close()
 		return nil, err
 	}
+	_ = os.WriteFile(a.lockPIDPath(), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644)
 	// Unlock before closing: a process forked while the lock was held shares
 	// the open file, and closing ours alone would leave it locked.
 	return func() {
@@ -51,6 +58,36 @@ func (a *App) AcquireLock(owner string) (release func(), err error) {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		f.Close()
 	}, nil
+}
+
+// flockHeldBy reports whether the flock on path is held and the file (or pidPath
+// when set) names pid as its holder.
+func flockHeldBy(path, pidPath string, pid int) bool {
+	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB) == nil {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		return false
+	}
+	if pidPath == "" {
+		pidPath = path
+	}
+	b, err := os.ReadFile(pidPath)
+	if err != nil {
+		return false
+	}
+	got, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	return err == nil && got == pid
+}
+
+// HoldsSessionLock reports whether process pid holds this repo's engine
+// lock (saddle up, up --rc or the plugin engine) or saddle up's up.lock: the
+// process that runs every watcher, which nothing else may stop (#789).
+func (a *App) HoldsSessionLock(pid int) bool {
+	return pid > 0 && (flockHeldBy(a.lockPath(), a.lockPIDPath(), pid) || flockHeldBy(a.stateDir("up.lock"), "", pid))
 }
 
 func writeAt0(f *os.File, s string) error {
