@@ -14,6 +14,10 @@ import (
 // GitHub is Forge through the gh CLI. Run is gh; New uses the real one.
 type GitHub struct {
 	Run Runner
+	// MergePoll are the waits between PR state reads after an async merge;
+	// nil means DefaultMergePoll. Sleep waits; nil is time.Sleep.
+	MergePoll []time.Duration
+	Sleep     func(time.Duration)
 }
 
 var _ Forge = (*GitHub)(nil)
@@ -69,6 +73,7 @@ func (p prJSON) pr() PR {
 		pr.Checks = append(pr.Checks, CheckRun{Kind: kind, Name: r.Name, Workflow: r.Workflow, Context: r.Context,
 			Status: r.Status, Conclusion: r.Conclusion, State: r.State, StartedAt: r.StartedAt})
 	}
+	pr.Checks = withoutSaddleOwned(pr.Checks)
 	return pr
 }
 
@@ -283,6 +288,7 @@ func parseOpenPRs(out string) ([]PR, string, error) {
 				}
 				pr.Checks = append(pr.Checks, c.check())
 			}
+			pr.Checks = withoutSaddleOwned(pr.Checks)
 		}
 		prs = append(prs, pr)
 	}
@@ -360,13 +366,19 @@ func (g *GitHub) RemoveLabel(ctx context.Context, ref, label string) error {
 	return err
 }
 
-// MergePR never passes --admin, so branch protection always applies.
+// MergePR never passes --admin, so branch protection always applies. A PR
+// in a native stack, which gh pr merge refuses, is merged through the async
+// merge API instead and polled until merged; ErrMergePending means GitHub
+// is still merging it (#838).
 func (g *GitHub) MergePR(ctx context.Context, ref, method, head string) error {
 	args := []string{"pr", "merge", ref, "--" + method}
 	if head != "" {
 		args = append(args, "--match-head-commit", head)
 	}
 	_, err := g.Run(ctx, args...)
+	if NeedsAsyncMerge(err) {
+		return g.mergeAsync(ctx, ref, method, head)
+	}
 	return err
 }
 

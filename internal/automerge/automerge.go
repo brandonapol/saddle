@@ -21,17 +21,19 @@
 // isn't held, whose bottom is red only for its CI and which has a green PR
 // above it, is handed to Collapse: it retargets that PR to base, merges it
 // carrying the stack below it, and restacks. Collapse decides whether the
-// stack really qualifies; a failure stops the watcher like a failed merge.
+// stack really qualifies; a failure is retried like a failed merge.
 // A stack AtRisk covers never collapses: a layer the ci-red watcher holds
 // red, or anything above it, merges by neither path; its repair folds into
 // it instead.
 //
 // A held stack (`saddle automerge hold <stack|pr>`) is never merged, but it is
 // still tracked and restacked; when it falls behind base the orchestrator
-// hears about it once, as info. Any merge or restack failure stops the
-// watcher with a notice to the orchestrator; it never retries in a loop.
-// Turning it on again is the way back. Every merge and every refusal is an
-// event with its reason. All GitHub access goes through GitHub.
+// hears about it once, as info. Nothing latches (#838): a failed merge,
+// restack or collapse backs off and is tried again on a later tick (see
+// retry.go), and a merge GitHub accepted but hasn't finished (merge-async,
+// for a PR in a native stack) is waited out until the PR shows merged, then
+// restacked. Every merge and every refusal is an event with its reason. All
+// GitHub access goes through GitHub.
 //
 // The runtime toggle, the holds and the last check live in one small JSON
 // file under .saddle/, not in the store. Every writer saves it through
@@ -63,7 +65,7 @@ const (
 	EventMerged    = "automerge_merged"    // a PR it merged
 	EventRefused   = "automerge_refused"   // a PR it won't merge until something changes, and why
 	EventWaiting   = "automerge_waiting"   // a PR it waits on (pending CI, GitHub computing), and why
-	EventFailed    = "automerge_failed"    // a merge or restack failed; the watcher stopped
+	EventFailed    = "automerge_failed"    // a merge, restack or collapse failed; it is retried after a backoff
 	EventBehind    = "automerge_behind"    // a held stack fell behind base
 	EventToggle    = "automerge_toggle"    // on or off
 	EventHold      = "automerge_hold"      // a stack held or released
@@ -85,12 +87,17 @@ const (
 	ChecksNone    = "none"
 )
 
-// DefaultRestackBackoff is how long a failed restack waits before each retry
-// (so it is tried 1+len times) before automerge stops itself (#680).
+// DefaultRestackBackoff is how long a failed restack waits before each
+// in-tick retry (so it is tried 1+len times) before it is left to a later
+// tick (#680).
 var DefaultRestackBackoff = []time.Duration{5 * time.Second, 20 * time.Second}
 
 // DefaultInterval is how often Run checks, the sentinel's cadence.
 const DefaultInterval = 2 * time.Minute
+
+// PendingTimeout is how long a merge GitHub accepted may stay unfinished
+// before the watcher tries it again.
+const PendingTimeout = 15 * time.Minute
 
 // DefaultBusyRetry is how soon Run checks again after a tick found the train
 // lock held.
@@ -181,7 +188,7 @@ type Stack struct {
 type Status struct {
 	Enabled bool   `json:"enabled"`
 	Source  string `json:"source"`            // config or runtime
-	Stopped string `json:"stopped,omitempty"` // why it stopped; on clears it
+	Stopped string `json:"stopped,omitempty"` // never set since #838; kept so old readers parse
 	Busy    bool   `json:"busy,omitempty"`    // the train held its lock; nothing was checked
 	// BusySince is when the watcher first found the lock held in a row of busy ticks.
 	BusySince time.Time `json:"busy_since,omitzero"`
@@ -197,11 +204,20 @@ type Status struct {
 type State struct {
 	Enabled *bool    `json:"enabled,omitempty"` // runtime override; nil follows config
 	Holds   []string `json:"holds,omitempty"`   // held tasks or PRs; any one holds its stack
-	Stopped string   `json:"stopped,omitempty"`
-	// RestackPending is the PR merged whose restack a rate limit deferred;
-	// the next tick restacks before it merges anything else.
-	RestackPending string         `json:"restack_pending,omitempty"`
-	Behind         map[string]int `json:"behind,omitempty"` // held stacks already flagged behind
+	// Stopped is the latch older saddles set after a failure. A check
+	// clears it; nothing sets it any more (#838).
+	Stopped string `json:"stopped,omitempty"`
+	// RestackPending is the PR merged whose restack hasn't succeeded yet;
+	// the next ticks retry it before they merge anything else.
+	RestackPending string `json:"restack_pending,omitempty"`
+	// MergePending is the PR GitHub accepted a merge of but hasn't finished
+	// (merge-async), MergePendingTask its task and MergePendingAt when.
+	MergePending     string    `json:"merge_pending,omitempty"`
+	MergePendingTask string    `json:"merge_pending_task,omitempty"`
+	MergePendingAt   time.Time `json:"merge_pending_at,omitzero"`
+	// Attempts are the failed actions backing off, by key (retry.go).
+	Attempts map[string]Attempt `json:"attempts,omitempty"`
+	Behind   map[string]int     `json:"behind,omitempty"` // held stacks already flagged behind
 	// Logged is the last refusal or wait logged per PR, so a reason is
 	// logged once per change even across restarts.
 	Logged map[string]string `json:"logged,omitempty"`
@@ -474,8 +490,6 @@ func (w *Watcher) explain(st *Status, last time.Time, merged string) {
 		switch {
 		case !st.Enabled:
 			x.Blocked = "auto-merge is off; `saddle automerge on` turns it on"
-		case st.Stopped != "":
-			x.Blocked = "auto-merge stopped after a failure (" + st.Stopped + "); `saddle automerge on` resumes"
 		case st.Busy:
 			x.Blocked = fmt.Sprintf("the train lock is busy (a land, restack or the stack sentinel holds it) since %s; the watcher retries every %s",
 				at(st.BusySince), w.busyRetry())
@@ -509,13 +523,40 @@ func (w *Watcher) plan(s State) (Status, error) {
 
 // status is s with the stacks nodes make, under s's holds.
 func (w *Watcher) status(s State, nodes []Node) Status {
-	st := Status{Stopped: s.Stopped, Holds: s.Holds, Checked: w.now()}
+	st := Status{Holds: s.Holds, Checked: w.now()}
 	st.Enabled, st.Source = w.enabled(s)
 	if nodes != nil {
 		st.Stacks = w.graph(nodes, s.Holds)
 		w.gate(st.Stacks, s.Approved)
+		w.retrying(&s, st.Stacks)
 	}
 	return st
+}
+
+// retrying marks the stacks whose next action is backing off after a
+// failure, or whose bottom GitHub is still merging: they wait, they aren't
+// refused.
+func (w *Watcher) retrying(s *State, stacks []Stack) {
+	for i := range stacks {
+		x := &stacks[i]
+		bottom := x.Nodes[0]
+		if s.MergePending != "" && bottom.PR == s.MergePending {
+			x.Ready, x.Collapse, x.wait = false, "", true
+			x.Why = "GitHub accepted its merge at " + s.MergePendingAt.Local().Format("15:04:05") + " and is still merging it"
+			continue
+		}
+		if x.Ready {
+			if why := w.backingOff(s, mergeKey(bottom.PR), bottom.head); why != "" {
+				x.Ready, x.Why, x.wait = false, why, true
+			}
+		}
+		if x.Collapse != "" {
+			if why := w.backingOff(s, collapseKey(x.ID), bottom.head); why != "" {
+				x.Collapse = ""
+				x.Why += "; collapse " + why
+			}
+		}
+	}
 }
 
 // read reads every entry's PR; merged and closed ones are left out. A forge
@@ -823,16 +864,30 @@ func (w *Watcher) Check() (Status, error) {
 	if s, err = Load(w.Path); err != nil { // what changed while GitHub was read
 		return Status{}, err
 	}
+	if s.Stopped != "" {
+		w.event("", EventToggle, "cleared an old stop; auto-merge no longer latches after a failure: "+s.Stopped)
+		s.Stopped = ""
+	}
+	if s.MergePending != "" && !w.settlePending(&s, nodes) {
+		s.MergePending, s.MergePendingTask, s.MergePendingAt = "", "", time.Time{}
+	}
 	st := w.status(s, nodes)
-	stopped := s.Stopped
 	w.flagBehind(&s, st.Stacks)
 
-	if st.Enabled && s.Stopped == "" {
-		if s.RestackPending != "" {
-			release() // restack takes the train lock itself
-			w.finishRestack(&s)
+	if st.Enabled {
+		if s.MergePending != "" {
 			st.Next = w.now().Add(w.wait(false))
-			return w.record(s, &st, s.Stopped != stopped)
+			return w.record(s, &st)
+		}
+		if s.RestackPending != "" {
+			if w.backingOff(&s, restackKey(s.RestackPending), "") == "" {
+				release() // restack takes the train lock itself
+				if pr := s.RestackPending; w.finishRestack(&s) {
+					w.notify(false, fmt.Sprintf("Restacked the rest of the stack after merging %s.", pr))
+				}
+			}
+			st.Next = w.now().Add(w.wait(false))
+			return w.record(s, &st)
 		}
 		w.logDecisions(&s, st.Stacks)
 		w.noticeTiers(&s, st.Stacks)
@@ -843,23 +898,47 @@ func (w *Watcher) Check() (Status, error) {
 			release() // collapse takes the train lock itself
 			w.collapse(&s, &st, st.Stacks[i])
 		}
+		w.retrying(&s, st.Stacks) // what this tick just failed or left pending
 	}
 	st.Next = w.now().Add(w.wait(false))
-	return w.record(s, &st, s.Stopped != stopped)
+	return w.record(s, &st)
+}
+
+// settlePending looks at the PR GitHub was merging. Merged (gone from the
+// open PRs) moves on to its restack; still open inside PendingTimeout keeps
+// waiting. It reports whether s still has a merge pending.
+func (w *Watcher) settlePending(s *State, nodes []Node) bool {
+	pr, task := s.MergePending, s.MergePendingTask
+	i := slices.IndexFunc(nodes, func(n Node) bool { return n.PR == pr })
+	if i >= 0 && nodes[i].Error != "" {
+		return true // couldn't read it; ask again next tick
+	}
+	if i < 0 {
+		s.MergePending, s.MergePendingTask, s.MergePendingAt = "", "", time.Time{}
+		s.RestackPending = pr
+		w.event(task, EventMerged, pr+": GitHub finished the merge it accepted")
+		return false
+	}
+	if w.now().Sub(s.MergePendingAt) < PendingTimeout {
+		return true
+	}
+	w.event(task, EventWaiting, fmt.Sprintf("%s: GitHub accepted its merge %s ago and it is still open; trying again", pr, PendingTimeout))
+	return false
 }
 
 // record saves a check: the fields a check owns (Behind, Logged, Idle and
-// IdleAt, Stopped when it stopped, and Last) merged into the file as it is
-// now, with Last's toggle and holds taken from it.
-func (w *Watcher) record(s State, st *Status, stopped bool) (Status, error) {
+// IdleAt, the pending merge and restack, the attempts, and Last) merged into
+// the file as it is now, with Last's toggle and holds taken from it. It
+// clears an old stop.
+func (w *Watcher) record(s State, st *Status) (Status, error) {
 	var idle func()
 	_, err := update(w.Path, func(cur *State) error {
 		cur.Behind, cur.Logged, cur.TierNoticed = s.Behind, s.Logged, s.TierNoticed
-		if stopped {
-			cur.Stopped = s.Stopped
-		}
+		cur.Attempts, cur.RestackPending = s.Attempts, s.RestackPending
+		cur.MergePending, cur.MergePendingTask, cur.MergePendingAt = s.MergePending, s.MergePendingTask, s.MergePendingAt
+		cur.Stopped = ""
 		st.Enabled, st.Source = w.enabled(*cur)
-		st.Stopped, st.Holds = cur.Stopped, cur.Holds
+		st.Stopped, st.Holds = "", cur.Holds
 		holdStacks(st, cur.Holds)
 		w.explain(st, st.Checked, st.Merged)
 		cur.Idle, cur.IdleAt = s.Idle, s.IdleAt
@@ -874,7 +953,7 @@ func (w *Watcher) record(s State, st *Status, stopped bool) (Status, error) {
 }
 
 // vetoed says why stack mustn't merge after all: the file, read again just
-// before merging, has auto-merge off or stopped, or holds the stack.
+// before merging, has auto-merge off, or holds the stack.
 func (w *Watcher) vetoed(stack Stack) string {
 	s, err := Load(w.Path)
 	switch on, _ := w.enabled(s); {
@@ -882,8 +961,6 @@ func (w *Watcher) vetoed(stack Stack) string {
 		return "couldn't read " + w.Path + ": " + err.Error()
 	case !on:
 		return "auto-merge was turned off during the check"
-	case s.Stopped != "":
-		return "auto-merge stopped during the check"
 	case held(stack, s.Holds):
 		return "the stack was held during the check"
 	}
@@ -914,7 +991,7 @@ func (w *Watcher) busy(s State) (Status, error) {
 	}
 	st.Busy = true
 	st.Next = w.now().Add(w.wait(true))
-	return w.record(s, &st, false)
+	return w.record(s, &st)
 }
 
 // readFailed reports whether GitHub failed on any PR in st's read.
@@ -955,47 +1032,49 @@ func (w *Watcher) logIdle(s *State, st Status) func() {
 	return func() { w.event(task, EventIdle, data) }
 }
 
-// merge merges stack's bottom PR and restacks; a failure of either stops
-// the watcher.
+// merge merges stack's bottom PR and restacks. A failure of either is
+// backed off and retried on a later tick; a merge GitHub accepted but
+// hasn't finished is waited out (settlePending).
 func (w *Watcher) merge(s *State, st *Status, stack Stack) {
 	n := stack.Nodes[0]
-	stop := func(why string) {
-		s.Stopped = why
-		w.event(n.Task, EventFailed, why)
-		w.notify(true, fmt.Sprintf("Auto-merge stopped: %s. It won't retry; fix it (or merge by hand), then `saddle automerge on` to resume.", why))
-	}
+	key := mergeKey(n.PR)
+	what := fmt.Sprintf("merging %s (%s)", n.PR, n.Task)
 	method, err := w.GH.MergeMethod()
 	if err != nil {
-		stop(fmt.Sprintf("couldn't read the repo's merge method for %s: %v", n.PR, err))
+		w.failed(s, key, n.Task, n.head, what+": reading the repo's merge method", err)
 		return
 	}
 	if why := w.vetoed(stack); why != "" {
 		w.event(n.Task, EventRefused, n.PR+": "+why)
 		return
 	}
-	if err := w.GH.Merge(n.PR, method, n.head); err != nil {
-		stop(fmt.Sprintf("merging %s (%s) failed: %v", n.PR, n.Task, err))
+	err = w.GH.Merge(n.PR, method, n.head)
+	switch {
+	case errors.Is(err, forge.ErrMergePending):
+		w.succeeded(s, key)
+		s.MergePending, s.MergePendingTask, s.MergePendingAt = n.PR, n.Task, w.now()
+		w.resetPolls()
+		delete(s.Logged, n.PR)
+		w.event(n.Task, EventWaiting, fmt.Sprintf("%s by %s: GitHub accepted the merge and is finishing it; restack follows once it shows merged", n.PR, method))
+		return
+	case err != nil:
+		w.failed(s, key, n.Task, n.head, what, err)
 		return
 	}
+	w.succeeded(s, key)
 	st.Merged = n.PR
 	w.resetPolls()
 	w.event(n.Task, EventMerged, fmt.Sprintf("%s by %s: checks %s, mergeable, CLEAN", n.PR, method, n.Checks))
 	delete(s.Logged, n.PR)
-	switch err := w.restackRetry(); {
-	case err == nil:
-	case rateLimited(err):
-		w.deferRestack(s, n, err)
-		return
-	default:
-		stop(fmt.Sprintf("restack after merging %s failed: %v", n.PR, err))
-		return
+	s.RestackPending = n.PR
+	if w.finishRestack(s) {
+		w.notify(false, fmt.Sprintf("Auto-merged %s (%s) into %s and restacked the rest of stack %s.", n.PR, n.Task, w.Base, stack.ID))
 	}
-	w.notify(false, fmt.Sprintf("Auto-merged %s (%s) into %s and restacked the rest of stack %s.", n.PR, n.Task, w.Base, stack.ID))
 }
 
 // restackRetry runs Restack, retrying the whole restack after each
 // RestackBackoff wait. A rate limit isn't retried in-tick: the wait would
-// need to outlast the limit, so the caller defers it to the next tick.
+// need to outlast the limit, so it is left to a later tick.
 func (w *Watcher) restackRetry() error {
 	backoff := w.RestackBackoff
 	if backoff == nil {
@@ -1012,67 +1091,34 @@ func (w *Watcher) restackRetry() error {
 	return err
 }
 
-// rateLimited reports whether err is GitHub refusing for rate limits, which
-// clears by itself (#680).
-func rateLimited(err error) bool {
-	m := strings.ToLower(err.Error())
-	return strings.Contains(m, "rate limit") || strings.Contains(m, "abuse detection")
-}
-
-// deferRestack records that n's restack hit a rate limit, so the next tick
-// retries it instead of stopping automerge.
-func (w *Watcher) deferRestack(s *State, n Node, err error) {
-	s.RestackPending = n.PR
-	if _, uerr := update(w.Path, func(cur *State) error {
-		cur.RestackPending = n.PR
-		return nil
-	}); uerr != nil {
-		s.Stopped = fmt.Sprintf("restack after merging %s hit a rate limit (%v) and couldn't be deferred: %v", n.PR, err, uerr)
-		w.event(n.Task, EventFailed, s.Stopped)
-		return
-	}
-	w.event(n.Task, EventIdle, fmt.Sprintf("restack after merging %s hit a rate limit; retrying next tick: %v", n.PR, err))
-}
-
-// finishRestack retries a deferred restack. A rate limit leaves it pending;
-// any other failure stops the watcher.
-func (w *Watcher) finishRestack(s *State) {
+// finishRestack restacks after the merge of s.RestackPending. A failure
+// leaves it pending and backs it off; it reports whether it succeeded.
+func (w *Watcher) finishRestack(s *State) bool {
 	pr := s.RestackPending
-	err := w.restackRetry()
-	if err != nil && rateLimited(err) {
-		return
+	if err := w.restackRetry(); err != nil {
+		w.failed(s, restackKey(pr), "", "", "restack after merging "+pr, err)
+		return false
 	}
+	w.succeeded(s, restackKey(pr))
 	s.RestackPending = ""
-	if _, uerr := update(w.Path, func(cur *State) error {
-		cur.RestackPending = ""
-		return nil
-	}); uerr != nil && err == nil {
-		err = uerr
-	}
-	if err != nil {
-		s.Stopped = fmt.Sprintf("restack after merging %s failed: %v", pr, err)
-		w.event("", EventFailed, s.Stopped)
-		w.notify(true, fmt.Sprintf("Auto-merge stopped: %s. It won't retry; fix it (or merge by hand), then `saddle automerge on` to resume.", s.Stopped))
-		return
-	}
-	w.notify(false, fmt.Sprintf("Restacked the rest of the stack after merging %s.", pr))
+	return true
 }
 
-// collapse hands a red-bottom stack to Collapse; a failure stops the watcher.
+// collapse hands a red-bottom stack to Collapse; a failure is backed off
+// and retried.
 func (w *Watcher) collapse(s *State, st *Status, stack Stack) {
 	n := stack.Nodes[0]
 	if why := w.vetoed(stack); why != "" {
 		w.event(n.Task, EventRefused, n.PR+": "+why)
 		return
 	}
+	key := collapseKey(stack.ID)
 	pr, err := w.Collapse(stack.ID)
 	if err != nil {
-		why := fmt.Sprintf("collapsing stack %s (red %s) into %s failed: %v", stack.ID, n.PR, stack.Collapse, err)
-		s.Stopped = why
-		w.event(n.Task, EventFailed, why)
-		w.notify(true, fmt.Sprintf("Auto-merge stopped: %s. It won't retry; fix it (or `saddle stack collapse %s` by hand), then `saddle automerge on` to resume.", why, stack.ID))
+		w.failed(s, key, n.Task, n.head, fmt.Sprintf("collapsing stack %s (red %s) into %s", stack.ID, n.PR, stack.Collapse), err)
 		return
 	}
+	w.succeeded(s, key)
 	w.resetPolls()
 	if pr == "" {
 		return

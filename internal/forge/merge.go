@@ -1,0 +1,111 @@
+package forge
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// BaseStatus is the commit status saddle sets on every PR it publishes:
+// green on base, red ("merge the PRs below first") on another PR. It only
+// gates merge order, so it is saddle's own and never CI (#838).
+const BaseStatus = "saddle/base"
+
+// SaddleOwned reports whether c is a status saddle itself sets. Reads leave
+// those out of a PR's checks, so ci-red, repairs, the CI watcher and
+// automerge never take one for red or pending CI.
+func SaddleOwned(c CheckRun) bool {
+	return c.Context == BaseStatus || (c.Context == "" && c.Name == BaseStatus)
+}
+
+// withoutSaddleOwned drops saddle's own statuses from cs.
+func withoutSaddleOwned(cs []CheckRun) []CheckRun {
+	out := cs[:0]
+	for _, c := range cs {
+		if !SaddleOwned(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// ErrMergePending is what MergePR returns when GitHub accepted a merge but
+// hasn't finished it yet: the merge is in progress, not failed. The caller
+// checks the PR's state later.
+var ErrMergePending = errors.New("merge accepted; GitHub is still merging it")
+
+// DefaultMergePoll are the waits between reads of a PR's state after an
+// async merge, about half a minute in all.
+var DefaultMergePoll = []time.Duration{2 * time.Second, 3 * time.Second, 5 * time.Second, 5 * time.Second, 10 * time.Second}
+
+// NeedsAsyncMerge reports whether err is GitHub refusing a synchronous merge
+// of a PR in a native stack: such a PR must go through merge-async.
+func NeedsAsyncMerge(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := strings.ToLower(err.Error())
+	return strings.Contains(m, "asynchronous merge") || strings.Contains(m, "merge-async")
+}
+
+// prNumber is the number a PR ref names: 12, #12 or a /pull/12 URL.
+func prNumber(ref string) (int, bool) {
+	n := strings.TrimPrefix(ref, "#")
+	if i := strings.LastIndex(n, "/pull/"); i >= 0 {
+		n = n[i+len("/pull/"):]
+	}
+	n, _, _ = strings.Cut(n, "/")
+	v, err := strconv.Atoi(n)
+	return v, err == nil && v > 0
+}
+
+func (g *GitHub) sleep(d time.Duration) {
+	if g.Sleep != nil {
+		g.Sleep(d)
+		return
+	}
+	time.Sleep(d)
+}
+
+// mergeAsync merges ref with PUT pulls/{n}/merge-async, the only merge
+// GitHub accepts for a PR in a native stack, then reads the PR's state until
+// it shows MERGED. head, when set, is passed as sha so GitHub merges only
+// that head. Still open after the poll is ErrMergePending.
+func (g *GitHub) mergeAsync(ctx context.Context, ref, method, head string) error {
+	n, ok := prNumber(ref)
+	if !ok {
+		p, err := g.PR(ctx, ref, PRNumber)
+		if err != nil {
+			return err
+		}
+		n = p.Number
+	}
+	args := []string{"api", "-X", "PUT", fmt.Sprintf("repos/{owner}/{repo}/pulls/%d/merge-async", n), "-f", "merge_method=" + method}
+	if head != "" {
+		args = append(args, "-f", "sha="+head)
+	}
+	if _, err := g.Run(ctx, args...); err != nil {
+		return fmt.Errorf("async merge of #%d: %w", n, err)
+	}
+	poll := g.MergePoll
+	if poll == nil {
+		poll = DefaultMergePoll
+	}
+	for _, d := range poll {
+		g.sleep(d)
+		p, err := g.PR(ctx, ref, PRState)
+		if err != nil {
+			continue // a failed read says nothing about the merge
+		}
+		switch p.State {
+		case StateMerged:
+			return nil
+		case StateClosed:
+			return fmt.Errorf("async merge of #%d: the PR was closed instead of merged", n)
+		}
+	}
+	return fmt.Errorf("#%d: %w", n, ErrMergePending)
+}

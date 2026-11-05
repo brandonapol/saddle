@@ -262,49 +262,6 @@ func TestPendingThenGreenMerges(t *testing.T) {
 	}
 }
 
-func TestStopsAfterMergeFailure(t *testing.T) {
-	r := newRig(t, "", "t1")
-	r.on(t)
-	r.gh.mergeErr = errors.New("required review missing")
-	st := check(t, r.w)
-	if !strings.Contains(st.Stopped, "required review missing") {
-		t.Fatalf("stopped = %q", st.Stopped)
-	}
-	if len(r.notices) != 1 || !r.notices[0].action || !strings.Contains(r.notices[0].text, "required review missing") {
-		t.Fatalf("notices = %+v", r.notices)
-	}
-	if !slices.Contains(r.kinds(), EventFailed) || r.restacks != 0 {
-		t.Fatalf("events %v, restacks %d", r.kinds(), r.restacks)
-	}
-	// No retry loop: later ticks don't try again, even once GitHub would allow it.
-	r.gh.mergeErr = nil
-	check(t, r.w)
-	check(t, r.w)
-	if len(r.gh.merged) != 0 || len(r.notices) != 1 {
-		t.Fatalf("retried after a failure: merged %v notices %d", r.gh.merged, len(r.notices))
-	}
-	// Turning it on again is the escape hatch.
-	r.on(t)
-	if st := check(t, r.w); st.Stopped != "" || len(r.gh.merged) != 1 {
-		t.Fatalf("on didn't resume: %+v merged %v", st, r.gh.merged)
-	}
-}
-
-func TestStopsAfterRestackFailure(t *testing.T) {
-	r := newRig(t, "", "t1", "t2")
-	r.on(t)
-	r.restack = func() error { return errors.New("restack stopped: t2 conflicts") }
-	st := check(t, r.w)
-	if !strings.Contains(st.Stopped, "t2 conflicts") || len(r.gh.merged) != 1 {
-		t.Fatalf("stopped = %q merged %v", st.Stopped, r.gh.merged)
-	}
-	r.restack = r.retarget
-	check(t, r.w)
-	if len(r.gh.merged) != 1 {
-		t.Fatalf("kept merging after a failed restack: %v", r.gh.merged)
-	}
-}
-
 func TestTogglePersistsAcrossRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "automerge.json")
 	r := newRig(t, path, "t1")
@@ -642,7 +599,7 @@ func TestRunRetriesSoonAfterBusyTick(t *testing.T) {
 	}
 }
 
-func TestIdleEventWhenStoppedNotWhenOff(t *testing.T) {
+func TestIdleEventNotWhenOff(t *testing.T) {
 	r := newRig(t, "", "t1")
 	check(t, r.w)
 	if len(r.idles()) != 0 {
@@ -651,19 +608,6 @@ func TestIdleEventWhenStoppedNotWhenOff(t *testing.T) {
 	st := check(t, r.w)
 	if !strings.Contains(st.Stacks[0].Blocked, "auto-merge is off") {
 		t.Fatalf("off: blocked = %q", st.Stacks[0].Blocked)
-	}
-	r.on(t)
-	s, _ := Load(r.w.Path)
-	s.Stopped = "merging pr/x failed"
-	if err := s.Save(r.w.Path); err != nil {
-		t.Fatal(err)
-	}
-	st = check(t, r.w)
-	if len(r.gh.merged) != 0 || !strings.Contains(st.Stacks[0].Blocked, "stopped") {
-		t.Fatalf("stopped: merged %v, %+v", r.gh.merged, st.Stacks)
-	}
-	if idle := r.idles(); len(idle) != 1 || !strings.Contains(idle[0], "merging pr/x failed") {
-		t.Fatalf("idle = %q", idle)
 	}
 }
 
@@ -828,6 +772,7 @@ func TestRetriesRestackAfterTransientFailure(t *testing.T) {
 // without stopping the watcher.
 func TestRateLimitedRestackDoesNotStop(t *testing.T) {
 	r := newRig(t, "", "t1", "t2")
+	c := withClock(r)
 	r.w.RestackBackoff = []time.Duration{0}
 	r.on(t)
 	limited := true
@@ -842,6 +787,7 @@ func TestRateLimitedRestackDoesNotStop(t *testing.T) {
 		t.Fatalf("a rate limit stopped automerge: %q", st.Stopped)
 	}
 	limited = false
+	c.add(time.Minute)
 	check(t, r.w) // the deferred restack
 	check(t, r.w) // t2, now retargeted
 	if r.restacks < 2 || st.Stopped != "" {

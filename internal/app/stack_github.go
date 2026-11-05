@@ -221,18 +221,25 @@ func (a *App) healBranches(stack []landedTask) {
 
 // pushLanded pushes a landed commit to its branch on origin, leased on what
 // saddle last saw there. When GitHub deleted the branch (as it does after a
-// merge), the stale lease is dropped and the branch pushed fresh.
+// merge), the stale lease is dropped and the branch pushed fresh. When the
+// branch moved ("stale info"), it is re-fetched and pushed again if the
+// push still carries what is there; it never overwrites commits it lacks
+// (pushAfterMove, #838).
 func (a *App) pushLanded(branch, sha string) error {
 	push := func() error {
 		_, err := trainGit(a.Root, "push", "--force-with-lease=refs/heads/"+branch, "origin", sha+":refs/heads/"+branch)
 		return err
 	}
 	err := push()
-	if err == nil {
-		return nil
-	}
-	if out, lerr := gitx.Run(a.Root, "ls-remote", "origin", "refs/heads/"+branch); lerr != nil || out != "" {
+	if err == nil || queuedRefusal(err) {
 		return err
+	}
+	out, lerr := gitx.Run(a.Root, "ls-remote", "origin", "refs/heads/"+branch)
+	if lerr != nil {
+		return err
+	}
+	if out != "" {
+		return a.pushAfterMove(branch, sha, err)
 	}
 	_, _ = trainGit(a.Root, "update-ref", "-d", "refs/remotes/origin/"+branch)
 	return push()

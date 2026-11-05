@@ -271,6 +271,9 @@ func (c *call) pr(sub string, args []string) (int, error) {
 		if method == "" {
 			return exitErr, fail("--merge, --rebase, or --squash required when not running interactively")
 		}
+		if st := c.s.stackOf(p.Number); c.s.StackedAsyncOnly && st != nil && st.Open {
+			return exitErr, fail("GraphQL: Pull request #%d is part of a stack and must be merged using the asynchronous merge REST API (mergePullRequest)", p.Number)
+		}
 		if err := merge(c.dir, c.s, p, method, one(f, "match-head-commit")); err != nil {
 			return exitErr, fail("%v", err)
 		}
@@ -553,6 +556,8 @@ func (c *call) api(args []string) error {
 			return fail("gh: Branch not protected (HTTP 404)")
 		}
 		return c.print(map[string]any{"required_status_checks": map[string]any{"contexts": []string{"ci"}, "checks": []any{}}}, jq)
+	case len(rest) == 3 && rest[0] == "pulls" && rest[2] == "merge-async" && method == "PUT":
+		return c.mergeAsync(rest[1], fields, jq)
 	case len(rest) >= 2 && rest[0] == "issues":
 		is, err := c.findIssue(rest[1])
 		if err != nil {
@@ -703,4 +708,26 @@ func (r Repo) waitHold(args []string) {
 		}
 		time.Sleep(holdPoll)
 	}
+}
+
+// mergeAsync is PUT pulls/{n}/merge-async: GitHub accepts the merge and
+// answers pending. The fake finishes it at once, so the next read of the
+// PR shows MERGED. sha, when given, must be the PR's head. A merge closes
+// the PR's native stack once nothing in it is open.
+func (c *call) mergeAsync(num string, fields map[string]string, jq string) error {
+	p, err := c.ref(num)
+	if err != nil {
+		return fail("gh: Not Found (HTTP 404)")
+	}
+	method := fields["merge_method"]
+	if method == "" {
+		method = "merge"
+	}
+	if err := merge(c.dir, c.s, p, method, fields["sha"]); err != nil {
+		return fail("gh: %v (HTTP 405)", err)
+	}
+	if st := c.s.stackOf(p.Number); st != nil {
+		st.Open = slices.ContainsFunc(st.PRs, func(n int) bool { return c.s.PR(n).State == "OPEN" })
+	}
+	return c.print(map[string]any{"status": "pending", "details": map[string]any{"uuid": fmt.Sprintf("merge-%d-%s", p.Number, p.MergeCommit)}}, jq)
 }
