@@ -60,6 +60,10 @@ type State struct {
 	NoStackExt bool `json:"no_stack_ext,omitempty"`
 	// StacksDisabled makes the repo lack Stacked PRs (a per-repo preview).
 	StacksDisabled bool `json:"stacks_disabled,omitempty"`
+	// StackedAsyncOnly makes gh pr merge refuse a PR in an open native
+	// stack, as GitHub does: such a PR merges only through PUT
+	// pulls/{n}/merge-async (#838).
+	StackedAsyncOnly bool `json:"stacked_async_only,omitempty"`
 }
 
 // Settings are the repo's merge settings, as the REST API names them.
