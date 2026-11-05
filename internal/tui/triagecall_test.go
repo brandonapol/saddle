@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brandonapol/saddle/internal/agent"
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/orch"
 	"github.com/brandonapol/saddle/internal/store"
@@ -111,4 +112,52 @@ func TestFailedJevCallIsRecordedAndSurfacedOnce(t *testing.T) {
 			t.Fatalf("fallback escalations = %d, want 2\n%+v", n, m.chat)
 		}
 	})
+}
+
+// #780: triage runs only after a worker has stopped, so a "working" verdict
+// must not write Running. The task stays Idle, and an action notice then
+// reaches it with a wake line.
+func TestWorkingVerdictKeepsStoppedWorkerIdleAndWakeable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"answers":{"verdict":{"type":"choice","choice":"working","confidence":0.99}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	m := slashModel(t)
+	m.app.Root = t.TempDir()
+	tm := &typingTmux{}
+	m.app.Tmux = tm
+	m.attachJev(&triage.Client{Key: "k", BaseURL: srv.URL})
+	if err := m.app.Store.CreateTask(store.Task{ID: "t1", Title: "view router", Role: store.RoleWorker, Status: store.Running, Window: "@1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.app.Store.SetStatus("t1", store.Idle); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := m.raise(attention{task: "t1", title: "view router", text: "t1 stopped.", screen: "✻ Thinking…"})
+	if cmd == nil {
+		t.Fatal("the screen was not sent to Jev")
+	}
+	m.Update(cmd())
+
+	tk, err := m.app.Store.Task("t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.Status != store.Idle {
+		t.Fatalf("status after a working verdict = %s, want idle", tk.Status)
+	}
+	if err := m.app.Notify("t1", store.NoticeAction, "answer to your question"); err != nil {
+		t.Fatal(err)
+	}
+	var wakes int
+	for _, s := range tm.all() {
+		if s == agent.WakeLine {
+			wakes++
+		}
+	}
+	if wakes != 1 {
+		t.Fatalf("wake lines sent = %d, want 1: %q", wakes, tm.all())
+	}
 }

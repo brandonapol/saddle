@@ -1398,7 +1398,9 @@ func (m *model) applyTriage(msg triagedMsg) {
 	}
 	switch {
 	case d.Route == triage.Drop:
-		_ = m.app.Store.SetStatus(att.task, store.Running)
+		// Triage runs only after the worker stopped (Idle). A "working"
+		// verdict must not write Running: hooks do that when a tool really
+		// runs, and a stopped worker has to stay Idle so notices wake it (#780).
 		m.app.Store.Event(att.task, "triage_drop", tag)
 		return
 	case d.Route == triage.AutoApprove && !m.app.Cfg.Triage.NoAutoApprove:
