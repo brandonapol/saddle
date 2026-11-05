@@ -5,6 +5,17 @@ The same failure recurring adds a comment to that issue and bumps its count,
 so you get a record of what keeps hurting instead of chat lines that are gone
 by the next session.
 
+A blocker is a place saddle could not route around on its own, so it is
+saddle's to fix, not the repo's it was working in. The issues are filed in
+saddle's own repo, `brandonapol/saddle`, whatever repo saddle runs in. Each
+one names the repo it came from, and its PR link is a cross-repo reference
+(`autobutler-org/quark#3290`). Point them elsewhere with `[issues] repo`:
+
+```toml
+[issues]
+repo = "you/your-saddle-fork"   # "" files them in the repo saddle runs in
+```
+
 ## What triggers a filing
 
 The escalation points already write an event when they escalate. While
@@ -40,8 +51,9 @@ The signature and count live in the issue body as HTML comments:
 <!-- saddle-blocker-count: 3 -->
 ```
 
-That means deduplication survives a `state.db` reset. A repeat comments
-("Seen again 2026-10-12, t171, #412 (3 times so far).") and rewrites the
+That means deduplication survives a `state.db` reset, and the same blocker in
+two repos lands on one issue. A repeat comments
+("Seen again 2026-10-12, autobutler-org/quark, t171, autobutler-org/quark#412 (3 times so far).") and rewrites the
 count. A closed issue gets reopened instead of duplicated.
 
 ## The issue
@@ -70,7 +82,7 @@ a comment on the next sentinel cycle.
 
 ## Listing
 
-`saddle blockers` lists the open `saddle-blocker` issues, the most frequently
+`saddle blockers` lists the open `saddle-blocker` issues in the `[issues] repo`, the most frequently
 seen first, with each one's count, number, signature and title.
 
 ## Turning it off

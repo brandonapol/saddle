@@ -448,3 +448,19 @@ func TestGitLabEnsureLabelExists(t *testing.T) {
 		t.Fatalf("calls = %q, want an update after the 409", calls)
 	}
 }
+
+func TestRepoSlug(t *testing.T) {
+	for url, want := range map[string]string{
+		"git@github.com:o/r.git":                "o/r",
+		"https://github.com/o/r":                "o/r",
+		"https://github.com/o/r.git/":           "o/r",
+		"ssh://git@gitlab.example.com:2222/o/r": "o/r",
+		"https://user:tok@gitlab.com/g/s/r.git": "g/s/r",
+		"/srv/git/r.git":                        "",
+		"":                                      "",
+	} {
+		if got := RepoSlug(url); got != want {
+			t.Errorf("RepoSlug(%q) = %q, want %q", url, got, want)
+		}
+	}
+}

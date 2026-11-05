@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/config"
 	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/narrator"
 	"github.com/brandonapol/saddle/internal/store"
@@ -61,6 +62,7 @@ type Blocker struct {
 	Cause   string // the raw cause; normalized into the signature
 	Subject string // the title after the class, in plain words
 	Task    string
+	Repo    string // owner/name of the repo saddle was working in; FileBlocker fills it in
 	PR      string // the PR's number or URL, if any
 	RunURL  string
 	Detail  string // what saddle told the orchestrator
@@ -232,7 +234,23 @@ func (a *App) NewBlockerFiler() *BlockerFiler {
 		}
 		return n.Draft(ctx, blockerDraftPrompt, blockerFacts(b), 200)
 	}
-	return &BlockerFiler{App: a, GH: GHBlockers{Forge: a.Forge()}, Draft: draft, Enabled: a.blockerFilingOn}
+	return &BlockerFiler{App: a, GH: a.BlockerGitHub(), Draft: draft, Enabled: a.blockerFilingOn}
+}
+
+// BlockerRepo is the owner/name blocker issues are filed in ([issues] repo),
+// "" for this repo.
+func (a *App) BlockerRepo() string { return a.Cfg.Issues.Repo }
+
+// BlockerGitHub is GitHub for blocker issues: saddle's repo by default
+// ([issues] repo), since a blocker is saddle's to fix, not the repo's it was
+// working in. A local-only forge files nothing.
+func (a *App) BlockerGitHub() BlockerGitHub {
+	f := a.Forge()
+	repo := a.BlockerRepo()
+	if repo == "" || f.Provider() == config.ForgeNone || repo == forge.RepoSlug(forge.OriginURL(a.Root)) {
+		return GHBlockers{Forge: f}
+	}
+	return GHBlockers{Forge: &forge.GitHub{Run: forge.InRepo(forge.CLI(a.Root, forge.GH), repo)}}
 }
 
 func (a *App) blockerFilingOn() bool {
@@ -273,6 +291,9 @@ func (f *BlockerFiler) FileBlocker(ctx context.Context, b Blocker) (BlockerResul
 	}
 	if b.At.IsZero() {
 		b.At = f.now()
+	}
+	if b.Repo == "" {
+		b.Repo = forge.RepoSlug(forge.OriginURL(f.App.Root))
 	}
 	all, err := f.GH.Issues("all")
 	if err != nil {
@@ -452,11 +473,14 @@ func BlockerBody(b Blocker, summary string, count int) string {
 
 func blockerLinks(b Blocker) string {
 	var s strings.Builder
+	if b.Repo != "" {
+		s.WriteString("- Repo: " + b.Repo + "\n")
+	}
 	if b.Task != "" {
 		s.WriteString("- Task: " + b.Task + "\n")
 	}
 	if b.PR != "" {
-		s.WriteString("- PR: " + b.PR + "\n")
+		s.WriteString("- PR: " + blockerPR(b) + "\n")
 	}
 	if b.RunURL != "" {
 		s.WriteString("- Run: " + b.RunURL + "\n")
@@ -464,13 +488,26 @@ func blockerLinks(b Blocker) string {
 	return s.String()
 }
 
+// blockerPR is b's PR as a cross-repo reference: a bare number or #N in
+// another repo's issue would link to the wrong PR.
+func blockerPR(b Blocker) string {
+	n := strings.TrimPrefix(b.PR, "#")
+	if _, err := strconv.Atoi(n); err != nil || b.Repo == "" {
+		return b.PR
+	}
+	return b.Repo + "#" + n
+}
+
 func blockerSeenComment(b Blocker, n int) string {
 	parts := []string{b.At.Format("2006-01-02")}
+	if b.Repo != "" {
+		parts = append(parts, b.Repo)
+	}
 	if b.Task != "" {
 		parts = append(parts, b.Task)
 	}
 	if b.PR != "" {
-		parts = append(parts, b.PR)
+		parts = append(parts, blockerPR(b))
 	}
 	s := fmt.Sprintf("Seen again %s (%s so far).", strings.Join(parts, ", "), plural(n, "time"))
 	if b.Detail != "" {

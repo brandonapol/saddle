@@ -10,7 +10,7 @@ import (
 )
 
 // blockersGH is GitHub for saddle blockers; tests replace it.
-var blockersGH = func(a *app.App) app.BlockerGitHub { return app.GHBlockers{Forge: a.Forge()} }
+var blockersGH = func(a *app.App) app.BlockerGitHub { return a.BlockerGitHub() }
 
 func blockersCmd() *cobra.Command {
 	cmd := &cobra.Command{

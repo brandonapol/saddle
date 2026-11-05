@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 )
 
@@ -44,6 +45,20 @@ func CombinedOutput(ctx context.Context, dir, name string, args ...string) (stri
 // checks while checks are pending, a failed job's log) and still exits
 // non-zero.
 type Runner func(ctx context.Context, args ...string) (string, error)
+
+// InRepo is run pointed at repo (owner/name) with gh's -R, for a forge
+// that works on another repo than the checkout's. "" is run unchanged.
+func InRepo(run Runner, repo string) Runner {
+	if repo == "" {
+		return run
+	}
+	return func(ctx context.Context, args ...string) (string, error) {
+		if slices.Contains(args, "-R") {
+			return run(ctx, args...)
+		}
+		return run(ctx, append(slices.Clone(args), "-R", repo)...)
+	}
+}
 
 // CLI is the Runner for the forge CLI name in dir.
 func CLI(dir, name string) Runner {
