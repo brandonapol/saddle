@@ -29,7 +29,33 @@ type fakeEnv struct {
 	notices            []string
 	events             []string
 	parks, unparked    []string
+	seq                int // the last spawned task's number
+
+	// The Tracker and Scanner sides (#767, #733).
+	unassigned []Issue
+	closed     map[int]bool // issues the env reports closed
+	closes     []string     // "#n: comment" per CloseIssue
+	gaveUp     []string     // "#n: comment" per GiveUp
 }
+
+func (f *fakeEnv) CloseIssue(n int, comment string) error {
+	f.closes = append(f.closes, fmt.Sprintf("#%d: %s", n, comment))
+	return nil
+}
+
+func (f *fakeEnv) GiveUp(n int, comment string) error {
+	f.gaveUp = append(f.gaveUp, fmt.Sprintf("#%d: %s", n, comment))
+	for i := range f.issues {
+		if f.issues[i].Number == n {
+			f.issues[i].Labels = append(f.issues[i].Labels, NeedsHumanLabel)
+		}
+	}
+	return nil
+}
+
+func (f *fakeEnv) IssueClosed(n int) (bool, error) { return f.closed[n], nil }
+
+func (f *fakeEnv) Unassigned() ([]Issue, error) { return slices.Clone(f.unassigned), nil }
 
 func (f *fakeEnv) Park() ([]string, error) {
 	var out []string
@@ -94,7 +120,8 @@ func (f *fakeEnv) Spawn(r SpawnReq) (string, error) {
 		return "", err
 	}
 	f.spawns = append(f.spawns, r)
-	id := fmt.Sprintf("t%d", len(f.tasks)+1)
+	f.seq = max(f.seq+1, len(f.tasks)+1)
+	id := fmt.Sprintf("t%d", f.seq)
 	f.tasks = append(f.tasks, Task{ID: id, Issue: r.Issue, Claims: r.Claims, Live: true})
 	return id, nil
 }

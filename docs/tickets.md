@@ -57,9 +57,26 @@ spawned this tick, until the lane's cap is full. Overlapping tickets stay
 queued and start once the task they overlap is done. A ticket with no
 claims waits until nothing else runs, and nothing else starts beside it.
 
+A ticket is taken only while its task is live, queued or landed. A task
+that was killed, failed to start or ended with no change frees it (#767):
+autopilot respawns it after a short backoff, up to 2 times per run, with
+the last attempt's summary and kill reason in the brief. After that it
+labels the issue `needs-human` and comments once with the reasons; remove
+the label to let autopilot try again. A no-change task whose summary says
+the work was already done closes the issue instead.
+
+When the ready queue is empty, autopilot scans the tracker for open,
+unassigned tickets a maintainer opened (#733). While any exist the run
+neither stops nor goes idle: each nudge hands the orchestrator a batch of
+them, bugs first, with suggested claims, its focus rotating through bugs,
+perf, tests, docs and design drafts. A ticket that only waits on an owner
+choice is to be spawned as its recommended option, a PR the owner can
+reject, with a decision card filed in parallel.
+
 Other ticket lines autopilot reads:
 
-- `After: #12, #7`: wait until those issues' tasks are done, and build on them.
+- `After: #12, #7`: wait until those issues' tasks have landed (or the
+  issues are closed), and build on them.
 - `Difficulty: hard | standard | mechanical` (or the form's **Difficulty**
   field) and `Needs: review, image-gen`: what the work needs. Saddle picks
   the provider and model from them; see below.

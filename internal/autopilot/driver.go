@@ -54,7 +54,7 @@ var (
 	ErrAtCap  = errors.New("at the concurrency cap")
 )
 
-// Task is a worker as the driver sees it. Killed tasks are left out.
+// Task is a worker as the driver sees it.
 type Task struct {
 	ID     string
 	Issue  int      // the issue it implements, 0 for none
@@ -62,6 +62,13 @@ type Task struct {
 	Live   bool     // an agent works on it (running, idle, needs you, conflict, paused)
 	Queued bool     // done, waiting in the merge train
 	Paused bool     // live but parked: its agent was stopped and resumes later
+	Landed bool     // its work landed (train ok or merged)
+	// End is how it ended without landing: EndKilled, EndFailed or
+	// EndNoChange; "" otherwise. Such a task frees its issue (#767).
+	End     string
+	Summary string    // its last summary
+	Why     string    // why it ended: the kill note or the failure
+	Created time.Time // when it was spawned; zero if unknown
 }
 
 // Usage is plan-limit pressure now.
@@ -152,6 +159,14 @@ type Driver struct {
 	// Repo is the checkout claims are inferred against (#504). Nil means
 	// the repo that holds Path's .saddle directory, if it sits in one.
 	Repo fs.FS
+	// RetryBackoff is how long a freed issue waits before it is respawned
+	// (DefaultRetryBackoff); ScanEvery how long a ticket scan is reused
+	// (DefaultScanEvery).
+	RetryBackoff time.Duration
+	ScanEvery    time.Duration
+
+	scanAt  time.Time
+	scanned []Issue
 }
 
 // repo is Repo, else the checkout around a .saddle/ state file.
@@ -430,29 +445,17 @@ func (d *Driver) Tick() (Report, error) {
 	for _, s := range st.Spawned {
 		mine[s.Task] = true
 	}
-	byIssue := map[int]Task{}
 	var occupied []occupant
 	busy := false // a task of this run still runs or waits to land
 	for _, t := range tasks {
-		if t.Issue > 0 {
-			byIssue[t.Issue] = t
-		}
 		if t.Live || t.Queued {
 			occupied = append(occupied, occupant{t.ID, t.Claims})
 			busy = busy || mine[t.ID]
 		}
 	}
-	// What this run spawned counts even when a task doesn't record its issue.
-	for _, s := range st.Spawned {
-		if _, ok := byIssue[s.Issue]; !ok {
-			i := slices.IndexFunc(tasks, func(t Task) bool { return t.ID == s.Task })
-			if i < 0 {
-				byIssue[s.Issue] = Task{ID: s.Task}
-			} else {
-				byIssue[s.Issue] = tasks[i]
-			}
-		}
-	}
+	// Who holds each issue. What this run spawned counts even when a task
+	// doesn't record its issue; killed, failed and no-change tasks free it.
+	led := newLedger(&st, tasks, now)
 
 	sleeping := d.sleep(&st, now, use)
 	if st.Infinite && sleeping {
@@ -463,12 +466,29 @@ func (d *Driver) Tick() (Report, error) {
 		inQueue[is.Number] = true
 	}
 	slots := limit - running
-	ready := 0      // issues that could start but for claims, deps, cap, sleep or a drain
+	ready := 0      // issues that could start but for claims, deps, cap, sleep, a drain or a retry backoff
+	backoff := 0    // of those, the ones only waiting out a retry backoff
 	exclusive := "" // a claimless task picked this tick
 	var whyStuck string
 	repo := d.repo()
+	byNumber := map[int]Issue{}
 	for _, is := range issues {
-		why, after := d.blocked(is, byIssue, inQueue)
+		byNumber[is.Number] = is
+	}
+	for _, is := range issues {
+		if is.hasLabel(NeedsHumanLabel) {
+			rep.Skipped[is.Number] = "labelled " + NeedsHumanLabel + ": remove the label to retry it"
+			continue
+		}
+		why, after := d.blocked(is, led, byNumber)
+		var rv retryVerdict
+		if why == "" {
+			rv = d.retry(&st, led, is, now)
+			if rv.handled != "" {
+				rep.Skipped[is.Number] = rv.handled
+				continue
+			}
+		}
 		if why == "" && exclusive != "" {
 			why = exclusive + " declares no claims, so it runs alone"
 		}
@@ -502,7 +522,7 @@ func (d *Driver) Tick() (Report, error) {
 				why = "it declares no claims, so it runs alone once nothing else runs"
 			}
 		}
-		if is.HasPR || byIssue[is.Number].ID != "" {
+		if _, taken := led.taken[is.Number]; is.HasPR || taken {
 			rep.Skipped[is.Number] = why
 			continue
 		}
@@ -511,6 +531,7 @@ func (d *Driver) Tick() (Report, error) {
 			want = shared
 		}
 		req := ticketReq(is, d.Rules, d.DoneWhen, want, after)
+		req.Prompt += retryBrief(rv.prev, led.tries[is.Number]+1)
 		route := d.route(env, req)
 		if route != "" {
 			if rep.Routes == nil {
@@ -519,6 +540,9 @@ func (d *Driver) Tick() (Report, error) {
 			rep.Routes[is.Number] = route
 		}
 		switch {
+		case rv.why != "" && why == "":
+			why = rv.why
+			backoff++
 		case why != "":
 		case st.Draining != "":
 			why = "draining: " + st.Draining
@@ -552,7 +576,8 @@ func (d *Driver) Tick() (Report, error) {
 			continue
 		}
 		ready--
-		sp := Spawned{Issue: is.Number, Task: id, At: now, Route: route}
+		led.tries[is.Number]++
+		sp := Spawned{Issue: is.Number, Task: id, At: now, Route: route, Attempts: led.tries[is.Number]}
 		st.Spawned = append(st.Spawned, sp)
 		rep.Spawned = append(rep.Spawned, sp)
 		mine[id], busy = true, true
@@ -582,11 +607,27 @@ func (d *Driver) Tick() (Report, error) {
 	}
 	running += len(rep.Spawned)
 
+	// The tracker scan (#733), read at most once a tick and only when an
+	// empty queue or a nudge needs it.
+	var eligible []Issue
+	var scanErr error
+	scanned := false
+	scan := func() ([]Issue, error) {
+		if !scanned {
+			scanned = true
+			eligible, scanErr = d.scan(now, led, inQueue, &st)
+		}
+		return eligible, scanErr
+	}
 	switch {
 	case st.Draining != "" && !busy:
 		d.finish(&st, st.Draining, now, true)
 	case st.Draining == "" && ready == 0 && !busy && !st.Infinite:
-		d.finish(&st, "queue empty", now, true)
+		// Only a full scan that finds no eligible ticket ends the run; while
+		// GitHub's rate limit holds, the scan can't say, so the run waits.
+		if el, err := scan(); len(el) == 0 && !errors.Is(err, forge.ErrRateLimited) {
+			d.finish(&st, "queue empty", now, true)
+		}
 	}
 	if !st.On {
 		rep.Stopped, rep.Decision = st.Stopped, "stopped: "+st.Stopped
@@ -610,10 +651,12 @@ func (d *Driver) Tick() (Report, error) {
 		rep.Decision = digest
 	}
 
-	// In infinite mode an empty queue below the cap is a stall too: the
-	// orchestrator is asked to find more work.
-	empty := st.Infinite && ready == 0 && len(rep.Spawned) == 0
-	stalled := !sleeping && st.Draining == "" && (ready > 0 || empty) && len(rep.Spawned) == 0 && running < limit
+	// In infinite mode, or while the scan found open tickets, an empty
+	// queue below the cap is a stall too: the orchestrator is handed work.
+	hunting := scanned && len(eligible) > 0
+	empty := (st.Infinite || hunting) && ready == 0 && len(rep.Spawned) == 0
+	// An issue only waiting out its retry backoff is no stall.
+	stalled := !sleeping && st.Draining == "" && (ready > backoff || empty) && len(rep.Spawned) == 0 && running < limit
 	if !stalled {
 		st.StallSince = time.Time{}
 	} else if st.StallSince.IsZero() {
@@ -623,6 +666,8 @@ func (d *Driver) Tick() (Report, error) {
 	switch {
 	case st.Infinite && sleeping:
 		// Parked at the plan limit: a nudge would only spend what's left.
+	case stalled && empty && hunting && now.Sub(st.StallSince) >= orDefault(d.StallAfter, DefaultStallAfter):
+		reason, why = "empty", fmt.Sprintf("the ready queue is empty (%d/%d running) but open tickets nobody works on remain: start the batch below", running, limit)
 	case stalled && empty && now.Sub(st.StallSince) >= orDefault(d.StallAfter, DefaultStallAfter):
 		reason, why = "empty", fmt.Sprintf("the ready queue is empty (%d/%d running). Infinite mode is on: find more work "+
 			"(audit docs, flaky or missing tests, follow-ups from recent PRs) and open it as issues labelled %s, or spawn it", running, limit, st.Label())
@@ -635,7 +680,8 @@ func (d *Driver) Tick() (Report, error) {
 	}
 	switch {
 	case reason != "":
-		d.nudgeIdle(&st, &rep, now, reason, why, digest)
+		el, _ := scan()
+		d.nudgeIdle(&st, &rep, now, reason, why, digest, el)
 	case st.RunwayDue && !sleeping:
 		d.runway(&st, &rep, now, issues)
 	}
@@ -658,12 +704,16 @@ func (d *Driver) snapshot(now time.Time) Snapshot {
 // the snapshot and the lookahead step (#463). The same idle state is
 // nudged IdleRepeats times; then the owner hears once and the nudges stop
 // until something in the state changes.
-func (d *Driver) nudgeIdle(st *State, rep *Report, now time.Time, reason, why, digest string) {
+//
+// While the scan finds eligible tickets the cap doesn't apply (#733): each
+// nudge hands over a batch of them, its focus rotating, so the run never
+// goes idle with work open.
+func (d *Driver) nudgeIdle(st *State, rep *Report, now time.Time, reason, why, digest string, eligible []Issue) {
 	snap := d.snapshot(now)
 	if key := idleKey(digest, snap); key != st.IdleKey {
 		st.IdleKey, st.IdleNudges, st.Escalated = key, 0, false
 	}
-	if st.IdleNudges >= cmp.Or(d.IdleRepeats, DefaultIdleRepeats) {
+	if len(eligible) == 0 && st.IdleNudges >= cmp.Or(d.IdleRepeats, DefaultIdleRepeats) {
 		rep.Decision += "; idle and unchanged, so no more nudges until something changes"
 		if !st.Escalated {
 			st.Escalated = true
@@ -685,7 +735,7 @@ func (d *Driver) nudgeIdle(st *State, rep *Report, now time.Time, reason, why, d
 	if reason == st.Nudged && now.Sub(st.NudgedAt) < orDefault(d.NudgeEvery, DefaultNudgeEvery) {
 		return
 	}
-	text := IdlePrompt(why, digest, st.Label(), snap, now)
+	text := IdlePrompt(why, digest, st.Label(), snap, now) + BatchPrompt(eligible, st.NudgeRound, d.repo())
 	sent, err := d.Env.Nudge(text)
 	switch {
 	case err != nil:
@@ -693,6 +743,9 @@ func (d *Driver) nudgeIdle(st *State, rep *Report, now time.Time, reason, why, d
 	case sent:
 		st.Nudged, st.NudgedAt, rep.Nudged = reason, now, text
 		st.IdleNudges++
+		if len(eligible) > 0 {
+			st.NudgeRound++
+		}
 		d.Env.Event(EventNudge, why)
 	default:
 		rep.Decision += "; nudge waits for an idle orchestrator"
@@ -714,28 +767,51 @@ func (d *Driver) runway(st *State, rep *Report, now time.Time, issues []Issue) {
 }
 
 // blocked says why is can't start yet for reasons of its own: an open PR,
-// a task already on it, or an after: issue not done. It returns the tasks
-// it builds on.
-func (d *Driver) blocked(is Issue, byIssue map[int]Task, inQueue map[int]bool) (string, []string) {
+// a task already on it, or an after: issue whose work hasn't landed (#767).
+// It returns the tasks it builds on.
+func (d *Driver) blocked(is Issue, l ledger, open map[int]Issue) (string, []string) {
 	if is.HasPR {
 		return "an open PR already closes it", nil
 	}
-	if t, ok := byIssue[is.Number]; ok {
+	if t, ok := l.taken[is.Number]; ok {
 		return "task " + t.ID + " already works on it", nil
 	}
 	var after []string
 	for _, dep := range ParseAfter(is.Body) {
-		t, ok := byIssue[dep]
+		t, ok := l.taken[dep]
+		ds := l.dead[dep]
+		depIssue, inQueue := open[dep]
 		switch {
+		case ok && (t.Landed || depIssue.HasPR):
+			after = append(after, t.ID)
 		case ok && t.Live:
 			return fmt.Sprintf("after #%d, which %s still works on", dep, t.ID), nil
 		case ok:
-			after = append(after, t.ID)
-		case inQueue[dep]:
+			return fmt.Sprintf("after #%d, whose task %s hasn't landed yet", dep, t.ID), nil
+		case inQueue:
+			if len(ds) > 0 {
+				return fmt.Sprintf("after #%d, whose last task %s didn't land", dep, ds[len(ds)-1].ID), nil
+			}
 			return fmt.Sprintf("after #%d, which hasn't started", dep), nil
+		case len(ds) > 0 && !d.issueClosed(dep):
+			return fmt.Sprintf("after #%d, whose last task %s didn't land and which is still open", dep, ds[len(ds)-1].ID), nil
 		}
 	}
 	return "", after
+}
+
+// issueClosed reports whether issue n is closed, when Env is a Tracker that
+// can say; not knowing is not closed.
+func (d *Driver) issueClosed(n int) bool {
+	tr, ok := d.Env.(Tracker)
+	if !ok {
+		return false
+	}
+	closed, err := tr.IssueClosed(n)
+	if err != nil {
+		logErr(d.Env, fmt.Sprintf("read #%d", n), err)
+	}
+	return closed
 }
 
 // sleep decides whether a usage pause holds spawns this tick. In infinite
