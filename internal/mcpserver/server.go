@@ -136,11 +136,15 @@ type TaskView struct {
 	Model   string `json:"model,omitempty"`
 	Adapter string `json:"adapter,omitempty"` // claude, codex, gemini or grok (#480)
 	// Pick is the adapter the chooser put it on and why (#505).
-	Pick     string    `json:"pick,omitempty" jsonschema:"the adapter (and model) the chooser put this task on and why: needs, difficulty, kind, hooks, quota left and running workers, or requested"`
-	Parent   string    `json:"parent,omitempty"`
-	Branch   string    `json:"branch,omitempty"`
-	Claims   []string  `json:"claims,omitempty"`
-	Train    string    `json:"train,omitempty"`
+	Pick   string   `json:"pick,omitempty" jsonschema:"the adapter (and model) the chooser put this task on and why: needs, difficulty, kind, hooks, quota left and running workers, or requested"`
+	Parent string   `json:"parent,omitempty"`
+	Branch string   `json:"branch,omitempty"`
+	Claims []string `json:"claims,omitempty"`
+	Train  string   `json:"train,omitempty"`
+	// Delivery is how far a landed task's work has got toward base (#819):
+	// "landed locally, no PR yet", "landed locally, PR open", or "merged"
+	// once it is on base. Only merged is finished.
+	Delivery string    `json:"delivery,omitempty" jsonschema:"for landed tasks: landed locally, no PR yet | landed locally, PR open | merged. Only merged means the work is on base; never report a task done before it says merged"`
 	Notices  int       `json:"pending_notices,omitempty"`
 	PR       string    `json:"pr,omitempty"`
 	Window   string    `json:"window,omitempty"`
@@ -461,8 +465,9 @@ func Tasks(a *app.App) ([]TaskView, error) {
 	if err != nil {
 		return nil, err
 	}
-	tr := map[string]string{}
+	tr, ts0 := map[string]string{}, map[string]string{}
 	for _, e := range train {
+		ts0[e.Task] = e.State
 		s := e.State
 		if e.Note != "" {
 			s += ": " + e.Note
@@ -485,7 +490,7 @@ func Tasks(a *app.App) ([]TaskView, error) {
 		}
 		out = append(out, TaskView{Reason: reason,
 			ID: t.ID, Title: t.Title, Status: t.Status, Model: t.Model, Adapter: a.AdapterOf(t), Pick: picks[t.ID], Parent: t.Parent, Branch: t.Branch,
-			Claims: cl[t.ID], Train: tr[t.ID], Notices: pending[t.ID], PR: t.PR, Window: t.Window, Worktree: t.Worktree,
+			Claims: cl[t.ID], Train: tr[t.ID], Delivery: app.Delivery(t.Status, ts0[t.ID], t.PR), Notices: pending[t.ID], PR: t.PR, Window: t.Window, Worktree: t.Worktree,
 			created: t.CreatedAt,
 		})
 	}

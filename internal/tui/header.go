@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/brandonapol/saddle/internal/agent"
+	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -24,10 +25,14 @@ func (m *model) viewHeader() string {
 // allows, most important first.
 func (m *model) viewCounters() string {
 	counts := map[string]int{}
-	queued, stuck := 0, 0
+	queued, stuck, merged := 0, 0, 0
 	for _, t := range m.tasks {
 		counts[t.Status]++
-		switch state := firstWord(t.Train); {
+		state := firstWord(t.Train)
+		if t.Status == store.Landed && state == app.TrainMerged {
+			merged++
+		}
+		switch {
 		case waiting(state):
 			queued++
 		case trainStuck(state):
@@ -71,8 +76,10 @@ func (m *model) viewCounters() string {
 		parts = append(parts, rc)
 	}
 	parts = append(parts, m.heavySegments()...)
-	opt(counts[store.Landed], cDone, "✓ %d landed")
-	tail := []string{sBright.Render(m.app.Cfg.Session), sDim.Render(m.app.Cfg.Base + " → " + m.app.Cfg.Integration)}
+	// Landed is not finished: only work merged into base is (#819).
+	opt(counts[store.Landed]-merged, cAccent, "◇ %d landed, not merged")
+	opt(merged, cDone, "✓ %d merged")
+	tail := []string{sBright.Render(m.app.Cfg.Session), sDim.Render("→ " + m.app.Cfg.Base)}
 
 	state := "idle"
 	switch {

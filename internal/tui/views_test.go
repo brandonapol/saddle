@@ -120,9 +120,15 @@ func TestHeaderShowsViewsBranchesCountsTrain(t *testing.T) {
 	}
 	m := newViewModel(170, 30)
 	h := m.viewHeader()
-	for _, want := range []string{"1 control", "2 plan", "3 merge", "4 runs", "main → saddle/integration", "1 running", "1 need you", "train 1 queued", "1 conflict"} {
+	for _, want := range []string{"1 control", "2 plan", "3 merge", "4 runs", "→ main", "1 landed, not merged", "1 running", "1 need you", "train 1 queued", "1 conflict"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("header lacks %q: %q", want, h)
+		}
+	}
+	// #819: the local train branch is no destination, and landed isn't done.
+	for _, bad := range []string{"saddle/integration", "✓ 1 landed"} {
+		if strings.Contains(h, bad) {
+			t.Errorf("header shows %q: %q", bad, h)
 		}
 	}
 	m.Update(altKey('3'))
