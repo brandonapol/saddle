@@ -379,3 +379,75 @@ func TestAutopilotOverlapWaitsInSymbolModeWhenMedium(t *testing.T) {
 		t.Fatalf("report = %+v, want #2 waiting", rep)
 	}
 }
+
+// #767: a killed task frees its issue; after the backoff autopilot respawns
+// it with the last attempt in the brief instead of calling the queue empty.
+func TestAutopilotRespawnsKilledIssue(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	now := time.Now()
+	d := a.NewAutopilot(readyQueue(apIssue(1, "claims: alpha/**")))
+	d.Now = func() time.Time { return now }
+	_, err := d.Enable(autopilot.Options{})
+	must(t, err)
+	rep, err := d.Tick()
+	must(t, err)
+	if len(rep.Spawned) != 1 {
+		t.Fatalf("spawned %+v", rep.Spawned)
+	}
+	first := rep.Spawned[0].Task
+	must(t, a.Kill(first, true))
+	rep, err = d.Tick()
+	must(t, err)
+	if st, _ := d.Status(); !st.On || len(rep.Spawned) != 0 || !strings.Contains(rep.Skipped[1], "retry") {
+		t.Fatalf("after the kill: on=%v %+v", st.On, rep)
+	}
+	now = now.Add(autopilot.DefaultRetryBackoff)
+	rep, err = d.Tick()
+	must(t, err)
+	if len(rep.Spawned) != 1 {
+		t.Fatalf("no respawn after the backoff: %+v", rep)
+	}
+	tk, err := a.Store.Task(rep.Spawned[0].Task)
+	must(t, err)
+	if tk.Issue != 1 || !strings.Contains(tk.Prompt, "Previous attempt") || !strings.Contains(tk.Prompt, first+" was killed") {
+		t.Errorf("respawn %s for #%d, prompt:\n%s", tk.ID, tk.Issue, tk.Prompt)
+	}
+}
+
+func TestAutopilotTasksMarkHowTheyEnded(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	for _, tk := range []store.Task{
+		{ID: "t31", Issue: 1, Role: store.RoleWorker, Status: store.Killed},
+		{ID: "t32", Issue: 2, Role: store.RoleWorker, Status: StatusFailed, Summary: "worktree add failed"},
+		{ID: "t33", Issue: 3, Role: store.RoleWorker, Status: store.NoChange, Summary: "already fixed"},
+		{ID: "t34", Issue: 4, Role: store.RoleWorker, Status: store.Landed},
+	} {
+		must(t, a.Store.CreateTask(tk))
+	}
+	ts, err := (&autopilotEnv{a: a}).Tasks()
+	must(t, err)
+	got := map[string]autopilot.Task{}
+	for _, tk := range ts {
+		got[tk.ID] = tk
+	}
+	if got["t31"].End != autopilot.EndKilled || got["t32"].End != autopilot.EndFailed || got["t32"].Why != "worktree add failed" ||
+		got["t33"].End != autopilot.EndNoChange || got["t33"].Summary != "already fixed" || got["t34"].End != "" || !got["t34"].Landed {
+		t.Errorf("tasks = %+v", got)
+	}
+}
+
+func TestParseUnassignedKeepsMaintainerIssues(t *testing.T) {
+	out := `[
+	 {"number": 1, "title": "bug", "body": "b", "author_association": "OWNER", "labels": [{"name": "bug"}]},
+	 {"number": 2, "title": "drive-by", "author_association": "NONE"},
+	 {"number": 3, "title": "a PR", "author_association": "MEMBER", "pull_request": {}},
+	 {"number": 4, "title": "collab", "author_association": "COLLABORATOR"}
+	]`
+	is, err := parseUnassigned(out, map[int]bool{4: true})
+	must(t, err)
+	if len(is) != 2 || is[0].Number != 1 || !slices.Equal(is[0].Labels, []string{"bug"}) || is[1].Number != 4 || !is[1].HasPR {
+		t.Fatalf("issues = %+v", is)
+	}
+}

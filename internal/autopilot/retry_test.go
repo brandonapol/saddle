@@ -1,6 +1,8 @@
 package autopilot
 
 import (
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -174,5 +176,21 @@ func TestAlreadyDone(t *testing.T) {
 		if got := AlreadyDone(s); got != want {
 			t.Errorf("AlreadyDone(%q) = %v, want %v", s, got, want)
 		}
+	}
+}
+
+// A spawn that fails half-way leaves a failed task row and no Spawned
+// record; it still spends the budget and waits the backoff.
+func TestFailedSpawnRowsSpendTheRetryBudget(t *testing.T) {
+	r := newRig(t, 4, claimed(1, "a/**"))
+	r.on(Options{})
+	r.env.spawnErr = map[int]error{1: errors.New("worktree add failed")}
+	for i := range 2 * (MaxRetries + 2) {
+		r.env.tasks = append(r.env.tasks, Task{ID: fmt.Sprintf("f%d", i), Issue: 1, End: EndFailed, Why: "worktree add failed", Created: r.now})
+		r.tick()
+		r.now = r.now.Add(DefaultRetryBackoff)
+	}
+	if len(r.env.gaveUp) != 1 {
+		t.Fatalf("give-ups = %q; failing spawns should run out of retries", r.env.gaveUp)
 	}
 }

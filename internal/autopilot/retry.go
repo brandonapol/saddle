@@ -123,6 +123,19 @@ func newLedger(st *State, tasks []Task, now time.Time) ledger {
 		}
 		add(s.Issue, t)
 	}
+	// A task of this run that ended but isn't in Spawned (a spawn that
+	// failed half-way leaves its row behind) spends the budget too, or a
+	// failing spawn would retry every tick.
+	for _, t := range tasks {
+		if t.Issue == 0 || t.End == "" || t.Created.IsZero() || t.Created.Before(st.Started) ||
+			slices.ContainsFunc(st.Spawned, func(s Spawned) bool { return s.Task == t.ID }) {
+			continue
+		}
+		l.tries[t.Issue]++
+		if t.Created.After(l.ended[t.Issue]) {
+			l.ended[t.Issue] = t.Created
+		}
+	}
 	return l
 }
 

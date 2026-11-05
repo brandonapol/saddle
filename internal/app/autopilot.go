@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -34,8 +35,9 @@ type ReadyIssues func(label string) ([]autopilot.Issue, error)
 // NewAutopilot returns the autopilot driver for the repo; nil ready reads
 // the queue from GitHub with gh.
 func (a *App) NewAutopilot(ready ReadyIssues) *autopilot.Driver {
+	var unassigned ReadyIssues
 	if ready == nil {
-		ready = a.ghReadyIssues
+		ready, unassigned = a.ghReadyIssues, func(string) ([]autopilot.Issue, error) { return a.ghUnassignedIssues() }
 	}
 	done := ""
 	if cmd := strings.TrimSpace(a.Cfg.Test.Cmd); cmd != "" {
@@ -43,7 +45,7 @@ func (a *App) NewAutopilot(ready ReadyIssues) *autopilot.Driver {
 	}
 	return &autopilot.Driver{
 		Path:     a.autopilotPath(),
-		Env:      &autopilotEnv{a: a, ready: ready},
+		Env:      &autopilotEnv{a: a, ready: ready, unassigned: unassigned},
 		Now:      time.Now,
 		Rules:    a.agentRules(),
 		DoneWhen: done,
@@ -66,6 +68,9 @@ func (a *App) agentRules() string {
 type autopilotEnv struct {
 	a     *App
 	ready ReadyIssues
+	// unassigned scans the tracker for open, unassigned, maintainer-opened
+	// issues (#733); nil scans nothing.
+	unassigned ReadyIssues
 	// asked holds the tickets whose ErrNeedsConfirm already reached the
 	// orchestrator, so a refusal repeated every tick surfaces once (#604).
 	asked map[string]bool
@@ -80,17 +85,36 @@ func (e *autopilotEnv) Tasks() ([]autopilot.Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	var kills map[string]string
 	var out []autopilot.Task
 	for _, t := range ts {
-		if t.Role != store.RoleWorker || t.Status == store.Killed {
+		if t.Role != store.RoleWorker {
 			continue
 		}
-		out = append(out, autopilot.Task{
+		at := autopilot.Task{
 			ID: t.ID, Issue: t.Issue, Claims: all[t.ID],
-			Live:   liveStatus(t.Status) || t.Status == StatusPaused,
-			Queued: t.Status == store.Done,
-			Paused: t.Status == StatusPaused,
-		})
+			Live:    liveStatus(t.Status) || t.Status == StatusPaused,
+			Queued:  t.Status == store.Done,
+			Paused:  t.Status == StatusPaused,
+			Landed:  t.Status == store.Landed,
+			Summary: t.Summary,
+			Created: t.CreatedAt,
+		}
+		// Killed, failed and no-change tasks free their issue for a retry (#767).
+		switch t.Status {
+		case store.Killed:
+			if kills == nil {
+				if kills, err = e.a.Store.LatestEventData("kill"); err != nil {
+					return nil, err
+				}
+			}
+			at.End, at.Why = autopilot.EndKilled, kills[t.ID]
+		case StatusFailed:
+			at.End, at.Why, at.Summary = autopilot.EndFailed, t.Summary, ""
+		case store.NoChange:
+			at.End, at.Why = autopilot.EndNoChange, "its branch had nothing to land"
+		}
+		out = append(out, at)
 	}
 	return out, nil
 }
@@ -327,10 +351,20 @@ var closesRef = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd
 func (a *App) ghReadyIssues(label string) ([]autopilot.Issue, error) {
 	ctx, f := context.Background(), a.Forge()
 	raw, err := f.ListIssues(ctx, forge.IssueQuery{Label: label, State: "open", Limit: 200},
-		forge.IssueNumber|forge.IssueTitle|forge.IssueBody|forge.IssueCreated)
+		forge.IssueNumber|forge.IssueTitle|forge.IssueBody|forge.IssueCreated|forge.IssueLabels)
 	if err != nil {
 		return nil, err
 	}
+	closed := a.closedByOpenPRs(ctx, f)
+	is := make([]autopilot.Issue, len(raw))
+	for i, r := range raw {
+		is[i] = autopilot.Issue{Number: r.Number, Title: r.Title, Body: r.Body, Created: r.Created, HasPR: closed[r.Number], Labels: r.Labels}
+	}
+	return is, nil
+}
+
+// closedByOpenPRs is the issues an open PR closes.
+func (a *App) closedByOpenPRs(ctx context.Context, f forge.Forge) map[int]bool {
 	closed := map[int]bool{}
 	if prs, err := f.ListPRs(ctx, forge.PRQuery{State: "open", Limit: 200}, forge.PRBody); err == nil {
 		for _, p := range prs {
@@ -340,11 +374,97 @@ func (a *App) ghReadyIssues(label string) ([]autopilot.Issue, error) {
 			}
 		}
 	}
-	is := make([]autopilot.Issue, len(raw))
-	for i, r := range raw {
-		is[i] = autopilot.Issue{Number: r.Number, Title: r.Title, Body: r.Body, Created: r.Created, HasPR: closed[r.Number]}
+	return closed
+}
+
+// maintainer is a GitHub author_association that may open tickets autopilot
+// works on unasked (#733).
+var maintainer = map[string]bool{"OWNER": true, "MEMBER": true, "COLLABORATOR": true}
+
+// ghIssueJSON is an issue from GitHub's REST issues list.
+type ghIssueJSON struct {
+	Number      int       `json:"number"`
+	Title       string    `json:"title"`
+	Body        string    `json:"body"`
+	CreatedAt   time.Time `json:"created_at"`
+	Association string    `json:"author_association"`
+	Labels      []struct {
+		Name string `json:"name"`
+	} `json:"labels"`
+	PullRequest *struct{} `json:"pull_request"`
+}
+
+// parseUnassigned keeps the maintainer-opened issues of a REST issues list,
+// dropping pull requests, which the endpoint lists too.
+func parseUnassigned(out string, closed map[int]bool) ([]autopilot.Issue, error) {
+	var raw []ghIssueJSON
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		return nil, fmt.Errorf("parse unassigned issues: %w", err)
+	}
+	var is []autopilot.Issue
+	for _, r := range raw {
+		if r.PullRequest != nil || !maintainer[r.Association] {
+			continue
+		}
+		x := autopilot.Issue{Number: r.Number, Title: r.Title, Body: r.Body, Created: r.CreatedAt, HasPR: closed[r.Number]}
+		for _, l := range r.Labels {
+			x.Labels = append(x.Labels, l.Name)
+		}
+		is = append(is, x)
 	}
 	return is, nil
+}
+
+// ghUnassignedIssues lists the open issues nobody is assigned to that a
+// maintainer opened (#733). The forge has no author or assignee reads, so it
+// asks GitHub's REST API through gh; other forges scan nothing.
+func (a *App) ghUnassignedIssues() ([]autopilot.Issue, error) {
+	g, ok := a.Forge().(*forge.GitHub)
+	if !ok {
+		return nil, nil
+	}
+	ctx := context.Background()
+	out, err := g.Run(ctx, "api", "repos/{owner}/{repo}/issues?state=open&assignee=none&per_page=100")
+	if err != nil {
+		return nil, err
+	}
+	return parseUnassigned(out, a.closedByOpenPRs(ctx, g))
+}
+
+// Unassigned is autopilot's tracker scan (#733).
+func (e *autopilotEnv) Unassigned() ([]autopilot.Issue, error) {
+	if e.unassigned == nil {
+		return nil, nil
+	}
+	return e.unassigned("")
+}
+
+// CloseIssue closes an issue a no-change task found already done (#767).
+func (e *autopilotEnv) CloseIssue(n int, comment string) error {
+	return e.a.Forge().CloseIssue(context.Background(), n, comment)
+}
+
+// GiveUp labels an issue needs-human and comments why, once its retries
+// ran out (#767). Labelling an issue goes through gh's issue edit, which the
+// forge's PR-only AddLabel doesn't cover.
+func (e *autopilotEnv) GiveUp(n int, comment string) error {
+	ctx, f := context.Background(), e.a.Forge()
+	var lerr error
+	if g, ok := f.(*forge.GitHub); ok {
+		for _, l := range forge.KnownLabels() {
+			if l.Name == autopilot.NeedsHumanLabel {
+				_ = g.EnsureLabel(ctx, l)
+			}
+		}
+		_, lerr = g.Run(ctx, "issue", "edit", strconv.Itoa(n), "--add-label", autopilot.NeedsHumanLabel)
+	}
+	return errors.Join(lerr, f.CommentIssue(ctx, n, comment))
+}
+
+// IssueClosed reads whether issue n is closed.
+func (e *autopilotEnv) IssueClosed(n int) (bool, error) {
+	is, err := e.a.Forge().Issue(context.Background(), "", n, forge.IssueState)
+	return strings.EqualFold(is.State, "closed"), err
 }
 
 // ShareClaims lets autopilot start a ticket whose claims overlap live

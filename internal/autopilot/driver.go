@@ -66,8 +66,9 @@ type Task struct {
 	// End is how it ended without landing: EndKilled, EndFailed or
 	// EndNoChange; "" otherwise. Such a task frees its issue (#767).
 	End     string
-	Summary string // its last summary
-	Why     string // why it ended: the kill note or the failure
+	Summary string    // its last summary
+	Why     string    // why it ended: the kill note or the failure
+	Created time.Time // when it was spawned; zero if unknown
 }
 
 // Usage is plan-limit pressure now.
