@@ -248,31 +248,11 @@ func (a *App) pushLanded(branch, sha string) error {
 // Unstack takes a landed task out of the PR stack for good, by task id, PR
 // URL or PR number (#12). Its train entry becomes superseded and the next
 // restack drops its commits from integration. It is the self-service fix for
-// a task the stack should no longer carry.
+// a task the stack should no longer carry; UnstackTask says what happened to
+// its PR.
 func (a *App) Unstack(ref string) (store.Task, error) {
-	t, err := a.taskByRef(ref)
-	if err != nil {
-		return t, err
-	}
-	unlock, err := a.lockTrain()
-	if err != nil {
-		return t, err
-	}
-	defer unlock()
-	all, err := a.landedAll()
-	if err != nil {
-		return t, err
-	}
-	for _, l := range all {
-		if l.ID != t.ID {
-			continue
-		}
-		if l.State != store.TrainOK {
-			return t, nil // already out
-		}
-		return t, a.leaveStack(l, TrainSuperseded, "unstacked by hand")
-	}
-	return t, fmt.Errorf("%s hasn't landed, so it isn't in the stack", t.ID)
+	res, err := a.UnstackTask(ref)
+	return res.Task, err
 }
 
 // taskByRef finds a task by id or by its PR: the PR's URL (a GitHub PR or

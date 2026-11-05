@@ -39,6 +39,11 @@ const EventPRBase = "pr_base"
 // left alone because a task it depends on hasn't merged.
 const EventDependencyHold = "dependency_hold"
 
+// EventDependencyDropped is recorded on a layer when saddle stops waiting on
+// a dependency it no longer intends to merge (#774); data: the dependency
+// and why.
+const EventDependencyDropped = "dep_dropped"
+
 func (a *App) prBasesPath() string { return a.stateDir("pr-bases.json") }
 
 // savedBases maps each task to the base saddle last set on its PR.
@@ -209,7 +214,14 @@ func (a *App) notePRBase(t store.Task, live, base, source string) error {
 // waitingOn names a task that layer l depends on, outside stack, whose PR is
 // still open: l's work isn't complete on base until that PR merges, so
 // prs and restack leave l's PR where it is (#358). lookup asks GitHub.
+//
+// It waits only on a dependency saddle still means to merge (#774). One
+// that left the stack another way (unstacked, killed, repairing) keeps its
+// PR open but usually never merges it, so the edge is dropped, logged once,
+// and l stacks on base; if its commits don't replay there, that is an
+// ordinary restack repair.
 func (a *App) waitingOn(l landedTask, stack []landedTask, lookup PRLookup) (dep, pr string) {
+	var routed []StallRoute
 	for _, d := range a.TaskAfter(l.ID) {
 		if slices.ContainsFunc(stack, func(o landedTask) bool { return o.ID == d }) {
 			continue // the layout stacks on it
@@ -218,11 +230,43 @@ func (a *App) waitingOn(l landedTask, stack []landedTask, lookup PRLookup) (dep,
 		if err != nil || t.PR == "" {
 			continue
 		}
+		if routed == nil {
+			routed, _ = a.StallHeld()
+		}
+		if why := a.abandonedDep(t, routed); why != "" {
+			if last, ok := a.lastEvent(l.ID, EventDependencyDropped); !ok || last != d+": "+why {
+				a.Store.Event(l.ID, EventDependencyDropped, d+": "+why)
+			}
+			continue
+		}
 		if info, err := lookup(t.PR); err == nil && info.State == "OPEN" {
 			return d, t.PR
 		}
 	}
 	return "", ""
+}
+
+// abandonedDep is why saddle no longer means to merge dependency t's PR, ""
+// when it still does: t is queued, landed in the stack, or a route-around's
+// standalone PR.
+func (a *App) abandonedDep(t store.Task, routed []StallRoute) string {
+	if slices.ContainsFunc(routed, func(r StallRoute) bool { return r.Red == t.ID && r.PR != "" }) {
+		return ""
+	}
+	if t.Status == store.Killed {
+		return "it was killed"
+	}
+	e, ok := a.trainEntry(t.ID)
+	if !ok {
+		return ""
+	}
+	switch e.State {
+	case TrainSuperseded:
+		return "it left the stack as superseded"
+	case TrainRepairing:
+		return "it is out of the stack for a repair"
+	}
+	return ""
 }
 
 // holdForDependency logs a layer left alone for its dependency and tells

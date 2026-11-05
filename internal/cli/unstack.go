@@ -18,15 +18,18 @@ func unstackCmd() *cobra.Command {
 (#12; a GitLab MR's URL or !12). Their train entries become superseded, the next restack drops their commits
 from the integration branch, and Saddle never touches their PRs again. Merged
 and closed PRs and killed tasks leave the stack by themselves; this is for the
-rest. The stack sentinel checks again right away.`,
+rest. A task that is repairing, or escalated after failing to land, is
+dropped too: its live repair is stopped and its PR, already detached from
+the stack, is closed. Each line says what happened to the PR. The stack
+sentinel checks again right away.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, args []string) error {
 			for _, ref := range args {
-				t, err := a.Unstack(ref)
+				res, err := a.UnstackTask(ref)
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%s is out of the PR stack\n", t.ID)
+				fmt.Fprintf(cmd.OutOrStdout(), "%s is out of the PR stack: %s\n", res.Task.ID, res.Note)
 			}
 			reportCheck(cmd, a)
 			fmt.Fprintln(cmd.OutOrStdout(), "run restack to drop their commits from "+a.Cfg.Integration)
