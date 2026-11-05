@@ -30,7 +30,7 @@ func logRateLimited(root string, rl forge.RateLimitHold) {
 	if err != nil {
 		return
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	st.Event("", EventForgeRateLimited, fmt.Sprintf("GitHub rate-limited until %s (%s); gh calls wait for the reset",
 		rl.Until.Local().Format("15:04"), rl.Source))
 }
