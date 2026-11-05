@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // collapseRig is a two-PR stack, t1 then t2, with t1 red from a flaky test
@@ -85,9 +86,9 @@ func TestCollapseNotTried(t *testing.T) {
 		{"green bottom", nil, func(c *collapseRig) { c.gh.prs["pr/t1"].Checks = ChecksPass }},
 		{"pending bottom", nil, func(c *collapseRig) { c.gh.prs["pr/t1"].Checks = ChecksPending }},
 		{"no green PR above", nil, func(c *collapseRig) { c.gh.prs["pr/t2"].Checks = ChecksPending }},
-		{"stopped", nil, func(c *collapseRig) {
+		{"backing off", nil, func(c *collapseRig) {
 			s, _ := Load(c.w.Path)
-			s.Stopped = "earlier failure"
+			s.Attempts = map[string]Attempt{collapseKey("t1"): {N: 1, Head: "sha-t1", NextAt: time.Now().Add(time.Hour), LastErr: "earlier failure"}}
 			_ = s.Save(c.w.Path)
 		}},
 	} {
@@ -153,24 +154,24 @@ func TestCollapseDeclined(t *testing.T) {
 	}
 }
 
-// A failed collapse stops the watcher with a notice and isn't retried.
-func TestCollapseFailureStops(t *testing.T) {
+// A failed collapse is backed off and tried again later, never latched (#838).
+func TestCollapseFailureRetries(t *testing.T) {
 	c := newCollapseRig(t)
+	clk := withClock(c.rig)
 	c.err = errors.New("CI on the combined head is red")
 	c.on(t)
 	st := check(t, c.w)
-	if st.Stopped == "" || !strings.Contains(st.Stopped, "combined head") {
-		t.Fatalf("stopped = %q", st.Stopped)
-	}
-	if !slices.Contains(c.kinds(), EventFailed) {
-		t.Fatalf("events = %v", c.kinds())
-	}
-	if len(c.notices) == 0 || !c.notices[len(c.notices)-1].action || !strings.Contains(c.notices[len(c.notices)-1].text, "automerge on") {
-		t.Fatalf("notices = %+v", c.notices)
+	if st.Stopped != "" || !slices.Contains(c.kinds(), EventFailed) {
+		t.Fatalf("stopped = %q events %v", st.Stopped, c.kinds())
 	}
 	check(t, c.w)
 	if len(c.calls) != 1 {
-		t.Fatalf("collapse retried after a failure: %v", c.calls)
+		t.Fatalf("collapse retried inside its backoff: %v", c.calls)
+	}
+	c.err = nil
+	clk.add(2 * time.Minute)
+	if st := check(t, c.w); len(c.calls) != 2 || st.Merged != "pr/t2" {
+		t.Fatalf("collapse not retried after the backoff: calls %v status %+v", c.calls, st)
 	}
 }
 
