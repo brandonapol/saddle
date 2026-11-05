@@ -638,7 +638,7 @@ func doneCmd() *cobra.Command {
 func landCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "land",
-		Short: "Run the merge train: land queued branches one at a time",
+		Short: "Run the merge train: land queued branches one at a time and open their PRs",
 		RunE: withScratch(func(cmd *cobra.Command, a *app.App, _ []string) error {
 			if err := a.CheckMergeSettings(cmd.ErrOrStderr()); err != nil {
 				return err
