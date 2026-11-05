@@ -58,6 +58,12 @@ type Spawned struct {
 	At    time.Time `json:"at"`
 	// Route is the provider the chooser put it on and why (#505).
 	Route string `json:"route,omitempty"`
+	// Attempts counts this run's spawns for the issue, this one included (#767).
+	Attempts int `json:"attempts,omitempty"`
+	// Ended is when the driver first saw the task end without landing, and
+	// Why how it ended; the retry backoff runs from Ended.
+	Ended time.Time `json:"ended,omitzero"`
+	Why   string    `json:"why,omitempty"`
 }
 
 // State is .saddle/autopilot.json. The owner's controls (On, Paused, Stop,
@@ -102,6 +108,14 @@ type State struct {
 	// RunwayDue asks the orchestrator for a runway plan at its next idle
 	// moment; a run starting sets it.
 	RunwayDue bool `json:"runway_due,omitempty"`
+
+	// GaveUp are the issues labelled needs-human after their retries ran
+	// out, and Closed those closed as already done (#767): each is acted
+	// on once.
+	GaveUp []int `json:"gave_up,omitempty"`
+	Closed []int `json:"closed,omitempty"`
+	// NudgeRound rotates the focus of the ticket batch each nudge (#733).
+	NudgeRound int `json:"nudge_round,omitempty"`
 
 	// Stopped and Summary describe how the last run ended.
 	Stopped string `json:"stopped,omitempty"`

@@ -17,6 +17,7 @@ type Issue struct {
 	Body    string    `json:"body"`
 	Created time.Time `json:"created,omitzero"`
 	HasPR   bool      `json:"has_pr,omitempty"` // an open PR already closes it
+	Labels  []string  `json:"labels,omitempty"`
 }
 
 var (
