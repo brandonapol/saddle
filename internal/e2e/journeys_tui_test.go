@@ -328,7 +328,7 @@ func TestJourneyTUIMergedTaskNotShownAsConflict(t *testing.T) {
 		t.Fatalf("t1 after its PR merged = %+v", v)
 	}
 	u := w.StartTUI(120, 45)
-	u.WaitScreen("3 landed")
+	u.WaitScreen("1 merged") // #819: merged is counted apart from landed locally
 	if h := u.header(); strings.Contains(h, "conflict") {
 		t.Errorf("header counts the merged t1 as a conflict: %q", h)
 	}

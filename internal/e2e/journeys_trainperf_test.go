@@ -133,6 +133,8 @@ func TestJourneyPrepublishGateEnvironmentFailure(t *testing.T) {
 	full := filepath.Join(t.TempDir(), "disk-full")
 	check := "test ! -f beta/work.txt || test ! -e " + full + " || { echo 'compile: writing output: disk quota exceeded'; exit 1; }"
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\nprepublish.cmd = \"" + check + "\"\n"})
+	// The disk fills before t2 lands, so land's own publish (#819) hits it too.
+	must(t, os.WriteFile(full, nil, 0o644))
 	for _, l := range []struct{ id, dir string }{{"t1", "alpha"}, {"t2", "beta"}} {
 		w.Spawn(l.id, "Work "+l.dir, []string{l.dir + "/**"}, finished(l.dir, l.id+"\n")...)
 		w.WaitTask(l.id, "queued", func(v mcpserver.TaskView) bool { return v.Train == "queued" })
@@ -142,7 +144,6 @@ func TestJourneyPrepublishGateEnvironmentFailure(t *testing.T) {
 		}
 	}
 
-	must(t, os.WriteFile(full, nil, 0o644))
 	r := w.Saddle("prs")
 	if r.Code == 0 {
 		t.Fatalf("prs published a layer whose check could not run: %s", r)

@@ -30,9 +30,13 @@ func TestJourneyPublishWithBrokenStack(t *testing.T) {
 	for _, id := range []string{"t1", "t2"} {
 		w.WaitTask(id, "queued in the train", func(v mcpserver.TaskView) bool { return v.Status == "done" && v.Train == "queued" })
 	}
-	w.MustSaddle("land")
-
+	// The stack breaks before land can open the PRs (#819: land opens them
+	// itself), so neither task has one and publish is the way out.
 	must(t, w.App().SetFlag(app.StackFlag{Task: "t1", Cause: "Cannot change the base branch because the pull request is part of a stack"}))
+	w.MustSaddle("land")
+	if w.Task("t1").PR != "" || w.Task("t2").PR != "" {
+		t.Fatalf("land opened PRs on a flagged stack: t1 %q, t2 %q", w.Task("t1").PR, w.Task("t2").PR)
+	}
 	if r := w.Saddle("prs"); r.Code == 0 {
 		t.Fatalf("prs went ahead on a broken stack: %s", r)
 	}
