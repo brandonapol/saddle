@@ -8,8 +8,10 @@ import (
 	"io/fs"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/brandonapol/saddle/internal/ciwatch"
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -56,19 +58,106 @@ func (a *App) NewCIWatcher(ci ciwatch.CI) (*CIWatcher, error) {
 	return c, nil
 }
 
-// CITargets lists the PRs to watch: every live task that has one.
-func (a *App) CITargets(context.Context) ([]ciwatch.Target, error) {
+// ciTargetsHigh is how many watched PRs make the watcher log
+// EventCITargetsHigh: more than this means something is leaking (#763).
+const ciTargetsHigh = 40
+
+// EventCITargetsHigh is logged once when the watcher has more than
+// ciTargetsHigh PRs to poll.
+const EventCITargetsHigh = "ci_targets_high"
+
+// ciTargetState is what CITargets remembers between polls: PRs the forge said
+// are closed or merged (a terminal fact, never re-asked) and whether the
+// high-count warning has gone out. It is keyed by App because App has no
+// field for it.
+type ciTargetState struct {
+	mu       sync.Mutex
+	terminal map[string]bool
+	warned   bool
+	// state asks the forge for a PR's state; nil means the repo's forge.
+	state func(pr string) (string, error)
+}
+
+var ciTargetStates sync.Map // *App -> *ciTargetState
+
+func (a *App) ciTargetState() *ciTargetState {
+	v, _ := ciTargetStates.LoadOrStore(a, &ciTargetState{terminal: map[string]bool{}})
+	return v.(*ciTargetState)
+}
+
+func (s *ciTargetState) prState(a *App, pr string) (string, error) {
+	if s.state != nil {
+		return s.state(pr)
+	}
+	p, err := a.Forge().PR(context.Background(), pr, forge.PRState)
+	if err != nil {
+		return "", err
+	}
+	return p.State, nil
+}
+
+// CITargets lists the PRs to watch: every live task that has one. A task
+// whose train row is merged, superseded or folded, or whose landed PR the
+// forge reports closed or merged, cannot produce a CI event, so it is skipped
+// (#763). Once the forge says a PR is terminal that is cached.
+func (a *App) CITargets(ctx context.Context) ([]ciwatch.Target, error) {
 	ts, err := a.Store.Tasks()
 	if err != nil {
 		return nil, err
 	}
-	var out []ciwatch.Target
-	for _, t := range ts {
-		if t.PR != "" && t.Status != store.Killed {
-			out = append(out, ciwatch.Target{Task: t.ID, Branch: t.Branch, PR: t.PR})
+	train, err := a.Store.Train()
+	if err != nil {
+		return nil, err
+	}
+	done := map[string]bool{}
+	for _, e := range train {
+		switch e.State {
+		case TrainMerged, TrainSuperseded, TrainFolded:
+			done[e.Task] = true
 		}
 	}
+	st := a.ciTargetState()
+	var out []ciwatch.Target
+	for _, t := range ts {
+		if t.PR == "" || t.Status == store.Killed || done[t.ID] {
+			continue
+		}
+		if t.Status == store.Landed && st.closed(a, t) {
+			continue
+		}
+		out = append(out, ciwatch.Target{Task: t.ID, Branch: t.Branch, PR: t.PR})
+	}
+	st.mu.Lock()
+	warn := len(out) > ciTargetsHigh && !st.warned
+	if warn {
+		st.warned = true
+	} else if len(out) <= ciTargetsHigh {
+		st.warned = false
+	}
+	st.mu.Unlock()
+	if warn {
+		a.Store.Event("", EventCITargetsHigh, fmt.Sprintf("watching %d PRs (over %d): something is not being skipped", len(out), ciTargetsHigh))
+	}
 	return out, nil
+}
+
+// closed says whether t's PR is closed or merged, asking the forge only the
+// first time. A forge error counts as not closed and is not cached.
+func (s *ciTargetState) closed(a *App, t store.Task) bool {
+	s.mu.Lock()
+	known := s.terminal[t.PR]
+	s.mu.Unlock()
+	if known {
+		return true
+	}
+	state, err := s.prState(a, t.PR)
+	if err != nil || (state != forge.StateClosed && state != forge.StateMerged) {
+		return false
+	}
+	s.mu.Lock()
+	s.terminal[t.PR] = true
+	s.mu.Unlock()
+	return true
 }
 
 // Run polls now and then every ci.interval until ctx is done.
