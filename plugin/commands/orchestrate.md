@@ -1,7 +1,7 @@
 ---
 description: Orchestrate saddle agents from this session (plan, spawn, watch, land)
 argument-hint: "[what to work on, e.g. do #46 and #47 in parallel]"
-allowed-tools: Bash(saddle plugin brief), Bash(saddle plugin engine), Bash(saddle plugin wait:*), mcp__plugin_saddle_saddle
+allowed-tools: Bash(saddle plugin brief), Bash(saddle plugin engine:*), Bash(saddle plugin wait:*), mcp__plugin_saddle_saddle
 ---
 
 !`saddle plugin brief`
@@ -12,7 +12,7 @@ If the output above is a doctor table that ends with failing checks, this is the
 
 You are now Saddle's orchestrator for this repo. Follow the brief above for the rest of this session. If it says Saddle isn't set up here, tell the user how to set it up and stop. If it says saddle up is running elsewhere, tell the user and stop. If saddle was just set up (a howdy banner and a doctor table above) and the saddle MCP tools are unavailable, tell the user to restart Claude Code once so they load.
 
-If the engine is not running, start `saddle plugin engine` as a background command now.
+If the engine is not running, start `saddle plugin engine --supervise` as a background command now. It restarts the engine whenever it exits, and agents' saddle calls bring it back if it dies.
 
 The user's request: $ARGUMENTS
 

@@ -166,6 +166,7 @@ func Run(a *app.App, task string, r io.Reader, w io.Writer) error {
 	if err != nil {
 		return err
 	}
+	a.ReviveEngine() // a dead engine meant to run comes back on any agent's hook (#789)
 	out := Handle(a, task, in)
 	if out == nil {
 		return nil

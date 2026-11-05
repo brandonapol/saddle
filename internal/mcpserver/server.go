@@ -174,7 +174,10 @@ type StatusOut struct {
 	// Forecast is the collision forecast between live tasks; absent while no
 	// pair scores medium or above.
 	Forecast *app.ForecastView `json:"forecast,omitempty" jsonschema:"predicted collisions between live tasks: pairs at medium and above (a, b, level, reason), at most 10, and safe: how many pairs score low or none. Absent while no pair reaches medium"`
-	Tasks    []TaskView        `json:"tasks"`
+	// Watchers lists background watchers that are stale or recovered from a
+	// panic (#789); absent while every one is healthy.
+	Watchers []app.WatcherHealth `json:"watchers,omitempty" jsonschema:"background watchers (sentinel, automerge, ci, ...) that are stale while the engine runs or restarted after a panic: name, ago (since the last tick), restarts, last_panic"`
+	Tasks    []TaskView          `json:"tasks"`
 	// Jev is the triage log rolled up (#512). Zero calls is reported, so a
 	// quiet judge is visible rather than absent.
 	Jev JevStatus `json:"jev" jsonschema:"Jev triage so far: how many calls, how many failed, and approximate list-price spend in USD"`
@@ -410,6 +413,17 @@ func Status(a *app.App) (StatusOut, error) {
 	} else if v.Busy() {
 		out.HeavyRuns = &v
 	}
+	if down := a.EngineDown(); down != "" {
+		out.Warnings = append(out.Warnings, down)
+	}
+	if ws, err := a.Watchers(time.Now()); err == nil {
+		for _, w := range ws {
+			if w.Stale || w.Restarts > 0 {
+				out.Watchers = append(out.Watchers, w)
+				out.Warnings = append(out.Warnings, "watcher "+w.Line())
+			}
+		}
+	}
 	out.Adapters = a.Adapters()
 	out.AdapterPolicy = a.AdapterPolicy()
 	out.Fallback = a.Fallbacks(time.Now())
@@ -494,6 +508,20 @@ func ServeIdle(ctx context.Context, why string) error {
 	return s.Run(ctx, &mcp.StdioTransport{})
 }
 
+// reviveEngine checks the engine on every tool call and, when it died
+// while meant to run, starts it again in the background, so any live
+// agent's call brings it back (#789).
+func reviveEngine(a *app.App) mcp.Middleware {
+	return func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if method == "tools/call" {
+				a.ReviveEngine()
+			}
+			return next(ctx, method, req)
+		}
+	}
+}
+
 const serverInstructions = "Saddle coordinates parallel coding agents. Use spawn for disjoint sub-work, claim before large edits, and done when your branch is committed and tested. " +
 	"When prs is blocked (the stack is flagged, or GitHub refuses a base change) but a task's work stands on its own, publish is the escape hatch: it opens that task's PR against base. Never git push or gh pr create by hand."
 
@@ -502,6 +530,7 @@ func New(a *app.App, task string) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "saddle", Version: "0.1.0"}, &mcp.ServerOptions{
 		Instructions: serverInstructions,
 	})
+	s.AddReceivingMiddleware(reviveEngine(a))
 	self := func() error {
 		if task == "" {
 			return errors.New("SADDLE_TASK is not set; this MCP server must be started by saddle")

@@ -255,7 +255,8 @@ func (a *App) trainHolder() (holder string, pid int, since time.Time, ok bool) {
 // (the lock kept by a descriptor something leaked), or one that has held it
 // for over twice [train] gate_timeout, stuck past any gate, which is stopped
 // first. The lock file is replaced, so whatever still holds the old one
-// holds nothing. Never this process: its own other land just waits.
+// holds nothing. Never this process: its own other land just waits. Never
+// a live engine or saddle up either: it runs every background loop (#789).
 func (a *App) stealTrainLock() {
 	holder, pid, since, ok := a.trainHolder()
 	if !ok || pid == os.Getpid() {
@@ -265,6 +266,11 @@ func (a *App) stealTrainLock() {
 	switch limit := 2 * a.GateTimeout(); {
 	case !pidAlive(pid) || startedAfter(pid, since):
 		why = fmt.Sprintf("its holder, pid %d, is gone", pid)
+	case time.Since(since) > limit && a.HoldsSessionLock(pid):
+		// The engine or saddle up holds it in-process. Stopping it would
+		// stop every watcher with it; its own deadlines on network calls
+		// (#788) bound the work under the lock instead (#789).
+		return
 	case time.Since(since) > limit:
 		why = fmt.Sprintf("its holder, pid %d, held it for %s, over twice [train] gate_timeout (%s); stopped it", pid, time.Since(since).Round(time.Second), limit/2)
 		stopProcess(pid)

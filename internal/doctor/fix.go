@@ -46,6 +46,7 @@ const fixInit = "run `saddle doctor --fix` (or saddle init)"
 
 // about explains each check in plain words.
 var about = map[string]string{
+	CheckEngine:        engineAbout,
 	CheckConfig:        "saddle's settings for this repo, in .saddle/config.toml",
 	CheckRemote:        "the GitHub or GitLab remote saddle pushes branches to and opens PRs (MRs) on",
 	CheckDefaultBranch: "the branch PRs land on; saddle's base must match it",

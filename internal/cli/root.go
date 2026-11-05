@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"slices"
 	"strings"
-	"sync"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -29,6 +28,7 @@ import (
 	"github.com/brandonapol/saddle/internal/remote"
 	"github.com/brandonapol/saddle/internal/sentinel"
 	"github.com/brandonapol/saddle/internal/store"
+	"github.com/brandonapol/saddle/internal/supervise"
 	"github.com/brandonapol/saddle/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -174,6 +174,9 @@ keep the CLI they were spawned with.
 				return err
 			}
 			defer release()
+			// saddle up has the repo now: a dead plugin engine is not to be
+			// revived under it (#789).
+			a.UnwantEngine()
 			// Lets other commands spot a stale saddle up (#326).
 			defer recordUp(a.Root)()
 			trace.Mark("engine lock")
@@ -240,28 +243,49 @@ keep the CLI they were spawned with.
 // ci-red watchers. Short-lived commands never
 // start them. The returned func stops them and waits until they have.
 func startWatchers(ctx context.Context, a *app.App) (stop func()) {
-	ctx, cancel := context.WithCancel(ctx)
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		_ = sentinel.New(a).Run(ctx) // Run records failed checks as events
-	})
-	wg.Go(func() { _ = a.NewAutomerge(nil).Run(ctx) })   // merges only when on; failures are events
-	wg.Go(func() { _ = a.NewCompactWatcher().Run(ctx) }) // notices and compacts; failures are events
-	wg.Go(func() { a.RunDigest(ctx) })                   // routine notices as one digest line; failures are events
-	wg.Go(func() { a.RunResumeWatcher(ctx) })            // new windows for tasks that lost theirs (#254); failures are events
-	wg.Go(func() { _ = a.NewAutopilot(nil).Run(ctx) })   // drives the loop only while autopilot is on; failures are events
-	wg.Go(func() { a.NewCheckpointWatcher().Run(ctx) })  // checkpoints uncommitted work and nudges commits (#50); failures are events
-	wg.Go(func() { a.RunScratchSweeper(ctx) })           // sweeps saddle's scratch now and every 10m, holds spawns when low (#322)
-	wg.Go(func() { remote.RunManaged(ctx, a, nil) })     // serves remote control only when [remote] is enabled in the user config (#251); problems are events
+	return startWatchersWith(ctx, supervise.New(supervise.Options{Recorder: a.WatcherRecorder()}), watcherSet(a))
+}
+
+// watcher is one background loop startWatchers supervises.
+type watcher struct {
+	name string
+	run  func(ctx context.Context)
+}
+
+// watcherSet is every loop saddle up and the plugin engine run. Each one
+// records its own failures as events.
+func watcherSet(a *app.App) []watcher {
+	ws := []watcher{
+		{"sentinel", func(ctx context.Context) { _ = sentinel.New(a).Run(ctx) }},
+		{"automerge", func(ctx context.Context) { _ = a.NewAutomerge(nil).Run(ctx) }}, // merges only when on
+		{"compact", func(ctx context.Context) { _ = a.NewCompactWatcher().Run(ctx) }}, // notices and compacts
+		{"digest", a.RunDigest},        // routine notices as one digest line
+		{"resume", a.RunResumeWatcher}, // new windows for tasks that lost theirs (#254)
+		{"autopilot", func(ctx context.Context) { _ = a.NewAutopilot(nil).Run(ctx) }},   // drives the loop only while autopilot is on
+		{"checkpoint", func(ctx context.Context) { a.NewCheckpointWatcher().Run(ctx) }}, // checkpoints uncommitted work and nudges commits (#50)
+		{"scratch", a.RunScratchSweeper},                                                // sweeps saddle's scratch every 10m, holds spawns when low (#322)
+		{"remote", func(ctx context.Context) { remote.RunManaged(ctx, a, nil) }},        // only when [remote] is enabled in the user config (#251)
+	}
 	if !a.Cfg.CI.Disabled {
-		wg.Go(func() { _ = sentinel.NewCIRed(a).Run(ctx) }) // holds layers above red CI; errors are events
+		ws = append(ws, watcher{"ci-red", func(ctx context.Context) { _ = sentinel.NewCIRed(a).Run(ctx) }}) // holds layers above red CI
 		if ci, err := a.NewCIWatcher(nil); err == nil {
-			wg.Go(func() { ci.Run(ctx) }) // gh errors are recorded as events
+			ws = append(ws, watcher{"ci", ci.Run}) // gh errors are recorded as events
 		}
+	}
+	return ws
+}
+
+// startWatchersWith runs ws under g: a panic in one is recovered, recorded
+// as watcher_panic and that one restarted, while the rest keep running
+// (#789).
+func startWatchersWith(ctx context.Context, g *supervise.Group, ws []watcher) (stop func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	for _, w := range ws {
+		g.Go(ctx, w.name, w.run)
 	}
 	return func() {
 		cancel()
-		wg.Wait()
+		g.Wait()
 	}
 }
 
@@ -270,6 +294,9 @@ func downCmd() *cobra.Command {
 		Use:   "down",
 		Short: "Stop every agent; running tasks are paused and saddle up resumes them",
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
+			if a.StopEngine() { // on purpose: nothing revives it (#789)
+				fmt.Fprintln(cmd.OutOrStdout(), "Stopped the saddle engine.")
+			}
 			paused, err := a.Down()
 			if err != nil {
 				return err
@@ -412,6 +439,7 @@ func statusCmd() *cobra.Command {
 					o.Task, o.Step, time.Since(o.StepAt).Round(time.Minute))
 			}
 			writeForecast(cmd.OutOrStdout(), st.Forecast)
+			writeWatchers(cmd.OutOrStdout(), a)
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(w, "ID\tSTATUS\tMODEL\tWIN\tTITLE\tCLAIMS\tTRAIN")
 			for _, t := range st.Tasks {

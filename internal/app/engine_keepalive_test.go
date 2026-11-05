@@ -1,0 +1,142 @@
+package app
+
+import (
+	"os"
+	"os/exec"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/brandonapol/saddle/internal/supervise"
+)
+
+// fakeStart replaces StartEngine for the test and counts its calls.
+func fakeStart(t *testing.T) *int {
+	t.Helper()
+	n := 0
+	old := StartEngine
+	StartEngine = func(string) error { n++; return nil }
+	t.Cleanup(func() { StartEngine = old })
+	return &n
+}
+
+// #789: an engine that died while meant to run is started again by the next
+// call that checks, once, and never one stopped on purpose.
+func TestReviveEngine(t *testing.T) {
+	a, _ := setup(t)
+	started := fakeStart(t)
+	if a.ReviveEngine() || *started != 0 {
+		t.Fatal("revived an engine nobody wanted")
+	}
+	dead := exec.Command("true")
+	must(t, dead.Run())
+	must(t, a.WantEngine(dead.Process.Pid)) // the engine, now gone
+	if !a.ReviveEngine() || *started != 1 {
+		t.Fatalf("dead engine not revived (started %d)", *started)
+	}
+	if a.ReviveEngine() || *started != 1 {
+		t.Fatal("revived twice within the cooldown")
+	}
+	if !hasKeepaliveEvent(t, a, EventEngineRevived) {
+		t.Fatal("no engine_revived event")
+	}
+
+	// Past the cooldown, but the lock is held: the engine runs.
+	must(t, os.Truncate(a.engineRevivePath(), 0))
+	rel, err := a.AcquireLock(LockEngine)
+	must(t, err)
+	if a.ReviveEngine() {
+		t.Fatal("revived a running engine")
+	}
+	rel()
+
+	// A live supervisor between restarts brings its own child back.
+	sup := exec.Command("sleep", "60")
+	must(t, sup.Start())
+	t.Cleanup(func() { _ = sup.Process.Kill(); _ = sup.Wait() })
+	time.Sleep(20 * time.Millisecond)
+	must(t, a.WantEngine(sup.Process.Pid))
+	if a.ReviveEngine() {
+		t.Fatal("revived over a live supervisor")
+	}
+
+	// Stopped on purpose: the marker is gone and the keeper got SIGINT.
+	if !a.StopEngine() {
+		t.Fatal("StopEngine signalled nothing")
+	}
+	var st syscall.WaitStatus
+	if _, err := syscall.Wait4(sup.Process.Pid, &st, 0, nil); err != nil || st.Signal() != syscall.SIGINT {
+		t.Fatalf("supervisor not interrupted: %v %v", st, err)
+	}
+	if _, ok := a.EngineWanted(); ok {
+		t.Fatal("marker survived StopEngine")
+	}
+	if a.ReviveEngine() || *started != 1 {
+		t.Fatal("revived an engine stopped on purpose")
+	}
+}
+
+func hasKeepaliveEvent(t *testing.T, a *App, kind string) bool {
+	t.Helper()
+	evs, err := a.Store.Events(200)
+	must(t, err)
+	for _, e := range evs {
+		if e.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// #789: status and doctor read when each watcher last ticked; stale only
+// counts while an engine runs.
+func TestWatchersHealth(t *testing.T) {
+	a, _ := setup(t)
+	now := time.Now()
+	r := a.WatcherRecorder()
+	r.Tick(supervise.Beat{Name: "sentinel", At: now.Add(-14 * time.Minute)})
+	r.Tick(supervise.Beat{Name: "ci", At: now.Add(-10 * time.Second), Restarts: 1, LastPanic: "nil map"})
+	ws, err := a.Watchers(now)
+	must(t, err)
+	if len(ws) != 2 || ws[1].Line() != "sentinel last ticked 14m ago" || ws[1].Stale {
+		t.Fatalf("no engine: %+v", ws)
+	}
+	if got := ws[0].Line(); got != "ci last ticked 10s ago, restarted 1× after a panic (last: nil map)" {
+		t.Fatalf("ci line = %q", got)
+	}
+	rel, err := a.AcquireLock(LockEngine)
+	must(t, err)
+	defer rel()
+	ws, err = a.Watchers(now)
+	must(t, err)
+	if !ws[1].Stale || ws[0].Stale {
+		t.Fatalf("engine running: %+v", ws)
+	}
+	if a.EngineDown() != "" {
+		t.Fatal("engine runs, yet EngineDown")
+	}
+	rel()
+	must(t, a.WantEngine(1<<22))
+	if a.EngineDown() == "" {
+		t.Fatal("wanted engine down, yet no EngineDown")
+	}
+}
+
+// A keeper killed but not yet reaped by its parent is a zombie: dead for
+// ReviveEngine, though kill(pid, 0) still succeeds.
+func TestReviveEngineTreatsAZombieKeeperAsDead(t *testing.T) {
+	a, _ := setup(t)
+	started := fakeStart(t)
+	c := exec.Command("sleep", "60")
+	must(t, c.Start())
+	t.Cleanup(func() { _ = c.Wait() })
+	time.Sleep(20 * time.Millisecond)
+	must(t, a.WantEngine(c.Process.Pid))
+	must(t, c.Process.Kill())
+	for end := time.Now().Add(5 * time.Second); !zombie(c.Process.Pid) && time.Now().Before(end); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !a.ReviveEngine() || *started != 1 {
+		t.Fatal("a zombie keeper blocked the revival")
+	}
+}
