@@ -33,6 +33,11 @@ const (
 	DecisionOwner       = "owner" // filed through the decision queue (#464)
 )
 
+// DecisionKinds lists every kind of card saddle produces. Each kind's
+// default is checked against what its card says (#790).
+var DecisionKinds = []string{DecisionStuckStack, DecisionCIRepairCap, DecisionAskOwner, DecisionRiskyPrompt,
+	DecisionOwner, DecisionNoProgress, DecisionDoneOrphaned, DecisionWorkerHung}
+
 // Who closed a card.
 const (
 	DecidedByOwner   = "owner"
@@ -61,6 +66,10 @@ type DecisionOption struct {
 	Cost        string `json:"cost,omitempty"` // its consequence: who does it, how long, what it leaves
 	Action      string `json:"action"`         // what saddle or the orchestrator runs for it
 	Recommended bool   `json:"recommended,omitempty"`
+	// Run names the registered action (defaultRuns) saddle runs for this
+	// option when it is the default and nobody answers (#790). It is what
+	// Action says, so the card the owner reads is what happens.
+	Run string `json:"run,omitempty"`
 }
 
 // DecisionCard is one needs-you ask.
@@ -133,6 +142,11 @@ func (c DecisionCard) Validate() error {
 	}
 	if c.Default < 1 || c.Default > len(c.Options) {
 		errs = append(errs, fmt.Errorf("default %d is not an option", c.Default))
+	} else if run := c.DefaultOption().Run; !c.Irreversible {
+		// What runs on a timeout is the option the card shows (#790).
+		if _, ok := defaultRuns[run]; !ok {
+			errs = append(errs, fmt.Errorf("default option %d runs %q, not a registered action", c.Default, run))
+		}
 	}
 	if c.Timeout <= 0 {
 		errs = append(errs, errors.New("no timeout"))

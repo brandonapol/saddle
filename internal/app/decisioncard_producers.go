@@ -2,6 +2,8 @@ package app
 
 import (
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -40,7 +42,7 @@ func stuckCard(al StuckAlarm, label string, above []string) DecisionCard {
 		Options: []DecisionOption{
 			first,
 			{Label: "Drop " + al.Layer + " from the stack", Cost: "the layers above keep merging; it waits as its own PR",
-				Action: "saddle unstack " + al.Layer},
+				Action: "saddle unstack " + al.Layer, Run: RunRouteAround},
 			{Label: "Stop it holding the layers above", Cost: "they merge on top of it as it is",
 				Action: "saddle sentinel ack"},
 		},
@@ -63,7 +65,7 @@ func ciRepairCapCard(label string, l CIRedLayer, n int) DecisionCard {
 			{Label: "Look at the failing checks and fix them on " + l.Task + "'s layer", Cost: "you or an agent you spawn, ~10 min",
 				Action: "spawn a task to fix " + l.Task + "'s CI (" + strings.Join(l.Checks, ", ") + ") on its layer", Recommended: true},
 			{Label: "Drop " + l.Task + " from the stack", Cost: "the layers above keep merging; it waits as its own PR",
-				Action: "saddle unstack " + l.Task},
+				Action: "saddle unstack " + l.Task, Run: RunParkRepairCap},
 			{Label: "Stop it holding the layers above", Cost: "they merge on top of red CI",
 				Action: "saddle sentinel ack"},
 		},
@@ -87,7 +89,7 @@ func askOwnerCard(task, label, owner, path, glob, question string) DecisionCard 
 		Options: []DecisionOption{
 			{Label: "Answer it", Cost: "a one-line reply", Action: "saddle message " + task + " <your answer>", Recommended: true},
 			{Label: "Tell " + task + " to go ahead on its best guess", Cost: "it notes the guess in its done summary",
-				Action: "saddle message " + task + " \"No answer: go ahead on your best guess about " + path + " and say so in your done summary.\""},
+				Action: "saddle message " + task + " \"No answer: go ahead on your best guess about " + path + " and say so in your done summary.\"", Run: RunMessageTask},
 			{Label: "Tell " + task + " to leave " + path + " alone", Cost: "the change waits for a later task",
 				Action: "saddle message " + task + " \"Leave " + path + " alone; note what you needed in your done summary.\""},
 		},
@@ -113,8 +115,8 @@ func RiskyPromptCard(task, label, prompt string) DecisionCard {
 		Blocking: "Only " + task + ", which waits on the prompt. Everything else keeps running.",
 		Options: []DecisionOption{
 			{Label: "Allow it once", Cost: "the agent goes ahead", Action: "send_keys " + task + " 1"},
-			{Label: "Deny it and tell the agent to find another way", Cost: "it keeps working without it",
-				Action: "send_keys " + task + " Escape, then saddle message " + task + " \"Denied: find another way, or explain why you need it.\"", Recommended: true},
+			{Label: "Deny it and tell the agent to find another way", Cost: "it keeps working without it; if it asks again and nobody answers, saddle parks it and resumes it after the same wait",
+				Action: "send_keys " + task + " Escape, then saddle message " + task + " \"" + deniedNote + "\"", Recommended: true, Run: RunDenyPrompt},
 			{Label: "Stop the task", Cost: "its work so far stays on its branch", Action: "saddle kill " + task},
 		},
 		Default: 2,
@@ -122,7 +124,19 @@ func RiskyPromptCard(task, label, prompt string) DecisionCard {
 	}
 }
 
-// RiskyPromptDecision opens the card for task's risky prompt.
+// declinedPrompts are prompts saddle knows and declines at once, with
+// Escape, instead of carding them: Codex's near-quota offer to switch to a
+// cheaper model (#790). The task keeps the model it was given.
+var declinedPrompts = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bswitch to \S+ for lower credit usage\b`),
+}
+
+// RiskyPromptDecision opens the card for task's risky prompt, or declines
+// a prompt saddle knows.
 func (a *App) RiskyPromptDecision(task, prompt string) error {
+	if slices.ContainsFunc(declinedPrompts, func(r *regexp.Regexp) bool { return r.MatchString(prompt) }) {
+		a.Store.Event(task, "prompt_declined", oneLine(prompt))
+		return a.SendKeys(task, "", []string{"Escape"})
+	}
 	return a.OpenDecision(RiskyPromptCard(task, a.taskLabel(task), prompt))
 }

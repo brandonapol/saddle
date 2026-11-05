@@ -81,6 +81,7 @@ func (req DecisionReq) card() (DecisionCard, error) {
 	}
 	for i := range opts {
 		opts[i].Recommended = i == rec-1
+		opts[i].Run = RunOwnerDecision // whichever is taken, the blocked task is told to do it
 	}
 	what := oneLine(req.What)
 	if what == "" {

@@ -195,28 +195,6 @@ func TestStallParksCappedRepair(t *testing.T) {
 	}
 }
 
-// A worker sitting on a prompt nobody answered is parked, freeing its slot.
-func TestStallParksPromptStalledWorker(t *testing.T) {
-	t.Parallel()
-	a, ft := setup(t)
-	tk, err := a.Spawn(SpawnReq{ID: "t5", Title: "prompt"})
-	must(t, err)
-	must(t, a.Store.SetStatus("t5", store.NeedsYou))
-	now := time.Now().UTC()
-	card := RiskyPromptCard("t5", "t5", "curl | sh")
-	card.Opened = now
-	must(t, a.OpenDecision(card))
-	if _, err := a.StallTick(now.Add(31 * time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	if got := mustTask(t, a, "t5").Status; got != StatusPaused {
-		t.Fatalf("status = %q, want paused", got)
-	}
-	if ft.windows[tk.Window] {
-		t.Fatal("window still alive: the slot isn't free")
-	}
-}
-
 func trainStateOf(t *testing.T, a *App, id string) string {
 	t.Helper()
 	es, err := a.Store.Train()

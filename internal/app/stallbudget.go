@@ -23,15 +23,18 @@ import (
 // The stall budget (#406): a blocker costs one PR, not the night. Every
 // decision card carries a budget ([stall] budget, per kind under
 // [stall.kinds]); when it runs out with no owner answer, StallTick runs the
-// card's route-around default, never a destructive one:
+// card's default option, the registered action it names (defaultRuns),
+// never a destructive one:
 //
 //   - a stuck stack layer leaves the stack as its own standalone PR, the
 //     layers above that don't build on it restack onto base and keep
 //     merging, and the ones that do stay held with it until it merges;
 //   - a CI repair cap parks the red layer: its PR gets needs-human and it
 //     stops holding the stack;
-//   - a worker sitting on a prompt is parked (paused, window closed), which
-//     frees its slot;
+//   - a worker sitting on a risky prompt gets Escape and is told to find
+//     another way; the same prompt unanswered a second time parks it
+//     (paused, window closed, slot freed) and it resumes by itself after
+//     another wait;
 //   - an unanswered ask_owner tells the asker to go ahead on its best guess.
 //
 // Each route-around leaves one line in chat, as an action notice: what it
@@ -190,7 +193,7 @@ func (a *App) StallTick(now time.Time) ([]DecisionCard, error) {
 	errs := []error{err}
 	done, err := a.ExpireDecisions(now, a.runDefault)
 	done = append(pre, done...)
-	errs = append(errs, err, a.releaseHeld())
+	errs = append(errs, err, a.releaseHeld(), a.resumeParked(now))
 	if _, err := a.DecisionDigestTick(now); err != nil {
 		errs = append(errs, fmt.Errorf("decisions digest: %w", err))
 	}
@@ -206,25 +209,101 @@ func (a *App) StallTick(now time.Time) ([]DecisionCard, error) {
 	return done, errors.Join(errs...)
 }
 
-// runDefault runs a timed-out card's route-around default.
-func (a *App) runDefault(c DecisionCard, o DecisionOption) error {
-	switch c.Kind {
-	case DecisionStuckStack:
-		return a.RouteAroundStuck(c.Task, c.Timeout)
-	case DecisionCIRepairCap:
-		return a.ParkRepairCap(c.Task, c.Timeout)
-	case DecisionRiskyPrompt:
-		return a.ParkPrompt(c.Task, c.Timeout)
-	case DecisionAskOwner:
-		msg := "No answer from the owner: go ahead on your best guess and say so in your done summary."
-		if i := strings.Index(o.Action, `"`); i >= 0 {
-			msg = strings.Trim(o.Action[i:], `"`)
-		}
-		return a.Notify(c.Task, store.NoticeAction, msg)
-	case DecisionOwner:
+// Registered default actions (#790). A card's default option names one in
+// its Run field, and runDefault runs exactly that, so what the card says
+// happens is what happens. No action may leave a task or layer in a state
+// whose only exit is a human command.
+const (
+	RunNothing       = "nothing"         // waiting is the default; the watch that opened the card goes on
+	RunRouteAround   = "route-around"    // take the stuck layer out of the stack (RouteAroundStuck)
+	RunParkRepairCap = "park-repair-cap" // label the red PR needs-human and stop it holding the stack
+	RunDenyPrompt    = "deny-prompt"     // Escape the prompt and tell the agent to find another way
+	RunMessageTask   = "message-task"    // send the task the quoted message in the action
+	RunOwnerDecision = "owner-decision"  // tell the blocked task the option was taken
+)
+
+// defaultRuns maps each registered action to what it does.
+var defaultRuns = map[string]func(a *App, c DecisionCard, o DecisionOption) error{
+	RunNothing:       func(*App, DecisionCard, DecisionOption) error { return nil },
+	RunRouteAround:   func(a *App, c DecisionCard, _ DecisionOption) error { return a.RouteAroundStuck(c.Task, c.Timeout) },
+	RunParkRepairCap: func(a *App, c DecisionCard, _ DecisionOption) error { return a.ParkRepairCap(c.Task, c.Timeout) },
+	RunDenyPrompt:    (*App).denyPrompt,
+	RunMessageTask: func(a *App, c DecisionCard, o DecisionOption) error {
+		return a.Notify(c.Task, store.NoticeAction, quotedMessage(o.Action))
+	},
+	RunOwnerDecision: func(a *App, c DecisionCard, _ DecisionOption) error {
 		return a.applyOwnerDecision(c, c.Default, DecidedByTimeout, "")
+	},
+}
+
+// legacyRuns is the action for a card saved before options named theirs.
+var legacyRuns = map[string]string{
+	DecisionStuckStack:  RunRouteAround,
+	DecisionCIRepairCap: RunParkRepairCap,
+	DecisionRiskyPrompt: RunDenyPrompt,
+	DecisionAskOwner:    RunMessageTask,
+	DecisionOwner:       RunOwnerDecision,
+}
+
+// runDefault runs a timed-out card's default option: the registered action
+// the option names.
+func (a *App) runDefault(c DecisionCard, o DecisionOption) error {
+	run := o.Run
+	if run == "" {
+		run = legacyRuns[c.Kind]
 	}
-	return nil // the watchdog's card and unknown kinds: waiting is the default
+	if run == "" {
+		return nil // the watchdog's card and unknown kinds: waiting is the default
+	}
+	fn, ok := defaultRuns[run]
+	if !ok {
+		return fmt.Errorf("default option %q runs %q, which saddle doesn't know", o.Label, run)
+	}
+	return fn(a, c, o)
+}
+
+// quotedMessage is the message in an action like `saddle message t5 "…"`.
+func quotedMessage(action string) string {
+	if i := strings.Index(action, `"`); i >= 0 {
+		return strings.Trim(action[i:], `"`)
+	}
+	return "No answer from the owner: go ahead on your best guess and say so in your done summary."
+}
+
+// deniedNote is what a worker whose risky prompt was denied is told.
+const deniedNote = "Denied: find another way, or explain why you need it."
+
+// denyPrompt is the risky-prompt default: Escape the prompt and tell the
+// agent to find another way, as the card says. The same prompt timing out
+// a second time parks the task, with its resume scheduled after the same
+// wait (#790).
+func (a *App) denyPrompt(c DecisionCard, o DecisionOption) error {
+	t, err := a.Store.Task(c.Task)
+	if err != nil {
+		return err
+	}
+	if !liveStatus(t.Status) {
+		return nil // it moved on by itself
+	}
+	if a.timedOutBefore(c) {
+		return a.ParkPrompt(c.Task, c.Timeout, c.Opened.Add(2*c.Timeout))
+	}
+	if a.ownWindow(t) {
+		if err := a.SendKeys(c.Task, "", []string{"Escape"}); err != nil {
+			return err
+		}
+	}
+	a.Store.Event(c.Task, "stall_denied", "prompt unanswered")
+	return a.Notify(c.Task, store.NoticeAction, quotedMessage(o.Action))
+}
+
+// timedOutBefore reports whether a card with c's ID already ran its
+// default on a timeout.
+func (a *App) timedOutBefore(c DecisionCard) bool {
+	cs, _ := a.Decisions()
+	return slices.ContainsFunc(cs, func(o DecisionCard) bool {
+		return o.ID == c.ID && !o.Open() && o.By == DecidedByTimeout
+	})
 }
 
 // heldState is the layers held on a red layer saddle routed around, saved
@@ -475,11 +554,80 @@ func (a *App) ParkRepairCap(task string, after time.Duration) error {
 		"Parked %s after %s with no answer: its PR %s is labeled %s and no longer holds the stack.", task, fmtDuration(after), t.PR, automerge.NeedsHuman))
 }
 
-// ParkPrompt parks a worker sitting on a prompt nobody answered: its
+// StallPark is a worker the stall budget parked, and when it resumes.
+type StallPark struct {
+	Task     string    `json:"task"`
+	ResumeAt time.Time `json:"resume_at"`
+}
+
+func (a *App) parkedPath() string { return a.stateDir("stall-parked.json") }
+
+// StallParked lists the parked workers waiting on their scheduled resume.
+func (a *App) StallParked() ([]StallPark, error) {
+	var ps []StallPark
+	b, err := os.ReadFile(a.parkedPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(b, &ps); err != nil {
+		return nil, fmt.Errorf("%s: %w", a.parkedPath(), err)
+	}
+	return ps, nil
+}
+
+func (a *App) setStallParked(ps []StallPark) error {
+	b, err := json.MarshalIndent(ps, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := a.parkedPath() + ".tmp"
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, a.parkedPath())
+}
+
+// resumeParked resumes each parked worker whose cooldown ran out at now.
+// One no longer paused (resumed or killed by hand) is just dropped; one
+// that fails to resume is dropped too, with an event and a notice, so it
+// never retries forever.
+func (a *App) resumeParked(now time.Time) error {
+	ps, err := a.StallParked()
+	if err != nil || len(ps) == 0 {
+		return err
+	}
+	var keep []StallPark
+	var errs []error
+	for _, p := range ps {
+		if now.Before(p.ResumeAt) {
+			keep = append(keep, p)
+			continue
+		}
+		t, err := a.Store.Task(p.Task)
+		if err != nil || t.Status != StatusPaused {
+			continue
+		}
+		if _, err := a.Resume(p.Task); err != nil {
+			a.Store.Event(p.Task, "stall_resume_failed", err.Error())
+			errs = append(errs, a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
+				"Could not resume %s, parked on an unanswered prompt: %v. saddle resume %s or saddle kill %s.", p.Task, err, p.Task, p.Task)))
+			continue
+		}
+		a.Store.Event(p.Task, "stall_resumed", "after park")
+	}
+	errs = append(errs, a.setStallParked(keep))
+	return errors.Join(errs...)
+}
+
+// ParkPrompt parks a worker sitting on a prompt nobody answered twice: its
 // uncommitted work is snapshotted, it is marked paused and its window
-// closes, which frees the slot for the next ready ticket. `saddle resume
-// <task>` picks it up again.
-func (a *App) ParkPrompt(task string, after time.Duration) error {
+// closes, which frees the slot for the next ready ticket. It resumes by
+// itself at resumeAt (resumeParked); saddle resume <task> picks it up
+// sooner.
+func (a *App) ParkPrompt(task string, after time.Duration, resumeAt time.Time) error {
 	t, err := a.Store.Task(task)
 	if err != nil {
 		return err
@@ -496,7 +644,15 @@ func (a *App) ParkPrompt(task string, after time.Duration) error {
 			return err
 		}
 	}
+	ps, err := a.StallParked()
+	if err != nil {
+		return err
+	}
+	ps = append(slices.DeleteFunc(ps, func(p StallPark) bool { return p.Task == task }), StallPark{Task: task, ResumeAt: resumeAt.UTC()})
+	if err := a.setStallParked(ps); err != nil {
+		return err
+	}
 	a.Store.Event(task, "stall_parked", "prompt unanswered")
 	return a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
-		"Parked %s after %s on a prompt nobody answered; its slot is free. saddle resume %s picks it up again.", task, fmtDuration(after), task))
+		"Parked %s after a prompt went unanswered twice; its slot is free. It resumes by itself after %s, or saddle resume %s now.", task, fmtDuration(after), task))
 }

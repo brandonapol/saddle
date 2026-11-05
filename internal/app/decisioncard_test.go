@@ -15,7 +15,7 @@ func testCard(id string) DecisionCard {
 		Blocking: "1 layer above it (t3).",
 		Options: []DecisionOption{
 			{Label: "Fix it on t2's layer", Cost: "an agent, ~15 min", Action: "spawn a fix", Recommended: true},
-			{Label: "Drop t2 from the stack", Cost: "t3 keeps merging", Action: "saddle unstack t2"},
+			{Label: "Drop t2 from the stack", Cost: "t3 keeps merging", Action: "saddle unstack t2", Run: RunRouteAround},
 		},
 		Default: 2,
 		Timeout: 30 * time.Minute,
