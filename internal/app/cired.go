@@ -227,6 +227,7 @@ func ciRunName(url, id string) string {
 // (forge.RunID). A check without a log stays red. Each decision is
 // logged once as ci_ignored or ci_rerun.
 func (a *App) ScreenCIPoll(p CIPoll, fails []CIRedFailure, rerun func(runID string) error) (CIPoll, error) {
+	p.Failed = withoutSaddleOwned(p.Failed)
 	if len(p.Failed) == 0 {
 		return p, nil
 	}
@@ -275,6 +276,20 @@ func (a *App) ScreenCIPoll(p CIPoll, fails []CIRedFailure, rerun func(runID stri
 	return p, a.SetCIRed(s)
 }
 
+// withoutSaddleOwned drops saddle's own statuses (saddle/base) from failed
+// check labels. They gate merge order and are never red CI (#838).
+func withoutSaddleOwned(failed []string) []string {
+	return slices.DeleteFunc(slices.Clone(failed), func(c string) bool {
+		return forge.SaddleOwned(forge.CheckRun{Context: c})
+	})
+}
+
+// onlySaddleOwned reports whether checks are all saddle's own statuses: a
+// layer red only on those was never red CI.
+func onlySaddleOwned(checks []string) bool {
+	return len(checks) > 0 && len(withoutSaddleOwned(checks)) == 0
+}
+
 // CIRedTarget is a stacked task with a PR, for the watcher to poll.
 type CIRedTarget struct {
 	Task, Branch, PR string
@@ -321,7 +336,9 @@ func (a *App) ApplyCIRed(polls []CIPoll) (CIRedChange, error) {
 		stacked[l.ID] = true
 	}
 	seen := map[string]CIPoll{}
-	for _, p := range polls {
+	for i, p := range polls {
+		p.Failed = withoutSaddleOwned(p.Failed)
+		polls[i] = p
 		seen[p.Task] = p
 	}
 	now := time.Now().UTC()
@@ -329,7 +346,7 @@ func (a *App) ApplyCIRed(polls []CIPoll) (CIRedChange, error) {
 	for _, l := range s.Red {
 		p, polled := seen[l.Task]
 		switch {
-		case !stacked[l.Task], polled && p.Green:
+		case !stacked[l.Task], polled && p.Green, onlySaddleOwned(l.Checks):
 			ch.Cleared = append(ch.Cleared, l)
 		case polled && len(p.Failed) > 0 && p.Head != l.Head:
 			l.Head, l.Checks, l.PR, l.Acked = p.Head, p.Failed, p.PR, false

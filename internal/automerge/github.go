@@ -73,9 +73,12 @@ func (g *GH) OpenPRs() ([]PR, error) {
 func forgePR(p forge.PR) PR {
 	pr := PR{URL: p.URL, State: p.State, Draft: p.Draft, Mergeable: p.Mergeable, MergeState: p.MergeState,
 		Base: p.Base, Head: p.Head, HeadSHA: p.HeadSHA, Labels: p.Labels}
-	rollup := make([]Check, len(p.Checks))
-	for i, c := range p.Checks {
-		rollup[i] = Check{Status: c.Status, Conclusion: c.Conclusion, State: c.State}
+	rollup := make([]Check, 0, len(p.Checks))
+	for _, c := range p.Checks {
+		if forge.SaddleOwned(c) {
+			continue // saddle/base gates merge order; it isn't CI (#838)
+		}
+		rollup = append(rollup, Check{Status: c.Status, Conclusion: c.Conclusion, State: c.State})
 	}
 	pr.Checks = summarize(rollup)
 	return pr
