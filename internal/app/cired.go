@@ -48,6 +48,9 @@ const (
 	ciRepairFolded  = "folded"  // its commits joined the red layer
 	ciRepairFailed  = "failed"  // it could not be folded into the red layer
 	ciRepairKilled  = "killed"  // it was killed or finished with nothing to land (#466)
+	// ciRepairPending: its spawn failed (the cap, a claim overlap); every
+	// cycle retries it on the same head until it spawns (#768).
+	ciRepairPending = "pending"
 )
 
 // CIRepairRecord is one repair spawned for a red layer (see cired_repair.go).
@@ -56,8 +59,12 @@ type CIRepairRecord struct {
 	Head   string `json:"head"`   // the red head it was spawned for
 	Repair string `json:"repair"` // the repair task
 	Fixer  string `json:"fixer,omitempty"`
-	State  string `json:"state"` // spawned, folded, failed or killed
-	Note   string `json:"note,omitempty"`
+	State  string `json:"state"`          // spawned, folded, failed, killed or pending
+	Note   string `json:"note,omitempty"` // for pending: why the last spawn failed
+	// Claims and Fails are what a pending repair spawns with: its reserved
+	// files and the failing checks it was due for (#768).
+	Claims []string       `json:"claims,omitempty"`
+	Fails  []CIRedFailure `json:"fails,omitempty"`
 	// Retried is set on a killed repair once its red head was looked at
 	// again, whether or not that spawned another.
 	Retried bool `json:"retried,omitempty"`
@@ -544,7 +551,7 @@ func (a *App) CIRedHolds() ([]CIRedHold, error) {
 		h := CIRedHold{Task: r.Task, PR: r.PR, Head: r.Head, Checks: r.Checks, Held: r.Held,
 			Repair: r.Repair, Acked: r.Acked, Escalated: r.Escalated}
 		for _, rec := range s.Repairs {
-			if rec.Task == r.Task {
+			if rec.Task == r.Task && rec.State != ciRepairPending {
 				h.Attempts++
 			}
 		}

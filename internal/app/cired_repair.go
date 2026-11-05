@@ -98,12 +98,19 @@ func (a *App) CIRedRepair(task string, fails []CIRedFailure) (string, error) {
 		return save(fix.ID + " is repairing it on " + task + "'s layer.")
 	}
 	if slices.ContainsFunc(s.Repairs, func(r CIRepairRecord) bool {
-		return r.Task == task && r.Head == l.Head && r.State != ciRepairKilled
+		return r.Task == task && r.Head == l.Head && r.State != ciRepairKilled && r.State != ciRepairPending
 	}) {
 		return "", nil // one repair per red head, unless it was killed (#466)
 	}
-	// A killed repair's head is looked at once more, here; a spawn that
-	// fails returns before saving, so the next cycle tries again.
+	// A pending spawn is tried again below; it is recorded afresh if it
+	// fails again (#768). One for an older head is moot.
+	if j := slices.IndexFunc(s.Repairs, func(r CIRepairRecord) bool {
+		return r.Task == task && r.Head == l.Head && r.State == ciRepairPending
+	}); j >= 0 && len(fails) == 0 {
+		fails = s.Repairs[j].Fails // a retry outside the ci-red poll (#768)
+	}
+	s.Repairs = slices.DeleteFunc(s.Repairs, func(r CIRepairRecord) bool { return r.Task == task && r.State == ciRepairPending })
+	// A killed repair's head is looked at once more, here.
 	for i, r := range s.Repairs {
 		if r.Task == task && r.Head == l.Head && r.State == ciRepairKilled {
 			s.Repairs[i].Retried = true
@@ -123,7 +130,7 @@ func (a *App) CIRedRepair(task string, fails []CIRedFailure) (string, error) {
 	}
 	n := 0
 	for _, r := range s.Repairs {
-		if r.Task == task {
+		if r.Task == task && r.State != ciRepairPending {
 			n++
 		}
 	}
@@ -141,6 +148,7 @@ func (a *App) CIRedRepair(task string, fails []CIRedFailure) (string, error) {
 	if isLintFailure(fails) {
 		fixer, fixCommit = a.ciRunFixer(owner, task)
 	}
+	files := a.layerFiles(task)
 	req := SpawnReq{
 		Title:  ciFixTitle(owner),
 		Prompt: a.ciRepairPrompt(owner, *l, fails, fixer, fixCommit, n+1),
@@ -150,7 +158,8 @@ func (a *App) CIRedRepair(task string, fails []CIRedFailure) (string, error) {
 		Difficulty: config.DifficultyStandard,
 		Parent:     OrchestratorID,
 		Issue:      owner.Issue,
-		Claims:     a.layerFiles(task),
+		Claims:     slices.Clone(files),
+		For:        task, // its own pending repair reserves these files
 		Confirm:    true,
 	}
 	r, err := a.Spawn(req)
@@ -160,14 +169,22 @@ func (a *App) CIRedRepair(task string, fails []CIRedFailure) (string, error) {
 		r, err = a.Spawn(req)
 	}
 	if err != nil {
+		// Pending: every cycle retries it on this head, and it takes the next
+		// free slot before autopilot's tickets do (#768).
 		why := err.Error()
+		s.Repairs = append(s.Repairs, CIRepairRecord{Task: task, Head: l.Head, State: ciRepairPending, Note: why,
+			Claims: files, Fails: fails})
+		note := ""
 		if last, ok := a.lastEvent(task, eventCIRepairFailed); !ok || last != why {
 			a.Store.Event(task, eventCIRepairFailed, why)
+			note = "saddle couldn't spawn its repair yet: " + why
 			_ = a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
-				"CI is red on %s's PR %s and saddle couldn't spawn its repair: %s\nIt retries on the next ci-red cycle; spawn one titled %q yourself if that keeps failing.",
+				"CI is red on %s's PR %s and saddle couldn't spawn its repair: %s\n"+
+					"The repair is pending: saddle retries it every cycle on this head, and it takes the next free slot before new tickets. "+
+					"Spawn one titled %q yourself if that keeps failing.",
 				task, l.PR, why, req.Title))
 		}
-		return "", err
+		return save(note)
 	}
 	s.Repairs = append(s.Repairs, CIRepairRecord{Task: task, Head: l.Head, Repair: r.ID, Fixer: fixCommit, State: ciRepairSpawned})
 	l.Repair = r.ID
@@ -229,9 +246,10 @@ func (a *App) ReapCIRepairs() ([]string, error) {
 	return reaped, a.SetCIRed(s)
 }
 
-// CIRepairsDue lists the red layers whose repair was killed on the head
-// they are still red on, with no other repair for that head and no second
-// look yet: CIRedRepair should run for them again (#466).
+// CIRepairsDue lists the red layers CIRedRepair should run for again: those
+// whose repair is pending on the head they are still red on (#768), and
+// those whose repair was killed on it, with no other repair for that head
+// and no second look yet (#466).
 func (a *App) CIRepairsDue() []string {
 	s, err := a.CIRed()
 	if err != nil {
@@ -239,18 +257,21 @@ func (a *App) CIRepairsDue() []string {
 	}
 	var out []string
 	for _, l := range s.Red {
-		killed, other := false, false
+		killed, other, pending := false, false, false
 		for _, r := range s.Repairs {
 			if r.Task != l.Task || r.Head != l.Head {
 				continue
 			}
-			if r.State == ciRepairKilled {
+			switch r.State {
+			case ciRepairKilled:
 				killed = killed || !r.Retried
-			} else {
+			case ciRepairPending:
+				pending = true
+			default:
 				other = true
 			}
 		}
-		if killed && !other {
+		if (pending || killed) && !other {
 			out = append(out, l.Task)
 		}
 	}

@@ -190,8 +190,10 @@ func (a *App) stallBudget(kind string) (time.Duration, bool) {
 // [[preauth]] rule allows, runs the default of every reversible card whose
 // budget ran out, puts back layers held on a red layer that merged, runs
 // the no-progress watchdog and sends the day's decisions digest once it is
-// due (#464). The sentinel runs it every cycle, with the stuck-stack alarm. It returns the cards it closed.
+// due (#464). It also retries every pending repair spawn (#768). The
+// sentinel runs it every cycle, with the stuck-stack alarm. It returns the cards it closed.
 func (a *App) StallTick(now time.Time) ([]DecisionCard, error) {
+	a.RetryRepairs()
 	pre, err := a.ApplyPreauth(now)
 	errs := []error{err}
 	done, err := a.ExpireDecisions(now, a.runDefault)

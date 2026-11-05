@@ -157,14 +157,81 @@ func (a *App) spawnRepairs() []string {
 // ensureRepair spawns orig's repair task unless one is already live or
 // landed. The orchestrator hears once: when the repair is spawned, or when it
 // can't be, once per reason.
+//
+// The original has no agent, so its claims pass to the repair, but only
+// once the repair has spawned: Spawn moves them (SpawnReq.For). A spawn that
+// fails leaves them with the original, as a reservation fresh spawns
+// respect, and the repair is pending until RetryRepairs spawns it (#795).
 func (a *App) ensureRepair(orig store.Task, seed repairSeed, force bool) (store.Task, bool, error) {
+	r, created, err := a.spawnRepairOnce(orig, seed, force)
+	if err == nil && !created {
+		return r, false, nil
+	}
+	if err != nil {
+		// The retry starts from the same seed (#768).
+		b, _ := json.Marshal(seed)
+		if last, ok := a.lastEvent(orig.ID, eventRepairNeeded); !ok || last != string(b) {
+			a.Store.Event(orig.ID, eventRepairNeeded, string(b))
+		}
+		why := err.Error()
+		if last := a.lastRepairFailure(orig.ID); last != why {
+			a.Store.Event(orig.ID, eventRepairFailed, why)
+			_ = a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
+				"%s's %s conflicts with %s in %s and its agent is gone, but saddle couldn't spawn a repair task: %s\n"+
+					"The repair is pending: saddle retries it every cycle, %s keeps its files until it spawns, and it takes the next free slot before new tickets. "+
+					"Run `saddle repair %s --force` to spawn it now past the concurrency limit and claim overlaps.",
+				orig.ID, what(seed), seed.Onto, strings.Join(seed.Files, ", "), why, orig.ID, orig.ID))
+		}
+		return store.Task{}, false, err
+	}
+	_ = a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
+		"%s's %s conflicts with %s in %s and its agent is gone, so saddle spawned %s %q to resolve it on a fresh branch. "+
+			"When %s lands, %s is superseded and its PR closed. Nothing to do unless %s gets stuck.",
+		orig.ID, what(seed), seed.Onto, strings.Join(seed.Files, ", "), r.ID, r.Title, r.ID, orig.ID, r.ID))
+	return r, true, nil
+}
+
+// spawnRepairOnce spawns orig's repair unless one is live or landed, one
+// caller at a time so two can't both spawn it. It sends no notices: those
+// can run a restack, which comes back here.
+func (a *App) spawnRepairOnce(orig store.Task, seed repairSeed, force bool) (store.Task, bool, error) {
+	a.repairMu.Lock()
+	defer a.repairMu.Unlock()
 	if r, ok := a.repairOf(orig.ID); ok {
 		return r, false, nil
 	}
+	want := a.repairClaims(orig, seed)
+	req := SpawnReq{
+		Title:   repairTitlePrefix(orig.ID) + orig.Title,
+		Prompt:  a.repairPrompt(orig, seed),
+		Parent:  OrchestratorID,
+		Claims:  want,
+		Issue:   orig.Issue,
+		For:     orig.ID,
+		Force:   force,
+		Confirm: true,
+	}
+	r, err := a.Spawn(req)
+	if err != nil && !force && len(seed.Files) > 0 && len(want) > len(seed.Files) {
+		// The original's claims may overlap live work by now; the conflicting
+		// files are what the repair must own.
+		req.Claims = slices.Clone(seed.Files)
+		r, err = a.Spawn(req)
+	}
+	if err != nil {
+		return store.Task{}, false, err
+	}
+	a.Store.Event(orig.ID, eventRepairSpawned, r.ID)
+	return r, true, nil
+}
+
+// repairClaims are the files orig's repair claims: the conflicting files,
+// then the original's claims, live or as they were when it landed.
+func (a *App) repairClaims(orig store.Task, seed repairSeed) []string {
 	want := slices.Clone(seed.Files)
 	cl, err := a.Store.Claims()
 	if err != nil {
-		return store.Task{}, false, err
+		return want
 	}
 	own := cl[orig.ID]
 	if len(own) == 0 {
@@ -177,45 +244,7 @@ func (a *App) ensureRepair(orig store.Task, seed repairSeed, force bool) (store.
 			want = append(want, c)
 		}
 	}
-	// The original has no agent: its claims pass to the repair.
-	if len(cl[orig.ID]) > 0 {
-		if err := a.Store.Release(orig.ID); err != nil {
-			return store.Task{}, false, err
-		}
-	}
-	req := SpawnReq{
-		Title:   repairTitlePrefix(orig.ID) + orig.Title,
-		Prompt:  a.repairPrompt(orig, seed),
-		Parent:  OrchestratorID,
-		Claims:  want,
-		Issue:   orig.Issue,
-		Force:   force,
-		Confirm: true,
-	}
-	r, err := a.Spawn(req)
-	if err != nil && !force && len(seed.Files) > 0 && len(want) > len(seed.Files) {
-		// The original's claims may overlap live work by now; the conflicting
-		// files are what the repair must own.
-		req.Claims = slices.Clone(seed.Files)
-		r, err = a.Spawn(req)
-	}
-	if err != nil {
-		why := err.Error()
-		if last, ok := a.lastEvent(orig.ID, eventRepairFailed); !ok || last != why {
-			a.Store.Event(orig.ID, eventRepairFailed, why)
-			_ = a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
-				"%s's %s conflicts with %s in %s and its agent is gone, but saddle couldn't spawn a repair task: %s\n"+
-					"Run `saddle repair %s` to try again (--force ignores the concurrency limit and claim overlaps).",
-				orig.ID, what(seed), seed.Onto, strings.Join(seed.Files, ", "), why, orig.ID))
-		}
-		return store.Task{}, false, err
-	}
-	a.Store.Event(orig.ID, eventRepairSpawned, r.ID)
-	_ = a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
-		"%s's %s conflicts with %s in %s and its agent is gone, so saddle spawned %s %q to resolve it on a fresh branch. "+
-			"When %s lands, %s is superseded and its PR closed. Nothing to do unless %s gets stuck.",
-		orig.ID, what(seed), seed.Onto, strings.Join(seed.Files, ", "), r.ID, r.Title, r.ID, orig.ID, r.ID))
-	return r, true, nil
+	return want
 }
 
 // what names the work a seed is about, for notices.

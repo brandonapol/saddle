@@ -54,6 +54,20 @@ func repairsToday(es []store.Event, task string, now time.Time) int {
 // last one was killed, or the day's cap is spent. The orchestrator hears
 // once per reason.
 func (a *App) skipAutoRepair(orig string) bool {
+	why := a.autoRepairBlock(orig)
+	if why == "" {
+		return false
+	}
+	if last, ok := a.lastEvent(orig, eventRepairDeclined); !ok || last != why {
+		a.Store.Event(orig, eventRepairDeclined, why)
+		_ = a.Notify(OrchestratorID, store.NoticeInfo, why)
+	}
+	return true
+}
+
+// autoRepairBlock is why saddle must not spawn orig's repair on its own,
+// "" when nothing stops it.
+func (a *App) autoRepairBlock(orig string) string {
 	why := ""
 	if r, ok := a.repairDeclined(orig); ok {
 		why = fmt.Sprintf("%s's repair %s was killed, so restack won't spawn another: its work looks superseded. "+
@@ -63,14 +77,7 @@ func (a *App) skipAutoRepair(orig string) bool {
 		why = fmt.Sprintf("%s already had %d repairs in the last day, so restack won't spawn another until tomorrow. "+
 			"Run `saddle repair %s` to spawn one now.", orig, repairDailyCap, orig)
 	}
-	if why == "" {
-		return false
-	}
-	if last, ok := a.lastEvent(orig, eventRepairDeclined); !ok || last != why {
-		a.Store.Event(orig, eventRepairDeclined, why)
-		_ = a.Notify(OrchestratorID, store.NoticeInfo, why)
-	}
-	return true
+	return why
 }
 
 // eventCIRepairSkipped is recorded on a red task when its CI failure gets

@@ -186,8 +186,19 @@ func (c *CIRed) Check(ctx context.Context) (CIRedReport, error) {
 			break
 		}
 		red, _ := s.Layer(task)
+		pending := a.CIRepairPending(task)
 		note := c.onRed(ctx, red)
 		rep.Notes = append(rep.Notes, note)
+		if pending {
+			// A retry of a spawn that failed (#768): CIRedRepair already
+			// said why once; say only when it spawned.
+			if a.CIRepairPending(task) || note == "" {
+				continue
+			}
+			errs = append(errs, a.Notify(app.OrchestratorID, store.NoticeInfo, fmt.Sprintf(
+				"%s's pending CI repair of its red PR %s spawned on retry. %s", task, red.PR, note)))
+			continue
+		}
 		errs = append(errs, a.Notify(app.OrchestratorID, store.NoticeInfo, fmt.Sprintf(
 			"The CI repair of %s's red PR %s was killed or finished with nothing to land. %s", task, red.PR, note)))
 	}
