@@ -406,6 +406,7 @@ func (a *App) finishOrphan(t store.Task, o *DoneOrphan, now time.Time) error {
 		return err
 	}
 	claims := cl[t.ID]
+	a.recordKiller(t.ID, KilledByOrphan) // a finisher takes over: not a decline (#772)
 	if err := a.Kill(t.ID, false); err != nil {
 		return err
 	}

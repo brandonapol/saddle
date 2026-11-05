@@ -253,7 +253,7 @@ func TestRestackHoldsLayerUntilDependencyMerges(t *testing.T) {
 	}
 	t1, _ = a.Store.Task(t1.ID)
 	t2, _ = a.Store.Task(t2.ID)
-	must(t, a.Store.SetTrain(t1.ID, TrainRepairing, "", false))
+	routeAroundByHand(t, a, t1) // out of the stack, its PR still meant to merge
 	setPR(t, t2.PR, "OPEN", t1.Branch)
 	was := remoteRev(t, origin, t2.Branch)
 	before := len(ghLog())

@@ -246,6 +246,9 @@ func (a *App) retryConflictRepair(p PendingRepair) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if p.Kind == "restack" && a.settleRepairing(t.ID) {
+		return "", nil // its no_change repair found its work in place (#772)
+	}
 	seed, _ := a.seedOf(t.ID)
 	r, created, err := a.ensureRepair(t, seed, false)
 	if err != nil || !created {

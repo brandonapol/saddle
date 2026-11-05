@@ -40,7 +40,7 @@ func TestSentinelAckAndUnstackCommands(t *testing.T) {
 	}
 
 	out := run(t, "unstack", "#1")
-	if !strings.Contains(out, "t1 is out of the PR stack") || !strings.Contains(out, "the stack checks clean") {
+	if !strings.Contains(out, "t1 is out of the PR stack: its PR") || !strings.Contains(out, "is left open") || !strings.Contains(out, "the stack checks clean") {
 		t.Fatalf("unstack:\n%s", out)
 	}
 	es, err := a.Store.Train()

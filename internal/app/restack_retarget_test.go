@@ -86,7 +86,7 @@ func TestRestackKeepsRetargetOntoTaskOutsideStack(t *testing.T) {
 		t.Fatal(err)
 	}
 	t1, t2 := mustTask(t, a, "t1"), mustTask(t, a, "t2")
-	must(t, a.Store.SetTrain(t1.ID, TrainRepairing, "", false))
+	routeAroundByHand(t, a, t1) // out of the stack, its PR still meant to merge
 	setPR(t, t1.PR, "OPEN", "main")
 	setPR(t, t2.PR, "OPEN", t1.Branch) // gh pr edit --base, by hand
 	before := len(ghLog())
