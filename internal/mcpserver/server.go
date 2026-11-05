@@ -669,7 +669,7 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, OK{Message: "sent"}, err
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "land", Description: "Run the merge train: land queued branches one at a time on the integration branch (rebase, test, fast-forward). Conflicts go back to their agents."},
+	mcp.AddTool(s, &mcp.Tool{Name: "land", Description: "Run the merge train: land queued branches one at a time (rebase onto the work landed before them, test), then open each landed task's PR against base in the same step, stacked only on a PR it depends on. Conflicts go back to their agents. Landed is not done: a task is done only when its PR merges into base (status delivery: merged)."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, LandOut, error) {
 			rs, err := a.LandRecorded()
 			if err != nil {
@@ -678,7 +678,7 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, LandOut{Message: landMessage(len(rs)), Results: rs}, nil
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "prs", Description: "Push landed branches and open or update a stack of GitHub PRs, in landing order."},
+	mcp.AddTool(s, &mcp.Tool{Name: "prs", Description: "Push landed branches and open or update their stack of PRs, in landing order. Land and the sentinel already open every landed task's PR; run prs to refresh the stack or to see why a PR didn't open."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, PRsOut, error) {
 			urls, err := a.PRs()
 			return nil, PRsOut{PRs: urls}, err

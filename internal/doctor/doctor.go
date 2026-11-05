@@ -203,6 +203,9 @@ func runChecks(env Env, local bool) []Result {
 	if se, ok := env.(ScratchEnv); ok {
 		add(CheckScratch, func() Result { return scratchCheck(se) })
 	}
+	if ue, ok := env.(UnpublishedEnv); ok {
+		add(CheckUnpublished, func() Result { return unpublishedCheck(ue) })
+	}
 	if ee, ok := env.(EngineEnv); ok {
 		add(CheckEngine, func() Result { return engineCheck(ee) })
 	}

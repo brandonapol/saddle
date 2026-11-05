@@ -106,7 +106,8 @@ func landMessage(n int) string {
 		return "nothing queued: no branch is waiting in the merge train. A task is queued when it calls done; " +
 			"status shows which tasks are still running or idle without having called done."
 	}
-	return fmt.Sprintf("Ran the merge train over %d queued branch(es); see results.", n)
+	return fmt.Sprintf("Ran the merge train over %d queued branch(es) and opened the landed tasks' PRs against base; see results. "+
+		"Landed tasks are not done until their PRs merge into base: status shows each one's delivery.", n)
 }
 
 // KeyList is send_keys' keys: a JSON array of key names, or one key as a
