@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/autopilot"
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/usage"
 )
@@ -435,5 +437,31 @@ func TestAutopilotTasksMarkHowTheyEnded(t *testing.T) {
 	if got["t31"].End != autopilot.EndKilled || got["t32"].End != autopilot.EndFailed || got["t32"].Why != "worktree add failed" ||
 		got["t33"].End != autopilot.EndNoChange || got["t33"].Summary != "already fixed" || got["t34"].End != "" || !got["t34"].Landed {
 		t.Errorf("tasks = %+v", got)
+	}
+}
+
+// scanForge is a forge whose tracker holds the issues it is built with.
+type scanForge struct {
+	forge.Unsupported
+	issues []forge.Issue
+}
+
+func (s scanForge) UnassignedIssues(context.Context) ([]forge.Issue, error) { return s.issues, nil }
+
+// #807: the ticket scan returns the forge's unassigned issues, and a forge
+// without the read scans nothing instead of failing the tick.
+func TestAutopilotScanReturnsTicketsViaForge(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	f := scanForge{issues: []forge.Issue{{Number: 7, Title: "t", Body: "b", Labels: []string{"bug"}, Created: created}}}
+	got, err := a.unassignedVia(context.Background(), f)
+	must(t, err)
+	if len(got) != 1 || got[0].Number != 7 || got[0].Title != "t" || !got[0].Created.Equal(created) || !slices.Equal(got[0].Labels, []string{"bug"}) {
+		t.Fatalf("scan = %+v", got)
+	}
+	got, err = a.unassignedVia(context.Background(), forge.Unsupported{Reason: "local-only"})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("unsupported forge scan = %+v, %v", got, err)
 	}
 }

@@ -403,3 +403,37 @@ func TestReadMergedPRsUnsupported(t *testing.T) {
 		}
 	}
 }
+
+// #807: the REST list keeps maintainers' issues and drops PRs and outsiders.
+func TestGitHubUnassignedIssues(t *testing.T) {
+	f := &fakeGH{replies: []string{`[
+ {"number":1,"title":"mine","body":"b","created_at":"2026-01-02T03:04:05Z","author_association":"OWNER","labels":[{"name":"bug"}]},
+ {"number":2,"title":"collab","author_association":"COLLABORATOR"},
+ {"number":3,"title":"drive-by","author_association":"NONE"},
+ {"number":4,"title":"a PR","author_association":"MEMBER","pull_request":{"url":"x"}},
+ {"number":5,"title":"first timer","author_association":"FIRST_TIME_CONTRIBUTOR"}]`}}
+	is, err := f.github().UnassignedIssues(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.want(t, "api repos/{owner}/{repo}/issues?state=open&assignee=none&per_page=100")
+	if len(is) != 2 || is[0].Number != 1 || is[1].Number != 2 {
+		t.Fatalf("issues = %+v", is)
+	}
+	if is[0].Title != "mine" || is[0].Body != "b" || !reflect.DeepEqual(is[0].Labels, []string{"bug"}) ||
+		!is[0].Created.Equal(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)) {
+		t.Errorf("mapped = %+v", is[0])
+	}
+	if _, err := (&fakeGH{replies: []string{"nope"}}).github().UnassignedIssues(context.Background()); err == nil {
+		t.Error("bad JSON parsed")
+	}
+}
+
+// #807: labelling an issue is `gh issue edit`, not `gh pr edit`.
+func TestGitHubAddIssueLabelArgs(t *testing.T) {
+	f := &fakeGH{}
+	if err := f.github().AddIssueLabel(context.Background(), 12, "needs-human"); err != nil {
+		t.Fatal(err)
+	}
+	f.want(t, "issue edit 12 --add-label needs-human")
+}

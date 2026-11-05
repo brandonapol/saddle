@@ -674,6 +674,19 @@ func (g *GitLab) CloseIssue(ctx context.Context, n int, comment string) error {
 	return err
 }
 
+// UnassignedIssues isn't implemented: GitLab's issue list carries no author
+// membership to filter on.
+func (g *GitLab) UnassignedIssues(context.Context) ([]Issue, error) {
+	return nil, fmt.Errorf("list unassigned issues: %w", ErrUnsupported)
+}
+
+func (g *GitLab) AddIssueLabel(ctx context.Context, n int, label string) error {
+	return addLabelEnsuring(ctx, g, label, func() error {
+		_, err := g.api(ctx, "PUT", issuePath("", n), "-f", "add_labels="+label)
+		return err
+	})
+}
+
 func (g *GitLab) ReopenIssue(ctx context.Context, n int) error {
 	_, err := g.api(ctx, "PUT", issuePath("", n), "-f", "state_event=reopen")
 	return err
