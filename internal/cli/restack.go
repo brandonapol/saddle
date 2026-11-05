@@ -15,8 +15,12 @@ func restackCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
 			if abort || resume {
-				if err := a.RecoverRestack(abort); err != nil {
+				skipped, err := a.RecoverRestack(abort)
+				if err != nil {
 					return err
+				}
+				for _, wt := range skipped {
+					fmt.Fprintf(cmd.OutOrStdout(), "left %s alone: it has uncommitted changes\n", wt)
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "restack recovered; run saddle prs to publish")
 				return nil

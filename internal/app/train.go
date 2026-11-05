@@ -118,11 +118,13 @@ func (a *App) frozenFiles() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	covered, err := a.flagScope(f, stack)
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]string{}
-	at := false
-	for _, l := range stack {
-		at = at || l.ID == f.Task
-		if !at || l.From == "" || l.Lost != "" {
+	for i, l := range stack {
+		if !covered[i] || l.From == "" || l.Lost != "" {
 			continue
 		}
 		files, _ := gitx.ChangedFiles(a.Root, l.From, l.To)
@@ -162,6 +164,7 @@ func (a *App) lockTrain() (unlock func(), err error) {
 	if err != nil {
 		return nil, err
 	}
+	a.recoverDeadRestack() // #777
 	if err := a.pendingRestack(); err != nil {
 		unlock()
 		return nil, err
@@ -192,6 +195,7 @@ func (a *App) TryLockTrain() (unlock func(), ok bool, err error) {
 	if err != nil || !ok {
 		return unlock, ok, err
 	}
+	a.recoverDeadRestack() // #777
 	if err := a.pendingRestack(); err != nil {
 		unlock()
 		return nil, false, err
@@ -397,6 +401,33 @@ func (a *App) ClearFlag() error {
 	return nil
 }
 
+// flagScope is the layers of stack the at-risk flag f covers: the flagged
+// layer and those above it in its own PR stack (#771). Independent stacks
+// later in train order are not covered, and a flag whose task has left the
+// stack covers nothing; the sentinel's next pass re-flags it if still real.
+func (a *App) flagScope(f StackFlag, stack []landedTask) (map[int]bool, error) {
+	at := slices.IndexFunc(stack, func(l landedTask) bool { return l.ID == f.Task })
+	if at < 0 {
+		return nil, nil
+	}
+	layout, _, err := a.stackLayout(stack)
+	if err != nil {
+		return nil, err
+	}
+	return flagScopeOf(layout, at), nil
+}
+
+// flagScopeOf is layer at and every layer above it in layout.
+func flagScopeOf(layout []prLayer, at int) map[int]bool {
+	out := map[int]bool{at: true}
+	for j := range layout {
+		if j != at && above(layout, j, at) {
+			out[j] = true
+		}
+	}
+	return out
+}
+
 // checkFlag refuses while the stack is flagged at risk and not acked.
 func (a *App) checkFlag() error {
 	f, ok, err := a.Flag()
@@ -407,7 +438,7 @@ func (a *App) checkFlag() error {
 }
 
 func flagErr(f StackFlag) error {
-	return fmt.Errorf("the PR stack is flagged at risk from %s up (%s), so nothing from there up was pushed, landed or opened. "+
+	return fmt.Errorf("the PR stack is flagged at risk from %s up (%s), so nothing in its PR stack from there up was pushed, landed or opened. "+
 		"Run restack to rebuild it; the flag clears once the stack checks clean. "+
 		"If it can't be fixed that way, `saddle unstack %s` drops the task from the stack and `saddle sentinel ack` acknowledges the flag",
 		f.Task, f.Cause, f.Task)
@@ -817,23 +848,34 @@ func (a *App) publishMode(pushOnly bool) (published, error) {
 	if err != nil {
 		return res, err
 	}
+	// The flag holds back only its own PR stack (#771); independent stacks
+	// still go out.
+	var flagHeld map[int]bool
+	if flagged && !flag.Acked {
+		if flagHeld, err = a.flagScope(flag, landed); err != nil {
+			return res, err
+		}
+	}
 	var stop error
 	stopAt := len(landed)
 	ciHeld, ciSkipped := a.ciRedHeld(landed, layout), map[int]string{}
 	base, baseName := a.baseRef(), a.Cfg.Base
 	independent := a.publishedPRs() // saddle publish put these up on their own (#220)
 	for i, l := range landed {
-		if flagged && !flag.Acked && l.ID == flag.Task {
-			stop, stopAt = flagErr(flag), i
-			break
+		if flagHeld[i] {
+			if stop == nil {
+				stop = flagErr(flag)
+			}
+			base, baseName = l.To, l.ID+"'s branch"
+			continue
 		}
 		prob, err := a.layerProblem(l, base, baseName)
 		if err != nil {
 			return res, err
 		}
 		if prob != "" {
-			stop = fmt.Errorf("the PR stack doesn't match what the train landed, so nothing from %s up was pushed and no PR there changed. "+
-				"Run restack to rebuild it; don't fix it with git:\n  %s: %s", l.ID, l.ID, prob)
+			stop = errors.Join(stop, fmt.Errorf("the PR stack doesn't match what the train landed, so nothing from %s up was pushed and no PR there changed. "+
+				"Run restack to rebuild it; don't fix it with git:\n  %s: %s", l.ID, l.ID, prob))
 			stopAt = i
 			break
 		}
@@ -845,7 +887,7 @@ func (a *App) publishMode(pushOnly bool) (published, error) {
 	gateHeld, gateStop := a.prGate(landed, layout, order, func(i int) bool {
 		_, held := ciHeld[i]
 		_, own := independent[landed[i].ID]
-		return i < stopAt && !held && !own
+		return i < stopAt && !flagHeld[i] && !held && !own
 	})
 	if gateHeld == nil && gateStop != nil {
 		return res, gateStop
@@ -855,7 +897,7 @@ func (a *App) publishMode(pushOnly bool) (published, error) {
 	var entries []stackEntry
 	done := map[int]bool{}
 	for _, i := range order {
-		if i >= stopAt {
+		if i >= stopAt || flagHeld[i] {
 			continue
 		}
 		if _, ok := gateHeld[i]; ok {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/gitx"
@@ -16,7 +17,14 @@ import (
 
 const RestackJournalFile = "restack-journal.json"
 
+// EventRestackAutoAborted records a journal whose writer died rolled back
+// on its own at the next train-lock acquire (#777).
+const EventRestackAutoAborted = "restack_auto_aborted"
+
 type restackJournal struct {
+	// Pid is the process that wrote the journal; 0 in journals written
+	// before it was recorded.
+	Pid       int           `json:"pid,omitempty"`
 	Plan      []restacked   `json:"plan"`
 	Moves     []RestackMove `json:"moves"`
 	Checkouts []store.Task  `json:"checkouts,omitempty"`
@@ -36,6 +44,9 @@ func (a *App) pendingRestack() error {
 func (a *App) writeRestackJournal(j restackJournal) error {
 	if err := a.pendingRestack(); err != nil {
 		return err
+	}
+	if j.Pid == 0 {
+		j.Pid = os.Getpid()
 	}
 	b, err := json.MarshalIndent(j, "", "  ")
 	if err != nil {
@@ -92,40 +103,62 @@ func (a *App) moveRestackRefs(moves []RestackMove, abort bool) error {
 	return nil
 }
 
-func (a *App) applyRestackJournal(j restackJournal, abort bool) error {
+// applyRestackJournal completes j, or with abort rolls it back. Abort never
+// fails on a dirty checkout: it leaves that checkout (and, while it is on its
+// branch, that branch's ref) alone and returns it in skipped (#777).
+func (a *App) applyRestackJournal(j restackJournal, abort bool) (skipped []string, err error) {
+	dirty := func(task store.Task) bool {
+		d, err := gitx.Dirty(task.Worktree)
+		return err != nil || len(d) > 0
+	}
+	skip := func(task store.Task) {
+		if !slices.Contains(skipped, task.Worktree) {
+			skipped = append(skipped, task.Worktree)
+			a.Store.Event(task.ID, "restack_abort", "left dirty checkout "+task.Worktree+" alone")
+		}
+	}
+	// Detach clean task checkouts first. If interrupted after the transaction,
+	// their files and index still match their detached HEAD, never a moved ref.
+	keep := map[string]bool{} // refs left alone under a dirty checkout
+	for _, task := range j.Checkouts {
+		if !a.checkedOut(task) {
+			continue
+		}
+		if dirty(task) {
+			if !abort {
+				return nil, fmt.Errorf("%s has uncommitted changes; preserve them before resuming restack", task.Worktree)
+			}
+			skip(task)
+			keep["refs/heads/"+task.Branch] = true
+			continue
+		}
+		if _, err := trainGit(task.Worktree, "checkout", "-q", "--detach"); err != nil {
+			return nil, err
+		}
+	}
 	var pending []RestackMove
 	for _, m := range j.Moves {
 		current, err := gitx.RevParse(a.Root, m.Ref)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if current != m.Old && current != m.New {
 			if !abort {
-				return fmt.Errorf("%s changed outside the restack transaction; run saddle restack --abort to leave that change intact and discard this plan", m.Ref)
+				return nil, fmt.Errorf("%s changed outside the restack transaction; run saddle restack --abort to leave that change intact and discard this plan", m.Ref)
 			}
 			a.Store.Event(m.Task, "restack_abort", "preserved externally changed "+m.Ref)
+			continue
+		}
+		if keep[m.Ref] {
 			continue
 		}
 		if !abort && current == m.Old || abort && current == m.New {
 			pending = append(pending, m)
 		}
 	}
-	// Detach clean task checkouts first. If interrupted after the transaction,
-	// their files and index still match their detached HEAD, never a moved ref.
-	for _, task := range j.Checkouts {
-		if !a.checkedOut(task) {
-			continue
-		}
-		if dirty, err := gitx.Dirty(task.Worktree); err != nil || len(dirty) > 0 {
-			return fmt.Errorf("%s has uncommitted changes; preserve them before resuming restack", task.Worktree)
-		}
-		if _, err := trainGit(task.Worktree, "checkout", "-q", "--detach"); err != nil {
-			return err
-		}
-	}
 	if len(pending) > 0 {
 		if err := a.moveRestackRefs(pending, abort); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for _, r := range j.Plan {
@@ -137,7 +170,7 @@ func (a *App) applyRestackJournal(j restackJournal, abort bool) error {
 			state, note = r.State, r.rangeNote()
 		}
 		if err := a.Store.SetTrain(r.ID, state, note, false); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for _, task := range j.Checkouts {
@@ -147,42 +180,91 @@ func (a *App) applyRestackJournal(j restackJournal, abort bool) error {
 		if a.checkedOut(task) {
 			continue
 		}
-		if dirty, err := gitx.Dirty(task.Worktree); err != nil || len(dirty) > 0 {
-			return fmt.Errorf("%s has uncommitted changes; preserve them before resuming restack", task.Worktree)
+		if dirty(task) {
+			if !abort {
+				return nil, fmt.Errorf("%s has uncommitted changes; preserve them before resuming restack", task.Worktree)
+			}
+			skip(task) // stays detached at the commit its files match
+			continue
 		}
 		if _, err := trainGit(task.Worktree, "checkout", "-q", task.Branch); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for _, m := range j.Moves {
 		a.Store.Event(m.Task, "restack", fmt.Sprintf("%s %s → %s (abort=%t)", m.Ref, short(m.Old), short(m.New), abort))
 	}
-	return os.Remove(a.stateDir(RestackJournalFile))
+	return skipped, os.Remove(a.stateDir(RestackJournalFile))
 }
 
-// RecoverRestack completes or rolls back the journaled local transaction.
-// Remote publishing can be retried with prs after recovery.
-func (a *App) RecoverRestack(abort bool) error {
-	unlock, err := a.lockTrainForRecovery()
-	if err != nil {
-		return err
-	}
-	defer unlock()
+// readRestackJournal reads and checks the journal; ok is false when there is
+// none.
+func (a *App) readRestackJournal() (j restackJournal, ok bool, err error) {
 	b, err := os.ReadFile(a.stateDir(RestackJournalFile))
 	if errors.Is(err, os.ErrNotExist) {
-		return errors.New("no interrupted restack to recover")
+		return j, false, nil
 	}
 	if err != nil {
-		return err
+		return j, false, err
 	}
-	var j restackJournal
 	if err := json.Unmarshal(b, &j); err != nil {
-		return err
+		return j, false, err
 	}
 	for _, m := range j.Moves {
 		if !strings.HasPrefix(m.Ref, "refs/heads/") || strings.ContainsAny(m.Ref, "\r\n \x00") || !validJournalOID(m.Old) || !validJournalOID(m.New) {
-			return errors.New("invalid restack journal ref")
+			return j, false, errors.New("invalid restack journal ref")
 		}
+	}
+	return j, true, nil
+}
+
+// recoverDeadRestack rolls back a journal whose writer is dead, so a crash or
+// a stolen lock mid-restack never needs a human (#777). Every move is a CAS,
+// so restoring old tips is safe: a ref someone moved since is kept. The
+// caller holds the train lock. A journal whose writer still runs is left for
+// it; if the rollback itself fails, the journal stays and pendingRestack
+// reports it.
+func (a *App) recoverDeadRestack() {
+	j, ok, err := a.readRestackJournal()
+	if err != nil || !ok || j.Pid != 0 && pidAlive(j.Pid) {
+		return
+	}
+	skipped, err := a.applyRestackJournal(j, true)
+	if err != nil {
+		a.Store.Event("", "restack_auto_abort_failed", fmt.Sprintf("journal from dead pid %d: %v", j.Pid, err))
+		return
+	}
+	note := fmt.Sprintf("rolled back the restack journal of dead pid %d", j.Pid)
+	if len(skipped) > 0 {
+		note += "; left dirty checkouts alone: " + strings.Join(skipped, ", ")
+	}
+	a.Store.Event("", EventRestackAutoAborted, note)
+}
+
+// abortFailedRestack rolls back j after its own apply failed, so a live
+// process (the daemon) never leaves a journal behind it (#777).
+func (a *App) abortFailedRestack(j restackJournal, cause error) error {
+	if _, err := a.applyRestackJournal(j, true); err != nil {
+		return errors.Join(cause, fmt.Errorf("rolling the restack back failed too: %w", err))
+	}
+	return cause
+}
+
+// RecoverRestack completes or rolls back the journaled local transaction.
+// Remote publishing can be retried with prs after recovery. skipped lists
+// the dirty checkouts an abort left alone.
+func (a *App) RecoverRestack(abort bool) (skipped []string, err error) {
+	unlock, err := a.lockTrainForRecovery()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	j, ok, err := a.readRestackJournal()
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errors.New("no interrupted restack to recover")
 	}
 	return a.applyRestackJournal(j, abort)
 }

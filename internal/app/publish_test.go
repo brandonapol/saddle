@@ -34,6 +34,9 @@ func prCreate(log []string, head string) string {
 func TestPublishLandedTasksAsIndependentPRs(t *testing.T) {
 	t.Parallel()
 	a, origin, ghLog := publishSetup(t)
+	// One linear stack, so the flag on t1 holds t2 too (#771 scopes it to
+	// its own stack).
+	a.Cfg.Train.Output = "single"
 	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
 	tk, err := a.Spawn(SpawnReq{ID: "t2", Title: "two"})
 	must(t, err)

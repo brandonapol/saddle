@@ -107,7 +107,7 @@ func (a *App) atRisk(task string) string {
 }
 
 // flagCovers says why the stack-at-risk flag covers task: it is the flagged
-// layer or above it in train order. An acked flag still covers it; auto-merge
+// layer or above it in the flagged layer's own PR stack (#771). An acked flag still covers it; auto-merge
 // leaves that to a human.
 func (a *App) flagCovers(task string) string {
 	f, ok, err := a.Flag()
@@ -121,9 +121,11 @@ func (a *App) flagCovers(task string) string {
 	if err != nil {
 		return "can't read the stack: " + err.Error()
 	}
-	from := slices.IndexFunc(stack, func(l landedTask) bool { return l.ID == f.Task })
-	at := slices.IndexFunc(stack, func(l landedTask) bool { return l.ID == task })
-	if from >= 0 && at >= 0 && at < from {
+	covered, err := a.flagScope(f, stack)
+	if err != nil {
+		return "can't lay out the stack: " + err.Error()
+	}
+	if at := slices.IndexFunc(stack, func(l landedTask) bool { return l.ID == task }); at < 0 || !covered[at] {
 		return ""
 	}
 	why := fmt.Sprintf("from %s up: %s", f.Task, f.Cause)
