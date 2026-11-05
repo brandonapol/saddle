@@ -74,7 +74,7 @@ func (s system) Engine() (EngineReport, error) {
 	if err != nil {
 		return rep, err
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	a.Store = st
 	rep.Watchers, err = a.Watchers(time.Now())
 	return rep, err

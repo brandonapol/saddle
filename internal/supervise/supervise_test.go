@@ -76,8 +76,7 @@ func TestPanickingWatcherRestartsOthersKeepTicking(t *testing.T) {
 			badTicks.Add(1)
 			Tick(ctx)
 			if i == 2 {
-				var m map[string]int
-				m["boom"]++ // nil map write: a real runtime panic
+				panic("boom: nil map") // as a nil map write in a real loop would
 			}
 			time.Sleep(time.Millisecond)
 		}
@@ -101,7 +100,7 @@ func TestPanickingWatcherRestartsOthersKeepTicking(t *testing.T) {
 	for _, b := range g.Beats() {
 		beats[b.Name] = b
 	}
-	if beats["bad"].Restarts < 2 || !strings.Contains(beats["bad"].LastPanic, "nil map") {
+	if beats["bad"].Restarts < 2 || !strings.Contains(beats["bad"].LastPanic, "boom") {
 		t.Fatalf("bad beat = %+v", beats["bad"])
 	}
 	if beats["good"].Restarts != 0 || beats["good"].At.IsZero() {
