@@ -36,7 +36,8 @@ func noEvent(t *testing.T, a *app.App, kind string) {
 
 // #764: a sentinel cycle under GitHub's rate limit logs no sentinel_error
 // and no decision_default_failed. The case from quark: a ci-repair-cap card
-// times out and its default labels the PR needs-human through gh.
+// times out and its default labels the PR needs-human through gh. (The
+// card's retry_after is TestExpireDecisionsRateLimitedDefaultWaits.)
 func TestSentinelRunUnderRateLimitLogsNoError(t *testing.T) {
 	a, _ := setup(t)
 	newFakeGH(t)
@@ -57,9 +58,6 @@ func TestSentinelRunUnderRateLimitLogsNoError(t *testing.T) {
 	_ = s.Run(ctx) // one cycle, then ctx is done
 	noEvent(t, a, EventError)
 	noEvent(t, a, app.EventDecisionDefaultFailed)
-	if open, _ := a.OpenDecisions(); len(open) != 1 || open[0].RetryAfter.IsZero() {
-		t.Fatalf("open cards %+v; want the card pending with retry_after", open)
-	}
 }
 
 // limitedCI is a ci-red forge with GitHub's quota spent.
