@@ -32,7 +32,7 @@ func TestTickUnderRateLimitWaits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rate-limited tick err = %v, want a skipped tick", err)
 	}
-	if !strings.Contains(rep.Decision, "rate-limited") || len(r.env.spawns) != 0 {
+	if !strings.Contains(rep.Decision, "rate limit") || len(r.env.spawns) != 0 {
 		t.Fatalf("decision %q, spawns %v; want a wait", rep.Decision, r.env.spawns)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

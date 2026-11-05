@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -137,5 +138,14 @@ func TestOutputOtherFailuresDontTrip(t *testing.T) {
 	}
 	if _, ok := RateLimited(root); ok {
 		t.Fatal("a plain failure tripped the governor")
+	}
+}
+
+// A held call's error still reads as a rate limit to checks that match the
+// text, like automerge's restack deferral.
+func TestRateLimitErrorSaysRateLimit(t *testing.T) {
+	err := fmt.Errorf("gh pr view: %w", &RateLimitError{Until: time.Now()})
+	if !IsRateLimitMessage(err.Error()) {
+		t.Fatalf("%q does not read as a rate limit", err)
 	}
 }

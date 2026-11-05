@@ -32,7 +32,8 @@ type RateLimitError struct {
 }
 
 func (e *RateLimitError) Error() string {
-	msg := fmt.Sprintf("GitHub rate-limited until %s", e.Until.Local().Format("15:04"))
+	// "rate limit" stays in the text: older checks match on it.
+	msg := fmt.Sprintf("GitHub rate limit: gh calls held until %s", e.Until.Local().Format("15:04"))
 	if e.Err != nil {
 		msg += ": " + e.Err.Error()
 	}
@@ -92,9 +93,10 @@ func OnRateLimited(f func(root string, rl RateLimitHold)) {
 // IsRateLimitMessage reports whether gh's output says a rate limit was hit.
 func IsRateLimitMessage(s string) bool { return rateLimitRe.MatchString(s) }
 
-// saddleRoot finds the nearest directory at or above dir that saddle init
-// set up, or "". It only stats, since it runs before every gh call; a
-// worktree under .saddle/worktrees resolves to the main checkout.
+// saddleRoot finds the nearest directory at or above dir that saddle set
+// up (its .saddle/ holds config.toml or state.db), or "". It only stats,
+// since it runs before every gh call; a worktree under .saddle/worktrees
+// resolves to the main checkout.
 func saddleRoot(dir string) string {
 	if dir == "" {
 		return ""
@@ -104,8 +106,10 @@ func saddleRoot(dir string) string {
 		return ""
 	}
 	for d := abs; ; d = filepath.Dir(d) {
-		if _, err := os.Stat(filepath.Join(d, ".saddle", "config.toml")); err == nil {
-			return d
+		for _, f := range []string{"config.toml", "state.db"} {
+			if _, err := os.Stat(filepath.Join(d, ".saddle", f)); err == nil {
+				return d
+			}
 		}
 		if d == filepath.Dir(d) {
 			return ""

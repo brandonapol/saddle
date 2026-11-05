@@ -413,7 +413,7 @@ func (d *Driver) Tick() (Report, error) {
 	issues, err := env.Ready(st.Label())
 	if errors.Is(err, forge.ErrRateLimited) {
 		// GitHub's quota is spent: wait for the reset (#764).
-		rep.Decision = "waiting: " + err.Error()
+		rep.Decision = "waiting for GitHub's rate limit to reset: " + err.Error()
 		return rep, d.save(&st, gen, &rep)
 	}
 	if err != nil {

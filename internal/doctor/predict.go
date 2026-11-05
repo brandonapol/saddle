@@ -270,6 +270,12 @@ func (p *predict) rateLimit() []Risk {
 		return nil
 	}
 	c, err := forge.ReadRateLimit(context.Background(), p.fg)
+	if until, ok := forge.RateLimitUntil(err); ok {
+		// saddle's governor is holding gh calls until the reset (#764).
+		return []Risk{{Severity: High, Class: ClassRateLimit,
+			What: "GitHub rate-limited until " + until.Local().Format("15:04") + "; saddle holds every gh call until then, so nothing on GitHub moves",
+			Fix:  "wait for the reset, and lower concurrency so the quota lasts"}}
+	}
 	if err != nil || c.Limit == 0 {
 		return nil
 	}
