@@ -45,7 +45,7 @@ func TestDigestCoalescesWindow(t *testing.T) {
 	}
 	sent, err := a.FlushDigest(now.Add(16 * time.Minute))
 	must(t, err)
-	for _, want := range []string{"Since ", "3 PRs merged (#12 #13 #14)", "2 tasks landed (t1 t2)", "CI green on 1"} {
+	for _, want := range []string{"Since ", "3 PRs merged (#12 #13 #14)", "2 tasks landed locally (t1 t2)", "CI green on 1"} {
 		if !strings.Contains(sent, want) {
 			t.Fatalf("digest %q lacks %q", sent, want)
 		}
@@ -144,7 +144,7 @@ func TestMergeDigestsRolls(t *testing.T) {
 	t.Parallel()
 	lines := []string{
 		"Since 09:23: 3 PRs merged (#12 #13 #14), restacked 3 times.",
-		"Since 09:40: 1 PR merged (#15), 1 task landed (t4), restacked once, stack checks clean.",
+		"Since 09:40: 1 PR merged (#15), 1 task landed locally (t4), restacked once, stack checks clean.",
 		"Since 10:02: 3 PRs merged (#16 #17 #18), restacked 3 times, stack checks clean (2x), CI green on 1.",
 	}
 	got := lines[0]
@@ -154,7 +154,7 @@ func TestMergeDigestsRolls(t *testing.T) {
 			t.Fatalf("MergeDigests refused %q", l)
 		}
 	}
-	want := "Since 09:23: 7 PRs merged (#12 #13 #14 #15 #16 #17 #18), 1 task landed (t4), restacked 7 times, CI green on 1, stack checks clean (3x)."
+	want := "Since 09:23: 7 PRs merged (#12 #13 #14 #15 #16 #17 #18), 1 task landed locally (t4), restacked 7 times, CI green on 1, stack checks clean (3x)."
 	if got != want {
 		t.Fatalf("merged =\n%s\nwant\n%s", got, want)
 	}

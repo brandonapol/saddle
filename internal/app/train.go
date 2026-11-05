@@ -569,7 +569,7 @@ func (a *App) landOne(id string, run *landRun) LandResult {
 		}
 		_ = gitx.WorktreeRemove(a.Root, t.Worktree)
 	}
-	if err := a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf("%s %q landed on %s at %s.%s", id, t.Title, a.Cfg.Integration, head[:12], a.repairLanded(id))); err != nil {
+	if err := a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf("%s %q landed locally at %s; saddle opens its PR against %s now. It is not on %s, and not done, until that PR merges.%s", id, t.Title, head[:12], a.Cfg.Base, a.Cfg.Base, a.repairLanded(id))); err != nil {
 		res.Note += " (orchestrator not notified: " + err.Error() + ")"
 	}
 	return res

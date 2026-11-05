@@ -20,7 +20,7 @@ const EventDigestSent = "notice_digest_sent"
 var (
 	mrMergedRe   = regexp.MustCompile(`^(\d+ )MR(s? merged)`)
 	mergedPRRe   = regexp.MustCompile(`^Auto-merged (\S+) \(`)
-	landedTaskRe = regexp.MustCompile(`^(\S+) ".*" landed on `)
+	landedTaskRe = regexp.MustCompile(`^(\S+) ".*" landed (?:on \S+|locally) at `)
 )
 
 // pendingDigest returns the digest items logged since the last digest was
@@ -57,7 +57,7 @@ var digestKinds = []struct {
 	ids              bool
 }{
 	{TopicMerged, "1 PR merged", "%d PRs merged", true},
-	{TopicLanded, "1 task landed", "%d tasks landed", true},
+	{TopicLanded, "1 task landed locally", "%d tasks landed locally", true},
 	{TopicRestacked, "restacked once", "restacked %d times", false},
 	{TopicLeft, "1 task left the stack", "%d tasks left the stack", false},
 	{TopicCIGreen, "CI green on 1", "CI green on %d", false},

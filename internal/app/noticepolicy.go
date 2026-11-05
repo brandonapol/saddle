@@ -62,7 +62,7 @@ var (
 		{regexp.MustCompile(`^Auto-merged \S+ \(\S+\)`), NoticeDigest, TopicMerged},
 		{regexp.MustCompile(`^Merged the stack `), NoticeDigest, TopicMerged},
 		{regexp.MustCompile(`^Collapsed stack `), NoticeDigest, TopicMerged},
-		{regexp.MustCompile(`^\S+ ".*" landed on \S+ at `), NoticeDigest, TopicLanded},
+		{regexp.MustCompile(`^\S+ ".*" landed (?:on \S+|locally) at `), NoticeDigest, TopicLanded},
 		{regexp.MustCompile(`^Restacked \d+ landed tasks`), NoticeDigest, TopicRestacked},
 		{regexp.MustCompile(`^\S+ left the PR stack \(`), NoticeDigest, TopicLeft},
 		{regexp.MustCompile(`^CI is passing again on `), NoticeDigest, TopicCIGreen},

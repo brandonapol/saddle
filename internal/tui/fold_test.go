@@ -70,7 +70,7 @@ func TestDigestLinesMergeIntoOne(t *testing.T) {
 	m.chat = nil
 	for _, l := range []string{
 		"Since 09:23: 3 PRs merged (#12 #13 #14), restacked 3 times.",
-		"Since 09:40: 1 PR merged (#15), 1 task landed (t4), restacked once.",
+		"Since 09:40: 1 PR merged (#15), 1 task landed locally (t4), restacked once.",
 		"Since 10:02: 3 PRs merged (#16 #17 #18), restacked 3 times.",
 	} {
 		m.addChat(store.ChatEvent, l)
