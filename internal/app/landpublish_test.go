@@ -103,11 +103,11 @@ func TestLandedTaskWithNoPRIsAlarmedThenHealed(t *testing.T) {
 	// The stack is flagged at t1: prs publishes nothing from there up.
 	must(t, a.SetFlag(StackFlag{Task: "t1", Cause: "test"}))
 
-	_, err := a.PublishLanded("sentinel")
+	_, err := a.PublishLanded(PublishBySentinel)
 	if err == nil {
 		t.Fatal("publish under a flag reported no error")
 	}
-	_, _ = a.PublishLanded("sentinel") // a second cycle doesn't alarm twice
+	_, _ = a.PublishLanded(PublishBySentinel) // a second cycle doesn't alarm twice
 	if n := landedNoPRAlarms(t, a, "t1", EventLandedNoPR); n != 1 {
 		t.Fatalf("%d landed_no_pr alarms, want 1", n)
 	}
@@ -120,7 +120,7 @@ func TestLandedTaskWithNoPRIsAlarmedThenHealed(t *testing.T) {
 	}
 
 	must(t, a.ClearFlag())
-	opened, err := a.PublishLanded("sentinel")
+	opened, err := a.PublishLanded(PublishBySentinel)
 	must(t, err)
 	if !slices.Equal(opened, []string{"t1"}) || prCreates(calls()) != 1 {
 		t.Fatalf("heal opened %v", opened)
@@ -171,4 +171,30 @@ func landedNoPRAlarms(t *testing.T, a *App, task, kind string) int {
 		}
 	}
 	return n
+}
+
+// #819: the sentinel retries a failed publish with backoff, so a red gate
+// isn't rerun every cycle; land always retries.
+func TestPublishLandedBacksOffSentinelRetries(t *testing.T) {
+	t.Parallel()
+	a := trainSetup(t)
+	originWithGh(t, a)
+	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+	must(t, a.SetFlag(StackFlag{Task: "t1", Cause: "test"}))
+	if _, err := a.PublishLanded(PublishBySentinel); err == nil {
+		t.Fatal("the first sentinel attempt under a flag reported no error")
+	}
+	// A second cycle right away waits: it tries nothing, so nothing fails.
+	if _, err := a.PublishLanded(PublishBySentinel); err != nil {
+		t.Fatalf("the sentinel retried at once: %v", err)
+	}
+	if _, err := a.PublishLanded("land"); err == nil {
+		t.Fatal("land waited for the sentinel's backoff")
+	}
+	must(t, a.ClearFlag())
+	opened, err := a.PublishLanded("land")
+	must(t, err)
+	if !slices.Equal(opened, []string{"t1"}) {
+		t.Fatalf("land's retry opened %v", opened)
+	}
 }

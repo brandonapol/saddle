@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -65,10 +67,30 @@ func (a *App) Unpublished() ([]string, error) {
 	return out, nil
 }
 
+// PublishBySentinel is PublishLanded's why for the sentinel's cycle, whose
+// retries after a failure wait publishRetry.
+const PublishBySentinel = "sentinel"
+
+// publishRetry is how long the sentinel waits to retry a publish that left
+// the same tasks without PRs: a red pre-publish gate isn't cached, and
+// rerunning the repo's checks every two-minute cycle would load the machine.
+const publishRetry = 15 * time.Minute
+
+// failedPublishes maps a repo root to its last publish that left tasks
+// without PRs: which tasks, and when.
+var failedPublishes sync.Map
+
+type failedPublish struct {
+	ids string
+	at  time.Time
+}
+
 // PublishLanded opens the PRs of every landed task that has none, the way
 // prs does, so nobody has to remember to run it (#819). Land calls it right
 // after the train, the sentinel on every cycle, and so the first run after an
-// upgrade opens the PRs of tasks an older saddle landed without one. It
+// upgrade opens the PRs of tasks an older saddle landed without one. The
+// sentinel's retries of a publish that left the same tasks without PRs wait
+// publishRetry; land always tries. It
 // returns the tasks it opened PRs for. A repo with no remote has nowhere to
 // push, so nothing happens. Tasks still without a PR afterwards raise the
 // landed-with-no-PR alarm once each: an event, and a notice to the
@@ -79,12 +101,24 @@ func (a *App) PublishLanded(why string) ([]string, error) {
 	}
 	before, err := a.Unpublished()
 	if err != nil || len(before) == 0 {
+		failedPublishes.Delete(a.Root)
 		return nil, err
+	}
+	key := a.publishKey(before)
+	if why == PublishBySentinel {
+		if f, ok := failedPublishes.Load(a.Root); ok && f.(failedPublish).ids == key && time.Since(f.(failedPublish).at) < publishRetry {
+			return nil, nil // the same tasks failed a moment ago; land or a later cycle retries
+		}
 	}
 	_, perr := a.PRs()
 	after, err := a.Unpublished()
 	if err != nil {
 		return nil, err
+	}
+	if len(after) > 0 {
+		failedPublishes.Store(a.Root, failedPublish{ids: a.publishKey(after), at: time.Now()})
+	} else {
+		failedPublishes.Delete(a.Root)
 	}
 	var opened []string
 	for _, id := range before {
@@ -98,6 +132,16 @@ func (a *App) PublishLanded(why string) ([]string, error) {
 	}
 	a.alarmUnpublished(after, perr)
 	return opened, perr
+}
+
+// publishKey names a publish attempt: the tasks without PRs, and the stack
+// flag, whose clearing makes a retry worth it at once.
+func (a *App) publishKey(ids []string) string {
+	key := strings.Join(ids, ",")
+	if f, ok, _ := a.Flag(); ok {
+		key += fmt.Sprintf(" flag %s %t %s", f.Task, f.Acked, f.Cause)
+	}
+	return key
 }
 
 // alarmUnpublished raises the landed-with-no-PR alarm for each of ids that

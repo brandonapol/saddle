@@ -214,7 +214,7 @@ func (s *Sentinel) cycle(ctx context.Context) (busy bool) {
 	// here, so a land whose publish failed, or one an older saddle ran,
 	// heals by itself. Skipped while the train is busy; the next cycle does it.
 	if !busy {
-		if _, err := s.App.PublishLanded("sentinel"); err != nil && !deferred(err) {
+		if _, err := s.App.PublishLanded(app.PublishBySentinel); err != nil && !deferred(err) {
 			s.logErr("opening landed tasks' PRs: " + err.Error())
 		}
 	}
