@@ -160,8 +160,8 @@ func (e *autopilotEnv) Reconcile() ([]string, error) {
 	return out, errors.Join(errs...)
 }
 
-// Land runs the train when something is queued, and publishes PRs when
-// anything landed. It skips both when nothing waits.
+// Land runs the train when something is queued; landing opens the landed
+// tasks' PRs itself (#819). It skips both when nothing waits.
 func (e *autopilotEnv) Land() (int, error) {
 	q, err := e.a.Queue()
 	if err != nil {
@@ -182,11 +182,6 @@ func (e *autopilotEnv) Land() (int, error) {
 	for _, r := range rs {
 		if r.State == store.Landed {
 			n++
-		}
-	}
-	if n > 0 && !e.a.Cfg.CI.Disabled {
-		if _, err := e.a.PRs(); err != nil {
-			return n, fmt.Errorf("prs: %w", err)
 		}
 	}
 	return n, nil
