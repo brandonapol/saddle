@@ -230,6 +230,11 @@ type Forge interface {
 	// AddSubIssue links issue child under parent.
 	AddSubIssue(ctx context.Context, repo string, parent, child int) error
 	ListIssues(ctx context.Context, q IssueQuery, f IssueFields) ([]Issue, error)
+	// UnassignedIssues lists the open issues nobody is assigned to that a
+	// maintainer (owner, member, collaborator) opened (#733, #807).
+	UnassignedIssues(ctx context.Context) ([]Issue, error)
+	// AddIssueLabel labels issue n, creating the label if needed (#767, #807).
+	AddIssueLabel(ctx context.Context, n int, label string) error
 	// CreateIssue files i and returns it with its number and URL.
 	CreateIssue(ctx context.Context, i NewIssue) (Issue, error)
 	CommentIssue(ctx context.Context, n int, body string) error
@@ -417,6 +422,10 @@ func (u Unsupported) CommentIssue(context.Context, int, string) error {
 }
 func (u Unsupported) EditIssueBody(context.Context, int, string) error { return u.err("edit issue") }
 func (u Unsupported) CloseIssue(context.Context, int, string) error    { return u.err("close issue") }
+func (u Unsupported) UnassignedIssues(context.Context) ([]Issue, error) {
+	return nil, u.err("list unassigned issues")
+}
+func (u Unsupported) AddIssueLabel(context.Context, int, string) error { return u.err("label issue") }
 func (u Unsupported) ReopenIssue(context.Context, int) error           { return u.err("reopen issue") }
 
 // Name is how messages name provider p: "GitHub", "GitLab", or "the forge"

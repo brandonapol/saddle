@@ -376,29 +376,17 @@ func (a *App) closedByOpenPRs(ctx context.Context, f forge.Forge) map[int]bool {
 	return closed
 }
 
-// unassignedLister is a forge that can list the open issues nobody is
-// assigned to that a maintainer (owner, member, collaborator) opened (#733).
-// forge.Forge has no author or assignee reads yet (#807), so autopilot asks for it
-// by assertion and scans nothing on a forge without it.
-type unassignedLister interface {
-	UnassignedIssues(ctx context.Context) ([]forge.Issue, error)
-}
-
-// issueLabeler is a forge that can label an issue; forge.Forge's AddLabel
-// labels PRs only (#767, #807).
-type issueLabeler interface {
-	AddIssueLabel(ctx context.Context, n int, label string) error
-}
-
 // ghUnassignedIssues is the tracker scan through the forge (#733).
 func (a *App) ghUnassignedIssues() ([]autopilot.Issue, error) {
-	f := a.Forge()
-	l, ok := f.(unassignedLister)
-	if !ok {
+	return a.unassignedVia(context.Background(), a.Forge())
+}
+
+// unassignedVia scans f; a forge that can't list them has nothing to scan.
+func (a *App) unassignedVia(ctx context.Context, f forge.Forge) ([]autopilot.Issue, error) {
+	raw, err := f.UnassignedIssues(ctx)
+	if errors.Is(err, forge.ErrUnsupported) {
 		return nil, nil
 	}
-	ctx := context.Background()
-	raw, err := l.UnassignedIssues(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -428,9 +416,9 @@ func (e *autopilotEnv) CloseIssue(n int, comment string) error {
 // record keeps the issue out for the rest of the run.
 func (e *autopilotEnv) GiveUp(n int, comment string) error {
 	ctx, f := context.Background(), e.a.Forge()
-	var lerr error
-	if l, ok := f.(issueLabeler); ok {
-		lerr = l.AddIssueLabel(ctx, n, autopilot.NeedsHumanLabel)
+	lerr := f.AddIssueLabel(ctx, n, autopilot.NeedsHumanLabel)
+	if errors.Is(lerr, forge.ErrUnsupported) {
+		lerr = nil
 	}
 	return errors.Join(lerr, f.CommentIssue(ctx, n, comment))
 }

@@ -600,6 +600,60 @@ func (g *GitHub) ListIssues(ctx context.Context, q IssueQuery, f IssueFields) ([
 	return is, nil
 }
 
+// restIssue is one entry of the REST issues list (#807).
+type restIssue struct {
+	Number      int       `json:"number"`
+	Title       string    `json:"title"`
+	Body        string    `json:"body"`
+	CreatedAt   time.Time `json:"created_at"`
+	Association string    `json:"author_association"`
+	PullRequest *struct{} `json:"pull_request"`
+	Labels      []struct {
+		Name string `json:"name"`
+	} `json:"labels"`
+}
+
+// parseUnassigned reads the REST issues list, dropping pull requests and
+// issues a non-maintainer opened.
+func parseUnassigned(out string) ([]Issue, error) {
+	var raw []restIssue
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		return nil, fmt.Errorf("parse gh api issues: %w", err)
+	}
+	var is []Issue
+	for _, r := range raw {
+		switch {
+		case r.PullRequest != nil:
+			continue
+		case r.Association != "OWNER" && r.Association != "MEMBER" && r.Association != "COLLABORATOR":
+			continue
+		}
+		i := Issue{Number: r.Number, Title: r.Title, State: StateOpen, Body: r.Body, Created: r.CreatedAt}
+		for _, l := range r.Labels {
+			i.Labels = append(i.Labels, l.Name)
+		}
+		is = append(is, i)
+	}
+	return is, nil
+}
+
+// UnassignedIssues lists the open, unassigned issues a maintainer opened.
+func (g *GitHub) UnassignedIssues(ctx context.Context) ([]Issue, error) {
+	out, err := g.Run(ctx, "api", "repos/{owner}/{repo}/issues?state=open&assignee=none&per_page=100")
+	if err != nil {
+		return nil, err
+	}
+	return parseUnassigned(out)
+}
+
+// AddIssueLabel labels issue n, creating the label when it doesn't exist.
+func (g *GitHub) AddIssueLabel(ctx context.Context, n int, label string) error {
+	return addLabelEnsuring(ctx, g, label, func() error {
+		_, err := g.Run(ctx, "issue", "edit", strconv.Itoa(n), "--add-label", label)
+		return err
+	})
+}
+
 // CreateIssue files i; gh prints the new issue's URL last.
 func (g *GitHub) CreateIssue(ctx context.Context, i NewIssue) (Issue, error) {
 	args := []string{"issue", "create", "--title", i.Title, "--body", i.Body}
