@@ -99,7 +99,7 @@ func (a *App) ReviveEngine() bool {
 	if !ok || a.LockOwner() != "" {
 		return false
 	}
-	if keeper > 0 && keeper != os.Getpid() && pidAlive(keeper) {
+	if keeper > 0 && keeper != os.Getpid() && pidAlive(keeper) && !zombie(keeper) {
 		if st, err := os.Stat(a.engineWantPath()); err == nil && !startedAfter(keeper, st.ModTime()) {
 			return false // its supervisor is between restarts
 		}
@@ -150,4 +150,16 @@ func startEngineDetached(root string) error {
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+// zombie reports whether process pid has exited but its parent has not
+// reaped it yet: kill(pid, 0) still succeeds, but it runs nothing.
+func zombie(pid int) bool {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	i := strings.LastIndexByte(string(b), ')')
+	f := strings.Fields(string(b[i+1:]))
+	return i >= 0 && len(f) > 0 && (f[0] == "Z" || f[0] == "X")
 }

@@ -121,3 +121,22 @@ func TestWatchersHealth(t *testing.T) {
 		t.Fatal("wanted engine down, yet no EngineDown")
 	}
 }
+
+// A keeper killed but not yet reaped by its parent is a zombie: dead for
+// ReviveEngine, though kill(pid, 0) still succeeds.
+func TestReviveEngineTreatsAZombieKeeperAsDead(t *testing.T) {
+	a, _ := setup(t)
+	started := fakeStart(t)
+	c := exec.Command("sleep", "60")
+	must(t, c.Start())
+	t.Cleanup(func() { _ = c.Wait() })
+	time.Sleep(20 * time.Millisecond)
+	must(t, a.WantEngine(c.Process.Pid))
+	must(t, c.Process.Kill())
+	for end := time.Now().Add(5 * time.Second); !zombie(c.Process.Pid) && time.Now().Before(end); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !a.ReviveEngine() || *started != 1 {
+		t.Fatal("a zombie keeper blocked the revival")
+	}
+}
