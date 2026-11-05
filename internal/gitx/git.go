@@ -3,12 +3,16 @@ package gitx
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
+
+	"github.com/brandonapol/saddle/internal/netx"
 )
 
 // calls counts git processes this package started, so tests can catch work
@@ -29,19 +33,54 @@ func Env(extra ...string) []string {
 }
 
 // Run executes git in dir and returns trimmed stdout. Errors carry stderr.
+// A network subcommand gets NetTimeout as its deadline (see RunCtx).
 func Run(dir string, args ...string) (string, error) {
-	args = RefLogArgs(args)
+	return RunCtx(context.Background(), dir, args...)
+}
+
+// RunCtx is Run under ctx. A network subcommand (push, fetch, pull,
+// ls-remote, clone) also gets NetTimeout as its deadline, and one that runs
+// past it, or past ctx's own deadline, returns a *netx.TimeoutError
+// (errors.Is ErrNetTimeout): a wait and retry, not a failure (#788).
+func RunCtx(ctx context.Context, dir string, args ...string) (string, error) {
 	calls.Add(1)
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = Env()
+	return RunEnv(ctx, dir, nil, args...)
+}
+
+// RunEnv is RunCtx with extra environment, for callers such as the merge
+// train that mark their git with a variable of their own. Calls does not
+// count it.
+func RunEnv(ctx context.Context, dir string, extra []string, args ...string) (string, error) {
+	args = RefLogArgs(args)
+	env := Env(extra...)
+	var after time.Duration
+	network := IsNetwork(args)
+	if network {
+		if NetTimeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, NetTimeout)
+			defer cancel()
+			after = NetTimeout
+		}
+		env = append(env, netEnv(dir)...)
+	}
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = env
+	if network {
+		netx.Guard(cmd)
+	}
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
+		op := "git " + strings.Join(args, " ")
+		if terr := netx.Timeout(ctx, op, after); terr != nil && network {
+			return out.String(), terr
+		}
 		msg := strings.TrimSpace(errb.String())
 		if msg == "" {
 			msg = strings.TrimSpace(out.String())
 		}
-		return out.String(), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, msg)
+		return out.String(), fmt.Errorf("%s: %w: %s", op, err, msg)
 	}
 	return strings.TrimSpace(out.String()), nil
 }

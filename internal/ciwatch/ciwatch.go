@@ -119,8 +119,9 @@ type Config struct {
 	// OnError receives forge and Targets errors. The target is zero for a
 	// Targets error. Nil drops them. A target whose forge call fails keeps
 	// its previous state, so a flaky forge never reads as a recovery.
-	// A forge.ErrRateLimited is not an error: the poll stops there, keeps
-	// every target's state and reports nothing.
+	// A forge.ErrRateLimited or forge.ErrNetTimeout (see forge.Transient) is
+	// not an error: the poll stops there, keeps every target's state and
+	// reports nothing.
 	OnError func(t Target, err error)
 	// Now is the clock. Default time.Now.
 	Now func() time.Time
@@ -180,7 +181,7 @@ func (w *Watcher) Poll(ctx context.Context) []Event {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	targets, err := w.cfg.Targets(ctx)
-	if errors.Is(err, forge.ErrRateLimited) {
+	if forge.Transient(err) {
 		return nil
 	}
 	if err != nil {
@@ -202,9 +203,9 @@ func (w *Watcher) Poll(ctx context.Context) []Event {
 		if errors.Is(err, forge.ErrUnsupported) {
 			continue
 		}
-		if errors.Is(err, forge.ErrRateLimited) {
-			// GitHub's quota is spent: wait for the reset, keeping
-			// every target's state and logging nothing (#764).
+		if forge.Transient(err) {
+			// GitHub's quota is spent or the network is down: wait,
+			// keeping every target's state and logging nothing (#764, #788).
 			return out
 		}
 		if err != nil {

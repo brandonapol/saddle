@@ -217,9 +217,9 @@ func (s *Sentinel) Run(ctx context.Context) error {
 	}
 }
 
-// deferred reports whether err is GitHub's rate limit, which a cycle waits
-// out instead of logging (#764).
-func deferred(err error) bool { return errors.Is(err, forge.ErrRateLimited) }
+// deferred reports whether err is GitHub's rate limit (#764) or a network
+// call that timed out (#788), which a cycle waits out instead of logging.
+func deferred(err error) bool { return forge.Transient(err) }
 
 // hit is one problem, at index at of the stack's layers; the layers from
 // from up are at risk. conflict marks a conflict, the one kind of hit that

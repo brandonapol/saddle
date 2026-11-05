@@ -1335,21 +1335,17 @@ func short(sha string) string {
 
 // trainGit runs git as the merge train. The ref guard only lets the train
 // move the integration branch and other tasks' branches, and it knows the
-// train by SADDLE_TRAIN=1, set for this command alone.
+// train by SADDLE_TRAIN=1, set for this command alone. A push or fetch gets
+// gitx.NetTimeout as its deadline, so a dead connection can't hold
+// train.lock (#788).
 func trainGit(dir string, args ...string) (string, error) {
-	args = gitx.RefLogArgs(args)
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = gitx.Env("SADDLE_TRAIN=1")
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(errb.String())
-		if msg == "" {
-			msg = strings.TrimSpace(out.String())
-		}
-		return out.String(), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, msg)
-	}
-	return strings.TrimSpace(out.String()), nil
+	return trainGitCtx(context.Background(), dir, args...)
+}
+
+// trainGitCtx is trainGit under ctx; a network call that runs past its
+// deadline returns gitx.ErrNetTimeout.
+func trainGitCtx(ctx context.Context, dir string, args ...string) (string, error) {
+	return gitx.RunEnv(ctx, dir, []string{"SADDLE_TRAIN=1"}, args...)
 }
 
 // trainRebase is gitx.Rebase run as the train: it rebases the branch checked
