@@ -64,8 +64,8 @@ func ciRepairCapCard(label string, l CIRedLayer, n int) DecisionCard {
 		Options: []DecisionOption{
 			{Label: "Look at the failing checks and fix them on " + l.Task + "'s layer", Cost: "you or an agent you spawn, ~10 min",
 				Action: "spawn a task to fix " + l.Task + "'s CI (" + strings.Join(l.Checks, ", ") + ") on its layer", Recommended: true},
-			{Label: "Drop " + l.Task + " from the stack", Cost: "the layers above keep merging; it waits as its own PR",
-				Action: "saddle unstack " + l.Task, Run: RunParkRepairCap},
+			{Label: "Drop " + l.Task + " from the stack", Cost: "the layers above keep merging; its PR gets needs-human and waits for you",
+				Action: "saddle unstack " + l.Task, Run: RunDropRed},
 			{Label: "Stop it holding the layers above", Cost: "they merge on top of red CI",
 				Action: "saddle sentinel ack"},
 		},

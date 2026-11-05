@@ -29,8 +29,8 @@ import (
 //   - a stuck stack layer leaves the stack as its own standalone PR, the
 //     layers above that don't build on it restack onto base and keep
 //     merging, and the ones that do stay held with it until it merges;
-//   - a CI repair cap parks the red layer: its PR gets needs-human and it
-//     stops holding the stack;
+//   - a CI repair cap drops the red layer from the stack the same way, and
+//     its own PR, only that one, gets needs-human (#769);
 //   - a worker sitting on a risky prompt gets Escape and is told to find
 //     another way; the same prompt unanswered a second time parks it
 //     (paused, window closed, slot freed) and it resumes by itself after
@@ -214,20 +214,21 @@ func (a *App) StallTick(now time.Time) ([]DecisionCard, error) {
 // happens is what happens. No action may leave a task or layer in a state
 // whose only exit is a human command.
 const (
-	RunNothing       = "nothing"         // waiting is the default; the watch that opened the card goes on
-	RunRouteAround   = "route-around"    // take the stuck layer out of the stack (RouteAroundStuck)
-	RunParkRepairCap = "park-repair-cap" // label the red PR needs-human and stop it holding the stack
-	RunDenyPrompt    = "deny-prompt"     // Escape the prompt and tell the agent to find another way
-	RunMessageTask   = "message-task"    // send the task the quoted message in the action
-	RunOwnerDecision = "owner-decision"  // tell the blocked task the option was taken
+	RunNothing       = "nothing"        // waiting is the default; the watch that opened the card goes on
+	RunRouteAround   = "route-around"   // take the stuck layer out of the stack (RouteAroundStuck)
+	RunDropRed       = "drop-red"       // label the red PR needs-human and route around it (#769)
+	RunDenyPrompt    = "deny-prompt"    // Escape the prompt and tell the agent to find another way
+	RunMessageTask   = "message-task"   // send the task the quoted message in the action
+	RunOwnerDecision = "owner-decision" // tell the blocked task the option was taken
 )
 
 // defaultRuns maps each registered action to what it does.
 var defaultRuns = map[string]func(a *App, c DecisionCard, o DecisionOption) error{
-	RunNothing:       func(*App, DecisionCard, DecisionOption) error { return nil },
-	RunRouteAround:   func(a *App, c DecisionCard, _ DecisionOption) error { return a.RouteAroundStuck(c.Task, c.Timeout) },
-	RunParkRepairCap: func(a *App, c DecisionCard, _ DecisionOption) error { return a.ParkRepairCap(c.Task, c.Timeout) },
-	RunDenyPrompt:    (*App).denyPrompt,
+	RunNothing:        func(*App, DecisionCard, DecisionOption) error { return nil },
+	RunRouteAround:    func(a *App, c DecisionCard, _ DecisionOption) error { return a.RouteAroundStuck(c.Task, c.Timeout) },
+	RunDropRed:        (*App).dropRed,
+	"park-repair-cap": (*App).dropRed, // a card saved before #769
+	RunDenyPrompt:     (*App).denyPrompt,
 	RunMessageTask: func(a *App, c DecisionCard, o DecisionOption) error {
 		return a.Notify(c.Task, store.NoticeAction, quotedMessage(o.Action))
 	},
@@ -239,7 +240,7 @@ var defaultRuns = map[string]func(a *App, c DecisionCard, o DecisionOption) erro
 // legacyRuns is the action for a card saved before options named theirs.
 var legacyRuns = map[string]string{
 	DecisionStuckStack:  RunRouteAround,
-	DecisionCIRepairCap: RunParkRepairCap,
+	DecisionCIRepairCap: RunDropRed,
 	DecisionRiskyPrompt: RunDenyPrompt,
 	DecisionAskOwner:    RunMessageTask,
 	DecisionOwner:       RunOwnerDecision,
@@ -522,9 +523,23 @@ func (a *App) releaseHeld() error {
 	return errors.Join(errs...)
 }
 
+// dropRed is the ci-repair-cap default, as its card says: the red layer
+// leaves the stack so the layers above keep merging, and its own PR gets
+// needs-human. The label is a courtesy: a failure must not stop the drop,
+// or the default would fail and retry every cycle (#787).
+func (a *App) dropRed(c DecisionCard, _ DecisionOption) error {
+	if t, err := a.Store.Task(c.Task); err == nil && t.PR != "" {
+		if err := a.Forge().AddLabel(context.Background(), t.PR, automerge.NeedsHuman); err != nil {
+			a.Store.Event(c.Task, "stall_label_failed", fmt.Sprintf("label %s %s: %v", t.PR, automerge.NeedsHuman, err))
+		}
+	}
+	return a.RouteAroundStuck(c.Task, c.Timeout)
+}
+
 // ParkRepairCap parks a red layer whose repairs ran out: its PR gets the
 // needs-human label and it stops holding the stack, so everything else
-// moves on.
+// moves on. It is no card's default any more (dropRed is, #769); the
+// labels journey still drives it by hand.
 func (a *App) ParkRepairCap(task string, after time.Duration) error {
 	t, err := a.Store.Task(task)
 	if err != nil {

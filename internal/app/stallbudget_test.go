@@ -176,22 +176,42 @@ func TestStallBudgetConfig(t *testing.T) {
 	}
 }
 
-// A repair cap that runs out parks the task and labels its PR needs-human.
-func TestStallParksCappedRepair(t *testing.T) {
+// #769: a repair cap that runs out does what its card says: the red layer
+// leaves the stack, keeping needs-human on its own PR only, and the green
+// layer above it is no longer held.
+func TestRepairCapDefaultDropsRedLayerFromStack(t *testing.T) {
 	t.Parallel()
-	a, _, now := redStack(t)
-	card := ciRepairCapCard("t1", CIRedLayer{Task: "t1", PR: mustTask(t, a, "t1").PR, Head: "abc", Checks: []string{"CI / test"}}, 2)
+	a, gh, now := redStack(t, [2]string{"t2", "two.txt"})
+	pr := mustTask(t, a, "t1").PR
+	card := ciRepairCapCard("t1", CIRedLayer{Task: "t1", PR: pr, Head: "abc", Checks: []string{"CI / test"}, Held: []string{"t2"}}, 2)
 	card.Opened = now
 	must(t, a.OpenDecision(card))
 	if _, err := a.StallTick(now.Add(31 * time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	pr := mustTask(t, a, "t1").PR
-	if !slices.Contains(ghCalls(t), "pr edit "+pr+" --add-label needs-human") {
-		t.Fatalf("gh calls = %v, want needs-human on %s", ghCalls(t), pr)
+	if got := trainStateOf(t, a, "t1"); got != TrainSuperseded {
+		t.Fatalf("t1's train row = %q, want it out of the stack", got)
 	}
-	if s, _ := a.CIRed(); len(s.holding()) != 0 {
-		t.Fatalf("capped repair still holds the stack: %+v", s.Red)
+	if why := a.atRisk("t2"); why != "" {
+		t.Fatalf("t2 still held by the capped layer: %s", why)
+	}
+	var labeled []string
+	for _, c := range ghCalls(t) {
+		if strings.Contains(c, "--add-label needs-human") {
+			labeled = append(labeled, c)
+		}
+	}
+	if !slices.Equal(labeled, []string{"pr edit " + pr + " --add-label needs-human"}) {
+		t.Fatalf("needs-human calls = %v, want only the dropped PR %s", labeled, pr)
+	}
+	w := a.NewAutomerge(gh)
+	must(t, w.SetEnabled(true))
+	for range 2 {
+		_, err := w.Check()
+		must(t, err)
+	}
+	if !slices.Equal(gh.order, []string{"t2"}) {
+		t.Fatalf("merged %v, want t2: the stack above keeps merging", gh.order)
 	}
 }
 

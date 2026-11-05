@@ -105,7 +105,6 @@ func TestDecisionDefaultsDoWhatTheCardSays(t *testing.T) {
 			},
 		},
 		DecisionCIRepairCap: {
-			todo: "#769",
 			build: func(t *testing.T) (*App, DecisionCard) {
 				a, _, _ := redStack(t, [2]string{"t2", "two.txt"})
 				return a, ciRepairCapCard("t1", CIRedLayer{Task: "t1", PR: mustTask(t, a, "t1").PR, Head: "abc", Checks: []string{"CI / test"}, Held: []string{"t2"}}, 2)
