@@ -444,9 +444,28 @@ func flagErr(f StackFlag) error {
 		f.Task, f.Cause, f.Task)
 }
 
+// dropFinished takes a killed (or otherwise finished) task out of the
+// train instead of failing it: Conflict is a live status, so setting it
+// would have the resume watcher bring the dead task back (#784).
+func (a *App) dropFinished(res LandResult) LandResult {
+	res.State, res.Note = store.TrainError, "dropped: the task was killed or finished before it could land"
+	a.Store.Event(res.Task, EventTrainDropped, res.Note)
+	if err := a.Store.DequeuePending(res.Task); err != nil {
+		res.Note += " (could not dequeue: " + err.Error() + ")"
+	}
+	return res
+}
+
+// EventTrainDropped is a train entry dropped because its task was killed
+// or otherwise finished (#784).
+const EventTrainDropped = "train_dropped"
+
 func (a *App) landOne(id string, run *landRun) LandResult {
 	res := LandResult{Task: id}
 	fail := func(state, note, msg string) LandResult {
+		if a.finishedTask(id) {
+			return a.dropFinished(res)
+		}
 		res.State, res.Note = state, note
 		a.Store.Event(id, "train_"+state, note)
 		if err := a.Store.SetTrain(id, state, note, true); err != nil {
@@ -468,6 +487,9 @@ func (a *App) landOne(id string, run *landRun) LandResult {
 		res.State, res.Note = store.TrainError, err.Error()
 		return res
 	}
+	if store.Finished(t.Status) {
+		return a.dropFinished(res)
+	}
 	if dirty, _ := gitx.Dirty(t.Worktree); len(dirty) > 0 {
 		return fail(store.TrainError, "uncommitted changes",
 			"Your branch could not land because the worktree has uncommitted changes. Commit everything, then call the saddle done tool again.")
@@ -487,6 +509,9 @@ func (a *App) landOne(id string, run *landRun) LandResult {
 	}
 	if !rr.OK {
 		files := strings.Join(rr.Conflicts, ", ")
+		if a.finishedTask(id) {
+			return a.dropFinished(res)
+		}
 		if a.orphaned(id) {
 			// Nobody would read the conflict: a repair task takes it (#172).
 			res.State, res.Note = store.TrainError, files

@@ -77,9 +77,7 @@ type Task struct {
 }
 
 // Active reports whether the task still holds claims and can receive notices.
-func (t Task) Active() bool {
-	return t.Status != Landed && t.Status != Killed && t.Status != NoChange
-}
+func (t Task) Active() bool { return !Finished(t.Status) }
 
 type TrainEntry struct {
 	Task     string
@@ -282,11 +280,76 @@ func (s *Store) SetField(id, field, value string) error {
 	default:
 		return fmt.Errorf("unknown task field %q", field)
 	}
+	if field == "status" {
+		return s.SetStatus(id, value) // keeps the finished-task guard (#784)
+	}
 	_, err := s.db.Exec(`UPDATE tasks SET `+field+` = ?, updated_at = ? WHERE id = ?`, value, now(), id)
 	return err
 }
 
-func (s *Store) SetStatus(id, status string) error { return s.SetField(id, "status", status) }
+// ErrFinished is a write that would bring a finished task (killed, landed,
+// no change) back to life without saying so: see Revive (#784).
+var ErrFinished = errors.New("task is finished")
+
+// Finished reports whether status ends a task: it holds no claims, has no
+// agent and never comes back unless something revives it on purpose.
+func Finished(status string) bool {
+	return status == Landed || status == Killed || status == NoChange
+}
+
+// SetStatus sets a task's status. It refuses, with ErrFinished, to move a
+// finished task to a live status: a background gate or a failed land that
+// raced a kill must not resurrect it (#784). Finished to finished is fine.
+// Callers that mean to bring a task back use Revive.
+func (s *Store) SetStatus(id, status string) error {
+	if Finished(status) {
+		return s.setStatus(id, status)
+	}
+	return s.tx(func(tx *sql.Tx) error { return setLiveStatus(tx, id, status) })
+}
+
+// setLiveStatus sets a live status inside tx unless the task is finished.
+func setLiveStatus(tx *sql.Tx, id, status string) error {
+	var cur string
+	if err := tx.QueryRow(`SELECT status FROM tasks WHERE id = ?`, id).Scan(&cur); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("task %s: %w", id, ErrNotFound)
+		}
+		return err
+	}
+	if Finished(cur) {
+		return fmt.Errorf("%s is %s; not setting it %s: %w", id, cur, status, ErrFinished)
+	}
+	_, err := tx.Exec(`UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`, status, now(), id)
+	return err
+}
+
+// Revive sets a task's status even when it is finished: for an explicit
+// requeue or resume that means to bring it back.
+func (s *Store) Revive(id, status string) error { return s.setStatus(id, status) }
+
+func (s *Store) setStatus(id, status string) error {
+	res, err := s.db.Exec(`UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`, status, now(), id)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("task %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+// FinishDone marks a live task done and queues it in one transaction,
+// refusing with ErrFinished when it was killed (or otherwise finished)
+// first: a done gate that outlived a kill must not queue it (#784).
+func (s *Store) FinishDone(id string) error {
+	return s.tx(func(tx *sql.Tx) error {
+		if err := setLiveStatus(tx, id, Done); err != nil {
+			return err
+		}
+		return enqueue(tx, id)
+	})
+}
 
 // NextID returns the next free id of the form t<N>.
 func (s *Store) NextID() (string, error) {
@@ -567,17 +630,21 @@ func (s *Store) DequeuePending(task string) error {
 }
 
 // Enqueue puts a task at the back of the merge train (or back in line after a conflict).
+// It doesn't check the task's status; a done gate uses FinishDone, which
+// does (#784).
 func (s *Store) Enqueue(task string) error {
-	return s.tx(func(tx *sql.Tx) error {
-		var seq int64
-		if err := tx.QueryRow(`SELECT COALESCE(MAX(seq), 0) + 1 FROM train`).Scan(&seq); err != nil {
-			return err
-		}
-		_, err := tx.Exec(`INSERT INTO train(task, seq, state) VALUES(?, ?, ?)
-			ON CONFLICT(task) DO UPDATE SET seq = excluded.seq, state = excluded.state, note = ''
-			WHERE train.state <> ?`, task, seq, Queued, OnHold)
+	return s.tx(func(tx *sql.Tx) error { return enqueue(tx, task) })
+}
+
+func enqueue(tx *sql.Tx, task string) error {
+	var seq int64
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(seq), 0) + 1 FROM train`).Scan(&seq); err != nil {
 		return err
-	})
+	}
+	_, err := tx.Exec(`INSERT INTO train(task, seq, state) VALUES(?, ?, ?)
+		ON CONFLICT(task) DO UPDATE SET seq = excluded.seq, state = excluded.state, note = ''
+		WHERE train.state <> ?`, task, seq, Queued, OnHold)
+	return err
 }
 
 // SetTrainOrder puts the named entries in the given order, reusing the seqs

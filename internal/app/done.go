@@ -89,6 +89,17 @@ func (a *App) DoneAsync(task, summary string) (DoneJob, error) {
 	return DoneJob{ID: id, Running: true}, nil
 }
 
+// EventDoneGateDropped is a done gate that finished after its task was
+// killed: the task stays killed and unqueued (#784). Data: job id and why.
+const EventDoneGateDropped = "done_gate_dropped"
+
+// finishedTask reports whether task is killed, landed or no change, so a
+// background job that outlived it must leave it alone (#784).
+func (a *App) finishedTask(task string) bool {
+	t, err := a.Store.Task(task)
+	return err == nil && store.Finished(t.Status)
+}
+
 // EventDoneCalled is a done call that got past the quick checks; data: its
 // summary.
 const EventDoneCalled = "done_called"
@@ -100,6 +111,11 @@ func (a *App) WaitDoneJobs() { a.doneJobs.Wait() }
 // tell the agent why not. since is the event cursor when the job started.
 func (a *App) runDoneJob(t store.Task, id, tree, summary string, since int64) {
 	fail := func(event, text string) {
+		if a.finishedTask(t.ID) {
+			// Killed while the gate ran: nobody is left to tell (#784).
+			a.Store.Event(t.ID, EventDoneGateDropped, id+": "+event)
+			return
+		}
 		a.Store.Event(t.ID, event, id)
 		_ = a.Notify(t.ID, store.NoticeAction, fmt.Sprintf("done gate %s: %s", id, text))
 	}
@@ -131,7 +147,12 @@ func (a *App) runDoneJob(t store.Task, id, tree, summary string, since int64) {
 		}
 		a.Store.Event(t.ID, "done_gate_rebased", id+" "+short(head)+" → "+short(next))
 	}
-	if err := a.finishDone(t, summary); err != nil {
+	if err := a.finishDone(t, summary); errors.Is(err, store.ErrFinished) {
+		// Killed (or otherwise finished) while the gate ran: it stays that
+		// way and its agent is gone, so there is nobody to tell (#784).
+		a.Store.Event(t.ID, EventDoneGateDropped, id+": "+err.Error())
+		return
+	} else if err != nil {
 		fail("done_gate_failed", "the gate passed but queueing failed: "+err.Error()+"\nCall the saddle done tool again.")
 		return
 	}
@@ -280,10 +301,9 @@ func (a *App) finishDone(t store.Task, summary string) error {
 			return err
 		}
 	}
-	if err := a.Store.SetStatus(task, store.Done); err != nil {
-		return err
-	}
-	if err := a.Store.Enqueue(task); err != nil {
+	// One transaction: a kill that lands between the status write and the
+	// enqueue must not leave the killed task in the train (#784).
+	if err := a.Store.FinishDone(task); err != nil {
 		return err
 	}
 	a.Store.Event(task, "done", summary)
