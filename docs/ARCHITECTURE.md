@@ -60,6 +60,20 @@ saddle land | prs | sync | …         ─┘   CI watcher
   `.saddle/tui.lock`, which records its holder, so only one of them drives
   `t0`. The plugin's hook and MCP server do nothing outside a repo that ran
   `saddle init` or inside saddle's own agents (`SADDLE_TASK` set).
+- **Staying alive unattended** (#789). Each background watcher runs under
+  `internal/supervise`: a panic is recovered, logged as `watcher_panic` with
+  its stack, and that watcher restarted with backoff while the rest keep
+  going. Heartbeats go to the `watcher_ticks` table, which `saddle status`
+  and `saddle doctor` read. `stealTrainLock` never signals a process that
+  holds `tui.lock` (its pid is in `tui.lock.pid`) or `up.lock`; the
+  deadlines on network git and gh calls (#788) bound work under the lock.
+  The plugin engine writes `.saddle/engine.want` while it is meant to run,
+  and removes it only on a deliberate stop (ctrl-c, `saddle down`,
+  `saddle plugin engine --stop`, `saddle up` taking over).
+  `saddle plugin engine --supervise` restarts its child whenever it exits.
+  If the marker is there but nobody holds `tui.lock`, the next MCP tool call
+  or hook from any agent starts `saddle plugin engine --supervise` again,
+  detached (`setsid`).
 - **Environment tags.** Every agent process gets `SADDLE_ROOT` (the repo) and
   `SADDLE_TASK` (its task id); the MCP server and hooks read them to know
   whose call it is. They are also how saddle finds leaks (#690): when a task

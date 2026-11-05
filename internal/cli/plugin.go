@@ -314,7 +314,7 @@ func writeBrief(w io.Writer, a *app.App) error {
 	case app.LockUp:
 		fmt.Fprintln(w, "- ‼ saddle up is running in another terminal, and its TUI orchestrator gets the agents' events. Quit it before orchestrating from here (agents keep running), or use the TUI.")
 	default:
-		fmt.Fprintln(w, "- Engine: not running. Start `saddle plugin engine` in the background before spawning.")
+		fmt.Fprintln(w, "- Engine: not running. Start `saddle plugin engine --supervise` in the background before spawning.")
 	}
 	if a.ModActive(time.Now()) {
 		fmt.Fprintln(w, "- Mod: active. It wakes you when an event needs you; don't run `saddle plugin wait`.")
