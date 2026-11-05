@@ -43,6 +43,7 @@ type App struct {
 	doneJobs      sync.WaitGroup   // done gates running in the background (#368)
 	runReap       func(dir string) // tests stand in for reaping a run dir's processes
 	previewLayout bool             // compute layout with Git objects, without worktree refs or hooks
+	repairMu      sync.Mutex       // one repair spawn at a time, so two callers can't both spawn one
 }
 
 // Open finds the repo from dir (SADDLE_ROOT wins) and opens its state.
@@ -190,6 +191,11 @@ type SpawnReq struct {
 	// when one has quota (#505).
 	Needs []string
 	Force bool // ignore claim conflicts, the concurrency cap and paused launches
+	// For is the task this spawn repairs. Its claims and its pending
+	// repair's reserved files don't conflict with this spawn, and once the
+	// spawn has launched its claims move here (#795): until then they stay
+	// with it, so a spawn that fails leaves nothing up for grabs.
+	For string
 	// Confirm goes ahead when every claim covers work landed or queued tasks
 	// already changed. Without it such a spawn returns ErrNeedsConfirm, unless
 	// it carries an Issue: a ticket of its own is new work (#604).
@@ -303,8 +309,11 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 		if err != nil {
 			return t, err
 		}
-		if c := claims.Conflicts(all, "", r.Claims); len(c) > 0 {
+		if c := claims.Conflicts(all, r.For, r.Claims); len(c) > 0 {
 			return t, a.conflictErr(c)
+		}
+		if err := a.reservedErr(r.Claims, r.For); err != nil {
+			return t, err
 		}
 	}
 	if len(r.Claims) > 0 && !r.Force && !r.Confirm && r.Issue == 0 {
@@ -344,7 +353,7 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	// Claims go in before the worktree exists so a racing spawn sees them.
 	if len(r.Claims) > 0 {
 		_, err := a.Store.Claim(id, func(all map[string][]string) ([]string, error) {
-			if c := claims.Conflicts(all, id, r.Claims); len(c) > 0 && !r.Force {
+			if c := claims.Conflicts(withoutTask(all, r.For), id, r.Claims); len(c) > 0 && !r.Force {
 				return nil, conflictErr(c)
 			}
 			return r.Claims, nil
@@ -364,6 +373,14 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 		return t, a.spawnFailed(t, true, hadBranch, fmt.Errorf("launch: %w", err))
 	}
 	t.Window = win
+	if r.For != "" {
+		// Launched: the repaired task's live claims are the repair's now (#795).
+		if cl, err := a.Store.Claims(); err == nil && len(cl[r.For]) > 0 {
+			if err := a.Store.Release(r.For); err != nil {
+				a.Store.Event(id, "claims_move_error", r.For+": "+err.Error())
+			}
+		}
+	}
 	a.Store.Event(id, "spawn", fmt.Sprintf("parent=%s adapter=%s (%s) model=%s claims=%s%s", r.Parent, ad.Name(), why, model, strings.Join(r.Claims, ","), hint))
 	a.Store.Event(id, EventAdapterPick, pickLine(ad.Name(), model, why, rotated))
 	if rotated != "" {
@@ -377,6 +394,20 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 		}
 	}
 	return t, nil
+}
+
+// withoutTask is all without task's claims.
+func withoutTask(all map[string][]string, task string) map[string][]string {
+	if task == "" || all[task] == nil {
+		return all
+	}
+	out := make(map[string][]string, len(all))
+	for k, v := range all {
+		if k != task {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // checkNewWork returns ErrNeedsConfirm when every claim covers a file that a

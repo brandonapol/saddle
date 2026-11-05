@@ -202,6 +202,12 @@ func (e *autopilotEnv) Route(r autopilot.SpawnReq) (string, string, string, erro
 }
 
 func (e *autopilotEnv) Spawn(r autopilot.SpawnReq) (string, error) {
+	// Repairs jump the queue (#768): a pending one gets the free slot first,
+	// and while one still waits on the cap no ticket starts.
+	e.a.RetryRepairs()
+	if err := e.a.repairFirst(); err != nil {
+		return "", fmt.Errorf("%w: %v", autopilot.ErrAtCap, err)
+	}
 	t, err := e.a.Spawn(e.spawnReq(r))
 	switch {
 	case errors.Is(err, ErrLaunchesPaused):
