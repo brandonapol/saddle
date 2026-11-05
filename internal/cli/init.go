@@ -42,7 +42,11 @@ agent CLI at all it prints how to install one.`,
 					return err
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "initialized %s/.saddle (edit .saddle/config.toml)\n", a.Root)
-				return initSetup(cmd.OutOrStdout(), a.Root)
+				if err := initSetup(cmd.OutOrStdout(), a.Root); err != nil {
+					return err
+				}
+				a.EnsureLabels(cmd.OutOrStdout())
+				return nil
 			})(cmd, args)
 		},
 	}

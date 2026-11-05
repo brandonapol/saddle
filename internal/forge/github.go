@@ -349,8 +349,10 @@ func (g *GitHub) EditComment(ctx context.Context, id, body string) error {
 }
 
 func (g *GitHub) AddLabel(ctx context.Context, ref, label string) error {
-	_, err := g.Run(ctx, "pr", "edit", ref, "--add-label", label)
-	return err
+	return addLabelEnsuring(ctx, g, label, func() error {
+		_, err := g.Run(ctx, "pr", "edit", ref, "--add-label", label)
+		return err
+	})
 }
 
 func (g *GitHub) RemoveLabel(ctx context.Context, ref, label string) error {

@@ -443,7 +443,9 @@ func (g *GitLab) EditComment(ctx context.Context, id, body string) error {
 }
 
 func (g *GitLab) AddLabel(ctx context.Context, ref, label string) error {
-	return g.updateMR(ctx, ref, "-f", "add_labels="+label)
+	return addLabelEnsuring(ctx, g, label, func() error {
+		return g.updateMR(ctx, ref, "-f", "add_labels="+label)
+	})
 }
 
 func (g *GitLab) RemoveLabel(ctx context.Context, ref, label string) error {
