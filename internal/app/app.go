@@ -85,6 +85,13 @@ func (a *App) Init() error {
 	if err := os.MkdirAll(a.stateDir("worktrees"), 0o755); err != nil {
 		return err
 	}
+	// doctor --fix runs this: taking the train lock rolls back a restack
+	// journal its dead writer left (#777).
+	if RestackInterrupted(a.Root) {
+		if unlock, ok, _ := a.TryLockTrain(); ok {
+			unlock()
+		}
+	}
 	cfgPath := a.stateDir("config.toml")
 	if _, err := os.Stat(cfgPath); errors.Is(err, os.ErrNotExist) {
 		if err := os.WriteFile(cfgPath, []byte(config.Template), 0o644); err != nil {

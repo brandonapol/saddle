@@ -164,6 +164,7 @@ func (a *App) lockTrain() (unlock func(), err error) {
 	if err != nil {
 		return nil, err
 	}
+	a.recoverDeadRestack() // #777
 	if err := a.pendingRestack(); err != nil {
 		unlock()
 		return nil, err
@@ -194,6 +195,7 @@ func (a *App) TryLockTrain() (unlock func(), ok bool, err error) {
 	if err != nil || !ok {
 		return unlock, ok, err
 	}
+	a.recoverDeadRestack() // #777
 	if err := a.pendingRestack(); err != nil {
 		unlock()
 		return nil, false, err

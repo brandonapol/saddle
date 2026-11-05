@@ -539,8 +539,8 @@ func (a *App) moveStack(plan []restacked, integ, base string, res *RestackResult
 	if err := a.writeRestackJournal(j); err != nil {
 		return err
 	}
-	if err := a.applyRestackJournal(j, false); err != nil {
-		return err
+	if _, err := a.applyRestackJournal(j, false); err != nil {
+		return a.abortFailedRestack(j, err)
 	}
 	res.Moves = j.Moves
 	for _, r := range plan {

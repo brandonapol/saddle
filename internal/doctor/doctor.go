@@ -700,7 +700,8 @@ func (r *run) tool(name, cmd, versionFlag, fix string) Result {
 
 func (r *run) hooks() Result {
 	if app.RestackInterrupted(r.env.Root()) {
-		return fail(CheckHooks, "interrupted restack journal in .saddle/"+app.RestackJournalFile, "run saddle restack --continue or saddle restack --abort")
+		return local(fail(CheckHooks, "interrupted restack journal in .saddle/"+app.RestackJournalFile,
+			fixInit+" rolls it back once the process that wrote it is gone (the next land or restack does too); or run saddle restack --continue or saddle restack --abort"))
 	}
 	hs, err := r.env.Hooks()
 	if err != nil {

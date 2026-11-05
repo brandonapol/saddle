@@ -101,7 +101,8 @@ func TestInterruptedRestackCanContinueOrAbort(t *testing.T) {
 				if committed {
 					must(t, a.moveRestackRefs(j.Moves, false))
 				}
-				must(t, a.RecoverRestack(abort))
+				_, err = a.RecoverRestack(abort)
+				must(t, err)
 				want := next
 				if abort {
 					want = old
