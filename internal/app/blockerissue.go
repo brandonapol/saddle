@@ -32,11 +32,12 @@ const BlockerLabel = "saddle-blocker"
 
 // Blocker kinds.
 const (
-	BlockerCIRed          = "ci_red"           // CI still red after the repair attempts
-	BlockerHistoryCheck   = "history_check"    // a history-scanning check saddle can't rewrite past
-	BlockerRepairOfRepair = "repair_of_repair" // a CI repair went red itself
-	BlockerStuckStack     = "stuck_stack"      // a red or conflicting layer nobody is fixing
-	BlockerTrainEscalated = "train_escalated"  // a branch failed to land too often
+	BlockerCIRed           = "ci_red"           // CI still red after the repair attempts
+	BlockerHistoryCheck    = "history_check"    // a history-scanning check saddle can't rewrite past
+	BlockerRepairOfRepair  = "repair_of_repair" // a CI repair went red itself
+	BlockerStuckStack      = "stuck_stack"      // a red or conflicting layer nobody is fixing
+	BlockerTrainEscalated  = "train_escalated"  // a branch failed to land too often
+	BlockerDecisionDefault = "decision_default" // a card's default kept failing, so it gave up (#766)
 )
 
 // EventHandFix is the events-table kind for a hand fix recorded against a
@@ -670,6 +671,12 @@ func (a *App) blockerFromEvent(e store.Event) (Blocker, bool) {
 		b.Kind, b.Cause = BlockerTrainEscalated, why
 		b.Subject = fmt.Sprintf("%s failed to land: %s", e.Task, truncateRunes(why, 70))
 		b.Detail = e.Data
+	case EventDecisionGaveUp:
+		id, why, _ := strings.Cut(e.Data, ": ")
+		kind, _, _ := strings.Cut(id, ":")
+		b.Kind, b.Cause = BlockerDecisionDefault, kind+": "+why
+		b.Subject = fmt.Sprintf("%s card's default for %s failed %d times: %s", kind, orUnknown(e.Task), maxDefaultAttempts, truncateRunes(why, 70))
+		b.Detail = fmt.Sprintf("Nobody answered decision card %s and its default failed %d times the same way, so saddle closed it: %s", id, maxDefaultAttempts, why)
 	default:
 		return b, false
 	}

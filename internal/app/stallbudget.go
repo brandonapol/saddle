@@ -16,6 +16,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/automerge"
 	"github.com/brandonapol/saddle/internal/claims"
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -28,7 +29,9 @@ import (
 //
 //   - a stuck stack layer leaves the stack as its own standalone PR, the
 //     layers above that don't build on it restack onto base and keep
-//     merging, and the ones that do stay held with it until it merges;
+//     merging, and the ones that do stay held with it until it merges; one
+//     that can't stand alone cuts the stack instead, waiting off it until
+//     the layers below merge (#766);
 //   - a CI repair cap drops the red layer from the stack the same way, and
 //     its own PR, only that one, gets needs-human (#769);
 //   - a worker sitting on a risky prompt gets Escape and is told to find
@@ -314,12 +317,16 @@ type heldState struct {
 }
 
 // StallRoute is one route-around: the red layer that left the stack and the
-// layers above it that build on it, held with it until it merges.
+// layers above it that build on it, held with it until it merges. A
+// truncated route (#766) has no PR: the red layer couldn't stand alone, so
+// it and Held wait off the stack until the layers Below it merge, then go
+// back on top.
 type StallRoute struct {
-	Red  string    `json:"red"`
-	PR   string    `json:"pr"`
-	Held []string  `json:"held,omitempty"`
-	At   time.Time `json:"at"`
+	Red   string    `json:"red"`
+	PR    string    `json:"pr"`
+	Held  []string  `json:"held,omitempty"`
+	Below []string  `json:"below,omitempty"`
+	At    time.Time `json:"at"`
 }
 
 func (a *App) heldPath() string { return a.stateDir("stall-held.json") }
@@ -353,11 +360,16 @@ func (a *App) setStallHeld(rs []StallRoute) error {
 }
 
 // RouteAroundStuck takes the red layer out of its PR stack after its card
-// waited after: it stands alone as its own PR against base (its existing PR
-// when that already targets base, else a fresh one through publish), the
-// layers above it that build on it (they run after it, or change files it
-// or they change) leave with it and stay held, and the rest restack onto
-// base and keep merging. A layer already out of the stack is done.
+// waited after. The layers above it that build on it (they run after it, or
+// change files it or they change) leave with it and stay held, and the rest
+// restack onto base and keep merging. The red layer stands alone as its own
+// PR against base when it can: its existing PR when that already targets
+// base, else a fresh one through publish. When it can't (it needs work from
+// the layers below it, or it fails the pre-publish gate by itself, which is
+// why it is stuck) the stack is truncated at it instead (#766): it waits
+// off the stack with no PR, the layers below keep merging, and once they
+// have it goes back on top (releaseHeld). A layer already out of the stack
+// is done.
 func (a *App) RouteAroundStuck(red string, after time.Duration) error {
 	unlock, err := a.lockTrain()
 	if err != nil {
@@ -385,6 +397,12 @@ func (a *App) RouteAroundStuck(red string, after time.Duration) error {
 			independent = append(independent, id)
 		}
 	}
+	var below []string
+	for _, l := range stack[:at] {
+		if stackOf[l.ID] == stackOf[red] {
+			below = append(below, l.ID)
+		}
+	}
 
 	t := stack[at].Task
 	url := t.PR
@@ -396,9 +414,18 @@ func (a *App) RouteAroundStuck(red string, after time.Duration) error {
 		res, err := a.Publish(PublishReq{Target: red})
 		if err != nil {
 			_ = a.Store.SetField(red, "pr", t.PR)
-			return fmt.Errorf("route around %s: %w", red, err)
+			if forge.Transient(err) {
+				return fmt.Errorf("route around %s: %w", red, err)
+			}
+			// It can't stand alone: truncate the stack at it.
+			a.Store.Event(red, "stall_truncate", oneLine(err.Error()))
+			url = ""
+		} else {
+			url = res.URL
 		}
-		url = res.URL
+	}
+	if url != "" {
+		below = nil // it stands alone, so it waits on nothing below
 	}
 
 	unlock, err = a.lockTrain()
@@ -406,6 +433,9 @@ func (a *App) RouteAroundStuck(red string, after time.Duration) error {
 		return err
 	}
 	why := fmt.Sprintf("routed around after %s with no answer; it waits as the standalone PR %s", fmtDuration(after), url)
+	if url == "" {
+		why = fmt.Sprintf("routed around after %s with no answer; it can't stand alone, so it waits off the stack until %s merge", fmtDuration(after), orNothing(below))
+	}
 	err = a.leaveStack(stack[at], TrainSuperseded, why)
 	for _, id := range dependent {
 		i := slices.IndexFunc(stack, func(l landedTask) bool { return l.ID == id })
@@ -422,7 +452,7 @@ func (a *App) RouteAroundStuck(red string, after time.Duration) error {
 		return err
 	}
 	routes = append(slices.DeleteFunc(routes, func(r StallRoute) bool { return r.Red == red }),
-		StallRoute{Red: red, PR: url, Held: dependent, At: time.Now().UTC()})
+		StallRoute{Red: red, PR: url, Held: dependent, Below: below, At: time.Now().UTC()})
 	if err := a.setStallHeld(routes); err != nil {
 		return err
 	}
@@ -436,12 +466,25 @@ func (a *App) RouteAroundStuck(red string, after time.Duration) error {
 	if _, err := a.Restack(); err != nil {
 		return err
 	}
-	return a.Notify(OrchestratorID, store.NoticeAction, routeLine(red, url, after, independent, dependent, a.Cfg.Base))
+	return a.Notify(OrchestratorID, store.NoticeAction, routeLine(red, url, after, independent, dependent, below, a.Cfg.Base))
+}
+
+func orNothing(ids []string) string {
+	if len(ids) == 0 {
+		return "nothing"
+	}
+	return strings.Join(ids, ", ")
 }
 
 // routeLine is the one chat line a route-around leaves.
-func routeLine(red, url string, after time.Duration, went, held []string, base string) string {
+func routeLine(red, url string, after time.Duration, went, held, below []string, base string) string {
 	s := fmt.Sprintf("Routed around %s after %s. It's now a standalone PR %s waiting on you", red, fmtDuration(after), url)
+	if url == "" {
+		s = fmt.Sprintf("Routed around %s after %s. It can't stand alone as a PR, so the stack is cut at it", red, fmtDuration(after))
+		if len(below) > 0 {
+			s += fmt.Sprintf(": %s keep merging, and %s goes back on top once they have", strings.Join(below, ", "), red)
+		}
+	}
 	if len(went) > 0 {
 		s += fmt.Sprintf("; %s restacked onto %s and keep merging without it", strings.Join(went, ", "), base)
 	}
@@ -490,7 +533,9 @@ func (a *App) dependentLayers(stack []landedTask, at int, ups []string) []string
 }
 
 // releaseHeld puts layers held on a routed-around red layer back in the
-// train once base has the red layer's work.
+// train once base has the red layer's work. A truncated route (no PR) puts
+// the red layer itself back first, on top, once base has the layers that
+// were below it (#766).
 func (a *App) releaseHeld() error {
 	routes, err := a.StallHeld()
 	if err != nil || len(routes) == 0 {
@@ -501,22 +546,35 @@ func (a *App) releaseHeld() error {
 		return err
 	}
 	base := "refs/remotes/origin/" + a.Cfg.Base
+	merged := func(id string) bool {
+		i := slices.IndexFunc(all, func(l landedTask) bool { return l.ID == id })
+		return i >= 0 && (all[i].State == TrainMerged || a.inBase(all[i], base))
+	}
 	var keep []StallRoute
 	var errs []error
 	for _, r := range routes {
-		i := slices.IndexFunc(all, func(l landedTask) bool { return l.ID == r.Red })
-		if i < 0 || !a.inBase(all[i], base) {
+		var back []string
+		switch {
+		case r.PR == "" && !slices.ContainsFunc(r.Below, func(id string) bool { return !merged(id) }):
+			back = append([]string{r.Red}, r.Held...)
+		case r.PR != "" && merged(r.Red):
+			back = r.Held
+		default:
 			keep = append(keep, r)
 			continue
 		}
-		for _, id := range r.Held {
+		for _, id := range back {
 			if err := a.Requeue(id); err != nil {
 				errs = append(errs, fmt.Errorf("requeue %s held on %s: %w", id, r.Red, err))
 			}
 		}
-		if len(r.Held) > 0 {
+		switch {
+		case r.PR == "":
 			errs = append(errs, a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
-				"%s merged, so %s, held on it, are back in the train.", r.Red, strings.Join(r.Held, ", "))))
+				"The layers below %s merged, so %s %s back on top of the stack.", r.Red, strings.Join(back, ", "), isAre(len(back)))))
+		case len(back) > 0:
+			errs = append(errs, a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
+				"%s merged, so %s, held on it, are back in the train.", r.Red, strings.Join(back, ", "))))
 		}
 	}
 	errs = append(errs, a.setStallHeld(keep))

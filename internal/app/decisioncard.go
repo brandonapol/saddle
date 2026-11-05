@@ -44,7 +44,15 @@ const (
 	DecidedByTimeout = "timeout"
 	DecidedResolved  = "resolved" // the situation cleared on its own
 	DecidedPreauth   = "preauth"  // a [[preauth]] rule allowed it (#464)
+	// DecidedDefaultFailed closes a card whose default failed the same
+	// deterministic way maxDefaultAttempts times: it is filed as a blocker
+	// issue instead of retried every cycle (#766).
+	DecidedDefaultFailed = "default_failed"
 )
+
+// maxDefaultAttempts is how many deterministic failures a card's default
+// gets before the card gives up.
+const maxDefaultAttempts = 3
 
 // Events logging a card's life. Their data starts with the card's ID.
 const (
@@ -54,6 +62,7 @@ const (
 	EventDecisionDefaultFailed = "decision_default_failed"
 	EventDecisionResolved      = "decision_resolved"
 	EventDecisionPreauth       = "decision_preauth"
+	EventDecisionGaveUp        = "decision_default_gave_up" // data: card ID: last error; filed as a blocker
 )
 
 // DefaultDecisionTimeout is how long a card waits for an answer before
@@ -99,6 +108,10 @@ type DecisionCard struct {
 	// RetryAfter holds a due default whose action hit GitHub's rate limit
 	// until the limit resets (#764).
 	RetryAfter time.Time `json:"retry_after,omitzero"`
+	// Attempts counts the default's deterministic failures, and LastError
+	// holds the latest (#766).
+	Attempts  int    `json:"default_attempts,omitempty"`
+	LastError string `json:"last_error,omitempty"`
 }
 
 // Open reports whether nobody has answered the card and it hasn't timed out.
@@ -201,6 +214,8 @@ func (c DecisionCard) Line() string {
 		return "✓ " + c.Headline + ": it cleared on its own."
 	case DecidedPreauth:
 		how = "pre-authorized, so saddle ran"
+	case DecidedDefaultFailed:
+		return fmt.Sprintf("✗ %s: nobody answered and its default failed %d times (%s); filed as a blocker.", c.Headline, c.Attempts, c.LastError)
 	}
 	label := ""
 	if c.Answer >= 1 && c.Answer <= len(c.Options) {
@@ -396,8 +411,14 @@ func (a *App) ResolveDecision(id string, now time.Time) error {
 }
 
 // ExpireDecisions runs the default of every open card whose timeout has run
-// out at now, through run, and closes it. A default that fails stays open
-// for the next call. It returns the cards it closed.
+// out at now, through run, and closes it. A rate limit or a network timeout
+// is a wait: the card stays open and nothing is counted. Any other failure
+// is an attempt: the card stays open for the next call, and the error is
+// returned (the sentinel's alarm) only when it differs from the last one,
+// so the alarm fires once per state change, not once per cycle. After
+// maxDefaultAttempts the card closes as default_failed with one
+// EventDecisionGaveUp, which the blocker filer turns into an issue (#766).
+// It returns the cards whose default ran.
 func (a *App) ExpireDecisions(now time.Time, run func(DecisionCard, DecisionOption) error) ([]DecisionCard, error) {
 	var due []DecisionCard
 	open, err := a.OpenDecisions()
@@ -419,9 +440,12 @@ func (a *App) ExpireDecisions(now time.Time, run func(DecisionCard, DecisionOpti
 			errs = append(errs, a.deferDecision(c.ID, until))
 			continue
 		}
-		if err != nil {
-			a.Store.Event(c.Task, EventDecisionDefaultFailed, c.ID+": "+err.Error())
+		if err != nil && forge.Transient(err) {
 			errs = append(errs, fmt.Errorf("decision %s: default %q: %w", c.ID, opt.Action, err))
+			continue
+		}
+		if err != nil {
+			errs = append(errs, a.defaultFailed(c, opt, err, now))
 			continue
 		}
 		closed := false
@@ -445,6 +469,43 @@ func (a *App) ExpireDecisions(now time.Time, run func(DecisionCard, DecisionOpti
 		}
 	}
 	return done, errors.Join(errs...)
+}
+
+// defaultFailed records a deterministic failure of c's default. It returns
+// the error to alarm on, or nil when it is the same failure as last time.
+func (a *App) defaultFailed(c DecisionCard, opt DecisionOption, ferr error, now time.Time) error {
+	msg := oneLine(ferr.Error())
+	var card DecisionCard
+	changed := false
+	err := a.withDecisions(func(cs *[]DecisionCard) error {
+		for i, o := range *cs {
+			if o.ID != c.ID || !o.Open() {
+				continue
+			}
+			o.Attempts++
+			changed = o.LastError != msg
+			o.LastError = msg
+			if o.Attempts >= maxDefaultAttempts {
+				o.Answer, o.By, o.Closed = c.Default, DecidedDefaultFailed, now.UTC()
+			}
+			(*cs)[i], card = o, o
+			return nil
+		}
+		return nil
+	})
+	if err != nil || card.ID == "" {
+		return err
+	}
+	var out error
+	if changed {
+		a.Store.Event(c.Task, EventDecisionDefaultFailed, c.ID+": "+msg)
+		out = fmt.Errorf("decision %s: default %q: %w", c.ID, opt.Action, ferr)
+	}
+	if card.By == DecidedDefaultFailed {
+		a.Store.Event(c.Task, EventDecisionGaveUp, c.ID+": "+msg)
+		out = errors.Join(out, a.Notify(OrchestratorID, store.NoticeAction, card.Line()))
+	}
+	return out
 }
 
 // deferDecision holds open card id's default until until.
