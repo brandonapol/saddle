@@ -439,6 +439,7 @@ func statusCmd() *cobra.Command {
 					o.Task, o.Step, time.Since(o.StepAt).Round(time.Minute))
 			}
 			writeForecast(cmd.OutOrStdout(), st.Forecast)
+			writeWatchers(cmd.OutOrStdout(), a)
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(w, "ID\tSTATUS\tMODEL\tWIN\tTITLE\tCLAIMS\tTRAIN")
 			for _, t := range st.Tasks {

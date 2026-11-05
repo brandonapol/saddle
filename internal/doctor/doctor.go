@@ -203,6 +203,9 @@ func runChecks(env Env, local bool) []Result {
 	if se, ok := env.(ScratchEnv); ok {
 		add(CheckScratch, func() Result { return scratchCheck(se) })
 	}
+	if ee, ok := env.(EngineEnv); ok {
+		add(CheckEngine, func() Result { return engineCheck(ee) })
+	}
 	if re, ok := env.(RemoteEnv); ok {
 		add(CheckRemoteControl, func() Result { return remoteCheck(re, time.Now()) })
 	}

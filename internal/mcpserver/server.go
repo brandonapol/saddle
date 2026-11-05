@@ -174,7 +174,10 @@ type StatusOut struct {
 	// Forecast is the collision forecast between live tasks; absent while no
 	// pair scores medium or above.
 	Forecast *app.ForecastView `json:"forecast,omitempty" jsonschema:"predicted collisions between live tasks: pairs at medium and above (a, b, level, reason), at most 10, and safe: how many pairs score low or none. Absent while no pair reaches medium"`
-	Tasks    []TaskView        `json:"tasks"`
+	// Watchers lists background watchers that are stale or recovered from a
+	// panic (#789); absent while every one is healthy.
+	Watchers []app.WatcherHealth `json:"watchers,omitempty" jsonschema:"background watchers (sentinel, automerge, ci, ...) that are stale while the engine runs or restarted after a panic: name, ago (since the last tick), restarts, last_panic"`
+	Tasks    []TaskView          `json:"tasks"`
 	// Jev is the triage log rolled up (#512). Zero calls is reported, so a
 	// quiet judge is visible rather than absent.
 	Jev JevStatus `json:"jev" jsonschema:"Jev triage so far: how many calls, how many failed, and approximate list-price spend in USD"`
@@ -409,6 +412,17 @@ func Status(a *app.App) (StatusOut, error) {
 		out.Warnings = append(out.Warnings, "heavy-run queue: "+err.Error())
 	} else if v.Busy() {
 		out.HeavyRuns = &v
+	}
+	if down := a.EngineDown(); down != "" {
+		out.Warnings = append(out.Warnings, down)
+	}
+	if ws, err := a.Watchers(time.Now()); err == nil {
+		for _, w := range ws {
+			if w.Stale || w.Restarts > 0 {
+				out.Watchers = append(out.Watchers, w)
+				out.Warnings = append(out.Warnings, "watcher "+w.Line())
+			}
+		}
 	}
 	out.Adapters = a.Adapters()
 	out.AdapterPolicy = a.AdapterPolicy()

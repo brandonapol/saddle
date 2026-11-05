@@ -6,6 +6,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/brandonapol/saddle/internal/supervise"
 )
 
 // fakeStart replaces StartEngine for the test and counts its calls.
@@ -84,4 +86,38 @@ func hasKeepaliveEvent(t *testing.T, a *App, kind string) bool {
 		}
 	}
 	return false
+}
+
+// #789: status and doctor read when each watcher last ticked; stale only
+// counts while an engine runs.
+func TestWatchersHealth(t *testing.T) {
+	a, _ := setup(t)
+	now := time.Now()
+	r := a.WatcherRecorder()
+	r.Tick(supervise.Beat{Name: "sentinel", At: now.Add(-14 * time.Minute)})
+	r.Tick(supervise.Beat{Name: "ci", At: now.Add(-10 * time.Second), Restarts: 1, LastPanic: "nil map"})
+	ws, err := a.Watchers(now)
+	must(t, err)
+	if len(ws) != 2 || ws[1].Line() != "sentinel last ticked 14m ago" || ws[1].Stale {
+		t.Fatalf("no engine: %+v", ws)
+	}
+	if got := ws[0].Line(); got != "ci last ticked 10s ago, restarted 1× after a panic (last: nil map)" {
+		t.Fatalf("ci line = %q", got)
+	}
+	rel, err := a.AcquireLock(LockEngine)
+	must(t, err)
+	defer rel()
+	ws, err = a.Watchers(now)
+	must(t, err)
+	if !ws[1].Stale || ws[0].Stale {
+		t.Fatalf("engine running: %+v", ws)
+	}
+	if a.EngineDown() != "" {
+		t.Fatal("engine runs, yet EngineDown")
+	}
+	rel()
+	must(t, a.WantEngine(1<<22))
+	if a.EngineDown() == "" {
+		t.Fatal("wanted engine down, yet no EngineDown")
+	}
 }
