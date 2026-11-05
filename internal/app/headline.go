@@ -60,6 +60,9 @@ type HeadlineInput struct {
 	Autopilot        bool
 	// Orphans are the workers flagged done-orphaned (#467).
 	Orphans []DoneOrphan
+	// GitHubHeldUntil is when GitHub's rate limit resets while saddle holds
+	// gh calls for it (#764); zero when it isn't.
+	GitHubHeldUntil time.Time
 }
 
 // maxAsk caps the quoted ask in a needs-you headline.
@@ -175,6 +178,9 @@ func degradedHeadline(in HeadlineInput, live []store.Task) (StateHeadline, bool)
 			r += " (" + in.UsageNote + ")"
 		}
 		reasons = append(reasons, r)
+	}
+	if !in.GitHubHeldUntil.IsZero() {
+		reasons = append(reasons, "GitHub rate-limited until "+in.GitHubHeldUntil.Local().Format("15:04"))
 	}
 	names := make([]string, 0, len(in.Exhausted))
 	for n := range in.Exhausted {
@@ -392,6 +398,9 @@ func (a *App) headlineInput(now time.Time) (HeadlineInput, error) {
 		in.Flag = &f
 	}
 	in.Exhausted = a.ExhaustedAdapters(now)
+	if rl, ok := forge.ReadRateLimitHold(a.Root, now); ok {
+		in.GitHubHeldUntil = rl.Until
+	}
 	e, err := a.Limits(now)
 	if err != nil {
 		return in, err

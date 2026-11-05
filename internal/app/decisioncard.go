@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -86,6 +87,9 @@ type DecisionCard struct {
 	Closed       time.Time     `json:"closed,omitzero"`
 	Answer       int           `json:"answer,omitempty"` // the option taken
 	By           string        `json:"by,omitempty"`     // DecidedByOwner or DecidedByTimeout
+	// RetryAfter holds a due default whose action hit GitHub's rate limit
+	// until the limit resets (#764).
+	RetryAfter time.Time `json:"retry_after,omitzero"`
 }
 
 // Open reports whether nobody has answered the card and it hasn't timed out.
@@ -93,7 +97,7 @@ func (c DecisionCard) Open() bool { return c.Closed.IsZero() }
 
 // Due reports whether an open card's timeout has run out at now.
 func (c DecisionCard) Due(now time.Time) bool {
-	return c.Open() && !now.Before(c.Opened.Add(c.Timeout))
+	return c.Open() && !now.Before(c.Opened.Add(c.Timeout)) && !now.Before(c.RetryAfter)
 }
 
 // DefaultOption is the option run if nobody answers.
@@ -395,13 +399,19 @@ func (a *App) ExpireDecisions(now time.Time, run func(DecisionCard, DecisionOpti
 	var errs []error
 	for _, c := range due {
 		opt := c.DefaultOption()
-		if err := run(c, opt); err != nil {
+		err := run(c, opt)
+		if until, ok := forge.RateLimitUntil(err); ok {
+			// GitHub's quota is spent: a wait, not a failure (#764).
+			errs = append(errs, a.deferDecision(c.ID, until))
+			continue
+		}
+		if err != nil {
 			a.Store.Event(c.Task, EventDecisionDefaultFailed, c.ID+": "+err.Error())
 			errs = append(errs, fmt.Errorf("decision %s: default %q: %w", c.ID, opt.Action, err))
 			continue
 		}
 		closed := false
-		err := a.withDecisions(func(cs *[]DecisionCard) error {
+		err = a.withDecisions(func(cs *[]DecisionCard) error {
 			for i, o := range *cs {
 				if o.ID == c.ID && o.Open() {
 					o.Answer, o.By, o.Closed = c.Default, DecidedByTimeout, now.UTC()
@@ -421,6 +431,18 @@ func (a *App) ExpireDecisions(now time.Time, run func(DecisionCard, DecisionOpti
 		}
 	}
 	return done, errors.Join(errs...)
+}
+
+// deferDecision holds open card id's default until until.
+func (a *App) deferDecision(id string, until time.Time) error {
+	return a.withDecisions(func(cs *[]DecisionCard) error {
+		for i, o := range *cs {
+			if o.ID == id && o.Open() {
+				(*cs)[i].RetryAfter = until.UTC()
+			}
+		}
+		return nil
+	})
 }
 
 // taskLabel names a task by what it does: t150 ("Remote-control PR").

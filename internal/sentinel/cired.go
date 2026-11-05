@@ -84,7 +84,9 @@ func (c *CIRed) Run(ctx context.Context) error {
 		case <-t.C:
 		}
 		rep, err := c.Check(ctx)
-		if err != nil {
+		if deferred(err) {
+			// GitHub's quota is spent: skip the cycle quietly (#764).
+		} else if err != nil {
 			if msg := err.Error(); msg != c.lastErr {
 				c.lastErr = msg
 				c.App.Store.Event("", EventCIRedError, msg)
