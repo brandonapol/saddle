@@ -185,7 +185,9 @@ func (s *Sentinel) Run(ctx context.Context) error {
 	defer t.Stop()
 	for {
 		wait := iv
-		if rep, err := s.Check(); err != nil {
+		if rep, err := s.Check(); deferred(err) {
+			// GitHub's quota is spent: skip the cycle quietly (#764).
+		} else if err != nil {
 			if msg := err.Error(); msg != s.lastErr {
 				s.lastErr = msg
 				s.App.Store.Event("", EventError, msg)
@@ -198,11 +200,11 @@ func (s *Sentinel) Run(ctx context.Context) error {
 		}
 		// A stack red or conflicting too long with nobody on it wakes the
 		// orchestrator once (#223).
-		if _, err := s.App.CheckStuck(time.Now().UTC()); err != nil {
+		if _, err := s.App.CheckStuck(time.Now().UTC()); err != nil && !deferred(err) {
 			s.App.Store.Event("", EventError, "stuck-stack alarm: "+err.Error())
 		}
 		if s.Blockers != nil {
-			if _, err := s.Blockers.FileBlockers(ctx); err != nil {
+			if _, err := s.Blockers.FileBlockers(ctx); err != nil && !deferred(err) {
 				s.App.Store.Event("", EventError, "blocker issues: "+err.Error())
 			}
 		}
@@ -214,6 +216,10 @@ func (s *Sentinel) Run(ctx context.Context) error {
 		}
 	}
 }
+
+// deferred reports whether err is GitHub's rate limit, which a cycle waits
+// out instead of logging (#764).
+func deferred(err error) bool { return errors.Is(err, forge.ErrRateLimited) }
 
 // hit is one problem, at index at of the stack's layers; the layers from
 // from up are at risk. conflict marks a conflict, the one kind of hit that
