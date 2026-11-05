@@ -494,6 +494,20 @@ func ServeIdle(ctx context.Context, why string) error {
 	return s.Run(ctx, &mcp.StdioTransport{})
 }
 
+// reviveEngine checks the engine on every tool call and, when it died
+// while meant to run, starts it again in the background, so any live
+// agent's call brings it back (#789).
+func reviveEngine(a *app.App) mcp.Middleware {
+	return func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if method == "tools/call" {
+				a.ReviveEngine()
+			}
+			return next(ctx, method, req)
+		}
+	}
+}
+
 const serverInstructions = "Saddle coordinates parallel coding agents. Use spawn for disjoint sub-work, claim before large edits, and done when your branch is committed and tested. " +
 	"When prs is blocked (the stack is flagged, or GitHub refuses a base change) but a task's work stands on its own, publish is the escape hatch: it opens that task's PR against base. Never git push or gh pr create by hand."
 
@@ -502,6 +516,7 @@ func New(a *app.App, task string) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "saddle", Version: "0.1.0"}, &mcp.ServerOptions{
 		Instructions: serverInstructions,
 	})
+	s.AddReceivingMiddleware(reviveEngine(a))
 	self := func() error {
 		if task == "" {
 			return errors.New("SADDLE_TASK is not set; this MCP server must be started by saddle")

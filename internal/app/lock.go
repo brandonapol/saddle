@@ -97,7 +97,7 @@ func writeAt0(f *os.File, s string) error {
 
 func lockHeldError(owner string) error {
 	if owner == LockEngine {
-		return errors.New("a Claude Code session is orchestrating this repo (saddle plugin engine is running); stop it first")
+		return errors.New("a Claude Code session is orchestrating this repo (saddle plugin engine is running); stop it first with `saddle plugin engine --stop`")
 	}
 	return errors.New("saddle up is already running for this repo in another terminal")
 }

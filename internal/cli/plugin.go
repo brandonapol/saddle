@@ -19,7 +19,6 @@ import (
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/banner"
 	"github.com/brandonapol/saddle/internal/doctor"
-	"github.com/brandonapol/saddle/internal/engine"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/hook"
 	"github.com/brandonapol/saddle/internal/mcpserver"
@@ -249,6 +248,7 @@ func runPluginHook(r io.Reader, w io.Writer) error {
 		return nil
 	}
 	defer a.Close()
+	a.ReviveEngine() // the orchestrator's own hooks bring a dead engine back too (#789)
 	if a.LockOwner() != app.LockEngine || a.ModActive(time.Now()) {
 		return nil
 	}
@@ -352,43 +352,6 @@ func activeStatus(s string) bool {
 		return false
 	}
 	return true
-}
-
-func pluginEngineCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "engine",
-		Short: "Watch agents for the orchestrating Claude Code session (runs until stopped)",
-		Long: `Runs what saddle up runs in the background, without the TUI: it notices
-agents waiting on a prompt or stopped without calling done and queues those
-events for the orchestrator, and runs the stack sentinel, CI watcher and
-auto-merge watcher. While it runs, the plugin's hooks deliver the events into
-this repo's orchestrating Claude Code session. It can't run alongside saddle up.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			a, why := openPlugin(wd())
-			if a == nil {
-				return errors.New(why)
-			}
-			defer a.Close()
-			if err := trust.Gate(a.Root, trust.Options{}); err != nil {
-				return fmt.Errorf("the saddle engine won't run in a repo you haven't trusted; run `saddle trust` in %s first: %w", a.Root, err)
-			}
-			if _, err := a.EnsureOrchestrator(); err != nil {
-				return err
-			}
-			release, err := a.AcquireLock(app.LockEngine)
-			if err != nil {
-				return err
-			}
-			defer release()
-			ctx, stop := signalContext()
-			defer stop()
-			fmt.Fprintf(cmd.OutOrStdout(), "saddle engine running for %s. Stop it with ctrl-c; agents keep running.\n", a.Root)
-			stopWatchers := startWatchers(ctx, a)
-			err = engine.New(a).Run(ctx)
-			stopWatchers()
-			return err
-		},
-	}
 }
 
 func pluginWaitCmd() *cobra.Command {
