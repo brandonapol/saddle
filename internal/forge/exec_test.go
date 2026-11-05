@@ -2,10 +2,12 @@ package forge
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/config"
 )
@@ -67,5 +69,42 @@ func TestNewGitHubUsesGHOnPATH(t *testing.T) {
 func TestIsCLI(t *testing.T) {
 	if !IsCLI("gh") || !IsCLI("glab") || IsCLI("git") {
 		t.Fatal("IsCLI: want gh and glab only")
+	}
+}
+
+// #788: a gh call on a dead connection hung a watcher. Every call now has a
+// deadline and says it timed out, a wait rather than a failure.
+func TestOutputTimesOut(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, GH), []byte("#!/bin/sh\nsleep 3600\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	old := CallTimeout
+	CallTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { CallTimeout = old })
+	start := time.Now()
+	_, err := CLI(t.TempDir(), GH)(context.Background(), "pr", "checks", "7")
+	if !errors.Is(err, ErrNetTimeout) || !Transient(err) {
+		t.Fatalf("stalled gh = %v, want ErrNetTimeout", err)
+	}
+	if errors.Is(err, ErrRateLimited) {
+		t.Fatal("a timeout reads as the rate limit")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("stalled gh took %s over a 300ms deadline", took)
+	}
+}
+
+func TestCallContextLogDownloadGetsLonger(t *testing.T) {
+	_, d, cancel := callContext(context.Background(), []string{"run", "view", "--job", "1", "--log-failed"})
+	cancel()
+	if d != LogTimeout {
+		t.Fatalf("run view --log-failed deadline = %s, want LogTimeout %s", d, LogTimeout)
+	}
+	_, d, cancel = callContext(context.Background(), []string{"pr", "view", "--log"})
+	cancel()
+	if d != CallTimeout {
+		t.Fatalf("pr view deadline = %s, want CallTimeout %s", d, CallTimeout)
 	}
 }
