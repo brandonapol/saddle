@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/brandonapol/saddle/internal/config"
@@ -436,4 +437,44 @@ func PRNoun(p string) string {
 		return "MR"
 	}
 	return "PR"
+}
+
+// KnownLabels are the labels saddle itself puts on PRs and issues, with the
+// color and description it creates them with. The forges create one of these
+// on demand when adding it fails because the repo lacks it, and init/doctor
+// create them up front.
+func KnownLabels() []Label {
+	return []Label{
+		{Name: "needs-human", Color: "D93F0B", Description: "Saddle parked this PR: it needs a human"},
+		{Name: "ci-red", Color: "FBCA04", Description: "Saddle: CI is red on this PR or one below it; layers above wait for it"},
+		{Name: "saddle:ready", Color: "0E8A16", Description: "Saddle autopilot may pick this issue up"},
+		{Name: "saddle-blocker", Color: "B60205", Description: "Filed by saddle for a blocker (#407)"},
+	}
+}
+
+// knownLabel returns saddle's own label called name.
+func knownLabel(name string) (Label, bool) {
+	for _, l := range KnownLabels() {
+		if l.Name == name {
+			return l, true
+		}
+	}
+	return Label{}, false
+}
+
+// addLabelEnsuring runs add; when it fails because name doesn't exist yet and
+// name is one of saddle's own labels, it creates the label and retries once.
+func addLabelEnsuring(ctx context.Context, f Forge, name string, add func() error) error {
+	err := add()
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "not found") {
+		return err
+	}
+	l, ok := knownLabel(name)
+	if !ok {
+		return err
+	}
+	if eerr := f.EnsureLabel(ctx, l); eerr != nil {
+		return err
+	}
+	return add()
 }

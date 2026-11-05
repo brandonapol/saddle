@@ -452,8 +452,10 @@ func (a *App) ParkRepairCap(task string, after time.Duration) error {
 		return err
 	}
 	if t.PR != "" {
+		// The label is a courtesy: a failure must not stop the park, or the
+		// default would fail and retry every cycle (#787).
 		if err := a.Forge().AddLabel(context.Background(), t.PR, automerge.NeedsHuman); err != nil {
-			return fmt.Errorf("label %s %s: %w", t.PR, automerge.NeedsHuman, err)
+			a.Store.Event(task, "stall_label_failed", fmt.Sprintf("label %s %s: %v", t.PR, automerge.NeedsHuman, err))
 		}
 	}
 	s, err := a.CIRed()

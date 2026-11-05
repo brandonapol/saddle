@@ -127,6 +127,9 @@ func New(t testing.TB, bins Bins, opts Options) *World {
 	}
 	w.MustSaddle("init", "-q", "--trust")
 	w.WriteConfig(opts)
+	// init runs before the config names the forge, so it labeled through the
+	// default one (#787). Those calls are setup, not what a journey tests.
+	must(t, w.GH.Update(func(s *fakegh.State) error { s.Calls = nil; return nil }))
 	return w
 }
 

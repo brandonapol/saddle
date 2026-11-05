@@ -98,7 +98,11 @@ func doctorFixInit(a *app.App) error {
 	if err := a.Init(); err != nil {
 		return err
 	}
-	return initSetup(io.Discard, a.Root)
+	if err := initSetup(io.Discard, a.Root); err != nil {
+		return err
+	}
+	a.EnsureLabels(io.Discard)
+	return nil
 }
 
 // reportDoctor prints the results and returns an error when a check failed,
