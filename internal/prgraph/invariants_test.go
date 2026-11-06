@@ -581,7 +581,7 @@ func TestP11TerminalStaysTerminal(t *testing.T) {
 				continue
 			}
 			for _, s := range to {
-				if !(c.State == Superseded && s == Merged && w.inBase[c.ID]) {
+				if c.State != Superseded || s != Merged || !w.inBase[c.ID] {
 					t.Errorf("%s left terminal %s for %s", c.ID, c.State, s)
 					return false
 				}

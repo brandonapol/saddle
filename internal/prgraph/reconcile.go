@@ -891,8 +891,7 @@ func Collapsible(in Input) []Collapse {
 	// Group by connected component; the root is the first change in
 	// topological order.
 	parent := map[string]string{}
-	var find func(string) string
-	find = func(x string) string {
+	find := func(x string) string {
 		for parent[x] != x {
 			x = parent[x]
 		}

@@ -102,9 +102,7 @@ func (w *world) input() Input {
 	for _, b := range sortedKeys(w.heads) {
 		in.Git.Heads = append(in.Git.Heads, BranchHead{b, w.heads[b]})
 	}
-	for _, id := range sortedKeys(w.inBase) {
-		in.Git.InBase = append(in.Git.InBase, id)
-	}
+	in.Git.InBase = append(in.Git.InBase, sortedKeys(w.inBase)...)
 	in.Git.Gates = append([]GateResult(nil), w.gates...)
 	return in
 }
