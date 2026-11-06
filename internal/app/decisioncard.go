@@ -54,6 +54,11 @@ const (
 // gets before the card gives up.
 const maxDefaultAttempts = 3
 
+// claimStale is how long a claim on a card's default holds before another
+// process may take it over: a run that died mid-default must not leave the
+// card stuck (#119).
+const claimStale = 10 * time.Minute
+
 // Events logging a card's life. Their data starts with the card's ID.
 const (
 	EventDecisionOpen          = "decision_open"
@@ -105,6 +110,12 @@ type DecisionCard struct {
 	Closed       time.Time     `json:"closed,omitzero"`
 	Answer       int           `json:"answer,omitempty"` // the option taken
 	By           string        `json:"by,omitempty"`     // DecidedByOwner or DecidedByTimeout
+	// Reply is the owner's words when they answered with a message (#794).
+	Reply string `json:"reply,omitempty"`
+	// Claimed marks a due card whose default one process is running, so no
+	// other runs it too (#794). A claim older than claimStale is a crashed
+	// run's, and is taken over.
+	Claimed time.Time `json:"claimed,omitzero"`
 	// RetryAfter holds a due default whose action hit GitHub's rate limit
 	// until the limit resets (#764).
 	RetryAfter time.Time `json:"retry_after,omitzero"`
@@ -433,8 +444,19 @@ func (a *App) ExpireDecisions(now time.Time, run func(DecisionCard, DecisionOpti
 	var done []DecisionCard
 	var errs []error
 	for _, c := range due {
+		// Claim it first, under the lock: another process expiring the same
+		// card, or the owner answering it meanwhile, means this one is not
+		// ours to run (#794).
+		ok, err := a.claimDecision(c.ID, now)
+		if err != nil || !ok {
+			errs = append(errs, err)
+			continue
+		}
 		opt := c.DefaultOption()
-		err := run(c, opt)
+		err = run(c, opt)
+		if err != nil {
+			errs = append(errs, a.unclaimDecision(c.ID))
+		}
 		if until, ok := forge.RateLimitUntil(err); ok {
 			// GitHub's quota is spent: a wait, not a failure (#764).
 			errs = append(errs, a.deferDecision(c.ID, until))
@@ -452,7 +474,7 @@ func (a *App) ExpireDecisions(now time.Time, run func(DecisionCard, DecisionOpti
 		err = a.withDecisions(func(cs *[]DecisionCard) error {
 			for i, o := range *cs {
 				if o.ID == c.ID && o.Open() {
-					o.Answer, o.By, o.Closed = c.Default, DecidedByTimeout, now.UTC()
+					o.Answer, o.By, o.Closed, o.Claimed = c.Default, DecidedByTimeout, now.UTC(), time.Time{}
 					(*cs)[i], c, closed = o, o, true
 					return nil
 				}
@@ -506,6 +528,39 @@ func (a *App) defaultFailed(c DecisionCard, opt DecisionOption, ferr error, now 
 		out = errors.Join(out, a.Notify(OrchestratorID, store.NoticeAction, card.Line()))
 	}
 	return out
+}
+
+// claimDecision claims open card id's default for this run at now. It
+// reports false when the card closed or another run holds a fresh claim.
+func (a *App) claimDecision(id string, now time.Time) (bool, error) {
+	ok := false
+	err := a.withDecisions(func(cs *[]DecisionCard) error {
+		for i, o := range *cs {
+			if o.ID != id || !o.Open() {
+				continue
+			}
+			if !o.Claimed.IsZero() && now.Sub(o.Claimed) < claimStale {
+				return nil
+			}
+			(*cs)[i].Claimed, ok = now.UTC(), true
+			return nil
+		}
+		return nil
+	})
+	return ok, err
+}
+
+// unclaimDecision drops the claim on open card id after its default failed,
+// so the next run may try again.
+func (a *App) unclaimDecision(id string) error {
+	return a.withDecisions(func(cs *[]DecisionCard) error {
+		for i, o := range *cs {
+			if o.ID == id && o.Open() {
+				(*cs)[i].Claimed = time.Time{}
+			}
+		}
+		return nil
+	})
 }
 
 // deferDecision holds open card id's default until until.

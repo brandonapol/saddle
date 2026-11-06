@@ -736,7 +736,7 @@ func messageCmd() *cobra.Command {
 		Short: "Send a [saddle] message to a task, waking it if idle",
 		Args:  cobra.ExactArgs(2),
 		RunE: withApp(func(_ *cobra.Command, a *app.App, args []string) error {
-			return a.Notify(args[0], "action", "Message from the user: "+args[1])
+			return a.Message(app.UserID, args[0], args[1])
 		}),
 	}
 }
