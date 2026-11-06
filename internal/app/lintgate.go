@@ -94,12 +94,11 @@ func (a *App) lintDone(t store.Task) error {
 		if env && !errors.As(err, &timedOut) {
 			if attempt < gateEnvRetries {
 				a.Store.Event(t.ID, EventGateEnv, fmt.Sprintf("done's lint gate: %s; retry %d of %d", p.Signature, attempt+1, gateEnvRetries))
-				time.Sleep(time.Duration(attempt+1) * time.Second)
+				time.Sleep(time.Duration(attempt+1) * gateEnvPause)
 				continue
 			}
 			a.Store.Event(t.ID, EventGateEnv, "done's lint gate: "+p.Signature)
-			return fmt.Errorf("done could not check your tree: the repo's gate `%s` failed on the environment (%q), not on your branch. Free %s, then call the saddle done tool again; your branch needs no change for it.%s\n%s",
-				g.Cmd, p.Signature, p.Free, a.tempHint(), tail(out, 10))
+			return &DoneEnvError{Cmd: g.Cmd, Problem: p, Out: out, Hint: a.tempHint()}
 		}
 		if a.brokenGate(t.ID, g, out) {
 			return nil

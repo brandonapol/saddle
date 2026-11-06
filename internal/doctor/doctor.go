@@ -142,7 +142,7 @@ type run struct {
 // saddle up runs them after its first frame (#635).
 var slowChecks = map[string]bool{
 	CheckGH: true, CheckMergeSettings: true, CheckProtection: true, CheckGhStack: true,
-	CheckPush: true, CheckLeftovers: true, CheckSkills: true, CheckScratch: true,
+	CheckPush: true, CheckLeftovers: true, CheckSkills: true, CheckScratch: true, CheckLogins: true,
 }
 
 // Slow reports whether Run makes the named check and RunLocal skips it.
@@ -186,6 +186,9 @@ func runChecks(env Env, local bool) []Result {
 	}
 	if _, ok := env.(AgentsEnv); ok {
 		add(CheckAgents, r.agentCLIs)
+	}
+	if le, ok := env.(LoginsEnv); ok {
+		add(CheckLogins, func() Result { return r.logins(le) })
 	}
 	add(CheckOrchestrator, r.orchestrator)
 	if r.wantsGrok() { // after config, which sets the harness

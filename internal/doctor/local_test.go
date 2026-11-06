@@ -69,8 +69,8 @@ func TestRunLocalSkipsTheSlowChecks(t *testing.T) {
 		full[r.Name] = true
 	}
 	for name := range slowChecks {
-		if name == CheckScratch || name == CheckSkills {
-			continue // healthy's env has neither
+		if name == CheckScratch || name == CheckSkills || name == CheckLogins {
+			continue // healthy's env has none of them
 		}
 		if !full[name] {
 			t.Errorf("Run skipped %q", name)

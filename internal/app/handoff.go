@@ -24,11 +24,23 @@ const (
 )
 
 // handoffNote tells the finisher it is taking over another agent's work.
-func handoffNote(from, to, integration string) string {
-	return fmt.Sprintf("[saddle] You are taking over this task: the agent working on it ran out of quota on %s, so saddle relaunched it on %s. "+
+func handoffNote(from, to, integration, why string) string {
+	return fmt.Sprintf("[saddle] You are taking over this task: the agent working on it %s %s, so saddle relaunched it on %s. "+
 		"This worktree and branch hold its work so far, commits and uncommitted changes alike. "+
 		"Start with git status and git log %s..HEAD to see what it did, then finish the task; don't redo work that is already there.",
-		from, to, integration)
+		why, from, to, integration)
+}
+
+// handoffWhy is why e's agents were handed off, as a sentence reads it:
+// "ran out of quota on".
+func handoffWhy(e Exhaustion) string {
+	switch e.Reason {
+	case ReasonLogin:
+		return "lost its login on"
+	case ReasonCredits:
+		return "ran out of credits on"
+	}
+	return "ran out of quota on"
 }
 
 // LimitHit handles a worker whose screen shows a usage-limit banner: its
@@ -73,7 +85,7 @@ func (a *App) HandOff(task string, now time.Time) (string, error) {
 	if !out {
 		return "", nil
 	}
-	if p.HandoffWait > 0 && e.Until.Sub(now) <= p.HandoffWait {
+	if p.HandoffWait > 0 && e.outFor(now) <= p.HandoffWait {
 		a.Store.Event(task, EventHandoffSkipped, fmt.Sprintf("%s resets at %s, within handoff_wait %s", e.Label(), e.when(), p.HandoffWait))
 		return "", nil
 	}
@@ -98,7 +110,7 @@ func (a *App) HandOff(task string, now time.Time) (string, error) {
 	if err := a.Store.SetField(t.ID, "adapter", t.Adapter); err != nil {
 		return "", err
 	}
-	prompt := strings.TrimSpace(t.Prompt + "\n\n" + handoffNote(e.Label(), c.Label(), a.Cfg.Integration))
+	prompt := strings.TrimSpace(t.Prompt + "\n\n" + handoffNote(e.Label(), c.Label(), a.Cfg.Integration, handoffWhy(e)))
 	win, err := a.start(t, all[t.ID], ad, "", prompt)
 	if err != nil {
 		// Its window is gone; ResumeLost relaunches it on an adapter with
@@ -112,8 +124,12 @@ func (a *App) HandOff(task string, now time.Time) (string, error) {
 	a.ForgetResumed(task)
 	a.Store.Event(task, EventAdapterHandoff, fmt.Sprintf("%s -> %s (%s) window %s", e.Label(), c.Label(), c.Why, win))
 	a.Store.Event(task, EventAdapterPick, pickLine(c.Adapter, c.Model, "handed off: "+c.Why, e.Label()))
-	text := fmt.Sprintf("%s %q ran out of quota on %s (resets %s), so saddle handed it to %s: a new %s agent finishes it in the same worktree and branch. Nothing needs doing.",
-		t.ID, t.Title, e.Label(), e.when(), c.Label(), c.Adapter)
+	back := "resets " + e.when()
+	if e.Indefinite() {
+		back = "out until cleared"
+	}
+	text := fmt.Sprintf("%s %q %s %s (%s), so saddle handed it to %s: a new %s agent finishes it in the same worktree and branch. Nothing needs doing.",
+		t.ID, t.Title, handoffWhy(e), e.Label(), back, c.Label(), c.Adapter)
 	if cl := all[t.ID]; len(cl) > 0 && !ad.Hooks() {
 		text += fmt.Sprintf(" %s has no hooks, so saddle checks its claims (%s) only when it commits and calls done.", c.Adapter, strings.Join(cl, ", "))
 	}

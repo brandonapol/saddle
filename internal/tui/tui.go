@@ -1479,6 +1479,17 @@ func (m *model) watchScreens(ts []mcpserver.TaskView, screens map[string]string)
 		if st.acted || time.Since(st.since) < 4*time.Second {
 			continue
 		}
+		if !banner && usage.DetectAuthBanner(s) {
+			// Its login expired: its adapter is marked logged out and its
+			// tasks handed off (#798). Handing off types, so off the UI loop.
+			st.acted = true
+			go func(id string) {
+				if err := m.app.AuthHit(id); err != nil {
+					m.app.Store.Event(id, "tui_error", err.Error())
+				}
+			}(id)
+			continue
+		}
 		// A usage-limit banner parks the worker on its own; its adapter is
 		// out of quota, so new spawns rotate past it (#321). No keys:
 		// Escape there cancels Claude Code's automatic restart. A banner

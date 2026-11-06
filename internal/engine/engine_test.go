@@ -559,3 +559,33 @@ func TestEngineTickTmuxExecs(t *testing.T) {
 		t.Fatalf("t7's screen = %+v, want it read", got)
 	}
 }
+
+// #798: one engine tick on a worker sitting at a login screen marks its
+// adapter unauthenticated and hands the task off, instead of leaving it
+// for the hung watchdog or a human.
+func TestEngineHandsOffWorkerAtLoginScreen(t *testing.T) {
+	a, ft := setup(t)
+	a.AdapterStatus = allAdapters
+	a.OwnerNotify = func(string) {}
+	w, err := a.Spawn(app.SpawnReq{Title: "meter", Claims: []string{"meter/**"}})
+	must(t, err)
+	clock := time.Now()
+	e := New(a)
+	e.now = func() time.Time { return clock }
+	ft.screens[w.Window] = "API Error: 401 {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"OAuth token has expired.\"}} · Please run /login\n> "
+	must(t, e.Tick())
+	clock = clock.Add(5 * time.Second)
+	must(t, e.Tick())
+	got, err := a.Store.Task(w.ID)
+	must(t, err)
+	if got.Window == w.Window || got.Worktree != w.Worktree {
+		t.Fatalf("after the login screen: %+v", got)
+	}
+	if ad := a.TaskAdapterName(w.ID); ad == usage.Claude {
+		t.Fatalf("task still on %s", ad)
+	}
+	ex, out := a.ExhaustedAdapters(time.Now())[usage.Claude]
+	if !out || ex.Reason != app.ReasonLogin {
+		t.Fatalf("claude not marked unauthenticated: %+v %v", ex, out)
+	}
+}

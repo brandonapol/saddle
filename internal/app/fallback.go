@@ -121,11 +121,7 @@ func (a *App) reroute(adapter, requested string, r pickReq, now time.Time) (p fa
 // markModelOut marks model on adapter out of quota on its own until b's
 // reset, or ExhaustFor from now when b names none.
 func (a *App) markModelOut(adapter, model string, b usage.LimitBanner) error {
-	now := time.Now()
-	until, ok := parseReset(b.Resets, now)
-	if !ok {
-		until = now.Add(ExhaustFor)
-	}
+	until := a.limitUntil(exhaustKey(adapter, model), b, time.Now())
 	resets := b.Resets
 	if resetInRe.MatchString(resets) {
 		resets = ""
@@ -149,6 +145,9 @@ func (a *App) MarkModelExhausted(adapter, model string, until time.Time, resets 
 		return nil
 	}
 	e := Exhaustion{Adapter: adapter, Model: model, Since: now, Until: until, Resets: resets}
+	if until.IsZero() {
+		e.Reason = ReasonCredits
+	}
 	m[key] = e
 	err := a.writeExhausted(m)
 	exhaustMu.Unlock()
@@ -164,7 +163,7 @@ func (a *App) MarkModelExhausted(adapter, model string, until time.Time, resets 
 	} else {
 		text = fmt.Sprintf("Model %s is out of quota until %s. New spawns that would use it go to %s instead (%s) until then; other %s models stay usable. ",
 			key, e.when(), p.Label(), p.Why, adapter)
-		if pol := a.Cfg.AdapterPolicy; pol.Failover == config.FailoverHandoff && (pol.HandoffWait <= 0 || until.Sub(now) > pol.HandoffWait) {
+		if pol := a.Cfg.AdapterPolicy; pol.Failover == config.FailoverHandoff && (pol.HandoffWait <= 0 || e.outFor(now) > pol.HandoffWait) {
 			text += fmt.Sprintf("Tasks already on %s are handed to %s to finish in their worktrees.", key, p.Label())
 		} else {
 			text += fmt.Sprintf("Tasks already on %s stay parked and %s after the reset.", key, resumeHow(adapter))

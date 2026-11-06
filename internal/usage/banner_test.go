@@ -145,3 +145,38 @@ func TestDetectLimitBannerOpenCodeQuotaPane(t *testing.T) {
 		}
 	}
 }
+
+// #796: credits and spend-cap banners never reset on a timer; ordinary
+// usage limits do.
+func TestLimitBannerCredits(t *testing.T) {
+	for screen, want := range map[string]bool{
+		"Error: You are out of credits.":                           true,
+		"You've hit your spend cap for this month.":                true,
+		"Insufficient credits to run this request":                 true,
+		"You've hit your usage limit · resets 3pm":                 false,
+		"Claude usage limit reached. Your limit will reset at 5pm": false,
+	} {
+		b, ok := DetectLimitBanner(screen)
+		if !ok || b.Credits != want {
+			t.Errorf("%q: banner %v, Credits %v, want %v", screen, ok, b.Credits, want)
+		}
+	}
+}
+
+// #798: a logged-out agent's screen: Claude Code's "/login" prompt, a 401,
+// an expired OAuth token. Limit banners and scrollback are not one.
+func TestDetectAuthBanner(t *testing.T) {
+	for screen, want := range map[string]bool{
+		"API Error: 401 {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"OAuth token has expired.\"}} · Please run /login\n> ": true,
+		"Invalid API key · Please run /login\n> ": true,
+		"■ unexpected status 401 Unauthorized: Your authentication token has expired. Please try signing in again.\n› Ask Codex": true,
+		"Error: Not logged in. Run grok login to sign in.":                                                                       true,
+		"You've hit your usage limit · resets 3pm":                                                                               false,
+		"working on the 401 handler in auth.go\n> ":                                                                              false,
+		"Please run /login\n" + strings.Repeat("line\n", 20):                                                                     false,
+	} {
+		if got := DetectAuthBanner(screen); got != want {
+			t.Errorf("DetectAuthBanner(%q) = %v, want %v", screen, got, want)
+		}
+	}
+}

@@ -153,7 +153,7 @@ func finishPendingLogin(cmd *cobra.Command, root string, st sso.Store, p sso.Pro
 		return err
 	}
 	if a != nil {
-		a.Store.Event(app.OrchestratorID, app.EventSSOLogin, p.Name+": logged in")
+		return a.SSOLoggedIn(p.Name)
 	}
 	return nil
 }

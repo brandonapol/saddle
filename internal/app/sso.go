@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/brandonapol/saddle/internal/agent"
@@ -71,5 +72,14 @@ func (a *App) SSOLoginNeeded(name string, da sso.DeviceAuth) error {
 	} else {
 		a.notifyExternal(text) // this process is short-lived: don't detach
 	}
-	return err
+	// Codex agents already running can't reach their model either: hand
+	// them off, not only new spawns (#798). The page above is the owner's.
+	return errors.Join(err, a.markUnauthenticated(usage.Codex, "SSO login "+name+" expired", false))
+}
+
+// SSOLoggedIn records that SSO provider name's sign-in finished, putting
+// codex back for spawns (#798).
+func (a *App) SSOLoggedIn(name string) error {
+	a.Store.Event(OrchestratorID, EventSSOLogin, name+": logged in")
+	return a.ClearUnauthenticated(usage.Codex)
 }

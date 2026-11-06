@@ -78,11 +78,7 @@ func OrchestratorOutOfQuota(text string) (usage.LimitBanner, bool) {
 // markOut marks adapter out of quota until b's reset, or ExhaustFor from
 // now when b names none.
 func (a *App) markOut(adapter string, b usage.LimitBanner) error {
-	now := time.Now()
-	until, ok := parseReset(b.Resets, now)
-	if !ok {
-		until = now.Add(ExhaustFor)
-	}
+	until := a.limitUntil(adapter, b, time.Now())
 	resets := b.Resets
 	if resetInRe.MatchString(resets) {
 		resets = "" // "in 2 hours" is stale once read: show the clock time (#480)

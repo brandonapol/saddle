@@ -188,7 +188,7 @@ func degradedHeadline(in HeadlineInput, live []store.Task) (StateHeadline, bool)
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		reasons = append(reasons, fmt.Sprintf("%s is out of quota until %s", n, in.Exhausted[n].when()))
+		reasons = append(reasons, n+" "+in.Exhausted[n].state())
 	}
 	conflicts := 0
 	for _, t := range live {
