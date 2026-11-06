@@ -38,6 +38,8 @@ import (
 //     another way; the same prompt unanswered a second time parks it
 //     (paused, window closed, slot freed) and it resumes by itself after
 //     another wait;
+//   - a worker left in needs-you past [stall] hung_after gets a card with the
+//     same deny-then-park default (prompt_wait.go, #786);
 //   - an unanswered ask_owner tells the asker to go ahead on its best guess.
 //
 // Each route-around leaves one line in chat, as an action notice: what it
@@ -207,6 +209,9 @@ func (a *App) StallTick(now time.Time) ([]DecisionCard, error) {
 	}
 	if _, err := a.HungTick(now); err != nil {
 		errs = append(errs, fmt.Errorf("hung-worker watch: %w", err))
+	}
+	if _, err := a.PromptWaitTick(now); err != nil {
+		errs = append(errs, fmt.Errorf("prompt-wait watch: %w", err))
 	}
 	if _, _, err := a.WatchdogTick(now); err != nil {
 		errs = append(errs, fmt.Errorf("watchdog: %w", err))

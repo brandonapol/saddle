@@ -191,6 +191,23 @@ func TestDecisionDefaultsDoWhatTheCardSays(t *testing.T) {
 			},
 			check: func(t *testing.T, a *App, c DecisionCard) { autoExit(t, a, "t5") },
 		},
+		DecisionPromptWait: {
+			build: func(t *testing.T) (*App, DecisionCard) {
+				a, _ := setup(t)
+				tk := promptWorker(t, a, "t5")
+				return a, promptWaitCard(tk, PromptWait{Task: "t5", Episode: time.Now(), Since: time.Now()}, time.Now(), DefaultHungAfter)
+			},
+			check: func(t *testing.T, a *App, c DecisionCard) {
+				if got := keysSent(t, a, "t5"); !slices.Equal(got, []string{"Escape"}) {
+					t.Fatalf("keys = %q, want Escape as the card says", got)
+				}
+				ns := noticesFor(t, a, "t5")
+				if !slices.ContainsFunc(ns, func(n store.Notice) bool { return strings.HasPrefix(n.Text, "Nobody answered your prompt") }) {
+					t.Fatalf("t5 wasn't told to find another way: %+v", ns)
+				}
+				autoExit(t, a, "t5")
+			},
+		},
 		DecisionWorkerHung: {
 			build: func(t *testing.T) (*App, DecisionCard) {
 				a, _ := setup(t)

@@ -36,7 +36,7 @@ const (
 // DecisionKinds lists every kind of card saddle produces. Each kind's
 // default is checked against what its card says (#790).
 var DecisionKinds = []string{DecisionStuckStack, DecisionCIRepairCap, DecisionAskOwner, DecisionRiskyPrompt,
-	DecisionOwner, DecisionNoProgress, DecisionDoneOrphaned, DecisionWorkerHung}
+	DecisionOwner, DecisionNoProgress, DecisionDoneOrphaned, DecisionWorkerHung, DecisionPromptWait}
 
 // Who closed a card.
 const (
