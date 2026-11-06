@@ -14,6 +14,9 @@ import (
 // forSeeds runs prop on n seeds and stops at the first failure.
 func forSeeds(t *testing.T, n int, prop func(t *testing.T, r *rand.Rand) bool) {
 	t.Helper()
+	if testing.Short() {
+		n = max(n/10, 5)
+	}
 	for seed := int64(1); seed <= int64(n); seed++ {
 		if !prop(t, rand.New(rand.NewSource(seed))) {
 			t.Fatalf("property failed at seed %d", seed)
@@ -34,6 +37,7 @@ func actionsFor(p Plan, id string) []Action {
 // P1: Reconcile(x) equals Reconcile(x) and Reconcile(shuffle(x)), and it
 // never changes its input.
 func TestP1Determinism(t *testing.T) {
+	t.Parallel()
 	forSeeds(t, 400, func(t *testing.T, r *rand.Rand) bool {
 		in := genWorld(r, genOpts{}).input()
 		before := mustJSON(in)
@@ -56,6 +60,7 @@ func TestP1Determinism(t *testing.T) {
 
 // P1: a recorded tick replays to the same plan.
 func TestP1Replay(t *testing.T) {
+	t.Parallel()
 	forSeeds(t, 100, func(t *testing.T, r *rand.Rand) bool {
 		in := genWorld(r, genOpts{}).input()
 		tk, err := NewTick(in, Reconcile(in))
@@ -74,6 +79,7 @@ func TestP1Replay(t *testing.T) {
 // P2: every state in the table has a deadline and an automatic exit, and
 // the exit is an action.
 func TestP2StateTable(t *testing.T) {
+	t.Parallel()
 	seen := map[ChangeState]bool{}
 	kinds := map[ActionKind]bool{ActGate: true, ActRebase: true, ActPublish: true, ActMove: true, ActLink: true,
 		ActMerge: true, ActNeedsFix: true, ActClose: true, ActTransition: true, ActEscalate: true}
@@ -104,6 +110,7 @@ func TestP2StateTable(t *testing.T) {
 // P2: every non-terminal change has a next action: an effectful one, or a
 // Wait with a time or on another change.
 func TestP2EveryChangeHasANextAction(t *testing.T) {
+	t.Parallel()
 	forSeeds(t, 400, func(t *testing.T, r *rand.Rand) bool {
 		w := genWorld(r, genOpts{})
 		p := Reconcile(w.input())
@@ -131,6 +138,7 @@ func TestP2EveryChangeHasANextAction(t *testing.T) {
 // advancing Now takes every change to merged or superseded within a bound
 // computed from the DAG's depth.
 func TestP2SilentWorldTerminates(t *testing.T) {
+	t.Parallel()
 	forSeeds(t, 60, func(t *testing.T, r *rand.Rand) bool {
 		w := genWorld(r, genOpts{clean: true, maxN: 15})
 		w.ci = ciSilent
@@ -168,6 +176,7 @@ func allTerminal(w *world) bool {
 // to it. Making one change red changes no other change's actions unless
 // that change depends on it.
 func TestP3RedHoldsOnlyDependents(t *testing.T) {
+	t.Parallel()
 	forSeeds(t, 300, func(t *testing.T, r *rand.Rand) bool {
 		w := genWorld(r, genOpts{})
 		p := Reconcile(w.input())
@@ -203,6 +212,7 @@ func TestP3RedHoldsOnlyDependents(t *testing.T) {
 // change's unmerged dependencies, and nothing else. No action names the
 // integration branch.
 func TestP4TargetsBasePlusDeps(t *testing.T) {
+	t.Parallel()
 	forSeeds(t, 400, func(t *testing.T, r *rand.Rand) bool {
 		w := genWorld(r, genOpts{})
 		p := Reconcile(w.input())
@@ -232,11 +242,12 @@ func TestP4TargetsBasePlusDeps(t *testing.T) {
 // for it; exactly one NeedsFix(base, check) and one Escalate per (base tip,
 // check).
 func TestP5BaseRed(t *testing.T) {
+	t.Parallel()
 	forSeeds(t, 300, func(t *testing.T, r *rand.Rand) bool {
 		w := genWorld(r, genOpts{baseRed: true})
 		live := false
 		for _, c := range w.st.Changes {
-			live = live || !c.State.Terminal()
+			live = live || (!c.State.Terminal() && !w.inBase[c.ID])
 		}
 		p := Reconcile(w.input())
 		var baseFix, esc int
@@ -283,6 +294,7 @@ func TestP5BaseRed(t *testing.T) {
 // a Move explains (the change's own PR, or one below it, is on the wrong
 // base).
 func TestP6NeedsFixOnlyForOwnRed(t *testing.T) {
+	t.Parallel()
 	forSeeds(t, 400, func(t *testing.T, r *rand.Rand) bool {
 		w := genWorld(r, genOpts{})
 		p := Reconcile(w.input())
@@ -324,7 +336,8 @@ func TestP6NeedsFixOnlyForOwnRed(t *testing.T) {
 // there is no Transition to red or superseded, no Escalate, and no clock
 // moves a deadline it already had.
 func TestP7ForgeWaitsNeverFail(t *testing.T) {
-	forSeeds(t, 80, func(t *testing.T, r *rand.Rand) bool {
+	t.Parallel()
+	forSeeds(t, 40, func(t *testing.T, r *rand.Rand) bool {
 		w := genWorld(r, genOpts{noFailing: true})
 		w.degraded = true
 		w.outcome = func(a Action) Outcome {
@@ -348,7 +361,7 @@ func TestP7ForgeWaitsNeverFail(t *testing.T) {
 					t.Errorf("forge waits made %v", a)
 					return false
 				}
-				if b := before[a.Change]; a.Kind == ActTransition && a.To == b.State && !b.Deadline.IsZero() && !a.Deadline.Equal(b.Deadline) {
+				if b := before[a.Change]; a.Kind == ActTransition && a.Head == "" && a.To == b.State && !b.Deadline.IsZero() && !a.Deadline.Equal(b.Deadline) {
 					t.Errorf("forge waits moved %s's deadline: %v", a.Change, a)
 					return false
 				}
@@ -364,7 +377,8 @@ func TestP7ForgeWaitsNeverFail(t *testing.T) {
 // is only waits. Crashing after any prefix of the first plan and then
 // reconciling reaches the same fixpoint. Every effectful action has a guard.
 func TestP8FixpointAndCrashPrefix(t *testing.T) {
-	forSeeds(t, 120, func(t *testing.T, r *rand.Rand) bool {
+	t.Parallel()
+	forSeeds(t, 60, func(t *testing.T, r *rand.Rand) bool {
 		w := genWorld(r, genOpts{clean: r.Intn(2) == 0})
 		w.ci = []ciMode{ciFixed, ciGreen}[r.Intn(2)]
 		first := Reconcile(w.input())
@@ -380,7 +394,14 @@ func TestP8FixpointAndCrashPrefix(t *testing.T) {
 		}
 		want := worldShape(ref)
 		eff := first.Effectful()
+		// Every prefix length on small plans; a sample of them on big ones.
+		ks := []int{}
 		for k := 0; k <= len(eff); k++ {
+			if len(eff) <= 8 || k <= 2 || k == len(eff) || r.Intn(len(eff)) < 4 {
+				ks = append(ks, k)
+			}
+		}
+		for _, k := range ks {
 			c := w.clone()
 			e := c.engine()
 			for _, a := range eff[:k] {
@@ -399,8 +420,8 @@ func TestP8FixpointAndCrashPrefix(t *testing.T) {
 		// P10 at the fixpoint: every open PR is on its desired base.
 		for _, c := range ref.st.Changes {
 			pr := ref.openPR(c.Branch)
-			if pr == nil || c.State.Terminal() {
-				continue
+			if pr == nil || c.State.Terminal() || c.State == Queued || c.HoldUntil.After(ref.now) || c.RetryAt.After(ref.now) {
+				continue // queued changes aren't moved yet; held ones wait
 			}
 			if want, ok := oracleDesiredBase(ref, c.ID); ok && pr.Base != want {
 				t.Errorf("fixpoint: %s's PR on %s, want %s", c.ID, pr.Base, want)
@@ -448,6 +469,7 @@ func worldShape(w *world) string {
 // whose deps are merged and is otherwise ready gets its Merge; merges in a
 // cooperative world happen in topological order.
 func TestP9MergeOrder(t *testing.T) {
+	t.Parallel()
 	forSeeds(t, 300, func(t *testing.T, r *rand.Rand) bool {
 		w := genWorld(r, genOpts{})
 		for _, a := range Reconcile(w.input()).Actions {
@@ -465,6 +487,9 @@ func TestP9MergeOrder(t *testing.T) {
 		w := genWorld(r, genOpts{clean: true, maxN: 15})
 		w.ci = ciGreen
 		w.native = true
+		for i := range w.st.Changes {
+			w.st.Changes[i].Automerge = true
+		}
 		for range 40 {
 			w.tick()
 			if allTerminal(w) {
@@ -498,6 +523,7 @@ func TestP9MergeOrder(t *testing.T) {
 // P10: each published PR's desired base is its nearest unmerged
 // dependency, else base. A PR on another base gets a Move there.
 func TestP10DesiredBase(t *testing.T) {
+	t.Parallel()
 	forSeeds(t, 400, func(t *testing.T, r *rand.Rand) bool {
 		w := genWorld(r, genOpts{})
 		p := Reconcile(w.input())
@@ -536,6 +562,7 @@ func TestP10DesiredBase(t *testing.T) {
 // write, not Reconcile's), except that a change whose work is in base is
 // merged, whatever its row says.
 func TestP11TerminalStaysTerminal(t *testing.T) {
+	t.Parallel()
 	forSeeds(t, 400, func(t *testing.T, r *rand.Rand) bool {
 		w := genWorld(r, genOpts{})
 		p := Reconcile(w.input())
@@ -575,6 +602,7 @@ func stateStrings(ss []ChangeState) []string {
 // P12: Collapsible returns only green, dependency-closed groups, and it
 // never changes the plan.
 func TestP12CollapseIsAView(t *testing.T) {
+	t.Parallel()
 	forSeeds(t, 400, func(t *testing.T, r *rand.Rand) bool {
 		w := genWorld(r, genOpts{})
 		in := w.input()

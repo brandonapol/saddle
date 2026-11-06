@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -155,6 +156,13 @@ func (w *world) Transition(_ context.Context, a Action, now time.Time) (bool, er
 	if c == nil || c.Gen != a.Guard.Gen {
 		return false, nil
 	}
+	for _, d := range a.Guard.Deps {
+		id, head, _ := strings.Cut(d, "=")
+		dc := w.change(id)
+		if dc == nil || dc.Head != head || dc.State.Terminal() {
+			return false, nil
+		}
+	}
 	if c.State != a.To {
 		c.Since = now
 	}
@@ -258,7 +266,12 @@ func (w *world) Apply(_ context.Context, a Action) Outcome {
 		p := w.prByNumber(a.PR)
 		p.Base = a.Base
 		w.relink()
-		w.ciReport(p.Head)
+		// CI re-runs for the moved PR and every PR stacked on it.
+		for _, q := range w.prs {
+			if q.State == PROpen {
+				w.ciReport(q.Head)
+			}
+		}
 	case ActLink:
 		w.relink()
 	case ActMerge:

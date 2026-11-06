@@ -46,10 +46,17 @@ type Guard struct {
 	Head    string `json:"head,omitempty"`     // the change branch's tip
 	PRBase  string `json:"pr_base,omitempty"`  // the PR's current base
 	BaseTip string `json:"base_tip,omitempty"` // base's tip
+	// Deps are "id=head" for each unmerged dependency the decision read: the
+	// store's CAS also requires each of those rows to still have that head
+	// and not be merged or superseded. A transition decided from a
+	// dependency's old head is then stale, not wrong.
+	Deps []string `json:"deps,omitempty"`
 }
 
 // IsZero reports whether g checks nothing.
-func (g Guard) IsZero() bool { return g == Guard{} }
+func (g Guard) IsZero() bool {
+	return g.Gen == 0 && g.Head == "" && g.PRBase == "" && g.BaseTip == "" && len(g.Deps) == 0
+}
 
 // Action is one step of a Plan. Kind selects which fields matter.
 type Action struct {

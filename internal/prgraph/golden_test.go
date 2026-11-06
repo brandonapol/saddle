@@ -3,6 +3,7 @@ package prgraph
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 func indexOf(p Plan, match func(Action) bool) int {
@@ -82,8 +83,9 @@ func TestGolden20261105MovesBeforeMerge(t *testing.T) {
 	}
 	// And the world heals: apply plans until nothing is left to do.
 	w.ci = ciGreen
-	for range 10 {
+	for range 20 {
 		w.tick()
+		w.now = w.now.Add(10 * time.Minute)
 	}
 	for _, c := range w.st.Changes {
 		if c.State != Merged {
