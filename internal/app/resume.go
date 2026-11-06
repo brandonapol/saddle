@@ -102,8 +102,12 @@ func (a *App) canResume(t store.Task) bool {
 // when it can and relaunching with the original brief when it can't.
 func (a *App) resume(t store.Task) (Resumed, error) {
 	r := Resumed{Task: t.ID}
+	fresh := false // a recreated worktree has no session to resume
 	if fi, err := os.Stat(t.Worktree); err != nil || !fi.IsDir() {
-		return r, fmt.Errorf("%s: worktree %s is gone; rescue or kill it", t.ID, t.Worktree)
+		if err := a.recoverWorktree(t); err != nil {
+			return r, err
+		}
+		fresh = true
 	}
 	all, err := a.Store.Claims()
 	if err != nil {
@@ -128,7 +132,7 @@ func (a *App) resume(t store.Task) (Resumed, error) {
 			}
 			ad = nad
 		}
-	} else if a.canResume(t) {
+	} else if !fresh && a.canResume(t) {
 		r.Session, prompt = t.SessionID, resumedNote
 	}
 	win, err := a.start(t, all[t.ID], ad, r.Session, prompt)
@@ -172,6 +176,9 @@ func (a *App) resumeLost(paused bool, allow func(store.Task) bool) ([]Resumed, e
 			continue
 		}
 		r, err := a.resume(t)
+		if errors.Is(err, errTaskRetired) {
+			continue // retired, told once: nothing left to resume (#765)
+		}
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -400,4 +407,70 @@ func (a *App) Rescue(task string) (Rescued, error) {
 	}
 	a.Store.Event(task, "rescue", strings.TrimSpace(r.Branch+" "+r.Diff))
 	return r, nil
+}
+
+// A task whose worktree vanished (#765) is rebuilt from its branch, or
+// retired when there is nothing to rebuild it from.
+const (
+	eventWorktreeRecreated = "worktree_recreated" // data: the branch it was recreated at
+	eventWorktreeLost      = "worktree_lost"      // data: why the task was retired
+	KilledByWorktreeLost   = "worktree_lost"      // the killer of a retired task
+)
+
+// errTaskRetired is resume's answer for a task it retired instead.
+var errTaskRetired = errors.New("retired")
+
+// recoverWorktree rebuilds t's missing worktree at its branch, local or on
+// origin, when the branch has work beyond integration. Otherwise it retires
+// t and returns errTaskRetired. Either way it logs one event and tells the
+// orchestrator once, so the resume watcher never errors on it every tick.
+func (a *App) recoverWorktree(t store.Task) error {
+	_, _ = gitx.Run(a.Root, "worktree", "prune") // forget the vanished one
+	integ := a.Cfg.Integration
+	var why string
+	switch remote := "refs/remotes/origin/" + t.Branch; {
+	case t.Branch == "":
+		why = "it has no branch"
+	case gitx.BranchExists(a.Root, t.Branch):
+		if a.unique(t.Branch) == 0 {
+			why = fmt.Sprintf("its branch %s has no commits beyond %s", t.Branch, integ)
+		} else if _, err := gitx.Run(a.Root, "worktree", "add", t.Worktree, t.Branch); err != nil {
+			why = fmt.Sprintf("recreating it at %s failed: %s", t.Branch, oneLine(err.Error()))
+		}
+	default:
+		if _, err := gitx.RevParse(a.Root, remote); err != nil {
+			why = "its branch " + t.Branch + " is gone too"
+		} else if n, err := gitx.CommitsBetween(a.Root, integ, remote); err == nil && n == 0 {
+			why = fmt.Sprintf("its branch %s has no commits beyond %s", t.Branch, integ)
+		} else if err := gitx.WorktreeAdd(a.Root, t.Worktree, t.Branch, remote); err != nil {
+			why = fmt.Sprintf("recreating it from %s failed: %s", remote, oneLine(err.Error()))
+		}
+	}
+	if why != "" {
+		return a.retireLost(t, why)
+	}
+	a.Store.Event(t.ID, eventWorktreeRecreated, t.Branch)
+	return a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
+		"%s %q lost its worktree, so saddle recreated it at %s and relaunched the task with its brief. Nothing needs doing.",
+		t.ID, t.Title, t.Branch))
+}
+
+// retireLost kills t, whose worktree is gone with nothing to rebuild it
+// from: its claims are released and its processes reaped, and a CI repair's
+// red layer is freed for a fresh repair. Saddle killed it, not the owner.
+func (a *App) retireLost(t store.Task, why string) error {
+	a.recordKiller(t.ID, KilledByWorktreeLost)
+	if err := a.Kill(t.ID, false); err != nil {
+		return fmt.Errorf("%s: worktree %s is gone and retiring it failed: %w", t.ID, t.Worktree, err)
+	}
+	a.Store.Event(t.ID, eventWorktreeLost, why)
+	if _, err := a.ReapCIRepairs(); err != nil {
+		a.Store.Event(t.ID, "ci_repair_reap_failed", err.Error())
+	}
+	if err := a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
+		"saddle retired %s %q: its worktree %s is gone and %s, so there was nothing to resume. Its claims are released.",
+		t.ID, t.Title, t.Worktree, why)); err != nil {
+		return err
+	}
+	return fmt.Errorf("%s: worktree is gone and %s, so saddle %w it", t.ID, why, errTaskRetired)
 }
