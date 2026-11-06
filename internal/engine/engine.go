@@ -136,6 +136,15 @@ func (e *Engine) watchScreens(ts []mcpserver.TaskView, screens map[string]string
 		if st.acted || e.now().Sub(st.since) < settle {
 			continue
 		}
+		if !banner && usage.DetectAuthBanner(s) {
+			// Its login expired: no reset will bring it back, so its
+			// adapter is marked logged out and its tasks handed off (#798).
+			st.acted = true
+			if err := e.a.AuthHit(id); err != nil {
+				e.a.Store.Event(id, "engine_error", err.Error())
+			}
+			continue
+		}
 		if banner {
 			st.acted = true
 			if !e.a.ResumedPast(id, b) { // not the banner it was typed past

@@ -26,6 +26,9 @@ var (
 	limitRe = regexp.MustCompile(`(?i)usage limit reached|you(?:(?:'|’)ve)? hit your [\w-]+(?: usage)? limit|hit your spend cap|reached your (?:workspace credit|usage) limit|\b(?:session|weekly|5-hour|opus) limit reached|exceeded your current quota|\bquota exceeded\b|free usage exceeded|\bout of credits\b|insufficient credits|used all available credits|reached its monthly spending limit`)
 	// creditsRe are the banners a timer never clears (#796).
 	creditsRe = regexp.MustCompile(`(?i)hit your spend cap|reached your workspace credit limit|\bout of credits\b|insufficient credits|used all available credits|reached its monthly spending limit|payment required`)
+	// authRe is an agent CLI whose login expired or was revoked (#798):
+	// Claude Code's "Please run /login", a 401, an expired OAuth token.
+	authRe = regexp.MustCompile(`(?i)please run /login|\binvalid api key\b|"authentication_error"|\b401\b[^\n]*(?:unauthori[sz]ed|authenticat|token)|oauth token (?:has )?expired|authentication token has expired|try signing in again|please (?:log|sign) in again|error:\s*not logged in`)
 	// "reset in" is opencode's relative reset (#520): "It will reset in 2 hours 5 minutes."
 	resetRe = regexp.MustCompile(`(?i)\b(?:resets(?:\s+at)?|reset\s+at|try\s+again\s+at|(?:reset|try\s+again)\s+(in))\s+([^·∙\n]+)`)
 )
@@ -34,15 +37,7 @@ var (
 // parked on a usage limit (or Codex, Grok or opencode out of quota), and
 // when the banner says the limit resets.
 func DetectLimitBanner(screen string) (LimitBanner, bool) {
-	var tail []string
-	ls := strings.Split(screen, "\n")
-	for i := len(ls) - 1; i >= 0 && len(tail) < bannerTail; i-- {
-		if strings.TrimSpace(ls[i]) != "" {
-			tail = append(tail, ls[i])
-		}
-	}
-	slices.Reverse(tail) // screen order, so a reset wrapped onto the next line reads on
-	text := strings.Join(tail, "\n")
+	text := screenTail(screen)
 	if !limitRe.MatchString(text) {
 		return LimitBanner{}, false
 	}
@@ -64,4 +59,25 @@ func DetectLimitBanner(screen string) (LimitBanner, bool) {
 		}
 	}
 	return b, true
+}
+
+// DetectAuthBanner reports whether a terminal screen shows an agent CLI
+// stopped on an expired or revoked login (#798): Claude Code's "Please run
+// /login", a 401, codex asking to sign in again. Like a limit banner it
+// must sit in the bottom lines; the same words higher up are scrollback.
+func DetectAuthBanner(screen string) bool {
+	return authRe.MatchString(screenTail(screen))
+}
+
+// screenTail is the last bannerTail non-blank lines of screen, in order.
+func screenTail(screen string) string {
+	var tail []string
+	ls := strings.Split(screen, "\n")
+	for i := len(ls) - 1; i >= 0 && len(tail) < bannerTail; i-- {
+		if strings.TrimSpace(ls[i]) != "" {
+			tail = append(tail, ls[i])
+		}
+	}
+	slices.Reverse(tail) // screen order, so a reset wrapped onto the next line reads on
+	return strings.Join(tail, "\n")
 }

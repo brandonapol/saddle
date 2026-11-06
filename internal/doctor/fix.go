@@ -59,6 +59,7 @@ var about = map[string]string{
 	CheckTmux:          "runs each agent in its own hidden terminal",
 	CheckClaude:        "the Claude Code CLI the agents run in",
 	CheckAgents:        "the agent CLIs (claude, codex, grok) installed and logged in, and which one saddle up runs",
+	CheckLogins:        "whether the agent CLIs' logins really work (one tiny request each), and adapters saddle took out for a dead login or no credits",
 	CheckHooks:         "git hooks that stop agents from moving saddle's own branches (saddle/*)",
 	CheckPush:          "saddle itself can push branches to the remote",
 	CheckOrchAllow:     "Claude permissions an orchestrator session needs so saddle's tools aren't blocked",
@@ -102,16 +103,31 @@ func Fix(env Env, init func() error) ([]Result, error) {
 			broken[r.Name] = true
 		}
 	}
-	if len(broken) == 0 {
+	// Logins need no init: a probe, then the adapters put back (#798).
+	logins := broken[CheckLogins]
+	delete(broken, CheckLogins)
+	if logins {
+		if le, ok := env.(LoginsEnv); ok {
+			if err := fixLogins(env, le); err != nil {
+				return before, err
+			}
+		}
+	}
+	if len(broken) == 0 && !logins {
 		return before, nil
 	}
-	if err := init(); err != nil {
-		return before, err
+	if len(broken) > 0 {
+		if err := init(); err != nil {
+			return before, err
+		}
 	}
 	if broken[CheckOrchAllow] {
 		if err := fixOrchAllow(env.Root()); err != nil {
 			return before, err
 		}
+	}
+	if logins {
+		broken[CheckLogins] = true
 	}
 	after := Run(env)
 	for i, r := range after {

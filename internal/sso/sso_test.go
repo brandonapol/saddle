@@ -372,6 +372,9 @@ func TestStartPendingOnceThenFinish(t *testing.T) {
 	}
 }
 
+// #798: a sign-in that expired unapproved is not restarted, paging the
+// owner again, by the next token request ten minutes later: a new one
+// starts at most once per RepageEvery. A successful login resets that.
 func TestPendingExpiresStartsNew(t *testing.T) {
 	f := newFakeIdP(t)
 	st, clk := newStore(t, f)
@@ -380,8 +383,26 @@ func TestPendingExpiresStartsNew(t *testing.T) {
 		t.Fatal(err)
 	}
 	clk.Add(11 * time.Minute)
+	if _, _, err := st.StartPending(context.Background(), p); !errors.Is(err, ErrRepageWait) {
+		t.Fatalf("expired sign-in restarted within RepageEvery: err=%v", err)
+	}
+	if n := f.deviceStarts.Load(); n != 1 {
+		t.Fatalf("device requests = %d, want 1", n)
+	}
+	clk.Add(RepageEvery)
+	da, fresh, err := st.StartPending(context.Background(), p)
+	if err != nil || !fresh {
+		t.Fatalf("expired pending sign-in reused after RepageEvery: fresh=%v err=%v", fresh, err)
+	}
+	_ = da
+	if err := st.FinishPending(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Logout(p); err != nil {
+		t.Fatal(err)
+	}
 	if _, fresh, err := st.StartPending(context.Background(), p); err != nil || !fresh {
-		t.Fatalf("expired pending sign-in reused: fresh=%v err=%v", fresh, err)
+		t.Fatalf("after a successful login the next expiry must page at once: fresh=%v err=%v", fresh, err)
 	}
 }
 

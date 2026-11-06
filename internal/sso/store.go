@@ -101,7 +101,7 @@ func (s Store) Save(p Provider, t Tokens) error {
 // Logout deletes the cached login and any pending sign-in.
 func (s Store) Logout(p Provider) error {
 	var errs []error
-	for _, ext := range []string{".json", ".pending.json"} {
+	for _, ext := range []string{".json", ".pending.json", ".paged.json"} {
 		if err := os.Remove(s.path(p, ext)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			errs = append(errs, err)
 		}
@@ -254,12 +254,30 @@ func (s Store) finish(ctx context.Context, p Provider, da DeviceAuth) error {
 		return err
 	}
 	_ = os.Remove(s.path(p, ".pending.json"))
+	_ = os.Remove(s.path(p, ".paged.json")) // logged in: the next expiry pages at once
 	return nil
+}
+
+// RepageEvery is how often a background sign-in may start, and so page the
+// owner, while no login succeeds (#798). A device code lives about ten
+// minutes; without this every token request after it expired started a
+// fresh sign-in and paged the owner again, all night.
+const RepageEvery = 4 * time.Hour
+
+// ErrRepageWait is StartPending refusing a new sign-in: one was started
+// within RepageEvery and expired unapproved. saddle sso login still works.
+var ErrRepageWait = errors.New("a sign-in was started recently and not approved")
+
+// paged is when the last background sign-in started.
+type paged struct {
+	At time.Time `json:"at"`
 }
 
 // StartPending returns the sign-in a background login waits on, starting
 // one when none is pending. fresh is true when this call started it, so
-// only one caller tells the owner and starts the poller.
+// only one caller tells the owner and starts the poller. While no login
+// succeeds a new one starts at most once per RepageEvery; until then it
+// returns ErrRepageWait (wrapped).
 func (s Store) StartPending(ctx context.Context, p Provider) (da DeviceAuth, fresh bool, err error) {
 	unlock, err := s.lock(p)
 	if err != nil {
@@ -267,14 +285,23 @@ func (s Store) StartPending(ctx context.Context, p Provider) (da DeviceAuth, fre
 	}
 	defer unlock()
 	path := s.path(p, ".pending.json")
-	if ok, err := s.readJSON(path, &da); err == nil && ok && s.Client.now().Before(da.ExpiresAt) {
+	now := s.Client.now()
+	if ok, err := s.readJSON(path, &da); err == nil && ok && now.Before(da.ExpiresAt) {
 		return da, false, nil
+	}
+	var last paged
+	if ok, err := s.readJSON(s.path(p, ".paged.json"), &last); err == nil && ok && now.Sub(last.At) < RepageEvery {
+		return DeviceAuth{}, false, fmt.Errorf("sso %s: %w at %s; the next starts after %s", p.Name, ErrRepageWait,
+			last.At.Local().Format("15:04"), last.At.Add(RepageEvery).Local().Format("15:04"))
 	}
 	da, err = s.Client.StartDevice(ctx, p)
 	if err != nil {
 		return da, false, err
 	}
 	if err := s.writeJSON(path, da); err != nil {
+		return da, false, err
+	}
+	if err := s.writeJSON(s.path(p, ".paged.json"), paged{At: now}); err != nil {
 		return da, false, err
 	}
 	return da, true, nil
