@@ -101,8 +101,8 @@ func (a *App) HandOff(task string, now time.Time) (string, error) {
 	prompt := strings.TrimSpace(t.Prompt + "\n\n" + handoffNote(e.Label(), c.Label(), a.Cfg.Integration))
 	win, err := a.start(t, all[t.ID], ad, "", prompt)
 	if err != nil {
-		// Its window is gone; ResumeLost relaunches it on an adapter with quota.
-		_ = a.Store.SetField(t.ID, "window", "")
+		// Its window is gone; ResumeLost relaunches it on an adapter with
+		// quota. The dead window id stays so it reads as lost (#781).
 		a.Store.Event(task, "handoff_failed", err.Error())
 		return "", fmt.Errorf("hand %s to %s: %w", task, c.Label(), err)
 	}

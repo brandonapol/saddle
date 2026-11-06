@@ -466,8 +466,9 @@ func (a *App) takeOver(t store.Task, h *HungWorker, now time.Time, still string)
 	win, err := a.start(t, all[t.ID], ad, "", prompt)
 	_ = a.ResolveDecision(h.Card, now)
 	if err != nil {
-		// Its window is gone; ResumeLost relaunches it.
-		_ = a.Store.SetField(t.ID, "window", "")
+		// Its window is gone; ResumeLost relaunches it. The dead window id
+		// stays: a blank one reads as never launched, which ResumeLost
+		// skips, leaving the task running forever (#781).
 		a.Store.Event(t.ID, EventHungTakeover, "relaunch failed: "+oneLine(err.Error()))
 		return a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
 			"%s %q hung for %s, so saddle closed its session, but relaunching it on %s failed: %v\nIts commits are on %s and its uncommitted work in %s.",
