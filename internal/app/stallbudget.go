@@ -38,6 +38,8 @@ import (
 //     another way; the same prompt unanswered a second time parks it
 //     (paused, window closed, slot freed) and it resumes by itself after
 //     another wait;
+//   - a worker left in needs-you past [stall] hung_after gets a card with the
+//     same deny-then-park default (prompt_wait.go, #786);
 //   - an unanswered ask_owner tells the asker to go ahead on its best guess.
 //
 // Each route-around leaves one line in chat, as an action notice: what it
@@ -208,6 +210,9 @@ func (a *App) StallTick(now time.Time) ([]DecisionCard, error) {
 	if _, err := a.HungTick(now); err != nil {
 		errs = append(errs, fmt.Errorf("hung-worker watch: %w", err))
 	}
+	if _, err := a.PromptWaitTick(now); err != nil {
+		errs = append(errs, fmt.Errorf("prompt-wait watch: %w", err))
+	}
 	if _, _, err := a.WatchdogTick(now); err != nil {
 		errs = append(errs, fmt.Errorf("watchdog: %w", err))
 	}
@@ -225,6 +230,8 @@ const (
 	RunDenyPrompt    = "deny-prompt"    // Escape the prompt and tell the agent to find another way
 	RunMessageTask   = "message-task"   // send the task the quoted message in the action
 	RunOwnerDecision = "owner-decision" // tell the blocked task the option was taken
+	RunRescueStalled = "rescue-stalled" // rescue the zombies and given-up tasks a stall names (#783)
+	RunResumeLost    = "resume-lost"    // give the windowless tasks a stall names new windows (#783)
 )
 
 // defaultRuns maps each registered action to what it does.
@@ -240,6 +247,8 @@ var defaultRuns = map[string]func(a *App, c DecisionCard, o DecisionOption) erro
 	RunOwnerDecision: func(a *App, c DecisionCard, _ DecisionOption) error {
 		return a.applyOwnerDecision(c, c.Default, DecidedByTimeout, "")
 	},
+	RunRescueStalled: (*App).rescueStalled,
+	RunResumeLost:    (*App).resumeStalled,
 }
 
 // legacyRuns is the action for a card saved before options named theirs.

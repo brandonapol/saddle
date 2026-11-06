@@ -221,7 +221,8 @@ func slug(s string) string {
 }
 
 // activeWorkers counts live workers. Orphaned tasks (no window, no
-// heartbeat) don't count: they must not block new spawns (#254).
+// heartbeat) don't count: they must not block new spawns (#254). Nor does a
+// needs-you worker whose prompt wait ran out (#786).
 func (a *App) activeWorkers() (int, error) {
 	ts, err := a.Store.Tasks()
 	if err != nil {
@@ -231,9 +232,11 @@ func (a *App) activeWorkers() (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	overdue := a.PromptOverdue()
 	n := 0
 	for _, t := range ts {
-		if t.Role == store.RoleWorker && (t.Status == store.Running || t.Status == store.Idle || t.Status == store.NeedsYou) && !orphans[t.ID] {
+		if t.Role == store.RoleWorker && (t.Status == store.Running || t.Status == store.Idle || t.Status == store.NeedsYou) && !orphans[t.ID] &&
+			(t.Status != store.NeedsYou || !overdue[t.ID]) {
 			n++
 		}
 	}

@@ -50,7 +50,7 @@ func TestWatchdogReportsOneRootCause(t *testing.T) {
 		t.Fatalf("notices = %+v, want one card naming only gh auth", ns)
 	}
 	// No repeats while nothing changed.
-	for _, d := range []time.Duration{time.Minute, time.Hour} {
+	for _, d := range []time.Duration{time.Minute, 59 * time.Minute} { // re-posts wait 1h (#783)
 		if _, posted, err := a.Watchdog(now.Add(d), st); err != nil || posted {
 			t.Fatalf("repeat after %s: posted %v, %v", d, posted, err)
 		}

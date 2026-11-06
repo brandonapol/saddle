@@ -17,7 +17,6 @@ import (
 	"github.com/brandonapol/saddle/internal/automerge"
 	"github.com/brandonapol/saddle/internal/autopilot"
 	"github.com/brandonapol/saddle/internal/sentinel"
-	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/triage"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -661,11 +660,7 @@ func New(a *app.App, task string) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{Name: "message", Description: "Send a [saddle] message to another task. It wakes the agent if it is idle."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in MessageIn) (*mcp.CallToolResult, OK, error) {
-			from := task
-			if from == "" {
-				from = "user"
-			}
-			err := a.Notify(in.Task, store.NoticeAction, fmt.Sprintf("Message from %s: %s", from, in.Message))
+			err := a.Message(task, in.Task, in.Message)
 			return nil, OK{Message: "sent"}, err
 		})
 
