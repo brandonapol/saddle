@@ -185,9 +185,9 @@ func TestKillSnapshotsWIP(t *testing.T) {
 	if out := git(t, a.Root, "show", ref+":README.md"); out != "edited" {
 		t.Fatalf("snapshot README.md = %q", out)
 	}
-	// The worktree itself is untouched.
-	if d, _ := os.ReadFile(filepath.Join(tk.Worktree, "new.txt")); string(d) != "untracked\n" {
-		t.Fatalf("worktree lost new.txt: %q", d)
+	// The snapshot holds the work, so the tree is gone (#803).
+	if exists(tk.Worktree) {
+		t.Fatal("kill kept the worktree its snapshot covers")
 	}
 	ls, err := a.GC()
 	must(t, err)

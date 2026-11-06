@@ -337,9 +337,9 @@ func TestGCKeepsUnmergedWork(t *testing.T) {
 	}
 }
 
-// #158: a worktree with uncommitted changes is never removed, and neither is
-// its branch.
-func TestGCKeepsDirtyWorktree(t *testing.T) {
+// #158, #803: a dead task's worktree with uncommitted changes goes only
+// once its work is in refs/saddle/wip/<task>; its branch waits a round.
+func TestGCRemovesDirtyWorktreeAfterSnapshot(t *testing.T) {
 	t.Parallel()
 	a, _ := setup(t)
 	task, err := a.Spawn(SpawnReq{Title: "dirty"})
@@ -349,11 +349,35 @@ func TestGCKeepsDirtyWorktree(t *testing.T) {
 
 	ls, err := a.GC()
 	must(t, err)
-	if l, ok := leftover(ls, "worktree", task.Worktree); !ok || l.Keep == "" {
-		t.Fatalf("dirty worktree: %+v (found %v), want kept", l, ok)
+	if l, ok := leftover(ls, "worktree", task.Worktree); !ok || l.Keep != "" {
+		t.Fatalf("dirty worktree: %+v (found %v), want removed", l, ok)
 	}
-	if !exists(filepath.Join(task.Worktree, "wip.txt")) || !gitx.BranchExists(a.Root, task.Branch) {
-		t.Fatal("gc removed a dirty worktree or its checked-out branch")
+	if exists(task.Worktree) {
+		t.Fatal("gc kept a dirty worktree whose work it snapshotted")
+	}
+	if out := git(t, a.Root, "show", wipRef(task.ID)+":wip.txt"); out != "wip" {
+		t.Fatalf("snapshot wip.txt = %q", out)
+	}
+	if !gitx.BranchExists(a.Root, task.Branch) {
+		t.Fatal("gc deleted the branch checked out in the tree it just removed")
+	}
+}
+
+// #158: a worktree not named after a task, with uncommitted changes, has no
+// snapshot to go to, so gc keeps it.
+func TestGCKeepsDirtyUntaskedWorktree(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	odd := a.stateDir("worktrees", "scratchpad")
+	git(t, a.Root, "worktree", "add", "-q", "--detach", odd, "HEAD")
+	write(t, odd, "wip.txt", "wip\n")
+	ls, err := a.GC()
+	must(t, err)
+	if l, ok := leftover(ls, "worktree", odd); ok && l.Keep == "" {
+		t.Fatalf("untasked dirty worktree: %+v, want kept", l)
+	}
+	if !exists(filepath.Join(odd, "wip.txt")) {
+		t.Fatal("gc removed an untasked dirty worktree")
 	}
 }
 
