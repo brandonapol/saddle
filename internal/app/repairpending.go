@@ -22,11 +22,11 @@ import (
 //     and the original's own claims stay put until the repair takes them.
 //
 // Each kind of repair lists its pending repairs (pendingLists) and knows how
-// to retry one (retryRepair). A new kind (gate reds, #773) adds to both.
+// to retry one (retryRepair). Gate reds (#773, prepublish_repair.go) are one.
 
 // PendingRepair is a repair saddle owes but hasn't spawned yet.
 type PendingRepair struct {
-	Kind   string   `json:"kind"`             // ci, restack or land
+	Kind   string   `json:"kind"`             // ci, restack, land or gate
 	Task   string   `json:"task"`             // the task it repairs
 	Claims []string `json:"claims,omitempty"` // the files it reserves
 	Err    string   `json:"err,omitempty"`    // why its last spawn failed, "" if none tried yet
@@ -42,7 +42,8 @@ func (p PendingRepair) AtCap() bool {
 // retries one by its Kind. A new kind adds to both. Spawn reads the lists
 // (reservations), so they must never spawn.
 func pendingLists() []func(*App) []PendingRepair {
-	return []func(*App) []PendingRepair{(*App).ciPendingRepairs, (*App).restackPendingRepairs, (*App).landPendingRepairs}
+	return []func(*App) []PendingRepair{(*App).ciPendingRepairs, (*App).restackPendingRepairs, (*App).landPendingRepairs,
+		(*App).gatePendingRepairs}
 }
 
 // retryRepair tries to spawn p and returns the repair task's id, "" when
@@ -53,6 +54,8 @@ func (a *App) retryRepair(p PendingRepair) (string, error) {
 		return a.retryCIRepair(p)
 	case "restack", "land":
 		return a.retryConflictRepair(p)
+	case "gate":
+		return a.retryGateRepair(p)
 	}
 	return "", fmt.Errorf("unknown pending repair kind %q", p.Kind)
 }
