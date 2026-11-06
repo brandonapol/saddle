@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/checkpoint"
 	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
@@ -162,26 +163,98 @@ type Leftover struct {
 	Keep string `json:"keep,omitempty"` // why gc won't remove it
 }
 
-// cleanup removes a dead task's worktree and, when it holds no commits
-// beyond integration, its branch. It says what it kept and why.
+// cleanup removes a dead task's worktree and, when its work is in base or
+// it has none of its own, its branch. A dirty tree goes too once its work is
+// verified in refs/saddle/wip/<task> (#803). It says what it kept and why.
 func (a *App) cleanup(t store.Task) (string, error) {
 	a.sweepScratchAfter(t.ID)
 	if _, err := os.Stat(t.Worktree); err == nil {
-		if dirty, _ := gitx.Dirty(t.Worktree); len(dirty) > 0 {
-			return "kept worktree: uncommitted changes", nil
-		}
-		if err := gitx.WorktreeRemove(a.Root, t.Worktree); err != nil {
+		why, err := a.retireWorktree(t.ID, t.Worktree)
+		if err != nil {
 			return "", err
+		}
+		if why != "" {
+			return "kept worktree: " + why, nil
 		}
 	}
 	if t.Branch == "" || !gitx.BranchExists(a.Root, t.Branch) {
 		return "", nil
 	}
-	if n := a.unique(t.Branch); n > 0 {
-		return fmt.Sprintf("kept branch %s: %d commit(s) not on integration", t.Branch, n), nil
+	if n := a.unique(t.Branch); n != 0 {
+		// The forge isn't asked here: kill and done stay offline. gc asks.
+		local := t
+		local.PR = ""
+		if why := a.unmerged(t.Branch, local, a.baseRef()); why != "" {
+			return fmt.Sprintf("kept branch %s: %s", t.Branch, why), nil
+		}
 	}
 	_, err := gitx.Run(a.Root, "branch", "-D", t.Branch)
 	return "", err
+}
+
+// EventWorktreeKept records a dead task's worktree left in place, with why.
+const EventWorktreeKept = "worktree_kept"
+
+// retireWorktree removes dead task id's worktree dir (#803). An operation
+// left half done (rebase, merge, cherry-pick, revert) is aborted first.
+// Uncommitted work must then be in refs/saddle/wip/<id>, snapshotted afresh
+// when the ref doesn't hold the tree's exact state; a snapshot that can't be
+// verified keeps the tree, and its reason is returned and recorded.
+func (a *App) retireWorktree(id, dir string) (string, error) {
+	abortOps(dir)
+	if why := a.saveWIP(id, dir); why != "" {
+		a.Store.Event(id, EventWorktreeKept, dir+": "+why)
+		return why, nil
+	}
+	if err := gitx.WorktreeRemove(a.Root, dir); err != nil {
+		// Read-only dirs (a Go module cache) defeat git's remove.
+		if rerr := removeTree(dir); rerr != nil {
+			return "", errors.Join(err, rerr)
+		}
+		_, _ = gitx.Run(a.Root, "worktree", "prune")
+	}
+	return "", nil
+}
+
+// saveWIP makes sure dir's uncommitted work is in refs/saddle/wip/<id>. It
+// returns "" when it is, or there is none, else why it couldn't be saved.
+func (a *App) saveWIP(id, dir string) string {
+	tree, _, err := checkpoint.Tree(dir)
+	if err != nil {
+		return "can't snapshot uncommitted changes: " + err.Error()
+	}
+	if tree == "" {
+		return ""
+	}
+	holds := func() bool {
+		got, err := gitx.Run(a.Root, "rev-parse", "--verify", "--quiet", wipRef(id)+"^{tree}")
+		return err == nil && got == tree
+	}
+	if holds() {
+		return ""
+	}
+	a.snapshotWIP(id, dir)
+	if holds() {
+		return ""
+	}
+	return "uncommitted changes, and the snapshot to " + wipRef(id) + " failed"
+}
+
+// abortOps aborts whatever rebase, merge, cherry-pick or revert dir's
+// worktree was left in, so its tree holds the branch plus uncommitted work.
+func abortOps(dir string) {
+	for _, op := range []struct{ marker, cmd string }{
+		{"rebase-merge", "rebase"}, {"rebase-apply", "rebase"}, {"rebase-apply", "am"},
+		{"MERGE_HEAD", "merge"}, {"CHERRY_PICK_HEAD", "cherry-pick"}, {"REVERT_HEAD", "revert"},
+	} {
+		p, err := gitx.Run(dir, "rev-parse", "--path-format=absolute", "--git-path", op.marker)
+		if err != nil {
+			return
+		}
+		if _, err := os.Stat(p); err == nil {
+			_, _ = gitx.Run(dir, op.cmd, "--abort")
+		}
+	}
 }
 
 // unique counts commits on branch that integration lacks (-1 if unknown).
@@ -408,7 +481,11 @@ func (a *App) leftovers(deadline time.Time) ([]Leftover, error) {
 			out[i].Keep = notChecked
 			inUse[wtBranch[i]] = true
 		case dirty[i]:
-			out[i].Keep = "uncommitted changes"
+			// gc snapshots a task's uncommitted work to refs/saddle/wip
+			// and removes the tree (#803); its branch waits a round.
+			if taskIDRe.FindString(filepath.Base(out[i].Name)) == "" {
+				out[i].Keep = "uncommitted changes"
+			}
 			inUse[wtBranch[i]] = true
 		}
 	}
@@ -585,10 +662,17 @@ func (a *App) GC() ([]Leftover, error) {
 		if l.Keep == "" {
 			switch l.Kind {
 			case "worktree":
-				if id := taskIDRe.FindString(filepath.Base(l.Name)); id != "" {
-					a.snapshotWIP(id, l.Name)
+				id := taskIDRe.FindString(filepath.Base(l.Name))
+				if id == "" {
+					err = gitx.WorktreeRemove(a.Root, l.Name)
+					break
 				}
-				err = gitx.WorktreeRemove(a.Root, l.Name)
+				var why string
+				if why, err = a.retireWorktree(id, l.Name); err == nil && why != "" {
+					l.Keep = why
+					out = append(out, l)
+					continue
+				}
 			case "branch":
 				_, err = gitx.Run(a.Root, "branch", "-D", l.Name)
 			case "remote":
