@@ -87,8 +87,9 @@ const quarkMakeHook = "#!/bin/sh\nset -eu\nif command -v gmake >/dev/null 2>&1; 
 // TestJourneyMakeVariableHookRunsOncePerLand (#270): the repo's hook runs
 // "${MAKE}" check and [test] cmd is make check. saddle used to take the hook
 // script itself as the lint gate, a different command, so every landing ran
-// make check twice on the same tree. Now doctor reports make check and a
-// land runs it once.
+// make check twice on the same tree. Now doctor reports make check, and
+// done and land together run it once: done gates the tree, and land, finding
+// that same tree on the same base, skips it (#800).
 func TestJourneyMakeVariableHookRunsOncePerLand(t *testing.T) {
 	if Fork(t) {
 		return
@@ -106,18 +107,18 @@ func TestJourneyMakeVariableHookRunsOncePerLand(t *testing.T) {
 	if out := doc.Stdout + doc.Stderr; !strings.Contains(out, "runs `make check`") {
 		t.Fatalf("doctor's lint gate:\n%s", out)
 	}
-	w.Spawn("t1", "Alpha work", []string{"alpha/**"}, finished("alpha", "alpha\n")...)
-	w.WaitTask("t1", "queued in the train", func(v mcpserver.TaskView) bool { return v.Status == "done" && v.Train == "queued" })
 	count := func() int {
 		b, _ := os.ReadFile(calls)
 		return strings.Count(string(b), "call")
 	}
 	before := count()
+	w.Spawn("t1", "Alpha work", []string{"alpha/**"}, finished("alpha", "alpha\n")...)
+	w.WaitTask("t1", "queued in the train", func(v mcpserver.TaskView) bool { return v.Status == "done" && v.Train == "queued" })
 	if r := w.MustSaddle("land"); w.Task("t1").Status != "landed" {
 		t.Fatalf("t1 didn't land: %s", r)
 	}
 	if n := count() - before; n != 1 {
-		t.Fatalf("land ran make check %d times, want 1", n)
+		t.Fatalf("done and land ran make check %d times on one tree, want 1", n)
 	}
 }
 

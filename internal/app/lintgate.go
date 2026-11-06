@@ -171,7 +171,11 @@ func stamped(file, line string) bool {
 	return err == nil && slices.Contains(strings.Split(string(b), "\n"), line)
 }
 
-// stampLint records that tree passed g, keeping the last 200.
+// stampKeep is how many pass stamps lintStamp keeps. 200 dropped stamps the
+// train then re-gated (#800); a line is ~60 bytes, so this is ~120KB.
+const stampKeep = 2000
+
+// stampLint records that tree passed g, keeping the last stampKeep.
 func stampLint(state, tree string, g lintgate.Gate) {
 	if state == "" || tree == "" || os.MkdirAll(state, 0o755) != nil {
 		return
@@ -180,8 +184,8 @@ func stampLint(state, tree string, g lintgate.Gate) {
 	b, _ := os.ReadFile(file)
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
 	lines = append(lines, stampLine(tree, g))
-	if len(lines) > 200 {
-		lines = lines[len(lines)-200:]
+	if len(lines) > stampKeep {
+		lines = lines[len(lines)-stampKeep:]
 	}
 	tmp := fmt.Sprintf("%s.%d.tmp", file, os.Getpid())
 	if os.WriteFile(tmp, []byte(strings.TrimSpace(strings.Join(lines, "\n"))+"\n"), 0o644) == nil {

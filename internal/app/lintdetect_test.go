@@ -39,6 +39,7 @@ func TestLintGateDetectsMakeVariableHookForms(t *testing.T) {
 				t.Fatalf("pre-publish checks = %+v, want make check once", cs)
 			}
 			queueTask(t, a, "t1", "once", map[string]string{"x.txt": "x\n"})
+			forgetPasses(t, a.Root) // the train must gate this tree, not skip it (#800)
 			before, _ := os.ReadFile(count)
 			rs, err := a.Land()
 			must(t, err)

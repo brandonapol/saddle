@@ -499,6 +499,7 @@ func (a *App) landOne(id string, run *landRun) LandResult {
 		res.State, res.Note = store.TrainError, err.Error()
 		return res
 	}
+	pre, _ := gitx.RevParse(t.Worktree, "HEAD") // what done gated, for the skip (#800)
 	from, _, err := a.replayFrom(t, a.Cfg.Integration)
 	if err != nil {
 		return fail(store.TrainError, "rebase failed", "Finding your branch's own commits failed:\n"+err.Error()+"\nFix it and call done again.")
@@ -561,7 +562,10 @@ func (a *App) landOne(id string, run *landRun) LandResult {
 	if msg := a.secretGate(t.Worktree); msg != "" {
 		return fail(store.TestFailed, "a commit adds a secret-shaped literal", msg)
 	}
-	if cmd := a.Cfg.Test.Cmd; cmd != NoTestCmd {
+	if cmd := a.Cfg.Test.Cmd; cmd != NoTestCmd && a.gatedBefore(t.Worktree, old, pre, cmd) {
+		// The same tree on the same base already passed this command (#800).
+		a.Store.Event(id, "test_skipped", "tree of "+short(pre)+" on "+short(old)+" already passed `"+strings.TrimSpace(cmd)+"`")
+	} else if cmd != NoTestCmd {
 		g := a.RunGateEnv(context.Background(), id, ShellGate(t.Worktree, cmd, a.GateTimeout()))
 		if errors.Is(g.Err, ErrGateInterrupted) {
 			res.State, res.Note = store.TrainError, "the gate was interrupted; stays queued"
@@ -576,6 +580,7 @@ func (a *App) landOne(id string, run *landRun) LandResult {
 			return fail(store.TestFailed, "tests failed", fmt.Sprintf(
 				"Your branch rebased cleanly onto %s, but `%s` failed on the result:\n%s\nFix it, commit, and call the saddle done tool again.", a.Cfg.Integration, cmd, tail(out, 40)))
 		}
+		stampTest(t.Worktree, cmd)
 	}
 	if msg, env, err := a.trainLint(id, t.Worktree); err != nil {
 		res.State, res.Note = store.TrainError, "the lint gate was interrupted; stays queued"

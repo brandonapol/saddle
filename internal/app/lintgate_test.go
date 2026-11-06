@@ -132,6 +132,7 @@ func TestLandRunsLintOnceWhenSameAsTest(t *testing.T) {
 	a.Cfg.Test.Cmd = "echo x >> " + count
 	a.Cfg.Train.Lint = config.Lint{Cmd: a.Cfg.Test.Cmd, Set: true}
 	queueTask(t, a, "t1", "once", map[string]string{"x.txt": "x\n"})
+	forgetPasses(t, a.Root)         // the train must gate this tree, not skip it (#800)
 	before, _ := os.ReadFile(count) // done may have run the gate
 	rs, err := a.Land()
 	must(t, err)
@@ -335,6 +336,7 @@ func TestLandRunsMakeVariableHookOnceWhenSameAsTest(t *testing.T) {
 		t.Fatalf("pre-publish checks = %+v", cs)
 	}
 	queueTask(t, a, "t1", "once", map[string]string{"x.txt": "x\n"})
+	forgetPasses(t, a.Root) // the train must gate this tree, not skip it (#800)
 	before, _ := os.ReadFile(count)
 	rs, err := a.Land()
 	must(t, err)
