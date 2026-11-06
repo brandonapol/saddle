@@ -120,6 +120,23 @@ func TestLastEventTimes(t *testing.T) {
 	}
 }
 
+// #782: given kinds, LastEventTimes only counts events of those kinds.
+func TestLastEventTimesOfKinds(t *testing.T) {
+	s := openTest(t)
+	s.Event("t1", "tool", "Edit")
+	s.Event("t2", "ci_error", "rate limited")
+	got, err := s.LastEventTimes("tool", "stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["t1"]; !ok {
+		t.Fatal("t1's tool call is not a heartbeat")
+	}
+	if _, ok := got["t2"]; ok {
+		t.Fatal("t2's ci_error counted as a heartbeat")
+	}
+}
+
 // #505: LatestEventData is each task's newest event of a kind.
 func TestLatestEventData(t *testing.T) {
 	s := openTest(t)

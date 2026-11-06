@@ -26,7 +26,7 @@ const StatusPaused = "paused"
 const StatusOrphaned = "orphaned"
 
 // OrphanAfter is how long a windowless task may go without a heartbeat (an
-// event from its hooks) before it is shown as orphaned.
+// event from its hooks, see heartbeatKinds) before it is shown as orphaned.
 var OrphanAfter = 10 * time.Minute
 
 // EventResumeWatch is logged once the resume watcher's startup pass is done.
@@ -37,10 +37,14 @@ var ResumeEvery = 15 * time.Second
 
 // Auto-resume gives up on a task resumed resumeBurst times within
 // resumeWindow: something kills it as fast as it starts. It shows as
-// orphaned, and saddle resume or saddle rescue take it from there.
+// orphaned, and saddle resume or saddle rescue take it from there. The
+// give-up lasts a backoff, resumeBackoff doubling to resumeBackoffMax, so a
+// cause that clears is retried without a restart (#782).
 const (
-	resumeBurst  = 3
-	resumeWindow = 30 * time.Minute
+	resumeBurst      = 3
+	resumeWindow     = 30 * time.Minute
+	resumeBackoff    = 30 * time.Minute
+	resumeBackoffMax = 2 * time.Hour
 )
 
 const (
@@ -102,8 +106,12 @@ func (a *App) canResume(t store.Task) bool {
 // when it can and relaunching with the original brief when it can't.
 func (a *App) resume(t store.Task) (Resumed, error) {
 	r := Resumed{Task: t.ID}
+	fresh := false // a recreated worktree has no session to resume
 	if fi, err := os.Stat(t.Worktree); err != nil || !fi.IsDir() {
-		return r, fmt.Errorf("%s: worktree %s is gone; rescue or kill it", t.ID, t.Worktree)
+		if err := a.recoverWorktree(t); err != nil {
+			return r, err
+		}
+		fresh = true
 	}
 	all, err := a.Store.Claims()
 	if err != nil {
@@ -128,7 +136,7 @@ func (a *App) resume(t store.Task) (Resumed, error) {
 			}
 			ad = nad
 		}
-	} else if a.canResume(t) {
+	} else if !fresh && a.canResume(t) {
 		r.Session, prompt = t.SessionID, resumedNote
 	}
 	win, err := a.start(t, all[t.ID], ad, r.Session, prompt)
@@ -172,6 +180,9 @@ func (a *App) resumeLost(paused bool, allow func(store.Task) bool) ([]Resumed, e
 			continue
 		}
 		r, err := a.resume(t)
+		if errors.Is(err, errTaskRetired) {
+			continue // retired, told once: nothing left to resume (#765)
+		}
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -216,24 +227,18 @@ func (a *App) Resume(task string) (Resumed, error) {
 // it resumes every lost or paused task, then every ResumeEvery it resumes
 // tasks whose window vanished. Failures are events.
 func (a *App) RunResumeWatcher(ctx context.Context) {
-	recent := map[string][]time.Time{}
+	gate := newResumeGate()
 	allow := func(t store.Task) bool {
-		var keep []time.Time
-		for _, at := range recent[t.ID] {
-			if time.Since(at) < resumeWindow {
-				keep = append(keep, at)
+		ok, wait := gate.allow(t.ID, time.Now())
+		if wait > 0 {
+			a.Store.Event(t.ID, "resume_gave_up", fmt.Sprintf("resumed %d times in %s; retrying in %s", resumeBurst, resumeWindow, wait))
+			if err := a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
+				"%s %q lost its window %d times in %s, so saddle stopped resuming it for %s. Look at why it dies, then saddle resume %s, saddle rescue %s or saddle kill %s.",
+				t.ID, t.Title, resumeBurst, resumeWindow, wait, t.ID, t.ID, t.ID)); err != nil {
+				a.Store.Event(t.ID, "resume_error", err.Error())
 			}
 		}
-		recent[t.ID] = keep
-		if len(keep) >= resumeBurst {
-			if len(keep) == resumeBurst {
-				a.Store.Event(t.ID, "resume_gave_up", fmt.Sprintf("resumed %d times in %s", resumeBurst, resumeWindow))
-				recent[t.ID] = append(keep, time.Now()) // log it once
-			}
-			return false
-		}
-		recent[t.ID] = append(keep, time.Now())
-		return true
+		return ok
 	}
 	tick := func(paused bool) {
 		if _, err := a.resumeLost(paused, allow); err != nil {
@@ -254,6 +259,11 @@ func (a *App) RunResumeWatcher(ctx context.Context) {
 	}
 }
 
+// heartbeatKinds are the events an agent's own hooks log. Only they are a
+// heartbeat: saddle logs events about a dead task too (ci_error, restack,
+// resume_gave_up), and those must not make it look alive (#782).
+var heartbeatKinds = []string{"tool", "stop", "notification", "session_start", EventDoneCalled}
+
 // Orphans returns the live tasks that lost their window and have had no
 // heartbeat for OrphanAfter.
 func (a *App) Orphans() (map[string]bool, error) {
@@ -261,7 +271,7 @@ func (a *App) Orphans() (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	beats, err := a.Store.LastEventTimes()
+	beats, err := a.Store.LastEventTimes(heartbeatKinds...)
 	if err != nil {
 		return nil, err
 	}
@@ -400,4 +410,106 @@ func (a *App) Rescue(task string) (Rescued, error) {
 	}
 	a.Store.Event(task, "rescue", strings.TrimSpace(r.Branch+" "+r.Diff))
 	return r, nil
+}
+
+// A task whose worktree vanished (#765) is rebuilt from its branch, or
+// retired when there is nothing to rebuild it from.
+const (
+	eventWorktreeRecreated = "worktree_recreated" // data: the branch it was recreated at
+	eventWorktreeLost      = "worktree_lost"      // data: why the task was retired
+	KilledByWorktreeLost   = "worktree_lost"      // the killer of a retired task
+)
+
+// errTaskRetired is resume's answer for a task it retired instead.
+var errTaskRetired = errors.New("retired")
+
+// recoverWorktree rebuilds t's missing worktree at its branch, local or on
+// origin, when the branch has work beyond integration. Otherwise it retires
+// t and returns errTaskRetired. Either way it logs one event and tells the
+// orchestrator once, so the resume watcher never errors on it every tick.
+func (a *App) recoverWorktree(t store.Task) error {
+	_, _ = gitx.Run(a.Root, "worktree", "prune") // forget the vanished one
+	integ := a.Cfg.Integration
+	var why string
+	switch remote := "refs/remotes/origin/" + t.Branch; {
+	case t.Branch == "":
+		why = "it has no branch"
+	case gitx.BranchExists(a.Root, t.Branch):
+		if a.unique(t.Branch) == 0 {
+			why = fmt.Sprintf("its branch %s has no commits beyond %s", t.Branch, integ)
+		} else if _, err := gitx.Run(a.Root, "worktree", "add", t.Worktree, t.Branch); err != nil {
+			why = fmt.Sprintf("recreating it at %s failed: %s", t.Branch, oneLine(err.Error()))
+		}
+	default:
+		if _, err := gitx.RevParse(a.Root, remote); err != nil {
+			why = "its branch " + t.Branch + " is gone too"
+		} else if n, err := gitx.CommitsBetween(a.Root, integ, remote); err == nil && n == 0 {
+			why = fmt.Sprintf("its branch %s has no commits beyond %s", t.Branch, integ)
+		} else if err := gitx.WorktreeAdd(a.Root, t.Worktree, t.Branch, remote); err != nil {
+			why = fmt.Sprintf("recreating it from %s failed: %s", remote, oneLine(err.Error()))
+		}
+	}
+	if why != "" {
+		return a.retireLost(t, why)
+	}
+	a.Store.Event(t.ID, eventWorktreeRecreated, t.Branch)
+	return a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
+		"%s %q lost its worktree, so saddle recreated it at %s and relaunched the task with its brief. Nothing needs doing.",
+		t.ID, t.Title, t.Branch))
+}
+
+// retireLost kills t, whose worktree is gone with nothing to rebuild it
+// from: its claims are released and its processes reaped, and a CI repair's
+// red layer is freed for a fresh repair. Saddle killed it, not the owner.
+func (a *App) retireLost(t store.Task, why string) error {
+	a.recordKiller(t.ID, KilledByWorktreeLost)
+	if err := a.Kill(t.ID, false); err != nil {
+		return fmt.Errorf("%s: worktree %s is gone and retiring it failed: %w", t.ID, t.Worktree, err)
+	}
+	a.Store.Event(t.ID, eventWorktreeLost, why)
+	if _, err := a.ReapCIRepairs(); err != nil {
+		a.Store.Event(t.ID, "ci_repair_reap_failed", err.Error())
+	}
+	if err := a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
+		"saddle retired %s %q: its worktree %s is gone and %s, so there was nothing to resume. Its claims are released.",
+		t.ID, t.Title, t.Worktree, why)); err != nil {
+		return err
+	}
+	return fmt.Errorf("%s: worktree is gone and %s, so saddle %w it", t.ID, why, errTaskRetired)
+}
+
+// resumeGate rate-limits the resume watcher per task (#782).
+type resumeGate struct {
+	recent  map[string][]time.Time // resumes within resumeWindow
+	until   map[string]time.Time   // no resumes before this
+	giveUps map[string]int
+}
+
+func newResumeGate() *resumeGate {
+	return &resumeGate{recent: map[string][]time.Time{}, until: map[string]time.Time{}, giveUps: map[string]int{}}
+}
+
+// allow reports whether task may be resumed at now. On the call that gives
+// up it returns the backoff, so the caller reports each give-up once.
+func (g *resumeGate) allow(task string, now time.Time) (bool, time.Duration) {
+	if now.Before(g.until[task]) {
+		return false, 0
+	}
+	var keep []time.Time
+	for _, at := range g.recent[task] {
+		if now.Sub(at) < resumeWindow {
+			keep = append(keep, at)
+		}
+	}
+	if len(keep) >= resumeBurst {
+		wait := min(resumeBackoff<<g.giveUps[task], resumeBackoffMax)
+		if wait < resumeBackoffMax {
+			g.giveUps[task]++ // stop counting at the cap: the shift can't overflow
+		}
+		g.until[task] = now.Add(wait)
+		delete(g.recent, task) // a fresh burst after the backoff
+		return false, wait
+	}
+	g.recent[task] = append(keep, now)
+	return true, 0
 }
