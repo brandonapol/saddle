@@ -91,7 +91,7 @@ func TestDoneGateEnvFailureTellsOrchestratorAndRetries(t *testing.T) {
 	}
 	a.WaitDoneJobs()
 	q := a.pendingEnv()[tk.ID]
-	if q.Attempts != p.Attempts+1 || q.Next.Sub(time.Now()) <= p.Next.Sub(p.Since) {
+	if q.Attempts != p.Attempts+1 || time.Until(q.Next) <= p.Next.Sub(p.Since) {
 		t.Fatalf("backoff did not grow: %+v then %+v", p, q)
 	}
 	if n := noticeTexts(t, a, OrchestratorID); strings.Contains(n, "action: ") {
