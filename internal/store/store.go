@@ -581,10 +581,17 @@ func (s *Store) LatestEventData(kind string) (map[string]string, error) {
 	return out, rows.Err()
 }
 
-// LastEventTimes maps each task to the time of its newest event: its
-// heartbeat, since hooks log every tool call.
-func (s *Store) LastEventTimes() (map[string]time.Time, error) {
-	rows, err := s.db.Query(`SELECT task, MAX(ts) FROM events WHERE task != '' GROUP BY task`)
+// LastEventTimes maps each task to the time of its newest event, of one of
+// kinds when any are given: its heartbeat, since hooks log every tool call.
+func (s *Store) LastEventTimes(kinds ...string) (map[string]time.Time, error) {
+	q, args := `SELECT task, MAX(ts) FROM events WHERE task != ''`, []any{}
+	if len(kinds) > 0 {
+		q += ` AND kind IN (?` + strings.Repeat(`,?`, len(kinds)-1) + `)`
+		for _, k := range kinds {
+			args = append(args, k)
+		}
+	}
+	rows, err := s.db.Query(q+` GROUP BY task`, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -26,7 +26,7 @@ const StatusPaused = "paused"
 const StatusOrphaned = "orphaned"
 
 // OrphanAfter is how long a windowless task may go without a heartbeat (an
-// event from its hooks) before it is shown as orphaned.
+// event from its hooks, see heartbeatKinds) before it is shown as orphaned.
 var OrphanAfter = 10 * time.Minute
 
 // EventResumeWatch is logged once the resume watcher's startup pass is done.
@@ -37,10 +37,14 @@ var ResumeEvery = 15 * time.Second
 
 // Auto-resume gives up on a task resumed resumeBurst times within
 // resumeWindow: something kills it as fast as it starts. It shows as
-// orphaned, and saddle resume or saddle rescue take it from there.
+// orphaned, and saddle resume or saddle rescue take it from there. The
+// give-up lasts a backoff, resumeBackoff doubling to resumeBackoffMax, so a
+// cause that clears is retried without a restart (#782).
 const (
-	resumeBurst  = 3
-	resumeWindow = 30 * time.Minute
+	resumeBurst      = 3
+	resumeWindow     = 30 * time.Minute
+	resumeBackoff    = 30 * time.Minute
+	resumeBackoffMax = 2 * time.Hour
 )
 
 const (
@@ -223,24 +227,18 @@ func (a *App) Resume(task string) (Resumed, error) {
 // it resumes every lost or paused task, then every ResumeEvery it resumes
 // tasks whose window vanished. Failures are events.
 func (a *App) RunResumeWatcher(ctx context.Context) {
-	recent := map[string][]time.Time{}
+	gate := newResumeGate()
 	allow := func(t store.Task) bool {
-		var keep []time.Time
-		for _, at := range recent[t.ID] {
-			if time.Since(at) < resumeWindow {
-				keep = append(keep, at)
+		ok, wait := gate.allow(t.ID, time.Now())
+		if wait > 0 {
+			a.Store.Event(t.ID, "resume_gave_up", fmt.Sprintf("resumed %d times in %s; retrying in %s", resumeBurst, resumeWindow, wait))
+			if err := a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
+				"%s %q lost its window %d times in %s, so saddle stopped resuming it for %s. Look at why it dies, then saddle resume %s, saddle rescue %s or saddle kill %s.",
+				t.ID, t.Title, resumeBurst, resumeWindow, wait, t.ID, t.ID, t.ID)); err != nil {
+				a.Store.Event(t.ID, "resume_error", err.Error())
 			}
 		}
-		recent[t.ID] = keep
-		if len(keep) >= resumeBurst {
-			if len(keep) == resumeBurst {
-				a.Store.Event(t.ID, "resume_gave_up", fmt.Sprintf("resumed %d times in %s", resumeBurst, resumeWindow))
-				recent[t.ID] = append(keep, time.Now()) // log it once
-			}
-			return false
-		}
-		recent[t.ID] = append(keep, time.Now())
-		return true
+		return ok
 	}
 	tick := func(paused bool) {
 		if _, err := a.resumeLost(paused, allow); err != nil {
@@ -261,6 +259,11 @@ func (a *App) RunResumeWatcher(ctx context.Context) {
 	}
 }
 
+// heartbeatKinds are the events an agent's own hooks log. Only they are a
+// heartbeat: saddle logs events about a dead task too (ci_error, restack,
+// resume_gave_up), and those must not make it look alive (#782).
+var heartbeatKinds = []string{"tool", "stop", "notification", "session_start", EventDoneCalled}
+
 // Orphans returns the live tasks that lost their window and have had no
 // heartbeat for OrphanAfter.
 func (a *App) Orphans() (map[string]bool, error) {
@@ -268,7 +271,7 @@ func (a *App) Orphans() (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	beats, err := a.Store.LastEventTimes()
+	beats, err := a.Store.LastEventTimes(heartbeatKinds...)
 	if err != nil {
 		return nil, err
 	}
@@ -473,4 +476,40 @@ func (a *App) retireLost(t store.Task, why string) error {
 		return err
 	}
 	return fmt.Errorf("%s: worktree is gone and %s, so saddle %w it", t.ID, why, errTaskRetired)
+}
+
+// resumeGate rate-limits the resume watcher per task (#782).
+type resumeGate struct {
+	recent  map[string][]time.Time // resumes within resumeWindow
+	until   map[string]time.Time   // no resumes before this
+	giveUps map[string]int
+}
+
+func newResumeGate() *resumeGate {
+	return &resumeGate{recent: map[string][]time.Time{}, until: map[string]time.Time{}, giveUps: map[string]int{}}
+}
+
+// allow reports whether task may be resumed at now. On the call that gives
+// up it returns the backoff, so the caller reports each give-up once.
+func (g *resumeGate) allow(task string, now time.Time) (bool, time.Duration) {
+	if now.Before(g.until[task]) {
+		return false, 0
+	}
+	var keep []time.Time
+	for _, at := range g.recent[task] {
+		if now.Sub(at) < resumeWindow {
+			keep = append(keep, at)
+		}
+	}
+	if len(keep) >= resumeBurst {
+		wait := min(resumeBackoff<<g.giveUps[task], resumeBackoffMax)
+		if wait < resumeBackoffMax {
+			g.giveUps[task]++ // stop counting at the cap: the shift can't overflow
+		}
+		g.until[task] = now.Add(wait)
+		delete(g.recent, task) // a fresh burst after the backoff
+		return false, wait
+	}
+	g.recent[task] = append(keep, now)
+	return true, 0
 }
