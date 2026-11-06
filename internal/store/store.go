@@ -546,6 +546,25 @@ func (s *Store) Events(n int) ([]Event, error) {
 	return scanEvents(rows)
 }
 
+// LastEventTime is when the newest event of any of kinds was logged, or the
+// zero time when there is none. It reads the whole log, so a flood of other
+// events can't push it out of view (#783).
+func (s *Store) LastEventTime(kinds ...string) (time.Time, error) {
+	if len(kinds) == 0 {
+		return time.Time{}, nil
+	}
+	args := make([]any, len(kinds))
+	for i, k := range kinds {
+		args[i] = k
+	}
+	var ts sql.NullInt64
+	q := `SELECT MAX(ts) FROM events WHERE kind IN (?` + strings.Repeat(",?", len(kinds)-1) + `)`
+	if err := s.db.QueryRow(q, args...).Scan(&ts); err != nil || !ts.Valid {
+		return time.Time{}, err
+	}
+	return time.Unix(ts.Int64, 0), nil
+}
+
 // EventsSince returns every event with an id above after, oldest first. Pass
 // the last ID seen to resume; LastEventID gives a cursor that skips history.
 func (s *Store) EventsSince(after int64) ([]Event, error) {

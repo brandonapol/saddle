@@ -139,7 +139,7 @@ func hungGateCause(hung []HungGate) RootCause {
 	if n := len(hung) - 1; n > 0 {
 		what += fmt.Sprintf(" %d more gate processes are overdue too.", n)
 	}
-	return RootCause{CauseHungGate, what, fmt.Sprintf("kill %d", h.PID)}
+	return RootCause{Key: CauseHungGate, What: what, Fix: fmt.Sprintf("kill %d", h.PID)}
 }
 
 // psProcs lists this user's processes with ps, reading each cwd from /proc

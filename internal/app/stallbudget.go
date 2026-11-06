@@ -225,6 +225,8 @@ const (
 	RunDenyPrompt    = "deny-prompt"    // Escape the prompt and tell the agent to find another way
 	RunMessageTask   = "message-task"   // send the task the quoted message in the action
 	RunOwnerDecision = "owner-decision" // tell the blocked task the option was taken
+	RunRescueStalled = "rescue-stalled" // rescue the zombies and given-up tasks a stall names (#783)
+	RunResumeLost    = "resume-lost"    // give the windowless tasks a stall names new windows (#783)
 )
 
 // defaultRuns maps each registered action to what it does.
@@ -240,6 +242,8 @@ var defaultRuns = map[string]func(a *App, c DecisionCard, o DecisionOption) erro
 	RunOwnerDecision: func(a *App, c DecisionCard, _ DecisionOption) error {
 		return a.applyOwnerDecision(c, c.Default, DecidedByTimeout, "")
 	},
+	RunRescueStalled: (*App).rescueStalled,
+	RunResumeLost:    (*App).resumeStalled,
 }
 
 // legacyRuns is the action for a card saved before options named theirs.
