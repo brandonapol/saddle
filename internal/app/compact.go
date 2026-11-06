@@ -507,6 +507,27 @@ func (a *App) CompactTarget() CompactTarget {
 	return nil
 }
 
+// DraftBlockMax is the longest an owner's draft in the input box holds back
+// a send saddle would otherwise make on its own: autopilot's nudge, the
+// digest (#791). After that it goes out as a notice, so an overnight run
+// never depends on an empty input box.
+var DraftBlockMax = 10 * time.Minute
+
+// draftSince holds, per App, when the orchestrator's input was first seen
+// holding a draft; absent while it is empty.
+var draftSince sync.Map // *App -> time.Time
+
+// draftHolds reports whether a draft in t still holds back a send at now:
+// true while t has a draft first seen less than DraftBlockMax ago.
+func (a *App) draftHolds(t CompactTarget, now time.Time) bool {
+	if t == nil || !t.Drafting() {
+		draftSince.Delete(a)
+		return false
+	}
+	v, _ := draftSince.LoadOrStore(a, now)
+	return now.Sub(v.(time.Time)) < DraftBlockMax
+}
+
 // CompactReport is the outcome of one Check.
 type CompactReport struct {
 	Fraction float64
