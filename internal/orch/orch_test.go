@@ -276,3 +276,21 @@ func TestErrorResultClearsBusy(t *testing.T) {
 		t.Fatal("an error result left the session busy")
 	}
 }
+
+// #792: a Send to a process that already exited fails, and must not leave
+// the session busy: its reader is gone, so nothing would ever clear it.
+func TestSendFailureClearsBusy(t *testing.T) {
+	p, err := Start(exec.Command("sh", "-c", "exit 0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	for e := next(t, p); e.Kind != Exit; e = next(t, p) {
+	}
+	if err := p.Send("hello"); err == nil {
+		t.Fatal("Send to an exited process succeeded")
+	}
+	if p.Busy() {
+		t.Fatal("a failed Send left the session busy")
+	}
+}

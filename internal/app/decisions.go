@@ -483,3 +483,29 @@ func (a *App) DecisionDigestTick(now time.Time) (string, error) {
 	a.Store.Event(OrchestratorID, "decision_digest_sent", strings.SplitN(text, "\n", 2)[0])
 	return text, a.Notify(OrchestratorID, store.NoticeAction, text)
 }
+
+// OpenCardsReminder lists the open decision cards waiting on the owner, for
+// the prompts that wake the orchestrator and the SessionStart after a
+// compaction or resume (#793): a card reaches t0 once as a notice, and an
+// irreversible one never times out, so a compacted orchestrator would
+// otherwise forget it. It is "" when none is open.
+func (a *App) OpenCardsReminder() string {
+	cs, err := a.OpenDecisions()
+	if err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, c := range cs {
+		if c.To != OrchestratorID {
+			continue
+		}
+		if b.Len() == 0 {
+			b.WriteString("Decision cards still waiting on the owner (answer with the decisions tool once they choose):")
+		}
+		fmt.Fprintf(&b, "\n- %s: %s", c.ID, oneLine(c.Headline))
+		if c.Irreversible {
+			b.WriteString(" (irreversible; it never times out)")
+		}
+	}
+	return b.String()
+}

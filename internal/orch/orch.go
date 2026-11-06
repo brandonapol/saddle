@@ -217,7 +217,10 @@ func (p *Proc) Send(text string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.busy.Store(true)
-	_, err = p.stdin.Write(append(b, '\n'))
+	if _, err = p.stdin.Write(append(b, '\n')); err != nil {
+		// No turn started; a dead process's reader can't clear it (#792).
+		p.busy.Store(false)
+	}
 	return err
 }
 

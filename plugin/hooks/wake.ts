@@ -1,9 +1,12 @@
 // Waking the orchestrator (#170): the pure parts; register.tsx runs them.
-// The mod takes the orchestrator's events itself (`saddle plugin events
-// --json`) and submits a `[saddle]` prompt only for the ones that need a
+// The mod reads the orchestrator's events itself (`saddle plugin events
+// --json --peek`) and submits a `[saddle]` prompt only for the ones that need a
 // decision. Routine ones (spawned, finished,
 // landed) are toasted and attached to the person's next message, or to the
-// next wake, instead of starting a turn.
+// next wake, instead of starting a turn. Events are acked (`plugin events
+// --ack`) only once handled: routine ones when they join the backlog, the
+// ones that need a decision after their prompt went in (#793), so a submit
+// that fails leaves them pending for the next tick.
 //
 // It writes a heartbeat to .saddle/mod.alive each tick. While that is fresh,
 // `saddle plugin hook` (the settings hooks) and `saddle plugin wait` leave the
@@ -18,8 +21,8 @@ export const HEARTBEAT = '.saddle/mod.alive'
 /** Routine events kept for the next message, oldest dropped first. */
 export const BACKLOG_MAX = 20
 
-/** One orchestrator notice: `action` needs a decision, `info` does not. */
-export type SaddleEvent = { kind: string; text: string }
+/** One orchestrator notice: `action` needs a decision, `info` does not. `id` is set under --peek. */
+export type SaddleEvent = { kind: string; text: string; id?: number }
 
 /** Parses `saddle plugin events --json`. */
 export function parseEvents(text: string): { value: SaddleEvent[] } | { error: string } {
@@ -31,13 +34,32 @@ export function parseEvents(text: string): { value: SaddleEvent[] } | { error: s
     const out: SaddleEvent[] = []
     for (const e of v.events as Array<Record<string, unknown>>) {
       if (e && typeof e.text === 'string') {
-        out.push({ kind: typeof e.kind === 'string' ? e.kind : 'info', text: e.text })
+        const ev: SaddleEvent = { kind: typeof e.kind === 'string' ? e.kind : 'info', text: e.text }
+        if (typeof e.id === 'number') {
+          ev.id = e.id
+        }
+        out.push(ev)
       }
     }
     return { value: out }
   } catch (err) {
     return { error: `saddle plugin events: ${err instanceof Error ? err.message : String(err)}` }
   }
+}
+
+/** The open decision cards `saddle plugin events --json` lists, or '' (#793). */
+export function parseCards(text: string): string {
+  try {
+    const v = JSON.parse(text) as { cards?: unknown }
+    return typeof v?.cards === 'string' ? v.cards : ''
+  } catch {
+    return ''
+  }
+}
+
+/** The ids of events, for `saddle plugin events --ack`. */
+export function idsOf(events: SaddleEvent[]): number[] {
+  return events.flatMap(e => (typeof e.id === 'number' ? [e.id] : []))
 }
 
 /** Whether an event wakes Claude: only the ones the orchestrator must decide. */
@@ -81,11 +103,18 @@ export function toastOf(e: SaddleEvent): string {
   return eventLine(e).split('\n')[0] ?? ''
 }
 
-/** The prompt a wake submits: the events that need a decision, then the routine backlog. */
-export function wakePrompt(actions: SaddleEvent[], backlog: string[]): string {
+/**
+ * The prompt a wake submits: the events that need a decision, then the
+ * routine backlog, then the decision cards still open, so a compacted
+ * session doesn't forget them (#793).
+ */
+export function wakePrompt(actions: SaddleEvent[], backlog: string[], cards = ''): string {
   let text = actions.map(eventLine).join('\n\n')
   if (backlog.length) {
     text += `\n\nAlso since your last update:\n\n${backlog.join('\n\n')}`
+  }
+  if (cards) {
+    text += `\n\n[saddle] ${cards}`
   }
   return text
 }
@@ -103,7 +132,7 @@ export type WakePlan = { toasts: string[]; prompt: string | null; backlog: strin
  * when any needs a decision, one prompt carries them and the backlog, which
  * empties.
  */
-export function planWake(events: SaddleEvent[], backlog: string[]): WakePlan {
+export function planWake(events: SaddleEvent[], backlog: string[], cards = ''): WakePlan {
   const actions = events.filter(wakes)
   const infos = events.filter(e => !wakes(e))
   const toasts = infos.map(toastOf)
@@ -111,7 +140,7 @@ export function planWake(events: SaddleEvent[], backlog: string[]): WakePlan {
   if (actions.length === 0) {
     return { toasts, prompt: null, backlog: next }
   }
-  return { toasts, prompt: wakePrompt(actions, next), backlog: [] }
+  return { toasts, prompt: wakePrompt(actions, next, cards), backlog: [] }
 }
 
 /** The context the person's next message carries: the routine backlog, if any. */

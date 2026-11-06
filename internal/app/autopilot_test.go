@@ -465,3 +465,74 @@ func TestAutopilotScanReturnsTicketsViaForge(t *testing.T) {
 		t.Fatalf("unsupported forge scan = %+v, %v", got, err)
 	}
 }
+
+// #791: under the plugin engine or --rc nothing registers a compact target.
+// A stall nudge then goes out as an action notice, which the mod or `plugin
+// wait` delivers, and counts as a nudge.
+func TestAutopilotNudgeFallsBackToNoticeWithoutTarget(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	a.SetCompactTarget(nil)
+	d := a.NewAutopilot(readyQueue(apIssue(1, "claims: alpha/**"), apIssue(2, "claims: alpha/x.go")))
+	now := time.Now()
+	d.Now = func() time.Time { return now }
+	_, err := d.Enable(autopilot.Options{})
+	must(t, err)
+	for range 3 {
+		_, err = d.Tick()
+		must(t, err)
+		now = now.Add(autopilot.DefaultStallAfter)
+	}
+	st, err := d.Status()
+	must(t, err)
+	if st.IdleNudges == 0 {
+		t.Errorf("IdleNudges = 0; the nudge without a target was not counted")
+	}
+	if !hasActionNotice(t, a, "[saddle autopilot] continue") {
+		t.Fatal("no action notice carries the nudge")
+	}
+}
+
+// #791: a draft in the input box holds a nudge back for at most
+// DraftBlockMax; after that the nudge goes out as a notice anyway.
+func TestAutopilotDraftBlocksNudgeAtMostLimit(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	var sent []string
+	a.SetCompactTarget(FuncTarget{DraftingFn: func() bool { return true }, SendFn: func(s string) error { sent = append(sent, s); return nil }})
+	t.Cleanup(func() { a.SetCompactTarget(nil) })
+	d := a.NewAutopilot(readyQueue(apIssue(1, "claims: alpha/**"), apIssue(2, "claims: alpha/x.go")))
+	now := time.Now()
+	d.Now = func() time.Time { return now }
+	_, err := d.Enable(autopilot.Options{})
+	must(t, err)
+	for range 3 {
+		_, err = d.Tick()
+		must(t, err)
+		now = now.Add(autopilot.DefaultStallAfter)
+	}
+	if hasActionNotice(t, a, "[saddle autopilot] continue") {
+		t.Fatal("the nudge went out while the draft was young")
+	}
+	now = now.Add(DraftBlockMax)
+	_, err = d.Tick()
+	must(t, err)
+	if len(sent) != 0 {
+		t.Errorf("typed over the owner's draft: %q", sent)
+	}
+	if !hasActionNotice(t, a, "[saddle autopilot] continue") {
+		t.Fatal("a draft older than DraftBlockMax still held the nudge back")
+	}
+}
+
+func hasActionNotice(t *testing.T, a *App, prefix string) bool {
+	t.Helper()
+	ns, err := a.Store.PeekNotices(OrchestratorID, true)
+	must(t, err)
+	for _, n := range ns {
+		if strings.HasPrefix(n.Text, prefix) {
+			return true
+		}
+	}
+	return false
+}

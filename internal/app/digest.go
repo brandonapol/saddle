@@ -233,7 +233,8 @@ func (a *App) PendingDigest() (string, error) {
 
 // FlushDigest sends the orchestrator one digest line of the routine notices
 // held back since the last one, once the oldest has waited digest_every,
-// the orchestrator is idle and the owner isn't typing. It goes in as an info
+// the orchestrator is idle and the owner isn't typing, or has left a draft
+// for longer than DraftBlockMax (#791). It goes in as an info
 // notice, which never starts a turn by itself. It returns the line sent, or
 // "" when it sent nothing.
 func (a *App) FlushDigest(now time.Time) (string, error) {
@@ -244,7 +245,7 @@ func (a *App) FlushDigest(now time.Time) (string, error) {
 	if now.Sub(items[0].TS) < a.digestEvery() {
 		return "", nil
 	}
-	if t := a.CompactTarget(); t != nil && (t.Busy() || t.Drafting()) {
+	if t := a.CompactTarget(); t != nil && (t.Busy() || a.draftHolds(t, now)) {
 		return "", nil
 	}
 	line := summarizeDigest(items)

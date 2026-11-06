@@ -42,13 +42,16 @@ func (a *App) NewAutopilot(ready ReadyIssues) *autopilot.Driver {
 	if cmd := strings.TrimSpace(a.Cfg.Test.Cmd); cmd != "" {
 		done = "`" + cmd + "` passes."
 	}
-	return &autopilot.Driver{
+	env := &autopilotEnv{a: a, ready: ready, unassigned: unassigned}
+	d := &autopilot.Driver{
 		Path:     a.autopilotPath(),
-		Env:      &autopilotEnv{a: a, ready: ready, unassigned: unassigned},
+		Env:      env,
 		Now:      time.Now,
 		Rules:    a.agentRules(),
 		DoneWhen: done,
 	}
+	env.now = func() time.Time { return d.Now() }
+	return d
 }
 
 // AutopilotState is the autopilot state file as last saved.
@@ -73,6 +76,8 @@ type autopilotEnv struct {
 	// asked holds the tickets whose ErrNeedsConfirm already reached the
 	// orchestrator, so a refusal repeated every tick surfaces once (#604).
 	asked map[string]bool
+	// now is the driver's clock, for how long a draft has held a nudge.
+	now func() time.Time
 }
 
 func (e *autopilotEnv) Tasks() ([]autopilot.Task, error) {
@@ -239,13 +244,29 @@ func (e *autopilotEnv) askConfirm(r autopilot.SpawnReq, err error) {
 }
 
 // Nudge types into the orchestrator's input the way compaction does: only
-// when it is idle and the owner has no draft.
+// when it is idle and the owner has no draft. With no input to type into
+// (the plugin engine, a stopped orchestrator), or a draft older than
+// DraftBlockMax, it goes out as an action notice, which the TUI, the mod or
+// `plugin wait` delivers (#791). Either way the nudge counts as sent.
 func (e *autopilotEnv) Nudge(text string) (bool, error) {
 	t := e.a.CompactTarget()
-	if t == nil || t.Busy() || t.Drafting() {
+	if t != nil && t.Busy() {
 		return false, nil
 	}
+	if e.a.draftHolds(t, e.clock()) {
+		return false, nil
+	}
+	if t == nil || t.Drafting() {
+		return true, e.a.Notify(OrchestratorID, store.NoticeAction, text)
+	}
 	return true, t.Send(text)
+}
+
+func (e *autopilotEnv) clock() time.Time {
+	if e.now != nil {
+		return e.now()
+	}
+	return time.Now()
 }
 
 func (e *autopilotEnv) Backlog() (time.Time, bool) {

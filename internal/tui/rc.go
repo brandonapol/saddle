@@ -31,11 +31,16 @@ func rcIntro(s orchrc.Session) string {
 	return fmt.Sprintf("The orchestrator is a Claude Code session under Remote Control (%s). Open %q in the Claude app or claude.ai/code to steer it from anywhere. Its terminal is the pane below: alt+` toggles it, ctrl+r restarts it.", how, s.Name)
 }
 
-// useRC makes s the orchestrator: the pane attaches to its window.
+// useRC makes s the orchestrator: the pane attaches to its window, and the
+// compact watcher and autopilot type into it when it is idle and holds no
+// draft (#791). Saddle's events still reach it through the wake path.
 func (m *model) useRC(s orchrc.Session) {
 	m.orc = &s
 	m.launch = s.Launch
 	m.termShell = s.Attach
+	if m.app != nil && m.app.Tmux != nil && s.Window != "" {
+		m.app.SetCompactTarget(app.PaneTarget{Tmux: m.app.Tmux, Window: s.Window})
+	}
 }
 
 // rcShow opens the orchestrator's pane the first time the screen has a size.

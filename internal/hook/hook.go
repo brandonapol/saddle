@@ -9,6 +9,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/store"
@@ -23,6 +24,8 @@ type Input struct {
 	Message        string         `json:"message"`
 	StopHookActive bool           `json:"stop_hook_active"`
 	PermissionMode string         `json:"permission_mode"`
+	// Source is why a SessionStart fired: startup, resume, clear or compact.
+	Source string `json:"source"`
 	// Grok is set when the payload came from the Grok CLI (camelCase keys).
 	Grok bool `json:"-"`
 	// ToolResponse is the tool's result (PostToolUse), when it is an object.
@@ -137,21 +140,60 @@ func deny(in Input, rule, reason string) *Output {
 // Code session orchestrating through the saddle plugin. It only delivers the
 // orchestrator's notices: the session writes no claimed files, and its
 // session id is not recorded, so the TUI never resumes the user's session.
+// While the saddle mod is active the notices are the mod's; SessionStart
+// still lists open decision cards. Nothing must depend on the model
+// remembering to re-arm `plugin wait` (#793): SessionStart, and a Stop
+// while workers run, say to start one when neither the mod nor a wait
+// would wake the session.
 func HandleOrchestrator(a *app.App, in Input) *Output {
 	st := a.Store
+	now := time.Now()
+	mod := a.ModActive(now)
 	switch in.Event {
-	case "SessionStart", "UserPromptSubmit", "PostToolUse":
+	case "SessionStart":
+		var notes string
+		if !mod {
+			notes = takeAll(st, app.OrchestratorID)
+		}
+		if in.Source == "compact" || in.Source == "resume" {
+			notes = joinNotes(notes, a.OpenCardsReminder())
+		}
+		if !a.WakeArmed(now) {
+			notes = joinNotes(notes, "[saddle] "+app.WaitInstruction)
+		}
+		return context(in.Event, notes)
+	case "UserPromptSubmit", "PostToolUse":
+		if mod {
+			return nil
+		}
 		return context(in.Event, takeAll(st, app.OrchestratorID))
 	case "Stop":
-		if in.StopHookActive {
-			return nil // it already continued once for notices; let it stop
+		if in.StopHookActive || mod {
+			return nil // it already continued once; let it stop
 		}
 		ns, _ := st.TakeNotices(app.OrchestratorID, true)
 		if len(ns) > 0 {
-			return &Output{Decision: "block", Reason: store.FormatNotices(ns)}
+			return &Output{Decision: "block", Reason: joinNotes(store.FormatNotices(ns), a.OpenCardsReminder())}
+		}
+		if !a.WaitActive(now) && workersLive(st) {
+			return &Output{Decision: "block", Reason: "[saddle] " + app.WaitInstruction}
 		}
 	}
 	return nil
+}
+
+// workersLive reports whether any worker is still at work.
+func workersLive(st *store.Store) bool {
+	ts, err := st.Tasks()
+	if err != nil {
+		return false
+	}
+	for _, t := range ts {
+		if t.Role == store.RoleWorker && t.Active() && t.Status != store.Done {
+			return true
+		}
+	}
+	return false
 }
 
 // Run reads hook JSON from r and writes the response to w.
@@ -192,6 +234,7 @@ type inputWire struct {
 	ModeSnake      string         `json:"permission_mode"`
 	ModeCamel      string         `json:"permissionMode"`
 	Cwd            string         `json:"cwd"`
+	Source         string         `json:"source"`
 }
 
 func decodeInput(b []byte) (Input, error) {
@@ -208,6 +251,7 @@ func decodeInput(b []byte) (Input, error) {
 		StopHookActive: w.StopSnake || w.StopCamel,
 		PermissionMode: first(w.ModeSnake, w.ModeCamel),
 		Cwd:            w.Cwd,
+		Source:         w.Source,
 		Grok:           w.EventCamel != "" || w.SessionIDCamel != "" || w.ToolCamel != "",
 	}
 	if in.ToolInput == nil {

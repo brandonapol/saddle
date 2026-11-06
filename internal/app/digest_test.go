@@ -212,3 +212,22 @@ func TestDigestSaysMRsOnGitLab(t *testing.T) {
 		t.Fatalf("github digest = %q", got)
 	}
 }
+
+// #791: a draft left in the input box holds the digest back for at most
+// DraftBlockMax, not all night.
+func TestDigestDraftHoldsAtMostLimit(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	tgt := &digestTarget{}
+	tgt.drafting.Store(true)
+	a.SetCompactTarget(tgt)
+	t.Cleanup(func() { a.SetCompactTarget(nil) })
+	feedDigest(t, a)
+	later := time.Now().Add(time.Hour)
+	if sent, _ := a.FlushDigest(later); sent != "" {
+		t.Fatalf("digest sent over a fresh draft: %q", sent)
+	}
+	if sent, _ := a.FlushDigest(later.Add(DraftBlockMax)); sent == "" {
+		t.Fatal("a draft older than DraftBlockMax still held the digest back")
+	}
+}

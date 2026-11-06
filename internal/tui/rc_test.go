@@ -8,6 +8,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/orchrc"
+	"github.com/brandonapol/saddle/internal/tmux"
 )
 
 // Under saddle up --rc the TUI has no headless process: worker events it
@@ -44,3 +45,20 @@ func TestRCPaneOpensOnStart(t *testing.T) {
 		t.Error("the intro doesn't name the Remote Control session")
 	}
 }
+
+// #791: under --rc the orchestrator's window is the compact target, so
+// autopilot's nudges and /compact reach it.
+func TestRCRegistersPaneTarget(t *testing.T) {
+	m := slashModel(t)
+	m.app.Root = t.TempDir()
+	m.app.Tmux = rcTmux{}
+	t.Cleanup(func() { m.app.SetCompactTarget(nil) })
+	m.useRC(orchrc.Session{Name: "saddle: repo", Attach: "/bin/sh", State: orchrc.State{Window: "saddle:t0"}})
+	pt, ok := m.app.CompactTarget().(app.PaneTarget)
+	if !ok || pt.Window != "saddle:t0" {
+		t.Fatalf("compact target = %#v, want the orchestrator's pane", m.app.CompactTarget())
+	}
+}
+
+// rcTmux stands in for the tmux driver; the test never calls it.
+type rcTmux struct{ tmux.Driver }

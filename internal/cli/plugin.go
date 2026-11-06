@@ -249,7 +249,9 @@ func runPluginHook(r io.Reader, w io.Writer) error {
 	}
 	defer a.Close()
 	a.ReviveEngine() // the orchestrator's own hooks bring a dead engine back too (#789)
-	if a.LockOwner() != app.LockEngine || a.ModActive(time.Now()) {
+	// While the mod is active HandleOrchestrator leaves the notices to it,
+	// but SessionStart still lists open cards (#793).
+	if a.LockOwner() != app.LockEngine {
 		return nil
 	}
 	out := hook.HandleOrchestrator(a, in)
@@ -392,7 +394,9 @@ func waitNotices(ctx context.Context, a *app.App, poll time.Duration, w io.Write
 	}
 	t := time.NewTicker(poll)
 	defer t.Stop()
+	defer a.EndWait()
 	for {
+		a.BeatWait(time.Now()) // the hooks see a wait is armed (#793)
 		if a.ModActive(time.Now()) {
 			fmt.Fprintln(w, "The saddle mod in this session wakes you when an event needs you, so no wait is needed. Don't start another.")
 			return nil
@@ -408,6 +412,10 @@ func waitNotices(ctx context.Context, a *app.App, poll time.Duration, w io.Write
 			}
 			fmt.Fprint(w, warn)
 			fmt.Fprintln(w, strings.TrimSpace(store.FormatNotices(ns)))
+			if cards := a.OpenCardsReminder(); cards != "" {
+				fmt.Fprintln(w, "\n"+cards)
+			}
+			fmt.Fprintln(w, "\nStart another `saddle plugin wait` in the background once you have handled these.")
 			return nil
 		}
 		select {
