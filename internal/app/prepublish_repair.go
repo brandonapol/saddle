@@ -307,7 +307,9 @@ func (a *App) retryGateRepair(p PendingRepair) (string, error) {
 // pruneGateRepairs drops what no longer matters: records of layers no
 // longer red whose repair is done with, and base checks of an old base.
 func (a *App) pruneGateRepairs(s *gateRepairState, g GateState, base string) {
-	red := func(task string) bool { return slices.ContainsFunc(g.Red, func(r GateRed) bool { return r.Task == task }) }
+	red := func(task string) bool {
+		return slices.ContainsFunc(g.Red, func(r GateRed) bool { return r.Task == task })
+	}
 	s.Repairs = slices.DeleteFunc(s.Repairs, func(rec gateRepairRecord) bool {
 		if red(rec.Task) {
 			return false
