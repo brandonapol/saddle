@@ -100,6 +100,19 @@ children. Also the orchestrator's instructions (`saddle plugin brief`).
 ### catchup
 `saddle catchup`: what happened since you last looked, in at most five bullets.
 
+### change
+The PR-graph engine's unit (proposed in [ADR 0009](adr/0009-prgraph-engine.md),
+#779): one task's work with a fixed branch, its current head, its target base,
+its dependency edges and, once published, its PR. Created when the task calls
+`done`; a repair or rebase gives it a new head, never a new change. A change is
+a *layer* while it has a PR in a stack. Its states are `queued`, `landed`,
+`published`, `green`, `red` (with a cause), then `merged` or `superseded` (with
+a reason: `closed`, `killed`, `unstacked`, `gave_up`). Every non-terminal state
+has a deadline and an automatic exit; a retry time is a field, never a state.
+*Avoid:* "parked" or "dropped" for a change state (use `red` with a retry time,
+and `superseded`); "entry" (a train row).
+*Maps to:* `prgraph_change` (planned, #829).
+
 ### changelog
 `saddle changelog --version vX.Y.Z [--write]`: release notes from the PRs
 merged since the last tag. See [VERSIONING.md](VERSIONING.md).
