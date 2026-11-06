@@ -45,5 +45,6 @@ thing to fail.
 - Watchers stop when `saddle up` exits. Work still lands because land and
   done do their own publishing (ADR 0003), but nobody notices a broken stack
   until a host runs again.
-- Every new loop must be safe to run from two hosts in turn, and must take
-  its own lock when two runs would collide (as the PR layout does, #680).
+- Every new loop must be safe when two processes run it at once: take a
+  lock, or give each run its own scratch state, as the PR layout does with
+  one worktree per run (#680).
