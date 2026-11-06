@@ -109,11 +109,19 @@ type model struct {
 	newProc func(resume string) (orchProc, error)
 	// savedSession is the session ctrl+r resumes; nil reads the store.
 	savedSession func() string
-	model        string                           // the model the session reported, if config names none
-	retry        string                           // the turn's latest API retry, shown in place of "thinking…"
-	confirm      *confirmAsk                      // a destructive key waiting on y
-	killer       func(task string) error          // x's kill; nil means the app's
-	lander       func() ([]app.LandResult, error) // L's land; nil means the app's
+	// restartBase is the first auto-restart backoff; zero is the default.
+	// restarts counts them since the last finished turn, restartGen marks
+	// the latest schedule, and quotaReset is when an out-of-quota
+	// orchestrator can run again (#792).
+	restartBase time.Duration
+	restarts    int
+	restartGen  int
+	quotaReset  time.Time
+	model       string                           // the model the session reported, if config names none
+	retry       string                           // the turn's latest API retry, shown in place of "thinking…"
+	confirm     *confirmAsk                      // a destructive key waiting on y
+	killer      func(task string) error          // x's kill; nil means the app's
+	lander      func() ([]app.LandResult, error) // L's land; nil means the app's
 
 	width, height int
 	focus         int
@@ -772,6 +780,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case termOutMsg, termExitMsg:
 		cmds = append(cmds, m.termEvent(msg))
 
+	case restartMsg:
+		cmds = append(cmds, m.restart(msg))
+
 	case closedMsg:
 		// The process is gone; ctrl+r restarts it.
 		if msg.p == m.proc {
@@ -929,6 +940,8 @@ func (m *model) key(k tea.KeyMsg) (tea.Cmd, bool) {
 		if m.orc != nil {
 			return m.rcRestart(), true
 		}
+		m.restartGen++ // a scheduled restart is moot now
+		m.restarts = 0
 		if err := m.startProc(m.sessionToResume()); err != nil {
 			m.addChat(store.ChatEvent, "Restart failed: "+err.Error())
 			return nil, true
@@ -1173,6 +1186,7 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 		m.streaming.Reset()
 		m.addChat(store.ChatTool, e.Text)
 	case orch.Result:
+		m.restarts = 0 // a finished turn: the next exit backs off from the start again
 		m.streaming.Reset()
 		if !m.turnText && strings.TrimSpace(e.Text) != "" {
 			// A command's reply that no assistant message carried.
@@ -1222,7 +1236,7 @@ func (m *model) handleEvent(e orch.Event) tea.Cmd {
 		if e.Text != "" {
 			msg += " " + lastLines(e.Text, 3)
 		}
-		m.addChat(store.ChatEvent, msg+" Press ctrl+r to restart it.")
+		return m.scheduleRestart(msg)
 	}
 	return nil
 }
@@ -1248,7 +1262,8 @@ func (m *model) failOver(text string) bool {
 	}
 	l, msg, err := m.app.FailOverOrchestrator(b, recent)
 	if err != nil {
-		m.addChat(store.ChatEvent, "The orchestrator is out of quota on "+from+" and can't move: "+err.Error()+". Workers keep running; press ctrl+r after the reset.")
+		m.noteQuotaReset()
+		m.addChat(store.ChatEvent, "The orchestrator is out of quota on "+from+" and can't move: "+err.Error()+". Workers keep running; saddle restarts it after the reset, or press ctrl+r.")
 		m.app.Store.Event(app.OrchestratorID, "tui_error", err.Error())
 		return false
 	}
@@ -1546,23 +1561,27 @@ func (m *model) deliver() {
 		m.sendNow(text)
 		return
 	}
-	ns, _ := m.app.Store.TakeNotices(app.OrchestratorID, false)
+	// Action notices are marked delivered only once the send succeeds, so
+	// a dead process loses none (#792); routine ones are held here.
+	ns, _ := m.app.Store.PeekNotices(app.OrchestratorID, false)
 	var actions []string
+	var taken, infos []store.Notice
 	for _, n := range ns {
-		m.addChat(store.ChatEvent, firstLine(n.Text))
 		if n.Kind == store.NoticeAction {
 			actions = append(actions, n.Text)
+			taken = append(taken, n)
 		} else {
 			// Landed/spawned updates don't need a turn of their own.
+			m.addChat(store.ChatEvent, firstLine(n.Text))
 			m.held = append(m.held, n.Text)
+			infos = append(infos, n)
 		}
 	}
+	_ = m.app.Store.MarkDelivered(infos)
 	if len(m.pending) == 0 && len(actions) == 0 {
 		return
 	}
 	msgs := append(append(append([]string{}, m.held...), actions...), m.pending...)
-	m.pending, m.held = nil, nil
-	m.eventTurn = true
 	var b strings.Builder
 	for i, s := range msgs {
 		if i > 0 {
@@ -1572,8 +1591,14 @@ func (m *model) deliver() {
 	}
 	b.WriteString("\n\nDecide what to do. Tell the user only what they need to know, briefly.")
 	if err := m.proc.Send(b.String()); err != nil {
-		m.pending = msgs
+		return // everything stays queued: held and pending here, actions in the store
 	}
+	_ = m.app.Store.MarkDelivered(taken)
+	for _, n := range taken {
+		m.addChat(store.ChatEvent, firstLine(n.Text))
+	}
+	m.pending, m.held = nil, nil
+	m.eventTurn = true
 }
 
 func firstLine(s string) string {
