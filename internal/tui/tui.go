@@ -1589,6 +1589,9 @@ func (m *model) deliver() {
 		}
 		b.WriteString("[saddle] " + s)
 	}
+	if cards := m.app.OpenCardsReminder(); cards != "" {
+		b.WriteString("\n\n[saddle] " + cards) // a compacted orchestrator still sees them (#793)
+	}
 	b.WriteString("\n\nDecide what to do. Tell the user only what they need to know, briefly.")
 	if err := m.proc.Send(b.String()); err != nil {
 		return // everything stays queued: held and pending here, actions in the store

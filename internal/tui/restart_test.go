@@ -77,3 +77,27 @@ func TestRestartBacksOff(t *testing.T) {
 		t.Fatalf("delay settles at %s, want the cap %s", last, restartMax)
 	}
 }
+
+// #793: every wake prompt lists the open decision cards waiting on the
+// owner, so one whose notice went out before a compaction isn't forgotten.
+func TestWakePromptListsOpenCards(t *testing.T) {
+	m := slashModel(t)
+	m.app.Root = t.TempDir()
+	c, err := m.app.FileDecision(app.DecisionReq{
+		By: "t5", Task: "t5", Class: "release-tag", Subject: "v1.4.0", Question: "Push the release tag v1.4.0?", Irreversible: true,
+		Options: []app.DecisionOption{{Label: "Push it", Action: "git push origin v1.4.0", Recommended: true}, {Label: "Wait", Action: "nothing"}},
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.app.Store.TakeNotices(app.OrchestratorID, false); err != nil {
+		t.Fatal(err)
+	}
+	p := &stubProc{}
+	m.proc = p
+	m.pending = []string{"t3 stopped without calling done."}
+	m.deliver()
+	if len(p.sent) != 1 || !strings.Contains(p.sent[0], c.ID) {
+		t.Fatalf("wake prompt lacks card %s: %q", c.ID, p.sent)
+	}
+}

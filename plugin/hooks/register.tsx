@@ -33,7 +33,8 @@ import {
   sameSnapshot,
   versionAtLeast,
 } from './snapshot'
-import { HEARTBEAT, backlogContext, hasEvents, ownsSession, parseEvents, planWake } from './wake'
+import { HEARTBEAT, backlogContext, hasEvents, idsOf, kept, ownsSession, parseCards, parseEvents, planWake, wakes } from './wake'
+import type { SaddleEvent } from './wake'
 
 // The shared snapshot. Another hook in this module reads it with
 // `read($, snapshot)`, which subscribes its drawing to every change.
@@ -143,10 +144,20 @@ async function refresh($: EngineInterface, cwd: string) {
 
 // Waking the orchestrator (#170). Each tick writes the heartbeat that keeps
 // the settings hook and `saddle plugin wait` off, then, when status counts
-// events for t0, takes them and acts on planWake's plan. The routine backlog
-// is the module's: a reload drops at most what the toasts already showed.
+// events for t0, peeks at them and acts on planWake's plan. Routine events
+// are acked as they join the backlog; the ones that need a decision only
+// after their prompt went in (#793), so a submit that fails leaves them
+// pending and the next tick tries again. The routine backlog is the
+// module's: a reload drops at most what the toasts already showed.
 let backlog: string[] = []
 let isWaking = false
+
+async function ack($: EngineInterface, cwd: string, events: SaddleEvent[]) {
+  const ids = idsOf(events)
+  if (ids.length) {
+    await saddle($, cwd, ['plugin', 'events', '--ack', ids.join(',')], 10000)
+  }
+}
 
 async function wake($: EngineInterface, cwd: string) {
   if (isWaking) {
@@ -158,19 +169,30 @@ async function wake($: EngineInterface, cwd: string) {
     if (!hasEvents(await read($, snapshot))) {
       return
     }
-    const r = await saddle($, cwd, ['plugin', 'events', '--json'], 10000)
+    const r = await saddle($, cwd, ['plugin', 'events', '--json', '--peek'], 10000)
     const got = 'text' in r ? parseEvents(r.text) : r
     if ('error' in got) {
       return
     }
-    const plan = planWake(got.value, backlog)
-    backlog = plan.backlog
+    const cards = 'text' in r ? parseCards(r.text) : ''
+    const plan = planWake(got.value, backlog, cards)
+    const infos = got.value.filter(e => !wakes(e))
     for (const t of plan.toasts) {
       $.ui.toast(t)
     }
-    if (plan.prompt !== null) {
-      await $.prompt.submit({ text: plan.prompt })
+    await ack($, cwd, infos)
+    if (plan.prompt === null) {
+      backlog = plan.backlog
+      return
     }
+    try {
+      await $.prompt.submit({ text: plan.prompt })
+    } catch {
+      backlog = kept(backlog, infos) // the actions stay pending in saddle
+      return
+    }
+    backlog = plan.backlog
+    await ack($, cwd, got.value.filter(wakes))
   } finally {
     isWaking = false
   }

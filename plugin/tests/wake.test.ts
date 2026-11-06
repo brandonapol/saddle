@@ -104,8 +104,12 @@ describe('which events wake Claude', () => {
 
 type World = {
   engine: string
-  /** The events saddle holds for t0; `plugin events` takes them. */
+  /** The events saddle holds for t0; `plugin events --peek` lists them and `--ack` takes them. */
   events: SaddleEvent[]
+  /** Open decision cards `plugin events` lists. */
+  cards?: string
+  /** Makes prompt.submit reject while set. */
+  failSubmit?: boolean
   calls: string[]
   beats: string[]
   prompts: string[]
@@ -140,17 +144,27 @@ function world(on: On, w: World, env: Record<string, string> = {}) {
         )
       case 'stack --json':
         return ok(JSON.stringify({ enabled: false, source: 'config' }))
-      case 'plugin events --json': {
+      case 'plugin events --json --peek': {
+        w.events.forEach((e, i) => {
+          e.id ??= 100 + i + w.calls.length * 10
+        })
         const events = w.engine === 'engine' ? w.events : []
-        w.events = w.engine === 'engine' ? [] : w.events
-        return ok(JSON.stringify({ events }))
+        return ok(JSON.stringify({ events, cards: w.cards ?? '' }))
       }
       default:
+        if (cmd.startsWith('plugin events --ack ')) {
+          const ids = new Set(cmd.slice('plugin events --ack '.length).split(',').map(Number))
+          w.events = w.events.filter(e => !ids.has(e.id ?? -1))
+          return ok('')
+        }
         return { value: { exitCode: 1, stdout: '', stderr: `unknown ${cmd}`, isStdoutTruncated: false, isStderrTruncated: false } }
     }
   })
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('prompt.submit', ($, e) => {
+    if (w.failSubmit) {
+      throw new Error('the session is busy')
+    }
     w.prompts.push(e.text)
     if (e.context?.length) {
       w.prompts.push(`context: ${e.context.join(' | ')}`)
@@ -180,7 +194,7 @@ describe('wake', () => {
     await clock.advance(6000)
     expect(w.beats.length).toBeGreaterThanOrEqual(3)
     expect(new Set(w.beats)).toEqual(new Set([`/repo/${HEARTBEAT}`]))
-    expect(w.calls).not.toContain('plugin events --json')
+    expect(w.calls).not.toContain('plugin events --json --peek')
     expect(w.prompts).toEqual([])
   })
 
@@ -189,7 +203,7 @@ describe('wake', () => {
     const clock = world(on, w)
     await $.session.start(start)
     await clock.settle()
-    w.events = [stuck, conflicted]
+    w.events = [{ ...stuck }, { ...conflicted }]
     await clock.advance(6000)
     expect(w.prompts).toEqual([
       '[saddle] t5 (spawn) is waiting on a prompt.\nDo you want to proceed?\n\n[saddle] t6 (train) conflicted with saddle/integration.',
@@ -197,7 +211,37 @@ describe('wake', () => {
     // Taken once: a later tick submits nothing more.
     await clock.advance(6000)
     expect(w.prompts).toHaveLength(1)
-    expect(w.calls.filter(c => c === 'plugin events --json')).toHaveLength(1)
+    expect(w.calls.filter(c => c === 'plugin events --json --peek')).toHaveLength(1)
+  })
+
+  test('a submit that rejects leaves the action events pending for the next tick (#793)', loaded, async ($, on) => {
+    const w = fresh()
+    const clock = world(on, w)
+    await $.session.start(start)
+    await clock.settle()
+    w.events = [{ ...stuck }, { ...landed }]
+    w.failSubmit = true
+    await clock.advance(6000)
+    expect(w.prompts).toEqual([])
+    expect(w.events.map(e => e.text)).toEqual([stuck.text])
+    w.failSubmit = false
+    await clock.advance(6000)
+    expect(w.prompts).toEqual([
+      '[saddle] t5 (spawn) is waiting on a prompt.\nDo you want to proceed?\n\nAlso since your last update:\n\n' +
+        '[saddle] t3 (meter) landed on saddle/integration.',
+    ])
+    expect(w.events).toEqual([])
+  })
+
+  test('the wake prompt carries the open decision cards (#793)', loaded, async ($, on) => {
+    const w = fresh({ cards: 'Decision cards still waiting on the owner:\n- owner:t5|release-tag|v1.4.0: Push the tag?' })
+    const clock = world(on, w)
+    await $.session.start(start)
+    await clock.settle()
+    w.events = [{ ...conflicted }]
+    await clock.advance(6000)
+    expect(w.prompts).toHaveLength(1)
+    expect(w.prompts[0]).toContain('owner:t5|release-tag|v1.4.0')
   })
 
   test('routine events only toast, then ride along on the next wake', loaded, async ($, on) => {
@@ -205,12 +249,12 @@ describe('wake', () => {
     const clock = world(on, w)
     await $.session.start(start)
     await clock.settle()
-    w.events = [landed, finished]
+    w.events = [{ ...landed }, { ...finished }]
     await clock.advance(6000)
     expect(w.prompts).toEqual([])
     expect(w.toasts).toEqual(['[saddle] t3 (meter) landed on saddle/integration.', '[saddle] t4 (claims) finished: done.'])
 
-    w.events = [conflicted]
+    w.events = [{ ...conflicted }]
     await clock.advance(6000)
     expect(w.prompts).toEqual([
       '[saddle] t6 (train) conflicted with saddle/integration.\n\nAlso since your last update:\n\n' +
@@ -223,7 +267,7 @@ describe('wake', () => {
     const clock = world(on, w)
     await $.session.start(start)
     await clock.settle()
-    w.events = [landed]
+    w.events = [{ ...landed }]
     await clock.advance(6000)
     w.prompts = []
     await $.prompt.submit({ text: 'what landed?' })
@@ -235,16 +279,16 @@ describe('wake', () => {
   })
 
   test("leaves events alone under saddle up: they are the TUI orchestrator's", loaded, async ($, on) => {
-    const w = fresh({ engine: 'up', events: [stuck] })
+    const w = fresh({ engine: 'up', events: [{ ...stuck }] })
     const clock = world(on, w)
     await $.session.start(start)
     await clock.advance(9000)
-    expect(w.calls).not.toContain('plugin events --json')
+    expect(w.calls).not.toContain('plugin events --json --peek')
     expect(w.prompts).toEqual([])
   })
 
   test('does nothing in a worker session', loaded, async ($, on) => {
-    const w = fresh({ events: [stuck] })
+    const w = fresh({ events: [{ ...stuck }] })
     const clock = world(on, w, { SADDLE_TASK: 't9' })
     await $.session.start(start)
     await clock.advance(9000)

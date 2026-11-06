@@ -139,3 +139,58 @@ func TestStatusCountsOrchestratorEventsForTheMod(t *testing.T) {
 	}
 	t.Fatal("status lists no t0")
 }
+
+// #793: the mod peeks, submits, then acks. Peeking leaves the events
+// pending, so a submit that fails loses none; the ack takes exactly them.
+func TestPluginEventsPeekThenAck(t *testing.T) {
+	a := pluginRepo(t)
+	release, err := a.AcquireLock(app.LockEngine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	_ = a.Store.Notify(app.OrchestratorID, store.NoticeAction, "t2 conflicted")
+	var out bytes.Buffer
+	if err := writeEventsMode(&out, a, true); err != nil {
+		t.Fatal(err)
+	}
+	var got eventsOut
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil || len(got.Events) != 1 || got.Events[0].ID == 0 {
+		t.Fatalf("peek: %q err %v", out.String(), err)
+	}
+	if n, _ := a.Store.PendingActionNotices(app.OrchestratorID); n != 1 {
+		t.Fatalf("peek took the notice: %d pending", n)
+	}
+	_ = a.Store.Notify(app.OrchestratorID, store.NoticeAction, "t3 needs you")
+	if err := ackEvents(a, []int64{got.Events[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	ns, _ := a.Store.PeekNotices(app.OrchestratorID, false)
+	if len(ns) != 1 || ns[0].Text != "t3 needs you" {
+		t.Fatalf("after the ack: %+v, want only the newer notice", ns)
+	}
+}
+
+// #793: a running wait leaves a heartbeat the hooks read, and clears it on
+// exit, so a Stop right after sees nothing waits.
+func TestWaitNoticesBeatsWhileRunning(t *testing.T) {
+	a := pluginRepo(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = waitNotices(ctx, a, 5*time.Millisecond, &bytes.Buffer{})
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for !a.WaitActive(time.Now()) {
+		if time.Now().After(deadline) {
+			t.Fatal("no wait heartbeat while the wait runs")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if a.WaitActive(time.Now()) {
+		t.Fatal("the wait heartbeat outlived the wait")
+	}
+}
