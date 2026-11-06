@@ -11,6 +11,20 @@
 - `make install` rebuilds `~/go/bin/saddle`, which spawned agents run. Run `make` alone to list every target.
 - Branch off `main`. Don't commit to it directly.
 
+## Words and decisions
+Read these before designing or filing a ticket, so you don't re-litigate what
+is settled:
+- `docs/GLOSSARY.md`: one meaning per word, with the synonyms to avoid and the
+  state each maps to. "Held", "landed", "merged", "stack", "layer", "parked"
+  and "repair" are settled there. A new term, or an old word in a new sense,
+  goes into the glossary in the same PR (a test checks commands and states).
+- `docs/adr/`: accepted decisions (no daemon, never the expensive model as the
+  synchronizer, stacked PRs by dependency, the serial train, ...). A change
+  that reverses one, or that its README says needs an ADR (#779, #804), gets
+  an ADR first.
+- `.out-of-scope/`: ideas already rejected, with the reason and the issue.
+  Answer that reason in a new issue before proposing one again.
+
 ## Layout
 See `docs/ARCHITECTURE.md`. Core logic lives in `internal/app`. The CLI
 (`internal/cli`), the hook (`internal/hook`) and the MCP server
