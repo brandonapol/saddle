@@ -84,7 +84,9 @@ func commitTree(dir, tree, head, msg string) (string, error) {
 // scratch runs git in dir with a fixed identity and, when index is set,
 // GIT_INDEX_FILE pointing at it.
 func scratch(dir, index string) func(args ...string) (string, error) {
-	env := os.Environ()
+	// The scratch index is our own, but git must not take optional locks
+	// on anything else in the agent's worktree either (#797).
+	env := append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
 	if index != "" {
 		env = append(env, "GIT_INDEX_FILE="+index)
 	}
@@ -160,7 +162,9 @@ func Prune(root, task string) error {
 // dirtyFiles lists dir's changed files, each file in a new directory on
 // its own line.
 func dirtyFiles(dir string) ([]string, error) {
-	out, err := gitx.Run(dir, "status", "--porcelain", "--untracked-files=all")
+	// --no-optional-locks: status must not take index.lock to refresh the
+	// agent's index; that failed a spawn's git worktree add (#797).
+	out, err := gitx.Run(dir, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all")
 	if err != nil || out == "" {
 		return nil, err
 	}

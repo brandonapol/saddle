@@ -259,3 +259,33 @@ func TestWatcherCountsFilesInsideNewDirectories(t *testing.T) {
 		t.Fatalf("three new files in pkg/: nudges = %v", h.nudges)
 	}
 }
+
+// #797: the watcher's read-only git must not write the worktree's index. A
+// plain git status refreshes stale stat data and rewrites the index under
+// index.lock, which raced git worktree add during a spawn and failed it.
+func TestWatcherLeavesTheWorktreeIndexAlone(t *testing.T) {
+	root, wt := repo(t)
+	index := strings.TrimSpace(git(t, wt, "rev-parse", "--path-format=absolute", "--git-path", "index"))
+	before, err := os.ReadFile(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same content, new mtime: the index's stat data for a.txt is stale.
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(filepath.Join(wt, "a.txt"), later, later); err != nil {
+		t.Fatal(err)
+	}
+	write(t, wt, "b.txt", "b\n")
+	h := &fakeHost{targets: []Target{{Task: "t1", Worktree: wt}}}
+	NewWatcher(root, h, Policy{Every: time.Minute, NudgeFiles: 1}).Tick()
+	if _, err := Lookup(root, "t1"); err != nil {
+		t.Fatalf("no checkpoint: %v", err)
+	}
+	after, err := os.ReadFile(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("the watcher rewrote the worktree's index (git status without --no-optional-locks)")
+	}
+}

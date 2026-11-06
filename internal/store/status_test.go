@@ -74,3 +74,16 @@ func TestFinishDoneRefusesAFinishedTask(t *testing.T) {
 		t.Fatalf("t1 status %s, want killed", got.Status)
 	}
 }
+
+// #797: a task whose spawn failed holds no claims and has no agent, so it is
+// not active: it must not count as live work on its issue.
+func TestFailedTaskIsNotActive(t *testing.T) {
+	if (Task{Status: Failed}).Active() {
+		t.Fatal("a failed task counts as active")
+	}
+	for _, live := range []string{Running, Idle, NeedsYou, Done, Conflict} {
+		if !(Task{Status: live}).Active() {
+			t.Errorf("%s is not active", live)
+		}
+	}
+}
