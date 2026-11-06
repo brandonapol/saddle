@@ -19,6 +19,8 @@ defined in [GLOSSARY.md](../GLOSSARY.md).
 | [0006](0006-never-the-expensive-model-as-synchronizer.md) | Never use the expensive model to synchronize | Accepted |
 | [0007](0007-stacked-prs-by-dependency.md) | Stacked PRs by default, stacked only by dependency | Accepted |
 | [0008](0008-serial-merge-train.md) | One serial merge train lands all work | Accepted |
+| [0009](0009-prgraph-engine.md) | One pure PR-graph engine owns the stack: one schema, one state machine, one Reconcile | Proposed |
+| [0010](0010-headless-workers.md) | Unattended workers run headless, one invocation per attempt, with a typed result | Proposed |
 
 ## When a change needs an ADR
 
@@ -30,14 +32,15 @@ Write one, and get it accepted, before the code when a change:
 - spans several packages or adds a new long-lived process or loop;
 - or its ticket says "needs an ADR".
 
-Open work that needs one now:
+Open work that needed one, and its ADR:
 
-- **#779** (pure PR-graph engine): it replaces the landed list and the
-  integration branch as the source of truth, and must reuse the glossary's
-  *stack*, *layer*, *landed*, *merged*, *held* and *repair*. It builds on
-  ADR 0003 and ADR 0004.
-- **#804** (headless worker mode): it changes how workers run and how saddle
-  learns their state, and keeps tmux for attended use.
+- **#779** (pure PR-graph engine): [ADR 0009](0009-prgraph-engine.md). It
+  replaces the landed list and the integration branch as the source of
+  truth, builds on ADR 0003 and ADR 0004, and uses the glossary's *stack*,
+  *layer*, *landed*, *merged*, *held* and *repair*.
+- **#804** (headless worker mode): [ADR 0010](0010-headless-workers.md). It
+  changes how workers run and how saddle learns their state, and keeps tmux
+  for attended use.
 
 ## Conventions
 
