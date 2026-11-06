@@ -40,6 +40,9 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	_ = os.Setenv(runq.EnvPath, filepath.Join(dir, "runq.db"))
+	// The scratch root and task TMPDIRs live in the cache dir: keep them
+	// off the user's real one (#801).
+	_ = os.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
