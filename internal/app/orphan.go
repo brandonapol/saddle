@@ -136,6 +136,8 @@ var doneOutcomes = map[string]bool{
 	EventDoneCalled: true, "done_gate_started": true, "done_gate_restarted": true,
 	"done_gate_interrupted": true, "done_gate_stale": true, "done_gate_failed": true,
 	"lint_failed": true, "done": true, "no_change": true, EventOrphanRegate: true,
+	// Saddle retries a gate that failed on the environment itself (#785).
+	EventDonePendingEnv: true,
 }
 
 // cancelledDone are the outcomes that leave a done call orphaned: the gate

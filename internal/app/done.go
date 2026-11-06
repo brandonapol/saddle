@@ -26,6 +26,11 @@ func (a *App) Done(task, summary string) error {
 		return err
 	}
 	if err := a.lintDone(t); err != nil {
+		var envErr *DoneEnvError
+		if errors.As(err, &envErr) {
+			// Not the worker's to fix: saddle retries it (#785).
+			return errors.New(a.holdDoneForEnv(t, "", summary, envErr))
+		}
 		return err
 	}
 	return a.finishDone(t, summary)
@@ -123,6 +128,16 @@ func (a *App) runDoneJob(t store.Task, id, tree, summary string, since int64) {
 	err := a.lintDone(t)
 	if errors.Is(err, ErrGateInterrupted) {
 		fail("done_gate_interrupted", "saddle stopped the gate before it finished. Your branch is not queued; call the saddle done tool again.")
+		return
+	}
+	var envErr *DoneEnvError
+	if errors.As(err, &envErr) {
+		if a.finishedTask(t.ID) {
+			a.Store.Event(t.ID, EventDoneGateDropped, id+": "+EventDonePendingEnv)
+			return
+		}
+		// The machine failed, not the branch: saddle retries it (#785).
+		a.holdDoneForEnv(t, id, summary, envErr)
 		return
 	}
 	if err != nil {
@@ -285,6 +300,7 @@ func (a *App) finishNoChange(t store.Task, summary, why string) error {
 		return err
 	}
 	a.Store.Event(t.ID, "no_change", why)
+	a.clearPendingEnv(t.ID)
 	a.reapTask(t.ID)
 	msg := fmt.Sprintf("%s %q finished with no change: %s, so there is nothing to land. It is out of the merge train and the PR stack.", t.ID, t.Title, why)
 	if summary != "" {
@@ -307,6 +323,7 @@ func (a *App) finishDone(t store.Task, summary string) error {
 		return err
 	}
 	a.Store.Event(task, "done", summary)
+	a.clearPendingEnv(task)
 	a.reapTask(task)
 	advisory := ""
 	if !a.taskAdapter(t).Hooks() {
