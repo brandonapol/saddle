@@ -242,7 +242,7 @@ machine-wide heavy-run queue so parallel agents don't saturate the box. See
 `saddle run`, `saddle runq` and [runq.md](runq.md).
 
 ### held
-Not a word on its own. Eight different mechanisms keep work from moving, and
+Not a word on its own. Nine different mechanisms keep work from moving, and
 #771, #774 and #776 were bugs where one subsystem read another's "held". Always
 name the kind:
 
@@ -256,6 +256,7 @@ name the kind:
 | dependency hold | a layer stays on its current base while a task it runs `after` has an open PR outside its stack | saddle (`prs`, restack) | event `dependency_hold` (`waitingOn`, `internal/app/prbase.go`) |
 | route-around hold | the layers built on a red layer that was routed around wait off the stack until it merges | saddle (stall budget) | `.saddle/stall-held.json` (`StallHeld`) |
 | write hold | a task may not write some paths until a condition (another task lands, a PR merges, a time) | saddle (spawn, scheduler) | `internal/gate` `Hold`; denied writes say `held (<id>)` |
+| reconcile hold | the PR-graph engine plans but applies no action, until it expires (24h at most) | owner (`saddle reconcile hold --for`, proposed in [ADR 0009](adr/0009-prgraph-engine.md)) | planned, #830 |
 
 Every hold that saddle places must lift on its own or offer a self-service
 escape (#119): a dependency hold drops when the dependency leaves for good
@@ -382,6 +383,14 @@ Sonnet in the TUI, or your own Claude Code session through the plugin (task
 ### orphaned
 Shown, never stored: a live task whose tmux window is gone and whose agent has
 been silent for 10 minutes. `saddle resume <task>` gives it a new window.
+
+### outage
+The PR-graph engine's word (proposed in [ADR 0009](adr/0009-prgraph-engine.md))
+for one cause turning many changes red at once: CI not reporting, a gate red
+on base's own tip, a forge refusal. It gets one escalation and no repairs, and
+the affected changes' clocks pause until it clears. Base-red is one kind.
+*Avoid:* "incident" (a GitHub issue label), "ci-red" for this.
+*Maps to:* planned, #834.
 
 ### park
 Stop an agent without losing its work so it frees a slot. Tasks park when their

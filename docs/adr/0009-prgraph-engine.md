@@ -57,14 +57,17 @@ prgraph_edge(change TEXT, dep TEXT,
   kind TEXT CHECK(kind IN ('declared','inferred','verified')),
   source TEXT NOT NULL,            -- after | parent | issue | owner_stack | hand_retarget | gate
   PRIMARY KEY(change, dep))
-prgraph_check(head TEXT, name TEXT, status TEXT, required INTEGER,
-  host_owned INTEGER, observed_at INTEGER, PRIMARY KEY(head, name))   -- CI facts, a cache
+prgraph_check(head TEXT, onto TEXT, name TEXT, status TEXT, required INTEGER,
+  host_owned INTEGER, observed_at INTEGER,
+  PRIMARY KEY(head, onto, name))   -- CI facts, a cache; onto = the PR base sha the run tested
 prgraph_gate(head TEXT, onto TEXT, status TEXT, detail TEXT, ran_at INTEGER,
   PRIMARY KEY(head, onto))         -- gate facts: onto = base sha + dep heads; immutable
 prgraph_attempt(key TEXT PRIMARY KEY, kind TEXT, inputs TEXT, n INTEGER,
   next_at INTEGER, first_err TEXT, last_err TEXT, escalated INTEGER)  -- #826
 prgraph_tick(id INTEGER PRIMARY KEY, ts INTEGER, input_hash TEXT,
-  input BLOB, plan BLOB)           -- recorded inputs and plans, for replay; pruned after 14 days
+  engine TEXT NOT NULL,            -- engine version and input encoding version
+  input BLOB, plan BLOB)           -- for replay; written only when input_hash changes;
+                                   -- pruned after 14 days or past 256 MiB, oldest first
 ```
 
 Stored rows are **intent** (branch, head, edges, policy), **facts that
@@ -72,8 +75,14 @@ cost work to learn** (gate results per head and base, CI results per
 head) and **history** (attempts, ticks). Everything else (PR base, PR
 state, mergeability, "is it in base") is read from the forge and git every
 tick, and a stored copy is only a cache that the next tick overwrites (I2).
-"Merged" is decided by git: base contains the change's patch-ids or its
-`Saddle-Task` trailer, whatever the rows say.
+"Merged" is decided by the forge and git, whatever the rows say, in this
+order: the forge reports the PR merged and its merge commit is reachable from
+base; else a commit on base carries the change's `Saddle-Task` trailer; else
+base has the patch-id of **every** commit of the head. The default merge
+method is squash, which defeats patch-ids, so the first two carry the load. A
+match on file content alone (today's `alreadyApplied`) never makes a change
+terminal: it gives one `Escalate` and a `Wait`. A later revert on base does
+not reopen a change; it is new work.
 
 What replaces the stack's files:
 
@@ -101,8 +110,8 @@ are not about the PR graph and stay.
 |---|---|---|---|
 | `queued` | `done`; this head hasn't passed the train's gate on base + its deps | 2h of gate attempts | gate green → `landed`; gate red or conflict → `red` |
 | `landed` | gate green on base + deps; PR not open on its desired base yet | 30m | `Publish`/`Move` → `published`; deadline → `red(publish)` |
-| `published` | PR open on its desired base; required checks pending | 3h | checks green → `green`; red → `red`; deadline → `red(checks_stuck)`, which re-runs the checks |
-| `green` | required, non-host checks green at the head on its desired base | 1h once its deps are merged | `Merge` → `merged`; refused or failed → retried through #826; deadline → `red(merge)`; with automerge off, deadline → a line in the owner's daily digest and a new deadline |
+| `published` | PR open on its desired base; required checks pending | 3h | checks green → `green`; red → `red`; deadline → `red(checks_stuck)`, which re-runs the checks and never spends a repair attempt (§7) |
+| `green` | required, non-host checks green at the head, observed against its current PR base sha | 1h once its deps are merged | `Merge` → `merged`; refused or failed → retried through #826; deadline → `red(merge)`; with automerge off, deadline → a line in the owner's daily digest and a new deadline |
 | `red(cause)` | a required non-host check, the gate, a rebase or a forge rule is red for this change alone | `retry_at` per fix attempt; cap `[ci] repair_attempts` | new head → `queued`; cap reached → `superseded(gave_up)` with one blocker issue |
 | `merged` | base contains the work | terminal | — |
 | `superseded(reason)` | leaves for good: `closed`, `killed`, `unstacked`, `gave_up` | terminal | — |
@@ -123,6 +132,16 @@ Rules a reviewer checks the code against:
   base without it. If it builds, the edge was wrong; if not, it goes `red`
   and follows its own exits.
 - **Any new head returns the change to `queued`** and resets its attempts.
+- **A `Move` returns the change to `published`.** Checks are cached per
+  `(head, onto)`, and a `pull_request` workflow does not re-run when only the
+  base changes (saddle's own `ci.yml` uses the default event types), so a
+  green from the old base never counts. The executor's `Move` re-requests the
+  required runs.
+- **A dependent of a `superseded(gave_up)` change gets no repair for it.**
+  If it goes red once the edge is dropped, its cause is `dep_gave_up`: no
+  `NeedsFix` (a repair would re-implement the dependency), it is listed on
+  the dependency's blocker issue, and a `requeue` of the dependency
+  re-gates it. Its own deadline still ends it as `superseded(gave_up)`.
 - **Terminal stays terminal.** Only an explicit host input (`requeue`)
   makes a new attempt, and it does so by submitting a new head.
 - **Owner inputs are intent, not states.** `unstack` = `superseded(unstacked)`.
@@ -172,12 +191,15 @@ and `Wait(change, reason, until)`. These are #829's set with three changes:
   states that are valid inputs at every step. A crash anywhere is healed by
   the next tick. There is no journal.
 - **Failures are classified, not raised.** The executor returns an
-  `Outcome` (ok, transient, rate-limited until, refused with a reason,
-  deterministic) that goes into `prgraph_attempt` (#826). Forge errors are
+  `Outcome` (ok, started, transient, rate-limited until, refused with a
+  reason, deterministic; `started` means a long action, a `Gate` or an async
+  `Merge`, was handed off and its result arrives as a fact on a later tick) that goes into `prgraph_attempt` (#826). Forge errors are
   waits, never failures.
-- **Replayable.** Each tick stores `(input_hash, input, plan)` in
-  `prgraph_tick`. `Reconcile(recorded input)` must reproduce the recorded
-  plan exactly, and that is how a bug report is reproduced.
+- **Replayable.** Each tick whose input changed stores `(input_hash,
+  engine, input, plan)` in `prgraph_tick`. `Reconcile(recorded input)` on the
+  same engine version must reproduce the recorded plan exactly, and that is
+  how a bug report is reproduced. Across versions, a replay judges outcomes
+  (§6.3), not bytes.
 - **Rules inside it** (from ADR 0004, unchanged): desired base = nearest
   unmerged dependency, else base, with "builds on" checked by the gate and
   never "commits apply"; a red explained by a wrong base is `Move`, not
@@ -194,7 +216,7 @@ property in `internal/prgraph`.
 | # | Property | ADR 0004 |
 |---|---|---|
 | P1 | Determinism: `Reconcile(x)` equals `Reconcile(x)` and `Reconcile(shuffle(x))`. | I9 |
-| P2 | Exits: every state in the table has a deadline and an exit, and the exit is an action, never "a human runs a command" (a table test). In a silent world (writes succeed, CI never reports, no agent pushes), advancing `Now` takes every change to `merged` or `superseded` within the DAG bound. | I5 |
+| P2 | Exits: every state in the table has a deadline and an exit, and the exit is an action, never "a human runs a command" (a table test). In a silent world (writes succeed, CI reports green after a delay, no agent pushes), advancing `Now` takes every change to `merged` or `superseded` within the DAG bound. If CI never reports, no change is superseded and no repair is spawned: they reach an outage (§7) and stay there with a digest line per deadline. | I5 |
 | P3 | A red change holds only itself and the changes with a path of edges to it. No other change is given `Wait` because of it, whatever the train order or file overlap. | I6 |
 | P4 | Every `Gate`, `Rebase` and `Publish` targets base tip plus the heads of the change's unmerged dependencies, and nothing else. No action names the integration branch. | #836 |
 | P5 | Base-red: when a required check is red on base's tip, no `NeedsFix` for that check is emitted for any change; exactly one `NeedsFix(base, check)` and one `Escalate` per (base tip, check). | I7, #726 |
@@ -205,10 +227,18 @@ property in `internal/prgraph`.
 | P10 | Each published PR's desired base is its nearest unmerged dependency, else base. | I3 |
 | P11 | No `Transition` out of `merged` or `superseded` without a `requeue` input; a change whose work is in base is `merged`, whatever its row says. | I1, I5 |
 | P12 | Collapse is a view: `Collapsible(graph)` returns only green, dependency-closed prefixes, and it never changes the plan. | — |
+| P13 | Clock gaps: when `Now` jumps by more than the gap limit between two ticks (a sleeping laptop, `saddle down`), no deadline expires because of the jump, and the plan after the jump equals the plan before it. | I5 |
+| P14 | Budgets: no plan has more `Merge`, `Close` or transitions to `superseded` than §7 allows; when the model asks for more, the rest are `Wait(budget)` and there is exactly one `Escalate`. Every `Merge` carries the expected head sha. | — |
+| P15 | Freshness: after a `Move` or a base change, no `Merge` is emitted until a required check is observed for the new `(head, onto)`. | I3 |
+| P16 | Outage: when one cause turns red or expires on more changes than §7's threshold in one window, the plan has no `NeedsFix` for that cause, no attempt is spent, one `Escalate` is emitted, and the affected clocks pause. | I4, I7 |
+| P17 | No flapping: an action that returned ok is not emitted again for the same key and inputs before its settle window; the third ok with no change in the snapshot turns into a deterministic failure in `prgraph_attempt`. | I4, I9 |
 
 Golden cases sit next to the properties: 2026-11-05 (#814 ends on t396's
 branch, no `NeedsFix` for t402/t403), #726 (one base repair), #751 (no
 17-deep chain), #651 and #662 (a repair is a new head on the same change).
+Two more come from failures saddle hasn't had yet but will: an 8h
+laptop sleep with 20 open changes (P13), and a 4h GitHub Actions outage
+with 20 published changes (P16).
 
 ### 5. The package boundary, for extraction to sddl
 
@@ -230,7 +260,11 @@ branch, no `NeedsFix` for t402/t403), #726 (one base repair), #751 (no
   type Locker   interface { Lock(ctx context.Context) (unlock func(), err error) }
   ```
   prgraph ships `Engine{Store, Source, Executor, Locker}.Tick(ctx)`: read,
-  reconcile, apply one action under the lock, record, repeat. Saddle's
+  reconcile, apply one action under the lock, record, repeat, within the
+  bounds of §7. The forge snapshot is read once per tick in a bounded number
+  of calls, not one per change; between actions only the next action's
+  guard target is re-read. Patch-ids are computed only for base commits
+  since the merge-base of the oldest open change, and cached by sha. Saddle's
   executor decides *how*: `Gate` runs the repo's gate in a throwaway
   worktree (heavy-run queue), `NeedsFix` messages the live agent or spawns a
   repair through `App.Spawn` (#828), and `Escalate` files the blocker issue
@@ -261,10 +295,17 @@ branch, no `NeedsFix` for t402/t403), #726 (one base repair), #751 (no
    unrelated layer (#771, target 0), repairs of `saddle/base` (target 0).
    Scrubbed slices of the golden incidents are checked into
    `internal/prgraph/testdata/`; the databases themselves are not.
-4. **#831, soak.** 50 changes, faults injected, zero human actions. It gates
-   every cutover.
+4. **#831, soak.** 50 changes, faults injected, zero human actions. The
+   faults include the two new golden cases, a clock jump, a stale snapshot
+   after a write (GitHub's reads lag its writes), a second writer racing the
+   engine, and the engine killed while holding the lock. It gates every
+   cutover.
 5. **Cutover, one action class at a time,** each behind `[reconcile] own`,
-   each after 7 clean shadow days for that class and a green soak:
+   each after a clean shadow for that class and a green soak. *Clean* means
+   at least 7 days **and** at least 30 actions of that class and 20 changes
+   reaching a terminal state in the shadow, with every divergence triaged:
+   a legacy bug with its ticket, or a prgraph bug fixed with a golden case.
+   Seven quiet days prove nothing.
    #832 `Publish`/`Move`/`Link`/`Rebase` (delete `pr-bases.json`,
    `published.json`, `stacks.json`) → #833 `Merge` (delete `automerge.json`'s
    stop state) → #834 `NeedsFix`/`Escalate` (delete `ci-red.json`,
@@ -274,9 +315,69 @@ branch, no `NeedsFix` for t402/t403), #726 (one base repair), #751 (no
    `saddle/integration` retires. When a class is owned, its legacy code path
    is **off**, not just shadowed: two actors never write the same PR. Each
    cutover imports its files once and keeps a `.bak` for one release
-   (ADR 0004's rollback).
+   (ADR 0004's rollback). prgraph's migrations stay additive until #836
+   ships, so the previous release still starts on a newer `state.db`; that
+   binary is the rollback once the legacy code is deleted.
 
-### 7. The open tickets, reviewed against this
+### 7. Operating limits: one bug must not become forty
+
+The engine acts on every PR at once, so a single wrong rule, a stale read or
+an outage reaches all of them in one tick. These limits are part of the
+contract, and the executor enforces the budgets again in case `Reconcile` is
+wrong.
+
+1. **Clocks count engine time, not wall time.** When two ticks are further
+   apart than the gap limit (default 3 sentinel intervals, 6m), the gap
+   doesn't count against any deadline, `retry_at` or `hold_until`: each is
+   pushed back by the gap. A laptop that slept overnight must not wake up to
+   every change past its deadline.
+2. **Correlated failures are an outage, not N bugs.** Base-red (§3) is one
+   case. Two more: the executor gates base's tip itself, cached per base sha,
+   so a gate red there (a broken tool, #732, #727) is base-red too, not red
+   on every change. And when one cause (`checks_stuck`, a gate cause, a forge
+   refusal) turns red or expires within one hour on at least 3 changes and
+   on at least half the changes in that state, it is an **outage**: one `Escalate`, no
+   `NeedsFix` for that cause, no attempts spent, and those changes' clocks
+   pause. An outage's deadline gives a digest line and a new deadline, like
+   `green` with automerge off; it never supersedes anything. It ends by
+   itself when the cause clears.
+3. **Budgets for what can't be undone.** Per tick, at most 3 `Merge`s and 3
+   of `Close` and transitions to `superseded` together; per hour, `Close`
+   and `superseded` together reach at most 20% of non-terminal changes. A
+   plan that wants more applies up to the budget, turns the rest into
+   `Wait(budget)` and emits one `Escalate` (#751 closed about 25 PRs at
+   once). `Merge` always passes the expected head sha
+   (`--match-head-commit`) and, for stacked PRs, the expected base.
+4. **Settle before acting again.** GitHub's reads lag its writes. After an
+   ok forge write, the same action on the same key isn't emitted again until
+   the snapshot shows its effect or 2 ticks pass. The third ok with no
+   visible effect is a deterministic failure (escalate once, retry slowly).
+   Repeated stale-guard skips on one key (default 5 in an hour) mean another
+   writer is racing the engine: one `Escalate` that names the key.
+5. **Bounded ticks and locks.** `Locker` is a lease with a TTL, renewed
+   while the tick runs, so a hung holder can't block `land` and `prs`
+   forever. A tick applies at most 20 actions or runs 60s, then returns;
+   the next tick continues. No action holds the lock while it waits for a
+   gate or an async merge (`started`). No SQLite write transaction spans
+   forge or git I/O.
+6. **A self-service off switch.** `saddle reconcile hold --for <d>` (a
+   *reconcile hold*, 24h at most, renewed only by the owner) stops the
+   executor from applying actions while the engine keeps planning and
+   recording; `saddle status` shows it and its expiry. Removing a class from
+   `[reconcile] own` stays the per-class switch until its legacy code is
+   deleted.
+7. **It reports on itself.** Each tick logs `reconcile_tick` with its
+   duration, plan size, actions applied, stale skips, budget deferrals and
+   open outages. The invariant monitor (#825) adds: no tick for 3 intervals;
+   a change past twice its deadline (the deadlines themselves are broken);
+   `prgraph_tick` over its size cap. `saddle status` shows, per state, the
+   oldest non-terminal change and its age.
+
+The numbers above are defaults in `[reconcile]`, chosen to be safe for one
+owner and about 50 open changes; the shadow (#830) reports how often each
+one would have fired, so they are tuned on data before the cutover.
+
+### 8. The open tickets, reviewed against this
 
 **Moot once the named step lands** (don't fix separately unless one hurts first):
 
@@ -345,7 +446,13 @@ before `NeedsFix(conflict)`); #733, #860 (orchestrator); #799, #801,
 - `folded`, `repairing` and the integration branch's ranges go. #836
   rewrites the glossary entries for *landed*, *layer*, *repair*, *folded*,
   *repairing* and *superseded* (adding the `gave_up` reason).
-- `prgraph_tick` costs disk; it is pruned after 14 days and by GC (#802).
+- `prgraph_tick` costs disk. At a 2-minute sentinel tick a 50-change input
+  recorded every tick would be gigabytes in 14 days, so ticks are recorded
+  only when the input changes, and capped at 256 MiB; GC (#802) prunes too.
+- §7's budgets and outage rule will sometimes slow real work (a burst of
+  green merges waits a tick; a real bug in three changes at once is read as
+  an outage until the window passes). That is the price of one bad rule not
+  touching every PR; the shadow measures how often it happens.
 - Gating each change on base + deps runs more gates than one integration
   tip. The `prgraph_gate` stamp and the heavy-run queue pay for it.
 - #829 must adopt this ADR's action list (`Gate`, `Transition` instead of
