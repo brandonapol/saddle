@@ -302,6 +302,14 @@ func (a *App) finishNoChange(t store.Task, summary, why string) error {
 	a.Store.Event(t.ID, "no_change", why)
 	a.clearPendingEnv(t.ID)
 	a.reapTask(t.ID)
+	if t.Role == store.RoleWorker {
+		// Nothing to land, so nothing to keep the worktree for (#803).
+		if note, err := a.cleanup(t); err != nil {
+			a.Store.Event(t.ID, "cleanup_failed", err.Error())
+		} else if note != "" {
+			a.Store.Event(t.ID, "cleanup", note)
+		}
+	}
 	msg := fmt.Sprintf("%s %q finished with no change: %s, so there is nothing to land. It is out of the merge train and the PR stack.", t.ID, t.Title, why)
 	if summary != "" {
 		msg += "\nSummary: " + summary

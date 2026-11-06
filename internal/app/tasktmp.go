@@ -54,7 +54,7 @@ func (a *App) taskTmpCmd(id, cmd string) string {
 
 // removeTaskTmp removes task id's tmp dir, once its agent is gone.
 func (a *App) removeTaskTmp(id string) {
-	if err := os.RemoveAll(a.taskTmp(id)); err != nil {
+	if err := scratch.RemoveTree(a.taskTmp(id)); err != nil {
 		a.Store.Event(id, "task_tmp_failed", "remove: "+err.Error())
 	}
 }
@@ -128,7 +128,7 @@ func (a *App) sweepTaskTmps(res *scratch.Result, dry bool) {
 		}
 		e.Bytes, e.Files = dirSize(p)
 		if !dry {
-			if err := os.RemoveAll(p); err != nil {
+			if err := scratch.RemoveTree(p); err != nil {
 				e.Reason = "remove failed: " + err.Error()
 				res.Kept = append(res.Kept, e)
 				res.Errs = append(res.Errs, err)

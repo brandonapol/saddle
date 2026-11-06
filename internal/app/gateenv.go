@@ -476,7 +476,7 @@ func gateTemp(base string) (env []string, done func(), out string, err error) {
 	}
 	return scratch.Env(dir), func() {
 		procreap.Reap(dir, gateKillGrace, procreap.Match{Env: true})
-		_ = os.RemoveAll(dir)
+		_ = removeTree(dir)
 		_ = os.Remove(base) // only if empty: the default lives in the user's cache dir
 	}, "", nil
 }
@@ -495,7 +495,7 @@ func sweepStaleTemp(base string, cutoff time.Time) {
 			continue
 		}
 		if fi, err := e.Info(); err == nil && fi.ModTime().Before(cutoff) {
-			_ = os.RemoveAll(filepath.Join(base, n))
+			_ = removeTree(filepath.Join(base, n))
 		}
 	}
 }
@@ -618,15 +618,4 @@ func E2ELeaks(maxAge time.Duration) (procs, socks int) {
 
 // removeTree removes dir, making its read-only dirs (Go's module cache)
 // writable when a plain remove fails.
-func removeTree(dir string) error {
-	if os.RemoveAll(dir) == nil {
-		return nil
-	}
-	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-		if err == nil && d.IsDir() {
-			_ = os.Chmod(p, 0o700)
-		}
-		return nil
-	})
-	return os.RemoveAll(dir)
-}
+func removeTree(dir string) error { return scratch.RemoveTree(dir) }

@@ -181,6 +181,9 @@ type Options struct {
 	DryRun bool          // list, remove nothing
 	// Holders lists held paths; nil means ProcHolders.
 	Holders Holders
+	// RepoKey is the sweeping repo's dir under Root. Another repo's task-*
+	// dirs are never candidates: only that repo knows its live tasks (#801).
+	RepoKey string
 }
 
 // Result is how a sweep went.
@@ -205,7 +208,10 @@ func Sweep(o Options) Result {
 		o.Holders = ProcHolders
 	}
 	var res Result
-	cands := Candidates(o.Root, o.OSTemp)
+	defer func() { sweepEmptyKeys(o, &res) }()
+	cands := slices.DeleteFunc(Candidates(o.Root, o.OSTemp), func(c string) bool {
+		return o.RepoKey != "" && othersTask(o.Root, o.RepoKey, c)
+	})
 	if len(cands) == 0 {
 		return res
 	}
@@ -224,7 +230,7 @@ func Sweep(o Options) Result {
 			continue
 		}
 		if !o.DryRun {
-			if err := os.RemoveAll(c); err != nil {
+			if err := RemoveTree(c); err != nil {
 				e.Reason = "remove failed: " + err.Error()
 				res.Kept = append(res.Kept, e)
 				res.Errs = append(res.Errs, err)
@@ -235,6 +241,54 @@ func Sweep(o Options) Result {
 		res.Freed += e.Bytes
 	}
 	return res
+}
+
+// othersTask reports whether c is a task-* dir in a repo dir other than
+// key's: the sweep can't see that repo's live tasks, an idle one included.
+func othersTask(root, key, c string) bool {
+	dir := filepath.Dir(c)
+	return filepath.Dir(dir) == filepath.Clean(root) && isRepoKey(filepath.Base(dir)) &&
+		filepath.Base(dir) != key && strings.HasPrefix(filepath.Base(c), "task-")
+}
+
+// sweepEmptyKeys removes the root's empty repo dirs that are stale: a fresh
+// one may be a spawn about to create its task dir in it.
+func sweepEmptyKeys(o Options, res *Result) {
+	if o.Root == "" {
+		return
+	}
+	cutoff := o.Now.Add(-o.MaxAge)
+	for _, e := range readDir(o.Root) {
+		if !e.IsDir() || !isRepoKey(e.Name()) {
+			continue
+		}
+		p := filepath.Join(o.Root, e.Name())
+		fi, err := os.Lstat(p)
+		if err != nil || fi.ModTime().After(cutoff) || len(readDir(p)) > 0 {
+			continue
+		}
+		if !o.DryRun {
+			if err := os.Remove(p); err != nil {
+				continue // something arrived in it meanwhile
+			}
+		}
+		res.Removed = append(res.Removed, Entry{Path: p, ModTime: fi.ModTime(), Saddle: true})
+	}
+}
+
+// RemoveTree removes p like os.RemoveAll, first making its read-only dirs
+// (a Go module cache, a nix store) writable when a plain remove fails.
+func RemoveTree(p string) error {
+	if os.RemoveAll(p) == nil {
+		return nil
+	}
+	_ = filepath.WalkDir(p, func(q string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			_ = os.Chmod(q, 0o700)
+		}
+		return nil
+	})
+	return os.RemoveAll(p)
 }
 
 // Candidates lists the paths a sweep may remove: every top-level entry of

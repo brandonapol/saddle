@@ -30,7 +30,17 @@ func TestMain(m *testing.M) {
 	// every exit, and so on every ref update.
 	_ = os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	_ = os.Setenv(app.TestRefguardEnv, "1")
-	os.Exit(m.Run())
+	// The scratch root and task TMPDIRs live in the cache dir: keep them
+	// off the user's real one (#801).
+	cache, err := os.MkdirTemp("", "saddle-hook-cache-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	_ = os.Setenv("XDG_CACHE_HOME", cache)
+	code := m.Run()
+	_ = os.RemoveAll(cache)
+	os.Exit(code)
 }
 
 type nopTmux struct{ n int }

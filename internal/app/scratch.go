@@ -67,7 +67,8 @@ func (a *App) scratchOptions(dry bool, maxAge time.Duration) scratch.Options {
 	if maxAge <= 0 {
 		maxAge = a.ScratchConfig().Age()
 	}
-	return scratch.Options{Root: a.ScratchRoot(), OSTemp: scratch.OSTemp(), MaxAge: maxAge, DryRun: dry, Holders: a.taskTmpHolders}
+	return scratch.Options{Root: a.ScratchRoot(), OSTemp: scratch.OSTemp(), MaxAge: maxAge, DryRun: dry, Holders: a.taskTmpHolders,
+		RepoKey: scratch.RepoKey(a.Root)}
 }
 
 // SweepScratch sweeps saddle's stale scratch now (scratch.Sweep) and
@@ -78,6 +79,7 @@ func (a *App) SweepScratch(dry bool, maxAge time.Duration) scratch.Result {
 	if !dry && len(res.Removed) > 0 {
 		a.Store.Event("", EventScratchSwept, fmt.Sprintf("%d entries, %s", len(res.Removed), scratch.Bytes(res.Freed)))
 	}
+	a.noteSweepErrs("", res)
 	return res
 }
 
@@ -97,7 +99,19 @@ func (a *App) sweepScratchAfter(task string) {
 		if len(res.Removed) > 0 {
 			a.Store.Event(task, EventScratchSwept, fmt.Sprintf("after %s: %d entries, %s", task, len(res.Removed), scratch.Bytes(res.Freed)))
 		}
+		a.noteSweepErrs(task, res)
 	}()
+}
+
+// EventScratchSweepFailed records what a sweep couldn't remove (#801).
+const EventScratchSweepFailed = "scratch_sweep_failed"
+
+// noteSweepErrs records res's removal errors as one event.
+func (a *App) noteSweepErrs(task string, res scratch.Result) {
+	if len(res.Errs) == 0 {
+		return
+	}
+	a.Store.Event(task, EventScratchSweepFailed, fmt.Sprintf("%d entries: %v", len(res.Errs), errors.Join(res.Errs...)))
 }
 
 // ScratchPressure checks the scratch filesystem and, when it is low, sweeps
