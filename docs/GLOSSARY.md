@@ -111,7 +111,7 @@ a reason: `closed`, `killed`, `unstacked`, `gave_up`). Every non-terminal state
 has a deadline and an automatic exit; a retry time is a field, never a state.
 *Avoid:* "parked" or "dropped" for a change state (use `red` with a retry time,
 and `superseded`); "entry" (a train row).
-*Maps to:* `prgraph_change` (planned, #829).
+*Maps to:* `prgraph_change`, `prgraph.Change` (`internal/prgraph`, #829).
 
 ### changelog
 `saddle changelog --version vX.Y.Z [--write]`: release notes from the PRs
