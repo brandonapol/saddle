@@ -73,7 +73,7 @@ func (a *App) HandOff(task string, now time.Time) (string, error) {
 	if !out {
 		return "", nil
 	}
-	if p.HandoffWait > 0 && e.Until.Sub(now) <= p.HandoffWait {
+	if p.HandoffWait > 0 && e.outFor(now) <= p.HandoffWait {
 		a.Store.Event(task, EventHandoffSkipped, fmt.Sprintf("%s resets at %s, within handoff_wait %s", e.Label(), e.when(), p.HandoffWait))
 		return "", nil
 	}

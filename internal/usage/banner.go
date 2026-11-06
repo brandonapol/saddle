@@ -11,6 +11,9 @@ import (
 // another agent CLI's out-of-quota error (#321).
 type LimitBanner struct {
 	Resets string // when it resets, as the banner words it; empty when it doesn't say
+	// Credits is set for an out-of-credits or spend-cap banner (#796):
+	// that never resets on a timer, only when the owner adds credits.
+	Credits bool
 }
 
 // bannerTail is how many non-blank lines from the bottom of a screen the
@@ -21,6 +24,8 @@ const bannerTail = 12
 
 var (
 	limitRe = regexp.MustCompile(`(?i)usage limit reached|you(?:(?:'|’)ve)? hit your [\w-]+(?: usage)? limit|hit your spend cap|reached your (?:workspace credit|usage) limit|\b(?:session|weekly|5-hour|opus) limit reached|exceeded your current quota|\bquota exceeded\b|free usage exceeded|\bout of credits\b|insufficient credits|used all available credits|reached its monthly spending limit`)
+	// creditsRe are the banners a timer never clears (#796).
+	creditsRe = regexp.MustCompile(`(?i)hit your spend cap|reached your workspace credit limit|\bout of credits\b|insufficient credits|used all available credits|reached its monthly spending limit|payment required`)
 	// "reset in" is opencode's relative reset (#520): "It will reset in 2 hours 5 minutes."
 	resetRe = regexp.MustCompile(`(?i)\b(?:resets(?:\s+at)?|reset\s+at|try\s+again\s+at|(?:reset|try\s+again)\s+(in))\s+([^·∙\n]+)`)
 )
@@ -42,7 +47,7 @@ func DetectLimitBanner(screen string) (LimitBanner, bool) {
 		return LimitBanner{}, false
 	}
 	// The fullest wording wins: "12:10pm (America/New_York)" over "12:10pm".
-	var b LimitBanner
+	b := LimitBanner{Credits: creditsRe.MatchString(text)}
 	for _, m := range resetRe.FindAllStringSubmatch(text, -1) {
 		r := strings.TrimSpace(m[2])
 		if m[1] != "" {

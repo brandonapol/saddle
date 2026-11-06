@@ -145,3 +145,20 @@ func TestDetectLimitBannerOpenCodeQuotaPane(t *testing.T) {
 		}
 	}
 }
+
+// #796: credits and spend-cap banners never reset on a timer; ordinary
+// usage limits do.
+func TestLimitBannerCredits(t *testing.T) {
+	for screen, want := range map[string]bool{
+		"Error: You are out of credits.":                           true,
+		"You've hit your spend cap for this month.":                true,
+		"Insufficient credits to run this request":                 true,
+		"You've hit your usage limit · resets 3pm":                 false,
+		"Claude usage limit reached. Your limit will reset at 5pm": false,
+	} {
+		b, ok := DetectLimitBanner(screen)
+		if !ok || b.Credits != want {
+			t.Errorf("%q: banner %v, Credits %v, want %v", screen, ok, b.Credits, want)
+		}
+	}
+}

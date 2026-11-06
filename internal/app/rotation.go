@@ -39,17 +39,45 @@ const (
 	EventAdapterPick = "adapter_pick"
 )
 
-// ExhaustFor is how long an adapter stays exhausted when its banner names
-// no reset saddle can read. A banner that clears sooner restores it.
+// ExhaustFor is how long an adapter stays exhausted the first time its
+// banner names no reset saddle can read. Each further one before a
+// successful run doubles it, up to ExhaustMax (#796). A banner that clears
+// sooner restores it.
 var ExhaustFor = time.Hour
+
+// ExhaustMax caps the no-reset backoff.
+const ExhaustMax = 24 * time.Hour
 
 // Exhaustion is one adapter, or one of its models (#483), out of quota.
 type Exhaustion struct {
 	Adapter string    `json:"adapter"`
 	Model   string    `json:"model,omitempty"` // set when only this model is out
 	Since   time.Time `json:"since"`
-	Until   time.Time `json:"until"`
-	Resets  string    `json:"resets,omitempty"` // as the banner words it
+	// Until is when it is back; zero means not on a timer: out of credits
+	// (#796) or logged out (#798), until ClearExhausted.
+	Until  time.Time `json:"until,omitzero"`
+	Resets string    `json:"resets,omitempty"` // as the banner words it
+	// Reason is why an entry with no Until is out: ReasonCredits or
+	// ReasonLogin.
+	Reason string `json:"reason,omitempty"`
+}
+
+// Why an adapter is out with no timer.
+const (
+	ReasonCredits = "credits" // out of credits or at its spend cap (#796)
+	ReasonLogin   = "login"   // its login expired or was revoked (#798)
+)
+
+// Indefinite reports whether e waits for ClearExhausted, not a reset.
+func (e Exhaustion) Indefinite() bool { return e.Until.IsZero() }
+
+// outFor is how long e still has at now; a day past ExhaustMax when it has
+// no timer, so a wait-for-the-reset rule never waits for it.
+func (e Exhaustion) outFor(now time.Time) time.Duration {
+	if e.Indefinite() {
+		return ExhaustMax * 2
+	}
+	return e.Until.Sub(now)
 }
 
 // Label is "adapter", or "adapter:model" for a model out on its own. It is
@@ -65,6 +93,9 @@ func exhaustKey(adapter, model string) string {
 
 // when is the reset as the owner should read it.
 func (e Exhaustion) when() string {
+	if e.Indefinite() {
+		return "cleared"
+	}
 	if e.Resets != "" {
 		return e.Resets
 	}
@@ -133,7 +164,7 @@ func (a *App) exhausted(now time.Time) map[string]Exhaustion {
 	m := a.readExhausted()
 	var back []Exhaustion
 	for n, e := range m {
-		if !now.Before(e.Until) {
+		if !e.Indefinite() && !now.Before(e.Until) {
 			back = append(back, e)
 			delete(m, n)
 		}
@@ -164,6 +195,9 @@ func (a *App) MarkExhausted(adapter string, until time.Time, resets string) erro
 		return nil
 	}
 	e := Exhaustion{Adapter: adapter, Since: now, Until: until, Resets: resets}
+	if until.IsZero() {
+		e.Reason = ReasonCredits
+	}
 	m[adapter] = e
 	err := a.writeExhausted(m)
 	exhaustMu.Unlock()
@@ -183,7 +217,7 @@ func (a *App) MarkExhausted(adapter string, until time.Time, resets string) erro
 			"Running tasks stay parked and continue after their reset; nothing is killed.", adapter, first.Adapter, first.when())
 	} else {
 		text = fmt.Sprintf("Adapter %s is out of quota until %s. New spawns that would use %s go to %s instead until then. ", adapter, e.when(), adapter, next)
-		if p := a.Cfg.AdapterPolicy; p.Failover == config.FailoverHandoff && (p.HandoffWait <= 0 || until.Sub(now) > p.HandoffWait) {
+		if p := a.Cfg.AdapterPolicy; p.Failover == config.FailoverHandoff && (p.HandoffWait <= 0 || e.outFor(now) > p.HandoffWait) {
 			text += fmt.Sprintf("Tasks already on %s are handed to the next adapter with quota (a hooked one when they claim paths) to finish in their worktrees.", adapter)
 		} else {
 			text += fmt.Sprintf("Tasks already on %s stay parked and %s after the reset.", adapter, resumeHow(adapter))
@@ -266,8 +300,10 @@ func (a *App) AdapterLimitCleared(task string) error {
 	}
 	ad := a.taskAdapter(t).Name()
 	if m, ok := a.Cfg.TracksModel(ad, t.Model); ok {
+		a.limitWorked(exhaustKey(ad, m))
 		return a.ClearExhausted(exhaustKey(ad, m))
 	}
+	a.limitWorked(ad)
 	return a.ClearExhausted(ad)
 }
 
@@ -307,6 +343,9 @@ func sortedExhaustion(m map[string]Exhaustion) []Exhaustion {
 		out = append(out, e)
 	}
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].Indefinite() != out[j].Indefinite() {
+			return out[j].Indefinite() // ones on a timer reset first
+		}
 		if !out[i].Until.Equal(out[j].Until) {
 			return out[i].Until.Before(out[j].Until)
 		}

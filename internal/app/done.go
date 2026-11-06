@@ -324,6 +324,7 @@ func (a *App) finishDone(t store.Task, summary string) error {
 	}
 	a.Store.Event(task, "done", summary)
 	a.clearPendingEnv(task)
+	a.taskWorked(t) // its adapter delivered: no-reset backoff starts over (#796)
 	a.reapTask(task)
 	advisory := ""
 	if !a.taskAdapter(t).Hooks() {
