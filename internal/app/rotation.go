@@ -69,7 +69,18 @@ const (
 )
 
 // Indefinite reports whether e waits for ClearExhausted, not a reset.
-func (e Exhaustion) Indefinite() bool { return e.Until.IsZero() }
+func (e Exhaustion) Indefinite() bool { return e.Until.IsZero() && e.Reason != "" }
+
+// state is why e is out, as a sentence reads it after its name.
+func (e Exhaustion) state() string {
+	switch e.Reason {
+	case ReasonLogin:
+		return "is logged out"
+	case ReasonCredits:
+		return "is out of credits"
+	}
+	return "is out of quota until " + e.when()
+}
 
 // outFor is how long e still has at now; a day past ExhaustMax when it has
 // no timer, so a wait-for-the-reset rule never waits for it.
@@ -93,11 +104,11 @@ func exhaustKey(adapter, model string) string {
 
 // when is the reset as the owner should read it.
 func (e Exhaustion) when() string {
-	if e.Indefinite() {
-		return "cleared"
-	}
 	if e.Resets != "" {
 		return e.Resets
+	}
+	if e.Indefinite() {
+		return "cleared"
 	}
 	return e.Until.Local().Format("15:04")
 }
