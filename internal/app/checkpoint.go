@@ -21,7 +21,9 @@ func (h checkpointHost) Targets() ([]checkpoint.Target, error) {
 	}
 	var out []checkpoint.Target
 	for _, t := range ts {
-		if t.Role == store.RoleWorker && t.Worktree != "" && (t.Status == store.Running || t.Status == store.Idle || t.Status == store.NeedsYou) {
+		// No window yet means the spawn is still checking out the worktree;
+		// git in it now races git worktree add (#797).
+		if t.Role == store.RoleWorker && t.Worktree != "" && t.Window != "" && (t.Status == store.Running || t.Status == store.Idle || t.Status == store.NeedsYou) {
 			out = append(out, checkpoint.Target{Task: t.ID, Worktree: t.Worktree})
 		}
 	}

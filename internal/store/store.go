@@ -30,6 +30,9 @@ const (
 	// NoChange is a task that finished with nothing to land: its branch had
 	// no commits integration lacks (#452). It never enters the stack.
 	NoChange = "no_change"
+	// Failed is a task whose spawn failed: its claims are released and no
+	// agent ever ran. Its id stays burned (#797).
+	Failed = "failed"
 )
 
 // Train entry states.
@@ -77,7 +80,9 @@ type Task struct {
 }
 
 // Active reports whether the task still holds claims and can receive notices.
-func (t Task) Active() bool { return !Finished(t.Status) }
+// A failed spawn is not active: it released its claims and has no agent, so
+// it must not keep holding its issue (#797).
+func (t Task) Active() bool { return !Finished(t.Status) && t.Status != Failed }
 
 type TrainEntry struct {
 	Task     string

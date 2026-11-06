@@ -76,3 +76,31 @@ func TestLandAndKillPruneCheckpoints(t *testing.T) {
 		t.Fatalf("kill lost the uncommitted work: %v", err)
 	}
 }
+
+// #797: a task whose spawn has not launched its agent yet (no window) is
+// still checking out its worktree. The watcher must leave it alone: its git
+// status took index.lock and failed git worktree add.
+func TestCheckpointWatcherSkipsSpawningTasks(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	w, err := a.Spawn(SpawnReq{Title: "spawning"})
+	must(t, err)
+	must(t, a.Store.SetField(w.ID, "window", "")) // as between CreateTask and launch
+	for _, f := range []string{"a", "b", "c", "d", "e", "f", "g", "h"} {
+		write(t, w.Worktree, f+".txt", f+"\n")
+	}
+	targets, err := checkpointHost{a}.Targets()
+	must(t, err)
+	if len(targets) != 0 {
+		t.Fatalf("targets = %+v, want none for a task with no window", targets)
+	}
+	a.NewCheckpointWatcher().Tick()
+	if _, err := checkpoint.Lookup(a.Root, w.ID); !errors.Is(err, checkpoint.ErrNone) {
+		t.Fatalf("checkpointed a spawning task: %v", err)
+	}
+	ns, err := a.Store.PeekNotices(w.ID, false)
+	must(t, err)
+	if len(ns) != 0 {
+		t.Fatalf("nudged a spawning task: %+v", ns)
+	}
+}

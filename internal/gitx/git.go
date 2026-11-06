@@ -168,7 +168,10 @@ func WorktreeRemove(root, path string) error {
 
 // Dirty lists uncommitted changes (porcelain lines) in a worktree.
 func Dirty(dir string) ([]string, error) {
-	out, err := Run(dir, "status", "--porcelain")
+	// --no-optional-locks: a read must not refresh and rewrite the index
+	// under index.lock, which fails a git worktree add or commit running
+	// in the same tree (#797).
+	out, err := Run(dir, "--no-optional-locks", "status", "--porcelain")
 	if err != nil || out == "" {
 		return nil, err
 	}
