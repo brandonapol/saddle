@@ -102,7 +102,7 @@ are not about the PR graph and stay.
 | `queued` | `done`; this head hasn't passed the train's gate on base + its deps | 2h of gate attempts | gate green → `landed`; gate red or conflict → `red` |
 | `landed` | gate green on base + deps; PR not open on its desired base yet | 30m | `Publish`/`Move` → `published`; deadline → `red(publish)` |
 | `published` | PR open on its desired base; required checks pending | 3h | checks green → `green`; red → `red`; deadline → `red(checks_stuck)`, which re-runs the checks |
-| `green` | required, non-host checks green at the head on its desired base | 1h once its deps are merged | `Merge` → `merged`; refused or failed → retried through #826; deadline → `red(merge)` |
+| `green` | required, non-host checks green at the head on its desired base | 1h once its deps are merged | `Merge` → `merged`; refused or failed → retried through #826; deadline → `red(merge)`; with automerge off, deadline → a line in the owner's daily digest and a new deadline |
 | `red(cause)` | a required non-host check, the gate, a rebase or a forge rule is red for this change alone | `retry_at` per fix attempt; cap `[ci] repair_attempts` | new head → `queued`; cap reached → `superseded(gave_up)` with one blocker issue |
 | `merged` | base contains the work | terminal | — |
 | `superseded(reason)` | leaves for good: `closed`, `killed`, `unstacked`, `gave_up` | terminal | — |
@@ -127,9 +127,11 @@ Rules a reviewer checks the code against:
   makes a new attempt, and it does so by submitting a new head.
 - **Owner inputs are intent, not states.** `unstack` = `superseded(unstacked)`.
   `queue hold` and `automerge hold` set `hold_until`, which always has a
-  time (default 24h, renewable). `publish` declares "no deps". `automerge
-  off` makes the owner the merger: `green` then waits for the owner and has
-  no deadline (open question 1).
+  time: 24h at most, renewed only by an explicit owner event, never by
+  default. `publish` declares "no deps". `automerge off` makes the owner the
+  merger, but `green` keeps its deadline: at the deadline the change goes
+  into the owner's daily digest, and stays `green` with a new deadline. No
+  state is human-only (owner answer 1).
 - `ready` and `green` from #779 are kept as one state, `green`; #779's
   `ready` (gate passed, not published) is `landed`, which after #836 means
   "gate green on base + deps; PR open or opening".
@@ -181,7 +183,7 @@ and `Wait(change, reason, until)`. These are #829's set with three changes:
   never "commits apply"; a red explained by a wrong base is `Move`, not
   `NeedsFix` (I3 before I7); `Merge` only on required, non-host checks; holds
   are computed. When a change has two unmerged dependencies that aren't in
-  one chain, it gets `Wait` until all but one have merged (open question 2).
+  one chain, it gets `Wait` until all but one have merged (owner answer 2).
 
 ### 4. Invariants, each a property test
 
@@ -293,7 +295,7 @@ branch, no `NeedsFix` for t402/t403), #726 (one base repair), #751 (no
 | #705 killed tasks stay queued | killed → `superseded(killed)`; work in base → `merged` (P11) | #836 |
 | #31 continuous pre-rebase | `Rebase` of `queued` changes is ordinary reconcile | #836 |
 | #863 rename the landed list | `landedStack()` is deleted | #836 |
-| Blocker instances #564, #597, #610, #612, #629, #661, #660, #695-#704, #728-#730, #837 | incidents of the stuck-stack and ci-red classes this removes | now, as stale (open question 5) |
+| Blocker instances #564, #597, #610, #612, #629, #661, #660, #695-#704, #728-#730, #837 | incidents of the stuck-stack and ci-red classes this removes | #834, #835 (owner answer 5) |
 
 **Move under prgraph** (still needed, built as part of a step):
 #800 (gate pass stamps = `prgraph_gate`, in #836); #754 (merge order and
@@ -332,9 +334,9 @@ before `NeedsFix(conflict)`); #733, #860 (orchestrator); #799, #801,
   backups, `saddle migrate` and the replay corpus in one place. The
   `prgraph_` prefix and an injected `*sql.DB` keep the split cheap for sddl.
 - **One integration PR as the default** (sandcastle input 5 on #779).
-  Deferred: it fits as a view over a green, dependency-closed prefix
-  (P12), so it can be added later without changing the engine (open
-  question 3).
+  Rejected for now: stacked PRs per change stay the default (ADR 0007,
+  owner answer 3). It fits as a view over a green, dependency-closed
+  prefix (P12), so it can be added later without changing the engine.
 
 ## Consequences
 
@@ -349,23 +351,20 @@ before `NeedsFix(conflict)`); #733, #860 (orchestrator); #799, #801,
 - #829 must adopt this ADR's action list (`Gate`, `Transition` instead of
   `Park`) and state names before it starts.
 
-## Open questions for the owner
+## Owner answers (proposed, owner to confirm)
 
-1. **Automerge off.** Should `green` with automerge off keep "no deadline,
-   the owner merges", or get a deadline whose exit is a once-a-day digest
-   line? The first breaks "every non-terminal state has an automatic exit"
-   for a state the owner chose.
-2. **Two unmerged dependencies in different stacks.** `Wait` until one
-   merges (this ADR), or open the PR on one and gate on both?
-3. **Default mode.** Per-change stacked PRs (ADR 0007), or sandcastle's
-   single integration PR as the default with stacks as the advanced mode?
-4. **Deadlines.** Are the defaults in §2 (2h, 30m, 3h, 1h, 24h holds) right,
-   and should owner holds be allowed to have no end?
-5. **Stale blockers.** Close the open stuck-stack and ci-red blocker
-   instances now, or keep them until #834/#835 land?
-6. **Gate concurrency.** ADR 0008 keeps landing serial. Once gates no
-   longer share an integration tip, may independent changes gate in
-   parallel?
-7. **#832 was closed** when PR #843 merged with "(#832)" in its title, but
-   #843 was the near-term merge fix (#838), not the publish cutover. Reopen
-   it?
+The owner answered the open questions on 2026-11-06. They are recorded
+here as proposed until the owner accepts this ADR.
+
+1. **Automerge off:** `green` keeps a deadline whose exit is a line in the
+   daily digest. No state is human-only.
+2. **Two unmerged dependencies in different stacks:** `Wait` until one
+   merges.
+3. **Default mode:** stacked PRs per change (ADR 0007) stay the default.
+4. **Deadlines:** the defaults in §2 stand. Holds are never indefinite:
+   24h at most, renewed only by an explicit owner event.
+5. **Stale blocker issues:** they stay open until #834 and #835 land, and
+   close with them.
+6. **Gate concurrency:** landing stays serial (ADR 0008). Revisit after
+   the cutover.
+7. **#832:** the owner reopens it; it is still the publish cutover.
