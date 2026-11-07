@@ -315,11 +315,14 @@ func (a *App) unmerged(tip string, t store.Task, base string) string {
 	if err != nil {
 		return err.Error()
 	}
-	_, held, err := gitx.LandedPrefixOf(a.Root, tip, base)
+	from, held, err := gitx.LandedPrefixOf(a.Root, tip, base)
 	if err != nil {
 		return "can't compare with " + a.Cfg.Base + ": " + err.Error()
 	}
-	if held == own || a.prMerged(t, tip) {
+	if from == "" {
+		from = mb
+	}
+	if held == own || mergedInto(a.Root, from, tip, base) || a.prMerged(t, tip) {
 		return ""
 	}
 	return fmt.Sprintf("%d commit(s) not on %s or %s", own-held, a.Cfg.Integration, a.Cfg.Base)
@@ -335,6 +338,21 @@ func (a *App) prMerged(t store.Task, tip string) bool {
 		return false
 	}
 	return pr.HeadRefOid == tip || ancestor(a.Root, tip, pr.HeadRefOid)
+}
+
+// mergedInto reports whether merging tip into base, from the commit from
+// (the merge base, or the newest of tip's commits base already holds), would
+// change nothing: all of tip's work is already in base, even squash-merged
+// after base moved the lines around it, which defeats patch-id and file
+// comparison (#802). A conflict counts as not merged.
+func mergedInto(dir, from, tip, base string) bool {
+	merged, err := gitx.Run(dir, "merge-tree", "--write-tree", "--no-messages", "--merge-base="+from, base, tip)
+	if err != nil {
+		return false
+	}
+	tree, _, _ := strings.Cut(merged, "\n")
+	want, err := gitx.Run(dir, "rev-parse", base+"^{tree}")
+	return err == nil && strings.TrimSpace(tree) == want
 }
 
 func ancestor(dir, a, b string) bool {
@@ -651,45 +669,65 @@ func (a *App) retargetDependents(branch string) {
 }
 
 // GC fetches, then removes every leftover it safely can. It returns what it
-// removed and what it kept, stopping at the first error.
+// removed and what it kept. A leftover that fails to go is kept, with the
+// error as its reason, and the rest still go (#802); the errors are joined.
 func (a *App) GC() ([]Leftover, error) {
 	a.gcFetch()
 	ls, err := a.Leftovers()
 	if err != nil {
 		return nil, err
 	}
+	return a.removeLeftovers(ls, nil)
+}
+
+// removeLeftovers removes each of ls not marked kept. skip, when set, gets a
+// last say on each one just before it goes; the reason it returns keeps it.
+func (a *App) removeLeftovers(ls []Leftover, skip func(Leftover) string) ([]Leftover, error) {
 	var out []Leftover
+	var errs []error
 	for _, l := range ls {
-		if l.Keep == "" {
-			switch l.Kind {
-			case "worktree":
-				id := taskIDRe.FindString(filepath.Base(l.Name))
-				if id == "" {
-					err = gitx.WorktreeRemove(a.Root, l.Name)
-					break
-				}
-				var why string
-				if why, err = a.retireWorktree(id, l.Name); err == nil && why != "" {
-					l.Keep = why
-					out = append(out, l)
-					continue
-				}
-			case "branch":
-				_, err = gitx.Run(a.Root, "branch", "-D", l.Name)
-			case "remote":
-				a.retargetDependents(strings.TrimPrefix(l.Name, a.remote()+"/"))
-				err = a.deleteRemote(l.Name)
-			case "ref":
-				_, err = gitx.Run(a.Root, "update-ref", "-d", l.Name)
-			}
-			if err != nil {
-				return out, err
-			}
+		if l.Keep == "" && skip != nil {
+			l.Keep = skip(l)
+		}
+		if l.Keep != "" {
+			out = append(out, l)
+			continue
+		}
+		why, err := a.removeLeftover(l)
+		switch {
+		case err != nil:
+			l.Keep = "failed: " + err.Error()
+			errs = append(errs, fmt.Errorf("%s %s: %w", l.Kind, l.Name, err))
+			a.Store.Event("", "gc_failed", l.Kind+" "+l.Name+": "+err.Error())
+		case why != "":
+			l.Keep = why
+		default:
 			a.Store.Event("", "gc", l.Kind+" "+l.Name)
 		}
 		out = append(out, l)
 	}
-	return out, nil
+	return out, errors.Join(errs...)
+}
+
+// removeLeftover removes l. A task's worktree whose uncommitted work can't
+// be saved stays, and why is returned.
+func (a *App) removeLeftover(l Leftover) (why string, err error) {
+	switch l.Kind {
+	case "worktree":
+		id := taskIDRe.FindString(filepath.Base(l.Name))
+		if id == "" {
+			return "", gitx.WorktreeRemove(a.Root, l.Name)
+		}
+		return a.retireWorktree(id, l.Name)
+	case "branch":
+		_, err = gitx.Run(a.Root, "branch", "-D", l.Name)
+	case "remote":
+		a.retargetDependents(strings.TrimPrefix(l.Name, a.remote()+"/"))
+		err = a.deleteRemote(l.Name)
+	case "ref":
+		_, err = gitx.Run(a.Root, "update-ref", "-d", l.Name)
+	}
+	return "", err
 }
 
 // windowNamer is implemented by tmux drivers that can report a window's name.

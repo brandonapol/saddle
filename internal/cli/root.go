@@ -238,7 +238,7 @@ keep the CLI they were spawned with.
 // startWatchers starts the background loops that live as long as saddle up:
 // the stack sentinel, the auto-merge watcher (which merges nothing unless
 // on), the orchestrator compact watcher, the notice digest, the resume
-// watcher, the checkpoint watcher, the scratch sweeper, remote control (when enabled) and, unless
+// watcher, the checkpoint watcher, the scratch sweeper, automatic gc, remote control (when enabled) and, unless
 // ci.disabled, the CI and
 // ci-red watchers. Short-lived commands never
 // start them. The returned func stops them and waits until they have.
@@ -266,6 +266,7 @@ func watcherSet(a *app.App) []watcher {
 		{"scratch", a.RunScratchSweeper},                                                // sweeps saddle's scratch every 10m, holds spawns when low (#322)
 		{"remote", func(ctx context.Context) { remote.RunManaged(ctx, a, nil) }},        // only when [remote] is enabled in the user config (#251)
 		{"reconcile-shadow", a.RunShadowReconciler},                                     // prgraph in shadow: logs reconcile_shadow divergences, never acts (#830)
+		{"gc", a.RunGC}, // dead tasks' worktrees, branches and refs, old backups, events and loose objects every 30m (#802)
 	}
 	if !a.Cfg.CI.Disabled {
 		ws = append(ws, watcher{"ci-red", func(ctx context.Context) { _ = sentinel.NewCIRed(a).Run(ctx) }}) // holds layers above red CI
