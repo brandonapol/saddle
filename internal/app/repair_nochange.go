@@ -30,15 +30,12 @@ func repairDead(t store.Task) bool {
 
 // repairsSpawned lists the repair tasks spawned for orig, oldest first.
 func (a *App) repairsSpawned(orig string) []store.Task {
-	es, err := a.Store.Events(-1)
+	es, err := a.Store.TaskEvents(orig, eventRepairSpawned)
 	if err != nil {
 		return nil
 	}
 	var out []store.Task
 	for _, e := range es {
-		if e.Task != orig || e.Kind != eventRepairSpawned {
-			continue
-		}
 		if t, err := a.Store.Task(e.Data); err == nil {
 			out = append(out, t)
 		}

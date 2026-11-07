@@ -49,16 +49,11 @@ func (a *App) replayFrom(t store.Task, onto string) (string, int, error) {
 
 // everLanded reports whether the train ever landed task.
 func (a *App) everLanded(task string) bool {
-	es, err := a.Store.Events(-1)
+	_, ok, err := a.Store.LastTaskEvent(task, "landed")
 	if err != nil {
 		return true // can't tell: don't trust the fork point
 	}
-	for _, e := range es {
-		if e.Task == task && e.Kind == "landed" {
-			return true
-		}
-	}
-	return false
+	return ok
 }
 
 // autoRebased is what autoRebase did to a live task's branch.

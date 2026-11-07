@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -100,7 +101,12 @@ type Notice struct {
 
 type Rename struct{ Old, New string }
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db *sql.DB
+	// eventRows counts event rows read back, so tests can prove a path reads
+	// a bounded slice of the log rather than all of it (#778).
+	eventRows atomic.Int64
+}
 
 var migrations = []string{`
 CREATE TABLE tasks(
@@ -172,6 +178,8 @@ CREATE TABLE symbol_claims(task TEXT NOT NULL, path TEXT NOT NULL, symbol TEXT N
 CREATE INDEX symbol_claims_path ON symbol_claims(path);
 `, `
 DELETE FROM train WHERE state IN ('queued', 'conflict', 'test_failed', 'on_hold') AND task IN (SELECT id FROM tasks WHERE status = 'killed');
+`, `
+CREATE INDEX IF NOT EXISTS events_kind_task ON events(kind, task);
 `}
 
 // Open opens (creating if needed) the database at path and applies migrations,
@@ -522,7 +530,7 @@ type Event struct {
 
 const eventCols = `id, ts, task, kind, data`
 
-func scanEvents(rows *sql.Rows) ([]Event, error) {
+func (s *Store) scanEvents(rows *sql.Rows) ([]Event, error) {
 	defer rows.Close()
 	var out []Event
 	for rows.Next() {
@@ -533,9 +541,13 @@ func scanEvents(rows *sql.Rows) ([]Event, error) {
 		}
 		e.TS = time.Unix(ts, 0)
 		out = append(out, e)
+		s.eventRows.Add(1)
 	}
 	return out, rows.Err()
 }
+
+// EventRowsRead is how many event rows this store has read back as Events.
+func (s *Store) EventRowsRead() int64 { return s.eventRows.Load() }
 
 // Events returns the newest n events, oldest first.
 func (s *Store) Events(n int) ([]Event, error) {
@@ -543,7 +555,7 @@ func (s *Store) Events(n int) ([]Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanEvents(rows)
+	return s.scanEvents(rows)
 }
 
 // LastEventTime is when the newest event of any of kinds was logged, or the
@@ -572,7 +584,63 @@ func (s *Store) EventsSince(after int64) ([]Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanEvents(rows)
+	return s.scanEvents(rows)
+}
+
+// TaskEvents returns task's events of any of kinds, oldest first. It reads
+// only those rows, through the events(kind, task) index (#778).
+func (s *Store) TaskEvents(task string, kinds ...string) ([]Event, error) {
+	if len(kinds) == 0 {
+		return nil, nil
+	}
+	q, args := kindsIn(`SELECT `+eventCols+` FROM events WHERE task = ? AND kind IN `, task, kinds)
+	rows, err := s.db.Query(q+` ORDER BY id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	return s.scanEvents(rows)
+}
+
+// LastTaskEvent is task's newest event of any of kinds; ok is false when it
+// has none.
+func (s *Store) LastTaskEvent(task string, kinds ...string) (e Event, ok bool, err error) {
+	if len(kinds) == 0 {
+		return Event{}, false, nil
+	}
+	q, args := kindsIn(`SELECT `+eventCols+` FROM events WHERE task = ? AND kind IN `, task, kinds)
+	rows, err := s.db.Query(q+` ORDER BY id DESC LIMIT 1`, args...)
+	if err != nil {
+		return Event{}, false, err
+	}
+	es, err := s.scanEvents(rows)
+	if err != nil || len(es) == 0 {
+		return Event{}, false, err
+	}
+	return es[0], true, nil
+}
+
+// LastEventWithData is the newest event of kind whose data is data; ok is
+// false when there is none. It reads only events of kind.
+func (s *Store) LastEventWithData(kind, data string) (e Event, ok bool, err error) {
+	rows, err := s.db.Query(`SELECT `+eventCols+` FROM events WHERE kind = ? AND data = ? ORDER BY id DESC LIMIT 1`, kind, data)
+	if err != nil {
+		return Event{}, false, err
+	}
+	es, err := s.scanEvents(rows)
+	if err != nil || len(es) == 0 {
+		return Event{}, false, err
+	}
+	return es[0], true, nil
+}
+
+// kindsIn appends "(?,?,...)" for kinds to q, with first then kinds as args.
+func kindsIn(q, first string, kinds []string) (string, []any) {
+	args := make([]any, 0, len(kinds)+1)
+	args = append(args, first)
+	for _, k := range kinds {
+		args = append(args, k)
+	}
+	return q + `(?` + strings.Repeat(`,?`, len(kinds)-1) + `)`, args
 }
 
 // LastEventID is the id of the newest event, or 0 when there are none.
