@@ -568,25 +568,25 @@ func TestDoctorRepoHooks(t *testing.T) {
 	}
 }
 
-// TestRunqObserveModeWarns: the heavy-run queue defaults to observe, which
-// never waits, so budget, slots and load gate do nothing (#664). Doctor says
-// so and how to enforce.
+// TestRunqObserveModeWarns: observe is opt-in and never waits, so budget,
+// slots and load gate do nothing (#664). Doctor says so and how to enforce.
+// The default is enforce.
 func TestRunqObserveModeWarns(t *testing.T) {
 	f := healthy(t)
 	t.Setenv("SADDLE_RUNQ", "")
-	r := find(t, Run(f), CheckRunq)
-	if r.Status != Warn || !strings.Contains(r.Detail, "observe") || !strings.Contains(r.Fix, "mode = \"enforce\"") {
+	if r := find(t, Run(f), CheckRunq); r.Status != OK || !strings.Contains(r.Detail, "enforce") {
 		t.Fatalf("default mode: %+v", r)
 	}
-	// An explicit enforce in the repo's runq.toml is fine.
+	// An explicit observe in the repo's runq.toml warns.
 	if err := os.MkdirAll(filepath.Join(f.root, ".saddle"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(f.root, ".saddle", "runq.toml"), []byte("mode = \"enforce\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(f.root, ".saddle", "runq.toml"), []byte("mode = \"observe\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if r := find(t, Run(f), CheckRunq); r.Status != OK || !strings.Contains(r.Detail, "enforce") {
-		t.Fatalf("enforce: %+v", r)
+	r := find(t, Run(f), CheckRunq)
+	if r.Status != Warn || !strings.Contains(r.Detail, "observe") || !strings.Contains(r.Fix, "mode = \"enforce\"") {
+		t.Fatalf("observe: %+v", r)
 	}
 	// Off is a deliberate choice, not a warning.
 	t.Setenv("SADDLE_RUNQ", "off")

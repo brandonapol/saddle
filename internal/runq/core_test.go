@@ -17,12 +17,12 @@ import (
 
 func envOf(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 
-// TestDefaultsObserveModeWithDefaultClasses: with no config the queue
-// observes (records, never waits) and seeds the built-in class slots.
-func TestDefaultsObserveModeWithDefaultClasses(t *testing.T) {
+// TestDefaultsEnforceModeWithDefaultClasses: with no config the queue
+// enforces (waits for a slot) and seeds the built-in class slots.
+func TestDefaultsEnforceModeWithDefaultClasses(t *testing.T) {
 	q := open(t, Options{Path: filepath.Join(t.TempDir(), "runq.db"), Getenv: envOf(nil)})
-	if q.Mode() != ModeObserve {
-		t.Fatalf("default mode %q, want observe", q.Mode())
+	if q.Mode() != ModeEnforce {
+		t.Fatalf("default mode %q, want enforce", q.Mode())
 	}
 	want := map[string]int{"flutter-test": 1, "golangci-lint": 1, "go-test": 2, "e2e": 1, "generic-heavy": 2}
 	for c, n := range want {
@@ -406,5 +406,27 @@ func TestTransientOpenErrorIsRetried(t *testing.T) {
 	var n int
 	if err := q.db.QueryRow(`SELECT COUNT(*) FROM history`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("history lost: %d %v", n, err)
+	}
+}
+
+// TestExplicitObserveModeStillWorks: mode = "observe" in a config file is the
+// opt-in, and an empty config resolves to enforce.
+func TestExplicitObserveModeStillWorks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runq.toml")
+	if err := os.WriteFile(path, []byte("mode = \"observe\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o := Config{}.Apply(Options{Path: filepath.Join(dir, "runq.db"), Getenv: envOf(nil)})
+	if got := open(t, o).Mode(); got != ModeEnforce {
+		t.Fatalf("empty config: mode %q, want enforce", got)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o = cfg.Apply(Options{Path: filepath.Join(dir, "runq2.db"), Getenv: envOf(nil)})
+	if got := open(t, o).Mode(); got != ModeObserve {
+		t.Fatalf("explicit observe: mode %q, want observe", got)
 	}
 }

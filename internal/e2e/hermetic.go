@@ -24,6 +24,9 @@ func (w *World) isolateRunq() {
 	must(w.T, os.MkdirAll(state, 0o755))
 	must(w.T, os.MkdirAll(cache, 0o755))
 	must(w.T, os.MkdirAll(filepath.Join(config, "saddle"), 0o755))
+	// The queue enforces by default, which would hold a journey's gate on the
+	// host's load. Journeys that test the queue write their own runq.toml.
+	must(w.T, os.WriteFile(filepath.Join(config, "saddle", "runq.toml"), []byte("mode = \"observe\"\n"), 0o644))
 	for _, kv := range [][2]string{
 		{"XDG_STATE_HOME", state},
 		{"XDG_CACHE_HOME", cache},

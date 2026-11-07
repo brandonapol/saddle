@@ -72,13 +72,15 @@ heavy run may start anyway, and no second one does while it holds (the wait is
 still bounded by `wait_max`). A persistently overloaded box therefore runs one
 heavy run at a time instead of everything at once.
 
-### Observe mode and `saddle doctor`
+### Enforce by default, observe opt-in, and `saddle doctor`
 
-The queue's default mode is `observe`: it records runs but never makes one
-wait, so slots, budget and the load gate are inert. `saddle doctor` warns
-while the queue is observing; set `mode = "enforce"` in `.saddle/runq.toml`
-(this repo) or `~/.config/saddle/runq.toml` (the machine) when you are done
-measuring.
+The queue's default mode is `enforce`: a heavy run waits for a free slot, the
+budget and the load gate. `observe` is opt-in: set `mode = "observe"` in
+`.saddle/runq.toml` (this repo) or `~/.config/saddle/runq.toml` (the machine)
+to record runs without ever making one wait while you measure. Then slots,
+budget and the load gate are inert, and `saddle doctor` warns while the queue
+is observing. The 30 minute lease expiry and the one-run floor past
+`gate_max_wait` apply in enforce mode as before.
 
 ### Compound commands and `make` targets
 

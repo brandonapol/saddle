@@ -205,11 +205,11 @@ saddle runq status [--json] | drain [class] | kill <lease> | slots <class> <n>
 While it waits it prints one line, such as `queued: position 1 of 2 for go-test,
 holder t83 (make check, 40s), ~2m`, and then the command runs as if called
 directly. It forwards stdin, stdout, signals and the exit code. It starts in
-`observe` mode, which records how long runs take but never makes one wait.
-To enforce the slots, set `mode = "enforce"` in `~/.config/saddle/runq.toml`
-or `.saddle/runq.toml`. `SADDLE_RUNQ=off|observe|enforce` overrides the mode
+`enforce` mode, where a run waits for a free slot. To only record how long
+runs take without ever waiting, set `mode = "observe"` in
+`~/.config/saddle/runq.toml` or `.saddle/runq.toml`. `SADDLE_RUNQ=off|observe|enforce` overrides the mode
 for one shell. `saddle doctor` warns while the queue is only observing, as a
-reminder to switch to `enforce` once you have measured. See
+reminder to switch back to `enforce` once you have measured. See
 [docs/runq.md](docs/runq.md).
 
 ### SRE mode: `saddle sre`
