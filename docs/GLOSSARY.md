@@ -67,13 +67,6 @@ with `saddle sentinel ack`. Status line: `stack_at_risk`.
 its own stack only (#771), not later tasks in train order. `atRisk()` in
 `internal/app/automerge.go` also counts ci-red; renaming it is #862.
 
-### automerge
-`saddle automerge on|off|status|hold|release|approve`. Off by default. While
-`saddle up` runs, merges the bottom PR of a ready stack (green, mergeable, not
-a draft, not needs-human, not at-risk), restacks, and repeats. A held stack is
-never merged. A failed merge, restack or collapse is a retry
-[attempt](#attempt); auto-merge never stops itself after a failure (#826). See [ARCHITECTURE.md](ARCHITECTURE.md#stack-upkeep-when-people-use-github-119-123).
-
 ### attempt
 One action saddle takes on its own (a merge, a restack, a resume, a repair
 spawn) that failed and is being retried, keyed by the action and what it acts
@@ -86,6 +79,13 @@ then every 2h. After three deterministic tries at the same error it is
 head SHA, base or config) starts a new attempt.
 *Avoid:* "stopped", "latched", "gave up": nothing waits on a human to resume.
 *Maps to:* the `retry_attempts` table in `state.db`; event `retry_escalated`.
+
+### automerge
+`saddle automerge on|off|status|hold|release|approve`. Off by default. While
+`saddle up` runs, merges the bottom PR of a ready stack (green, mergeable, not
+a draft, not needs-human, not at-risk), restacks, and repeats. A held stack is
+never merged. A failed merge, restack or collapse is a retry
+[attempt](#attempt); auto-merge never stops itself after a failure (#826). See [ARCHITECTURE.md](ARCHITECTURE.md#stack-upkeep-when-people-use-github-119-123).
 
 ### autopilot
 `saddle autopilot on|off|pause|resume|status|infinite`. Off by default. While
