@@ -91,11 +91,18 @@ func (a *App) lintDone(t store.Task) error {
 		return nil
 	}
 	defer a.sweepScratchAfter(t.ID)
+	// Kill, often from another process, stops the gate (#849).
+	ctx, stop := a.untilKilled(context.Background(), t.ID)
+	defer stop()
 	retriedTimeout := false
 	for attempt := 0; ; attempt++ {
-		out, err := a.runLintGate(t.Worktree, g.Cmd)
+		out, err := a.runLintGate(ctx, t.Worktree, g.Cmd)
 		if errors.Is(err, ErrGateInterrupted) {
 			return err
+		}
+		if ctx.Err() != nil {
+			a.Store.Event(t.ID, EventDoneGateKilled, g.Cmd)
+			return ErrGateKilled
 		}
 		if err == nil {
 			stampLint(state, tree, g)
@@ -130,13 +137,13 @@ func (a *App) lintDone(t store.Task) error {
 // runLintGate runs the lint gate cmd in dir with TMPDIR and GOTMPDIR in a
 // per-run dir under GateTmpdir, as the train's test gate does (#320), so a
 // full /tmp doesn't block done when the train would have passed.
-func (a *App) runLintGate(dir, cmd string) (string, error) {
+func (a *App) runLintGate(ctx context.Context, dir, cmd string) (string, error) {
 	env, cleanup, out, err := gateTemp(a.GateTmpdir())
 	if err != nil {
 		return out, err
 	}
 	defer cleanup()
-	return runGroup(context.Background(), dir, cmd, append(os.Environ(), env...), a.GateTimeout())
+	return runGroup(ctx, dir, cmd, append(os.Environ(), env...), a.GateTimeout())
 }
 
 // hooksState is where the repo-hook wrapper keeps its lock and pass stamps:
