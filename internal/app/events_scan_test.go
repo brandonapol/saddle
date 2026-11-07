@@ -60,6 +60,9 @@ func TestOrphanTickReadsOnlyItsEvents(t *testing.T) {
 	_, err = a.OrphanTick(now.Add(a.StallConfig().DoneOrphan + time.Second))
 	must(t, err)
 	readFew(t, a, before, "OrphanTick")
+	// The second tick re-runs the gate in the background; let it finish
+	// before the temp dir goes, or its cleanup races the job.
+	a.WaitDoneJobs()
 	if es, err := a.Store.TaskEvents(tk.ID, EventDoneOrphaned); err != nil || len(es) == 0 {
 		t.Fatalf("the cancelled done was not flagged: %+v, %v", es, err)
 	}
