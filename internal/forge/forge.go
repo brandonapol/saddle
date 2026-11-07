@@ -250,7 +250,11 @@ type Forge interface {
 // other GitHub. It starts no process: the remote is read from git's config
 // file.
 func New(fc config.Forge, dir string) Forge {
-	return Over(fc, OriginURL(dir), CLI(dir, GH), CLI(dir, Glab))
+	f := Over(fc, OriginURL(dir), CLI(dir, GH), CLI(dir, Glab))
+	if g, ok := f.(*GitHub); ok {
+		g.facts = repoFacts(dir)
+	}
+	return f
 }
 
 // Select is the provider New picks for fc and an origin remote's URL:
@@ -473,17 +477,22 @@ func knownLabel(name string) (Label, bool) {
 
 // addLabelEnsuring runs add; when it fails because name doesn't exist yet and
 // name is one of saddle's own labels, it creates the label and retries once.
+// A label still missing is refused with LabelMissing.
 func addLabelEnsuring(ctx context.Context, f Forge, name string, add func() error) error {
+	missing := func(err error) bool {
+		return err != nil && strings.Contains(strings.ToLower(err.Error()), "not found")
+	}
 	err := add()
-	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "not found") {
+	if !missing(err) {
 		return err
 	}
 	l, ok := knownLabel(name)
-	if !ok {
+	if !ok || f.EnsureLabel(ctx, l) != nil {
+		return refuse(LabelMissing, err)
+	}
+	if err := add(); missing(err) {
+		return refuse(LabelMissing, err)
+	} else {
 		return err
 	}
-	if eerr := f.EnsureLabel(ctx, l); eerr != nil {
-		return err
-	}
-	return add()
 }

@@ -186,7 +186,7 @@ func (a *App) Publish(req PublishReq) (PublishResult, error) {
 	out, err := a.Forge().CreatePR(context.Background(), forge.NewPR{Base: req.Base, Head: branch, Title: title, Body: body, Draft: req.Draft})
 	if err != nil {
 		url := prURLRe.FindString(err.Error())
-		if url == "" || !strings.Contains(err.Error(), "already exists") {
+		if r, _ := forge.RefusalOf(err); url == "" || r != forge.PRExists {
 			return res, err
 		}
 		out, res.Existing = url, true

@@ -235,6 +235,7 @@ func TestGitHubWatcherArgs(t *testing.T) {
 		"https://github.com/o/r/issues/12",
 	}}
 	g := f.github()
+	g.facts = noStacks()
 	all := PRNumber | PRTitle | PRHeadBranch | PRHead | PRBase | PRDraft | PRMergeable | PRLabels | PRFiles | PRChecks
 	prs, err := g.ListPRs(ctx, PRQuery{State: "open", Limit: 200}, all)
 	want := PR{Number: 4, Title: "T", Head: "saddle/t1", HeadSHA: "abc", Base: "main", Draft: true, Mergeable: Mergeable,

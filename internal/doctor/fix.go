@@ -56,6 +56,7 @@ var about = map[string]string{
 	CheckMergeSettings: "the repo's merge options on GitHub or GitLab; stacked PRs need squash or fast-forward merges, not merge commits",
 	CheckProtection:    "branch protection (GitHub) or protected branches (GitLab) that keep red or unreviewed work off the base branch",
 	CheckGhStack:       "GitHub's optional native Stacked PRs; not offered on other forges",
+	CheckForgeFacts:    "what the forge actually does for this repo (Stacked PRs, merge queue, required checks, auto-merge), probed so saddle never assumes it",
 	CheckTestCmd:       "the command the merge train runs before it lands a branch",
 	CheckTmux:          "runs each agent in its own hidden terminal",
 	CheckClaude:        "the Claude Code CLI the agents run in",

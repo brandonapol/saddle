@@ -65,19 +65,19 @@ func (e *Error) Unwrap() []error {
 	return []error{e.Kind, e.Err}
 }
 
-// classify types what gh printed. merge marks a merge, where an unexplained
-// failure is GitHub refusing it.
+// classify types a gh failure by forge's classification (forge.Classify
+// reads gh's text; nothing here does). merge marks a merge, where an
+// unexplained failure is GitHub refusing it.
 func classify(op string, err error) error {
-	msg := strings.ToLower(err.Error())
+	err = forge.Classify(err)
+	r, _ := forge.RefusalOf(err)
 	var kind error
 	switch {
-	case strings.Contains(msg, `unknown command "stack"`):
+	case r == forge.StackToolMissing:
 		kind = ErrNotInstalled
-	case strings.Contains(msg, "not enabled"), strings.Contains(msg, "is not available for this repository"),
-		op == "probe" && strings.Contains(msg, "http 404"):
+	case r == forge.StacksDisabled, op == "probe" && r == forge.NotFound:
 		kind = ErrNotEnabled
-	case strings.Contains(msg, "belongs to multiple stacks"), strings.Contains(msg, "belongs to a different stack"),
-		strings.Contains(msg, "already contains"):
+	case r == forge.StackConflict:
 		kind = ErrConflict
 	case op == "merge":
 		kind = ErrMergeRefused

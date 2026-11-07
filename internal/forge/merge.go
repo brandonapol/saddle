@@ -33,23 +33,13 @@ func withoutSaddleOwned(cs []CheckRun) []CheckRun {
 }
 
 // ErrMergePending is what MergePR returns when GitHub accepted a merge but
-// hasn't finished it yet: the merge is in progress, not failed. The caller
-// checks the PR's state later.
+// hasn't finished it yet: the merge is in progress, not failed (the
+// "pending" outcome of #822). The caller checks the PR's state later.
 var ErrMergePending = errors.New("merge accepted; GitHub is still merging it")
 
 // DefaultMergePoll are the waits between reads of a PR's state after an
 // async merge, about half a minute in all.
 var DefaultMergePoll = []time.Duration{2 * time.Second, 3 * time.Second, 5 * time.Second, 5 * time.Second, 10 * time.Second}
-
-// NeedsAsyncMerge reports whether err is GitHub refusing a synchronous merge
-// of a PR in a native stack: such a PR must go through merge-async.
-func NeedsAsyncMerge(err error) bool {
-	if err == nil {
-		return false
-	}
-	m := strings.ToLower(err.Error())
-	return strings.Contains(m, "asynchronous merge") || strings.Contains(m, "merge-async")
-}
 
 // prNumber is the number a PR ref names: 12, #12 or a /pull/12 URL.
 func prNumber(ref string) (int, bool) {
@@ -87,8 +77,8 @@ func (g *GitHub) mergeAsync(ctx context.Context, ref, method, head string) error
 	if head != "" {
 		args = append(args, "-f", "sha="+head)
 	}
-	if _, err := g.Run(ctx, args...); err != nil {
-		return fmt.Errorf("async merge of #%d: %w", n, err)
+	if _, err := g.run(ctx, args...); err != nil {
+		return err
 	}
 	poll := g.MergePoll
 	if poll == nil {
@@ -104,7 +94,7 @@ func (g *GitHub) mergeAsync(ctx context.Context, ref, method, head string) error
 		case StateMerged:
 			return nil
 		case StateClosed:
-			return fmt.Errorf("async merge of #%d: the PR was closed instead of merged", n)
+			return &RefusedError{Reason: PRClosed, Err: fmt.Errorf("async merge of #%d: the PR was closed instead of merged", n)}
 		}
 	}
 	return fmt.Errorf("#%d: %w", n, ErrMergePending)

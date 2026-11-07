@@ -360,5 +360,6 @@ const EventPRBaseLinked = "pr_base_linked"
 // linkedBaseErr reports whether err is GitHub refusing a base edit because
 // the PR is linked into a stack. The stack's link sets its bases instead.
 func linkedBaseErr(err error) bool {
-	return strings.Contains(err.Error(), "pull request is part of a stack")
+	r, _ := forge.RefusalOf(err)
+	return r == forge.StackedBaseLocked
 }

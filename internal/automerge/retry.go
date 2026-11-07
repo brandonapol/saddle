@@ -45,14 +45,12 @@ func backoff(transient bool, n int) time.Duration {
 	return steps[min(max(n, 1), len(steps))-1]
 }
 
-// transientMarks are failures that clear by themselves.
-var transientMarks = []string{
-	"rate limit", "rate-limit", "abuse detection", "secondary rate",
-	"timeout", "timed out", "deadline exceeded",
-	"http 500", "http 502", "http 503", "http 504", "bad gateway", "service unavailable", "internal server error",
-	"connection reset", "connection refused", "unexpected eof", "tls handshake",
+// gitMarks are git failures that clear by themselves: a push that lost a
+// race, a busy worktree, a dropped connection. Forge failures come typed
+// (forge.Classify) and are never matched by text.
+var gitMarks = []string{
 	"stale info", "remote branch moved", "index.lock", "no such file or directory",
-	"merge queue", "is still merging", "try again",
+	"connection reset", "connection refused", "unexpected eof", "timed out",
 }
 
 // transient reports whether err clears by itself.
@@ -60,11 +58,13 @@ func transient(err error) bool {
 	if err == nil {
 		return false
 	}
-	if forge.Transient(err) || errors.Is(err, forge.ErrMergePending) {
-		return true
-	}
+	return forge.Transient(err) || errors.Is(err, forge.ErrMergePending) || gitTransient(err)
+}
+
+// gitTransient reports whether err is a git failure that clears by itself.
+func gitTransient(err error) bool {
 	m := strings.ToLower(err.Error())
-	for _, s := range transientMarks {
+	for _, s := range gitMarks {
 		if strings.Contains(m, s) {
 			return true
 		}
@@ -73,13 +73,7 @@ func transient(err error) bool {
 }
 
 // rateLimited reports whether err is GitHub refusing for rate limits (#680).
-func rateLimited(err error) bool {
-	if errors.Is(err, forge.ErrRateLimited) {
-		return true
-	}
-	m := strings.ToLower(err.Error())
-	return strings.Contains(m, "rate limit") || strings.Contains(m, "abuse detection")
-}
+func rateLimited(err error) bool { return errors.Is(err, forge.ErrRateLimited) }
 
 // backingOff says why key mustn't be tried yet at head, "" when it may.
 // An attempt at another head is dropped.

@@ -87,10 +87,11 @@ var (
 )
 
 // Transient reports whether err is a wait rather than a failure: GitHub's
-// rate limit (#764) or a network call that timed out (#788). Callers retry
-// later and log nothing; neither ever latches.
+// rate limit (#764), a network call that timed out (#788), or any other
+// ErrTransient outcome (a 5xx, a killed CLI). Callers retry later and log
+// nothing; none ever latches.
 func Transient(err error) bool {
-	return errors.Is(err, ErrRateLimited) || errors.Is(err, ErrNetTimeout)
+	return errors.Is(err, ErrRateLimited) || errors.Is(err, ErrNetTimeout) || errors.Is(err, ErrTransient)
 }
 
 // callContext is ctx with the deadline a call with args gets, and that
@@ -122,7 +123,8 @@ func opName(name string, args []string) string {
 }
 
 // Runner runs a forge CLI with args and returns its trimmed stdout. A failure's
-// error names the CLI and its first two args, and carries its stderr; what
+// error is a classified outcome (see Classify) that names the CLI and its
+// first two args, and carries its stderr; what
 // it printed to stdout comes back too, since gh prints some answers (pr
 // checks while checks are pending, a failed job's log) and still exits
 // non-zero.
@@ -133,7 +135,7 @@ func CLI(dir, name string) Runner {
 	return func(ctx context.Context, args ...string) (string, error) {
 		out, errb, err := Output(ctx, dir, name, args...)
 		if err != nil {
-			return strings.TrimSpace(out), fmt.Errorf("%s %s: %w: %s", name, strings.Join(args[:min(2, len(args))], " "), err, strings.TrimSpace(errb))
+			return strings.TrimSpace(out), Classify(fmt.Errorf("%s %s: %w: %s", name, strings.Join(args[:min(2, len(args))], " "), err, strings.TrimSpace(errb)))
 		}
 		return strings.TrimSpace(out), nil
 	}

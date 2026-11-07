@@ -59,15 +59,16 @@ func TestGitHubMergePRFallsBackToMergeAsync(t *testing.T) {
 		{prefix: "pr view", out: `{"state":"MERGED"}`},
 	}}
 	var slept []time.Duration
-	g := &GitHub{Run: s.run, MergePoll: []time.Duration{time.Second, 2 * time.Second, 3 * time.Second},
+	g := &GitHub{Run: s.run, facts: noStacks(), MergePoll: []time.Duration{time.Second, 2 * time.Second, 3 * time.Second},
 		Sleep: func(d time.Duration) { slept = append(slept, d) }}
 	if err := g.MergePR(context.Background(), "https://github.com/o/r/pull/811", "squash", "abc123"); err != nil {
 		t.Fatalf("MergePR = %v, want nil", err)
 	}
 	got := s.joined()
-	want := "api -X PUT repos/{owner}/{repo}/pulls/811/merge-async -f merge_method=squash -f sha=abc123"
-	if len(got) < 2 || got[1] != want {
-		t.Fatalf("second call = %q, want %q (all: %q)", got[1], want, got)
+	want := []string{"pr merge https://github.com/o/r/pull/811 --squash --match-head-commit abc123",
+		"api -X PUT repos/{owner}/{repo}/pulls/811/merge-async -f merge_method=squash -f sha=abc123"}
+	if len(got) < 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("calls = %q, want %q first", got, want)
 	}
 	if len(slept) != 2 {
 		t.Fatalf("polled %d times (%v), want 2: once open, once merged", len(slept), slept)
@@ -82,12 +83,12 @@ func TestGitHubMergePRAsyncStillPending(t *testing.T) {
 		{prefix: "api -X PUT", out: `{"status":"pending"}`},
 		{prefix: "pr view", out: `{"state":"OPEN"}`},
 	}}
-	g := &GitHub{Run: s.run, MergePoll: []time.Duration{time.Millisecond}, Sleep: func(time.Duration) {}}
+	g := &GitHub{Run: s.run, facts: noStacks(), MergePoll: []time.Duration{time.Millisecond}, Sleep: func(time.Duration) {}}
 	err := g.MergePR(context.Background(), "12", "squash", "")
 	if !errors.Is(err, ErrMergePending) {
 		t.Fatalf("MergePR = %v, want ErrMergePending", err)
 	}
-	if got := s.joined(); got[1] != "api -X PUT repos/{owner}/{repo}/pulls/12/merge-async -f merge_method=squash" {
+	if got := s.joined(); len(got) < 2 || got[1] != "api -X PUT repos/{owner}/{repo}/pulls/12/merge-async -f merge_method=squash" {
 		t.Fatalf("calls = %q", got)
 	}
 }
@@ -99,7 +100,7 @@ func TestGitHubMergePRAsyncClosed(t *testing.T) {
 		{prefix: "api -X PUT", out: `{"status":"pending"}`},
 		{prefix: "pr view", out: `{"state":"CLOSED"}`},
 	}}
-	g := &GitHub{Run: s.run, MergePoll: []time.Duration{time.Millisecond}, Sleep: func(time.Duration) {}}
+	g := &GitHub{Run: s.run, facts: noStacks(), MergePoll: []time.Duration{time.Millisecond}, Sleep: func(time.Duration) {}}
 	err := g.MergePR(context.Background(), "12", "squash", "")
 	if err == nil || errors.Is(err, ErrMergePending) {
 		t.Fatalf("MergePR = %v, want a failure", err)
@@ -110,12 +111,12 @@ func TestGitHubMergePRAsyncClosed(t *testing.T) {
 func TestGitHubMergePROtherErrorNoAsync(t *testing.T) {
 	boom := errors.New("gh pr merge: Pull request is not mergeable")
 	s := &scriptedGH{rules: []*ghRule{{prefix: "pr merge", err: boom}}}
-	g := &GitHub{Run: s.run, Sleep: func(time.Duration) {}}
+	g := &GitHub{Run: s.run, facts: noStacks(), Sleep: func(time.Duration) {}}
 	if err := g.MergePR(context.Background(), "12", "squash", ""); !errors.Is(err, boom) {
 		t.Fatalf("MergePR = %v, want %v", err, boom)
 	}
-	if len(s.calls) != 1 {
-		t.Fatalf("calls = %q, want only gh pr merge", s.joined())
+	if got := s.joined(); len(got) != 1 || got[0] != "pr merge 12 --squash" {
+		t.Fatalf("calls = %q, want only gh pr merge", got)
 	}
 }
 

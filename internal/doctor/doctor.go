@@ -142,7 +142,7 @@ type run struct {
 // walk every branch and worktree. Under load they take tens of seconds, so
 // saddle up runs them after its first frame (#635).
 var slowChecks = map[string]bool{
-	CheckGH: true, CheckMergeSettings: true, CheckProtection: true, CheckGhStack: true,
+	CheckGH: true, CheckMergeSettings: true, CheckProtection: true, CheckGhStack: true, CheckForgeFacts: true,
 	CheckPush: true, CheckLeftovers: true, CheckSkills: true, CheckScratch: true, CheckLogins: true,
 }
 
@@ -164,6 +164,7 @@ func runChecks(env Env, local bool) []Result {
 	}{
 		{CheckConfig, r.config}, {CheckRemote, r.gitRemote}, {CheckDefaultBranch, r.defaultBranch},
 		{CheckGH, r.ghAuth}, {CheckMergeSettings, r.mergeSettings}, {CheckProtection, r.protection}, {CheckGhStack, r.ghStack},
+		{CheckForgeFacts, r.forgeFacts},
 		{CheckTestCmd, r.testCmd},
 		{CheckTmux, func() Result {
 			return r.tool(CheckTmux, "tmux", "-V", "install tmux (e.g. `brew install tmux` or your package manager)")
