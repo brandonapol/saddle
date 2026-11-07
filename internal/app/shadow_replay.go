@@ -119,7 +119,7 @@ func ReplayShadow(ctx context.Context, path string, o ReplayOptions) (ReplayRepo
 	if err != nil {
 		return ReplayReport{}, err
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	cp := filepath.Join(dir, "state.db")
 	src, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(10000)")
 	if err != nil {
@@ -555,13 +555,13 @@ func (w *replayWorld) run(o ReplayOptions) ReplayReport {
 		la, isAction := w.pre(ev)
 		if in {
 			rep.Events++
-			switch {
-			case ev.Kind == eventCIRepairSpawned:
+			switch ev.Kind {
+			case eventCIRepairSpawned:
 				rep.Outcomes.LegacyRepairs++
 				if c := w.change(ev.Task); c != nil && c.checks[baseStatus] == prgraph.CheckFailure && onlyHostRed(c) {
 					rep.Outcomes.LegacyHostRepairs++
 				}
-			case ev.Kind == "stack_at_risk":
+			case "stack_at_risk":
 				rep.Outcomes.AtRiskSpells++
 			}
 			if w.change(ev.Task) != nil {
