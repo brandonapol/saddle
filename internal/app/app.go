@@ -756,6 +756,9 @@ func (a *App) Kill(task string, keep bool) error {
 	if err := errors.Join(a.Store.Release(task), a.Store.DequeuePending(task), a.Store.SetStatus(task, store.Killed)); err != nil {
 		return err
 	}
+	// A done gate running for it polls the status set above and stops;
+	// its heavy-run leases go now, so the slot frees at once (#849).
+	a.killTaskLeases(task)
 	if t.Window != "" && a.Tmux.Alive(t.Window) {
 		if err := a.Tmux.KillWindow(t.Window); err != nil {
 			return err

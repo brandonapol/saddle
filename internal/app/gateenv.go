@@ -397,7 +397,7 @@ func (a *App) runGateEnv(ctx context.Context, task string, run GateRun, notify b
 			lost := gateLeaseLost
 			res.Env = &lost
 			a.Store.Event(task, EventGateEnv, gateLeaseLost.Signature+"; the gate was stopped, "+task+" stays queued")
-			if notify {
+			if notify && !a.finishedTask(task) { // a killed task's leases go with it (#849)
 				if err := a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf(
 					"The test gate for %s was stopped because its heavy-run lease was killed or reaped. "+
 						"%s stays queued and nothing was counted against it; land again to rerun it.", task, task)); err != nil {
