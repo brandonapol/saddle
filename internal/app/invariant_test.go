@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -204,5 +205,82 @@ func TestParseSpawnEvent(t *testing.T) {
 	}
 	if sp := parseSpawnEvent("parent= adapter=claude (default) model= claims="); sp.Adapter != "claude" || sp.Model != "" || sp.Claims != nil {
 		t.Fatalf("%+v", sp)
+	}
+}
+
+// I5, #825: terminal train rows for finished tasks have no exit by design
+// and were each reported after the engine restart. An escalated row for a
+// killed task (t96, t328) still is a violation.
+func TestInvariantMonitorSkipsTerminalTrainRows(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	for i, st := range []string{TrainMerged, TrainFolded, TrainSuperseded} {
+		id := fmt.Sprintf("t%d", 10+i)
+		must(t, a.Store.CreateTask(store.Task{ID: id, Title: "x", Role: store.RoleWorker, Status: store.Killed}))
+		trainRow(t, a, id, st)
+	}
+	must(t, a.Store.CreateTask(store.Task{ID: "t13", Title: "x", Role: store.RoleWorker, Status: store.Landed}))
+	trainRow(t, a, "t13", TrainMerged)
+	trainRow(t, a, "t14", TrainSuperseded) // its task is gone
+	now := time.Now().UTC()
+	if fresh, err := a.CheckInvariants(now); err != nil || len(fresh) != 0 {
+		t.Fatalf("terminal rows: %+v, %v", fresh, err)
+	}
+
+	must(t, a.Store.CreateTask(store.Task{ID: "t96", Title: "x", Role: store.RoleWorker, Status: store.Killed}))
+	trainRow(t, a, "t96", TrainEscalated)
+	reportsOnce(t, a, now, invariants.StateWithoutExit, "train row t96")
+}
+
+// The terminal train states the invariants package knows are the app's.
+func TestInvariantTerminalTrainStatesMatchTheApp(t *testing.T) {
+	for _, st := range []string{TrainMerged, TrainFolded, TrainSuperseded} {
+		if !invariants.TerminalTrainState(st) {
+			t.Errorf("%s isn't terminal to invariants", st)
+		}
+	}
+	for _, st := range []string{TrainEscalated, TrainHeld, TrainRepairing, store.TrainOK, store.TrainError, store.Queued, store.OnHold} {
+		if invariants.TerminalTrainState(st) {
+			t.Errorf("%s is terminal to invariants", st)
+		}
+	}
+}
+
+// A first-run burst: more than five new violations of one kind in a tick
+// send one summary notice, but still one event each.
+func TestInvariantMonitorSummarizesABurst(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	for i := range 8 {
+		id := fmt.Sprintf("t%d", 20+i)
+		must(t, a.Store.CreateTask(store.Task{ID: id, Title: "x", Role: store.RoleWorker, Status: store.Killed}))
+		trainRow(t, a, id, TrainEscalated)
+	}
+	// And one of another kind, which keeps its own notice.
+	must(t, a.SetCIRed(CIRedState{Red: []CIRedLayer{{Task: "t2", PR: "#2", Acked: true}}}))
+	fresh, err := a.CheckInvariants(time.Now().UTC())
+	must(t, err)
+	if len(fresh) != 9 {
+		t.Fatalf("fresh = %+v, want 9", fresh)
+	}
+	ev, all, ns := violationCounts(t, a, invariants.StateWithoutExit)
+	if ev != 8 || all != 9 || ns != 2 {
+		t.Fatalf("%d I5 events, %d in all, %d notices; want 8, 9, 2", ev, all, ns)
+	}
+	notices, err := a.Store.PeekNotices(OrchestratorID, false)
+	must(t, err)
+	var summary string
+	for _, n := range notices {
+		if strings.Contains(n.Text, string(invariants.StateWithoutExit)) {
+			summary = n.Text
+		}
+	}
+	for _, want := range []string{"8 ", "train row t20", "train row t22", "5 more"} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("summary %q lacks %q", summary, want)
+		}
+	}
+	if strings.Contains(summary, "train row t27") {
+		t.Errorf("summary %q lists every subject", summary)
 	}
 }

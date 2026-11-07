@@ -190,3 +190,18 @@ func TestDiffReportsNewAndCleared(t *testing.T) {
 		t.Fatalf("Diff = %v, %v", fresh, cleared)
 	}
 }
+
+// I5, #825: after an engine restart the monitor flagged ~380 train rows in
+// terminal states. Terminal states have no exit by definition (ADR 0009);
+// only a non-terminal row with no way out is a violation.
+func TestStateWithoutExitSkipsTerminalTrainRows(t *testing.T) {
+	var rows []State
+	for i, st := range []string{"merged", "folded", "superseded"} {
+		rows = append(rows, State{What: "train row", Subject: fmt.Sprintf("t%d", i), State: st, Detail: st + " for a task that is killed"})
+	}
+	none(t, Snapshot{Now: now, States: rows})
+
+	// t96, t328: escalated for a killed task is real.
+	rows = append(rows, State{What: "train row", Subject: "t96", State: "escalated", Detail: "escalated for a task that is killed"})
+	only(t, Snapshot{Now: now, States: rows}, StateWithoutExit, "train row t96")
+}
