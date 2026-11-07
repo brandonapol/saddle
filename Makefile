@@ -46,6 +46,23 @@ E2E_GO_TIMEOUT := $(or $(E2E_GO_TIMEOUT),15m)
 # How many journeys run at once (go test -parallel; empty means one per CPU).
 E2E_PARALLEL ?=
 
+# The harness's own race build in test/e2e. The local gate (check without
+# CHECK_FULL=1) leaves it out; CI and the nightly keep it.
+E2E_RACE_FLAG ?= -race
+
+# make check tests only the changed packages and their reverse dependents,
+# and runs the e2e journeys only when the TUI, hook, agent launch code or the
+# journeys changed (scripts/changed-pkgs.sh, #881). CHECK_FULL=1 runs the whole
+# suite, race build included; CHECK_BASE=ref picks the diff's base. CI runs
+# the full targets directly, so it always tests everything.
+CHECK_FULL ?=
+CHANGED_PKGS = GO=$(GO) GO_TAGS='$(GO_TAGS)' ./scripts/changed-pkgs.sh
+ifeq ($(CHECK_FULL),1)
+CHECK_TESTS := test check/templeak test/e2e
+else
+CHECK_TESTS := test/changed check/templeak/changed test/e2e/changed
+endif
+
 # go test's -timeout for each package's test binary (Go's default is 10m).
 # internal/app, the slowest, takes about 75s idle but several times that at
 # load average 60+, when several agents run `make check` at once.
@@ -150,6 +167,18 @@ clean: ## Remove build artifacts (never touches .saddle/ state)
 test: ## Run unit and integration tests (TEST_TIMEOUT per package, default 20m)
 	$(call go_test,$(GO_TAGFLAG) -timeout $(TEST_TIMEOUT) ./...)
 
+.PHONY: test/changed
+test/changed: ## Test only the changed packages and their dependents (CHECK_FULL=1 or an unsure diff runs all)
+	pkgs="$$($(CHANGED_PKGS) | tr '\n' ' ')"
+	if [ -z "$$pkgs" ]; then echo "test/changed: no Go package affected; skipping go test"; exit 0; fi
+	echo "test/changed: $$pkgs"
+	$(call go_test,$(GO_TAGFLAG) -timeout $(TEST_TIMEOUT) $$pkgs)
+
+.PHONY: test/e2e/changed
+test/e2e/changed: ## Run the e2e journeys, without the race build, only if the TUI, hook, agent launch or e2e code changed
+	if [ "$$($(CHANGED_PKGS) --e2e)" != yes ]; then echo "test/e2e/changed: no journey-relevant change; skipping e2e"; exit 0; fi
+	$(MAKE) --no-print-directory test/e2e E2E_RACE_FLAG=
+
 .PHONY: test/e2e
 test/e2e: ## Run the end-to-end journeys (RUN=Journey to pick some; needs tmux)
 	# Builds saddle, a fake gh and a fake agent, then drives the real binary in
@@ -160,11 +189,11 @@ test/e2e: ## Run the end-to-end journeys (RUN=Journey to pick some; needs tmux)
 	# Each journey package appends its slowest journeys to E2E_REPORT, shown
 	# after the run whether it passed or not.
 	rep="$$(mktemp)"; trap 'rm -f "$$rep"' EXIT; \
-	E2E_REPORT="$$rep" E2E_GO_TAGS='$(GO_TAGS)' $(GO) test -tags '$(GO_TAGS) e2e' -race -count=1 -timeout $(E2E_GO_TIMEOUT) $(if $(E2E_PARALLEL),-parallel $(E2E_PARALLEL)) $(if $(RUN),-run '$(RUN)') ./internal/e2e/... ./test/e2e/... ./internal/bench/...; \
+	E2E_REPORT="$$rep" E2E_GO_TAGS='$(GO_TAGS)' $(GO) test -tags '$(GO_TAGS) e2e' $(E2E_RACE_FLAG) -count=1 -timeout $(E2E_GO_TIMEOUT) $(if $(E2E_PARALLEL),-parallel $(E2E_PARALLEL)) $(if $(RUN),-run '$(RUN)') ./internal/e2e/... ./test/e2e/... ./internal/bench/...; \
 	code=$$?; cat "$$rep"; exit $$code
 
 .PHONY: test/scripts
-test/scripts: ## Test the shell scripts (upgrade, templeak, CI sharding, test summary, install PATH)
+test/scripts: ## Test the shell scripts (upgrade, templeak, CI sharding, test summary, install PATH, changed packages)
 	bash scripts/upgrade_test.sh
 	bash scripts/templeak_test.sh
 	bash scripts/e2e-nightly-shard_test.sh
@@ -172,6 +201,7 @@ test/scripts: ## Test the shell scripts (upgrade, templeak, CI sharding, test su
 	bash scripts/cover-report_test.sh
 	bash scripts/test-summary_test.sh
 	bash scripts/install-path_test.sh
+	bash scripts/changed-pkgs_test.sh
 
 .PHONY: test/plugin
 test/plugin: ## Run the plugin's TypeScript tests (needs the claude CLI, 2.1.287+)
@@ -207,7 +237,7 @@ test/cover: ## Run tests and write coverage.html
 ##@ Code quality
 
 .PHONY: check
-check: check/format check/tidy check/vet test check/templeak test/e2e test/scripts check/lint ## Run every check CI runs, bar the plugin tests (make test/plugin; they need claude)
+check: check/format check/tidy check/vet $(CHECK_TESTS) test/scripts check/lint ## Run CI's checks, testing only what changed (CHECK_FULL=1 for all; plugin tests: make test/plugin)
 
 .PHONY: check/format
 check/format: ## Fail if any Go file needs gofmt
@@ -232,6 +262,12 @@ check/templeak: ## Fail if a test binary leaves files in an empty TMPDIR just by
 	# internal/app's binary also runs as the ref guard hook on every ref
 	# update, which filled /tmp (#320).
 	GO=$(GO) ./scripts/templeak.sh $(GO_TAGFLAG) ./...
+
+.PHONY: check/templeak/changed
+check/templeak/changed: ## check/templeak on the changed packages and their dependents only
+	pkgs="$$($(CHANGED_PKGS) | tr '\n' ' ')"
+	if [ -z "$$pkgs" ]; then echo "templeak: no Go package affected; skipping"; exit 0; fi
+	GO=$(GO) ./scripts/templeak.sh $(GO_TAGFLAG) $$pkgs
 
 .PHONY: check/vet
 check/vet: ## Run go vet

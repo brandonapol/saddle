@@ -171,6 +171,37 @@ the MCP `done` tool calls `App.DoneAsync` (`internal/app/done.go`):
 hangs up mid-gate still gets its task queued. The CLI's `saddle done` still
 runs the gate inline.
 
+### What `make check` tests (#881)
+
+Several gates running the whole suite at once drove the machine to load 40+
+on 8 CPUs, which made tests flaky. So in this repo `make check`, which is the
+done gate and the train's gate, tests only what the change can break.
+`scripts/changed-pkgs.sh` diffs HEAD (plus uncommitted and untracked files)
+against its merge base with `CHECK_BASE`, else the first of
+`saddle/integration`, `origin/main` or `main` that exists. It lists the
+changed packages and every package that imports them, through tests too:
+
+- `test/changed` and `check/templeak/changed` run on that list. A
+  `_test.go`-only change tests just its own package. A non-Go file in a
+  package's tree (testdata, embeds) counts as a change to that package.
+- A Markdown file outside the packages (docs, ADRs, the glossary) selects
+  only the packages whose Go files mention its path, such as the glossary
+  test. A docs-only change runs no other Go tests. Format, tidy, vet, lint
+  and the script tests always run.
+- `test/e2e/changed` runs the journeys only when internal/tui, internal/hook,
+  agent launch code (internal/agent, internal/tmux, internal/termpane, cmd),
+  internal/e2e, test/e2e or internal/bench changed. It leaves out the race
+  build (`E2E_RACE_FLAG=`).
+- When the selector isn't sure, it falls back to the full suite and says
+  why on stderr: `CHECK_FULL=1`, no base ref or merge base, an empty diff,
+  a change to go.mod, go.sum, the Makefile, `.github/` or the golangci
+  config, a `.go` file outside any package (a deleted package), or a
+  non-Markdown file it can't map to a package.
+
+CI runs the full targets on every PR (`test/race/shard`, `test/e2e`,
+`check/templeak`), and so does the nightly, so they still test everything.
+`make check CHECK_FULL=1` runs the old full gate locally.
+
 ## Merge train
 
 **Landed means on its way to base, and only merged is done (#819, [ADR
