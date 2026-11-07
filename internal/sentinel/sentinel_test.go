@@ -132,6 +132,14 @@ func setup(t *testing.T) (*app.App, string) {
 	return a, origin
 }
 
+// manual is a sentinel that never restacks itself, so tests can see the
+// flag a restack-fixable stack raises when restack fails or is off.
+func manual(a *app.App) *Sentinel {
+	s := New(a)
+	s.AutoRestack = false
+	return s
+}
+
 func landTask(t *testing.T, a *app.App, id, file string) store.Task {
 	t.Helper()
 	tk, err := a.Spawn(app.SpawnReq{ID: id, Title: file})
@@ -358,8 +366,9 @@ func TestSentinelFlagsAboveSquashMergedBottom(t *testing.T) {
 
 	// A PR merged into main is not an incident (#119.2): t1 leaves the stack,
 	// and the PRs above it only need a restack, which needs no human, so
-	// nothing is labeled needs-human (#119.7).
-	s := New(a)
+	// nothing is labeled needs-human (#119.7). With the sentinel's own
+	// restack off (#775), it flags the stack for the orchestrator.
+	s := manual(a)
 	rep, err := s.Check()
 	must(t, err)
 	if !rep.AtRisk || rep.Task != t2.ID || !strings.Contains(strings.Join(rep.Hits, "\n"), "origin/main has") {

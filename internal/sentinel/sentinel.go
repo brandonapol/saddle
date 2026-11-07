@@ -8,8 +8,12 @@
 // work that depends on the broken layers. Only a conflict, which needs a
 // human decision, labels PRs needs-human; each labeled PR gets one comment
 // saying which conflict, kept current as the cause changes and turned into a
-// note when the label lifts. It never restacks itself. Once the stack checks
-// clean it lifts the labels and the flag. `saddle sentinel ack` and
+// note when the label lifts. When everything it finds is drift a restack
+// fixes (base moved, a layer left the stack with its commits still on
+// integration), it restacks itself instead of flagging, with backoff and at
+// most three tries per flagged task, and flags only when that fails (#775).
+// It never restacks over a conflict. Once the stack checks clean it lifts the
+// labels and the flag. `saddle sentinel ack` and
 // `saddle unstack` are the escape hatches when restack can't fix it.
 package sentinel
 
@@ -138,22 +142,50 @@ type Sentinel struct {
 	// Blockers files a GitHub issue for each blocker escalated since the
 	// last cycle (#407). Nil files none.
 	Blockers *app.BlockerFiler
-	lastErr  string
+	// AutoRestack lets Check restack the stack itself when everything it
+	// finds is drift a restack fixes (#775). New sets it; a restack's own
+	// re-check (app.StackCheck) leaves it off so it never starts another.
+	AutoRestack bool
+	lastErr     string
 	// posted is the sentinel comment last seen or written on each PR, so a
 	// quiet tick costs no GitHub calls.
 	posted map[string]Comment
+	// restack rebuilds the stack; nil means App.Restack. Tests stub it.
+	restack func() (app.RestackResult, error)
+	now     func() time.Time
+	// tries counts the sentinel's own restacks per flagged task, for the
+	// backoff and the cap (#775). A clean check resets it.
+	tries map[string]restackTry
+}
+
+// maxRestacks is how many times the sentinel restacks for one flagged task
+// before it leaves the flag to a human.
+const maxRestacks = 3
+
+// Event kinds for the sentinel's own restacks.
+const (
+	EventRestack       = "sentinel_restack"
+	EventRestackFailed = "sentinel_restack_failed"
+)
+
+type restackTry struct {
+	n    int
+	next time.Time
+	err  string // why the last one failed, for the flag's cause
 }
 
 func init() {
 	app.StackCheck = func(a *app.App) error {
-		_, err := New(a).Check()
+		s := New(a)
+		s.AutoRestack = false
+		_, err := s.Check()
 		return err
 	}
 }
 
 // New returns a sentinel for a's stack that talks to the repo's forge.
 func New(a *app.App) *Sentinel {
-	return &Sentinel{App: a, GH: &GH{Forge: a.Forge()}, Interval: DefaultInterval, BusyRetry: DefaultBusyRetry, Blockers: a.NewBlockerFiler()}
+	return &Sentinel{App: a, GH: &GH{Forge: a.Forge()}, Interval: DefaultInterval, BusyRetry: DefaultBusyRetry, Blockers: a.NewBlockerFiler(), AutoRestack: true}
 }
 
 // Report is the outcome of one check.
@@ -165,6 +197,12 @@ type Report struct {
 	Cause  string   `json:"cause,omitempty"` // why it broke
 	Hits   []string `json:"hits,omitempty"`  // every problem found, "task: problem"
 	PRs    []string `json:"prs,omitempty"`   // PRs labeled needs-human
+	// Restacked says the sentinel restacked the stack itself this check,
+	// since everything it found was drift a restack fixes (#775).
+	Restacked bool `json:"restacked,omitempty"`
+	// Deferred says the sentinel's restack raced another push twice, so it
+	// left the stack for the next cycle without flagging it.
+	Deferred bool `json:"deferred,omitempty"`
 }
 
 // Run checks the stack now and then every Interval until ctx ends, opens
@@ -255,34 +293,145 @@ type hit struct {
 	at, from int
 	cause    string
 	conflict bool
+	fix      bool // a restack fixes it without a human
 }
 
 // Check runs one cycle: it takes finished tasks out of the stack, checks every
 // layer left, then flags or clears the stack. It skips the cycle when the
 // train is busy, since a land or restack in progress moves the refs it reads.
+// When everything it finds is drift a restack fixes (base moved, a layer left
+// the stack with its commits still on integration), it restacks itself and
+// checks again, flagging only if that fails (#775). It backs off between its
+// restacks for the same flagged task and stops after maxRestacks.
 func (s *Sentinel) Check() (Report, error) {
+	rep, fix, err := s.check(s.AutoRestack)
+	if err != nil || !fix {
+		return rep, err
+	}
+	s.tried(rep.Task)
+	_, err = s.restackRetry()
+	switch {
+	case err == nil:
+		s.App.Store.Event(rep.Task, EventRestack, rep.Cause)
+		t := s.tries[rep.Task]
+		t.err = ""
+		s.tries[rep.Task] = t
+		rep, _, err = s.check(false)
+		rep.Restacked = true
+		return rep, err
+	case raced(err):
+		// Automerge or a repair pushed while restack did: not a failure,
+		// and not worth a flag. The next cycle restacks again.
+		s.tries[rep.Task] = restackTry{n: s.tries[rep.Task].n - 1, next: s.clock(), err: s.tries[rep.Task].err}
+		s.App.Store.Event(rep.Task, EventRestackFailed, "raced another push; retrying next cycle: "+err.Error())
+		return Report{Deferred: true, Task: rep.Task, Cause: rep.Cause, Hits: rep.Hits}, nil
+	default:
+		s.App.Store.Event(rep.Task, EventRestackFailed, err.Error())
+		t := s.tries[rep.Task]
+		t.err = err.Error()
+		s.tries[rep.Task] = t
+		rep, _, err = s.check(false)
+		return rep, err
+	}
+}
+
+// restackRetry restacks; when the push lost a race ("stale info"), it fetches
+// and tries once more.
+func (s *Sentinel) restackRetry() (app.RestackResult, error) {
+	run := s.restack
+	if run == nil {
+		run = s.App.Restack
+	}
+	res, err := run()
+	if err == nil || !raced(err) {
+		return res, err
+	}
+	_, _ = gitx.Run(s.App.Root, "fetch", "--quiet", "origin")
+	return run()
+}
+
+// raced reports whether a restack failed only because another push moved a
+// ref under it, which the next attempt fixes.
+func raced(err error) bool {
+	return errors.Is(err, app.ErrRemoteMoved) || strings.Contains(err.Error(), "stale info")
+}
+
+func (s *Sentinel) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+// mayRestack reports whether the sentinel may restack for task now: fewer
+// than maxRestacks tries, and the last one's backoff is over.
+func (s *Sentinel) mayRestack(task string) bool {
+	t := s.tries[task]
+	return t.n < maxRestacks && !s.clock().Before(t.next)
+}
+
+// tried records a restack for task and backs the next one off, doubling from
+// one Interval.
+func (s *Sentinel) tried(task string) {
+	if s.tries == nil {
+		s.tries = map[string]restackTry{}
+	}
+	iv := s.Interval
+	if iv <= 0 {
+		iv = DefaultInterval
+	}
+	t := s.tries[task]
+	t.n++
+	t.next = s.clock().Add(iv << (t.n - 1))
+	s.tries[task] = t
+}
+
+// restackFixes reports whether every part of a layer's problem is one a
+// restack fixes: other tasks' commits or merges in its range, not descending
+// from the layer below, missing landed commits, or landed work off
+// integration. A lost range or a branch moved by hand is not; restack
+// refuses those.
+func restackFixes(problem string) bool {
+	for _, p := range strings.Split(problem, "; ") {
+		switch {
+		case strings.HasPrefix(p, "does not descend from "),
+			strings.HasPrefix(p, "contains "),
+			strings.HasPrefix(p, "is missing "),
+			strings.HasPrefix(p, "has ") && strings.Contains(p, ", landed "),
+			strings.HasSuffix(p, "restack puts it back"):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// check is one locked pass over the stack. With restack set, it stops before
+// flagging and reports fix when a restack may fix everything it found. A
+// flag's cause names the sentinel's last failed restack for its task.
+func (s *Sentinel) check(restack bool) (rep Report, fix bool, err error) {
 	a := s.App
 	unlock, ok, err := a.TryLockTrain()
 	if err != nil {
-		return Report{}, err
+		return Report{}, false, err
 	}
 	if !ok {
-		return Report{Busy: true}, nil
+		return Report{Busy: true}, false, nil
 	}
 	defer unlock()
 
 	ahead := s.baseAhead()
 	info, err := a.ReconcileStack(s.GH.PR)
 	if err != nil {
-		return Report{}, err
+		return Report{}, false, err
 	}
 	layers, err := a.StackLayers()
 	if err != nil {
-		return Report{}, err
+		return Report{}, false, err
 	}
 	flag, flagged, err := a.Flag()
 	if err != nil {
-		return Report{}, err
+		return Report{}, false, err
 	}
 	inStack := map[string]bool{}
 	for _, l := range layers {
@@ -299,10 +448,10 @@ func (s *Sentinel) Check() (Report, error) {
 	var hits []hit
 	for i, l := range layers {
 		if pr, ok := info[l.Task.PR]; ok && l.Task.PR != "" && pr.Mergeable == "CONFLICTING" {
-			hits = append(hits, hit{i, i, fmt.Sprintf("%s reports its %s %s conflicts with its base", fname, noun, l.Task.PR), true})
+			hits = append(hits, hit{i, i, fmt.Sprintf("%s reports its %s %s conflicts with its base", fname, noun, l.Task.PR), true, false})
 		}
 		if l.Problem != "" {
-			hits = append(hits, hit{i, i, l.Problem, false})
+			hits = append(hits, hit{i, i, l.Problem, false, restackFixes(l.Problem)})
 		}
 	}
 	if len(layers) > 0 && ahead > 0 {
@@ -310,14 +459,15 @@ func (s *Sentinel) Check() (Report, error) {
 		if ahead > 1 {
 			commits = fmt.Sprintf("%d commits", ahead)
 		}
-		hits = append(hits, hit{0, 0, fmt.Sprintf("origin/%s has %s %s lacks", a.Cfg.Base, commits, a.Cfg.Integration), false})
+		hits = append(hits, hit{0, 0, fmt.Sprintf("origin/%s has %s %s lacks", a.Cfg.Base, commits, a.Cfg.Integration), false, true})
 	}
 
 	if len(hits) == 0 {
+		s.tries = nil
 		if flagged {
-			return Report{}, s.clear(flag, inStack)
+			return Report{}, false, s.clear(flag, inStack)
 		}
-		return Report{}, nil
+		return Report{}, false, nil
 	}
 
 	first := hits[0]
@@ -326,12 +476,20 @@ func (s *Sentinel) Check() (Report, error) {
 			first = h
 		}
 	}
-	rep := Report{AtRisk: true, Task: layers[first.from].Task.ID, Cause: first.cause}
+	rep = Report{AtRisk: true, Task: layers[first.from].Task.ID, Cause: first.cause}
 	if first.from != first.at {
 		rep.Cause = layers[first.at].Task.ID + ": " + first.cause
 	}
+	fix = true
 	for _, h := range hits {
 		rep.Hits = append(rep.Hits, layers[h.at].Task.ID+": "+h.cause)
+		fix = fix && h.fix
+	}
+	if restack && fix && s.mayRestack(rep.Task) {
+		return rep, true, nil
+	}
+	if t := s.tries[rep.Task]; t.err != "" {
+		rep.Cause += "; the sentinel's restack failed: " + t.err
 	}
 	// needs-human goes on the PRs from the lowest conflict up, unless acked.
 	rep.Acked = flagged && flag.Acked && flag.Task == rep.Task
@@ -393,13 +551,13 @@ func (s *Sentinel) Check() (Report, error) {
 		}
 	}
 	if err := a.SetFlag(next); err != nil {
-		return rep, errors.Join(append(errs, err)...)
+		return rep, false, errors.Join(append(errs, err)...)
 	}
 	if !rep.Acked && (!flagged || flag.Acked || flag.Task != next.Task || flag.Cause != next.Cause) {
 		a.Store.Event(rep.Task, EventAtRisk, rep.Cause)
 		errs = append(errs, a.Notify(app.OrchestratorID, store.NoticeAction, notice(rep, a.Cfg.Base)))
 	}
-	return rep, errors.Join(errs...)
+	return rep, false, errors.Join(errs...)
 }
 
 func notice(rep Report, base string) string {
