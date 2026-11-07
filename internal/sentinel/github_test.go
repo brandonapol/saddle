@@ -25,7 +25,7 @@ func TestSentinelDropsMergedClosedAndKilled(t *testing.T) {
 	for i := range ts {
 		ts[i], _ = a.Store.Task(ts[i].ID)
 	}
-	t1, t2, t3, t4 := ts[0], ts[1], ts[2], ts[3]
+	t1, t2, t3 := ts[0], ts[1], ts[2]
 	other := filepath.Join(t.TempDir(), "other")
 	git(t, a.Root, "clone", "-q", origin, other)
 	git(t, other, "merge", "-q", "--squash", "origin/"+t1.Branch)
@@ -35,11 +35,13 @@ func TestSentinelDropsMergedClosedAndKilled(t *testing.T) {
 	gh.setPR(t2.PR, "CLOSED", "UNKNOWN")
 	must(t, a.Kill(t3.ID, false))
 
+	// Only t4 is left, and it needs nothing but a restack, which the
+	// sentinel runs itself (#775).
 	s := New(a)
 	rep, err := s.Check()
 	must(t, err)
-	if !rep.AtRisk || rep.Task != t4.ID {
-		t.Fatalf("report = %+v, want only t4 needing a restack", rep)
+	if rep.AtRisk || !rep.Restacked {
+		t.Fatalf("report = %+v, want the sentinel to restack t4 clean", rep)
 	}
 	for id, want := range map[string]string{t1.ID: app.TrainMerged, t2.ID: app.TrainSuperseded, t3.ID: app.TrainSuperseded} {
 		if got := trainState(t, a, id); got != want {
@@ -58,10 +60,7 @@ func TestSentinelDropsMergedClosedAndKilled(t *testing.T) {
 		}
 	}
 
-	if _, err := a.Restack(); err != nil {
-		t.Fatalf("Restack: %v", err)
-	}
-	if rep, err := s.Check(); err != nil || rep.AtRisk {
+	if rep, err := s.Check(); err != nil || rep.AtRisk || rep.Restacked {
 		t.Fatalf("after restack: %+v, %v", rep, err)
 	}
 	if _, flagged, _ := a.Flag(); flagged {
@@ -131,7 +130,8 @@ func TestSentinelAck(t *testing.T) {
 	}
 }
 
-// Labels a conflict put on come off once only a routine restack is left.
+// Labels a conflict put on come off once only a routine restack is left
+// (here with the sentinel's own restack off, so the flag stays).
 func TestSentinelDropsLabelsWhenConflictGoes(t *testing.T) {
 	a, origin := setup(t)
 	gh := newFakeGH(t)
@@ -141,7 +141,7 @@ func TestSentinelDropsLabelsWhenConflictGoes(t *testing.T) {
 	}
 	t1, _ = a.Store.Task(t1.ID)
 	gh.setPR(t1.PR, "OPEN", "CONFLICTING")
-	s := New(a)
+	s := manual(a)
 	if rep, err := s.Check(); err != nil || len(rep.PRs) != 1 {
 		t.Fatalf("check = %+v, %v", rep, err)
 	}
@@ -162,7 +162,7 @@ func TestSentinelDropsLabelsWhenConflictGoes(t *testing.T) {
 	}
 }
 
-// #190: unstack's own check flags the layer above (it still holds the
+// #190: with the sentinel's own restack off, unstack's own check flags the layer above (it still holds the
 // unstacked task's commit). Restack drops that commit, and must lift the flag
 // itself so prs works at once, not after the next sentinel cycle.
 func TestRestackLiftsFlagUnstackRaised(t *testing.T) {
@@ -176,7 +176,7 @@ func TestRestackLiftsFlagUnstackRaised(t *testing.T) {
 	if _, err := a.Unstack("t1"); err != nil {
 		t.Fatal(err)
 	}
-	if rep, err := New(a).Check(); err != nil || !rep.AtRisk || rep.Task != "t2" {
+	if rep, err := manual(a).Check(); err != nil || !rep.AtRisk || rep.Task != "t2" {
 		t.Fatalf("check after unstack = %+v, %v; want t2 at risk", rep, err)
 	}
 	if _, err := a.Restack(); err != nil {
