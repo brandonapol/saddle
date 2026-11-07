@@ -57,6 +57,10 @@ Other terms you will meet:
   **requeue** puts a landed task whose work integration lacks back in the train.
 - **sentinel**: the watcher that flags the stack *at-risk* or *ci-red*;
   `saddle sentinel ack` acknowledges a flag so it stops holding work back.
+- **reconcile**: the PR-graph engine ([ADR 0009](docs/adr/0009-prgraph-engine.md))
+  runs in *shadow* and logs where it disagrees with saddle (`reconcile_shadow`
+  events); `saddle reconcile --plan` shows its plan, `--replay <state.db>`
+  replays a database against it.
 - **autopilot**: saddle lands, publishes and tops up from `ready` issues by
   itself; **infinite mode** keeps going until the plan limit and parks there.
 - **adapter / harness**: the agent CLI (`claude`, `codex`, `gemini`, `grok`)

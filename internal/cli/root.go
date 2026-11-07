@@ -45,7 +45,7 @@ func Root() *cobra.Command {
 	root.AddCommand(
 		restackCmd(), afterCmd(),
 		versionCmd(), migrateCmd(), changelogCmd(), initCmd(), upCmd(), downCmd(), spawnCmd(), withTmux(statusCmd()), catchupCmd(), briefCmd(), claimCmd(), releaseCmd(), doneCmd(),
-		landCmd(), syncCmd(), prsCmd(), peekCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(), repairCmd(), concurrencyCmd(), pluginCmd(), grokBridgeCmd(), codexBridgeCmd(), openCodeBridgeCmd(), ssoCmd(), publishCmd(), noticesCmd(), trustCmd(), untrustCmd(), resumeCmd(), rescueCmd(), heavyRunCmd(), runqCmd(), autopilotCmd(), blockersCmd(), decisionsCmd(), sreCmd(), benchCmd(), remote.Command(open),
+		landCmd(), syncCmd(), prsCmd(), peekCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(), repairCmd(), concurrencyCmd(), pluginCmd(), grokBridgeCmd(), codexBridgeCmd(), openCodeBridgeCmd(), ssoCmd(), publishCmd(), noticesCmd(), trustCmd(), untrustCmd(), resumeCmd(), rescueCmd(), heavyRunCmd(), runqCmd(), autopilotCmd(), blockersCmd(), decisionsCmd(), sreCmd(), benchCmd(), reconcileCmd(), remote.Command(open),
 	)
 	addGlossaryHelp(root)
 	return root
@@ -265,6 +265,7 @@ func watcherSet(a *app.App) []watcher {
 		{"checkpoint", func(ctx context.Context) { a.NewCheckpointWatcher().Run(ctx) }}, // checkpoints uncommitted work and nudges commits (#50)
 		{"scratch", a.RunScratchSweeper},                                                // sweeps saddle's scratch every 10m, holds spawns when low (#322)
 		{"remote", func(ctx context.Context) { remote.RunManaged(ctx, a, nil) }},        // only when [remote] is enabled in the user config (#251)
+		{"reconcile-shadow", a.RunShadowReconciler},                                     // prgraph in shadow: logs reconcile_shadow divergences, never acts (#830)
 	}
 	if !a.Cfg.CI.Disabled {
 		ws = append(ws, watcher{"ci-red", func(ctx context.Context) { _ = sentinel.NewCIRed(a).Run(ctx) }}) // holds layers above red CI
