@@ -229,7 +229,11 @@ A check that must pass before work moves on. Kinds:
 ### gc
 `saddle gc [--dry-run]`: removes worktrees, branches and refs of killed, failed
 or landed tasks, and sweeps the scratch root. Keeps anything with unmerged
-work.
+work. *Automatic gc* is the same run on a 30-minute timer in the engine and
+`saddle up` (the `gc` watcher, #802): it skips while the train is busy, only
+removes things of tasks the store knows are dead, keeps the newest
+integration backups, packs loose objects and prunes old noisy event rows
+(`gc_auto` events).
 
 ### harness
 What runs the orchestrator chat and, by default, the workers: `claude`,
