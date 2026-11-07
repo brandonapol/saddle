@@ -1,0 +1,21 @@
+{
+  "scenario": "stacked_merge_plain_refused",
+  "source": "hand-written from GitHub's documented behaviour (#823); #824's canary re-records it from a scratch repo",
+  "params": {
+    "bottom": "41",
+    "top": "42",
+    "stack": "43"
+  },
+  "calls": [
+    {
+      "args": [
+        "pr",
+        "merge",
+        "41",
+        "--squash"
+      ],
+      "stderr": "GraphQL: Pull request #41 is part of a stack and must be merged using the asynchronous merge REST API (mergePullRequest)",
+      "exit": 1
+    }
+  ]
+}

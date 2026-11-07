@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // git runs git in the bare repo dir with a fixed identity, so merges are
@@ -116,6 +117,7 @@ func merge(dir string, s *State, p *PR, method, head string) error {
 		return err
 	}
 	p.State, p.HeadOid, p.MergeCommit, p.MergedBy = "MERGED", headSHA, tip, method
+	p.MergedAt = time.Now().UTC().Format(time.RFC3339)
 	if s.Repo.DeleteBranch {
 		for _, o := range s.Open() {
 			if o.Base == p.Head {

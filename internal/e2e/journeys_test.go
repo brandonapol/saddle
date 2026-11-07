@@ -136,6 +136,7 @@ func TestJourneyParallelLandPRsAutomerge(t *testing.T) {
 		return
 	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
+	unlockStackBase(t, w)
 	must(t, w.GH.Update(func(s *fakegh.State) error {
 		s.DefaultChecks = []fakegh.Check{{Name: "ci", Workflow: "CI", State: fakegh.Pending}}
 		return nil
@@ -324,6 +325,7 @@ func TestJourneyRestackAfterHumanSquashMerge(t *testing.T) {
 		return
 	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
+	unlockStackBase(t, w)
 	urls := landTwo(t, w)
 	low := prNumber(t, w.GHState(), urls["t1"])
 	must(t, w.GH.MergeByHand(low.Number, "squash"))
@@ -362,6 +364,7 @@ func TestJourneyUnstackAndRequeue(t *testing.T) {
 		return
 	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
+	unlockStackBase(t, w)
 	urls := landTwo(t, w)
 
 	r := w.MustSaddle("unstack", "t1")
@@ -420,4 +423,13 @@ func TestJourneyPRsRightAfterUnstackRestack(t *testing.T) {
 	if r := w.Saddle("prs"); r.Code != 0 {
 		t.Fatalf("prs after unstack and restack: %s", r)
 	}
+}
+
+// unlockStackBase lets fakegh retarget a PR in an open native stack, which
+// GitHub refuses (internal/forge/contract's stacked_base_refused). Only the
+// journeys whose saddle code still does that set it, until #897 moves them
+// to forge.MovePR and deletes it.
+func unlockStackBase(t *testing.T, w *World) {
+	t.Helper()
+	must(t, w.GH.Update(func(s *fakegh.State) error { s.StackBaseUnlocked = true; return nil }))
 }

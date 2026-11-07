@@ -1,0 +1,20 @@
+{
+  "scenario": "checks_failing_exit_1",
+  "source": "hand-written from GitHub's documented behaviour (#823); #824's canary re-records it from a scratch repo",
+  "params": {
+    "pr": "41"
+  },
+  "calls": [
+    {
+      "args": [
+        "pr",
+        "checks",
+        "41",
+        "--json",
+        "name,workflow,bucket,link"
+      ],
+      "stdout": "[{\"bucket\": \"fail\", \"link\": \"https://github.com/saddle-contract/scratch/actions/runs/11800000002/job/33000000002\", \"name\": \"ci\", \"workflow\": \"CI\"}]\n",
+      "exit": 1
+    }
+  ]
+}

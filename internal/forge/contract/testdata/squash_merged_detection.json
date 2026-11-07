@@ -1,0 +1,32 @@
+{
+  "scenario": "squash_merged_detection",
+  "source": "hand-written from GitHub's documented behaviour (#823); #824's canary re-records it from a scratch repo",
+  "params": {
+    "pr": "41",
+    "head": "contract-a"
+  },
+  "calls": [
+    {
+      "args": [
+        "pr",
+        "list",
+        "--state",
+        "merged",
+        "--base",
+        "main",
+        "--limit",
+        "10",
+        "--json",
+        "number,title,labels,mergedAt"
+      ],
+      "stdout": "[{\"labels\": [], \"mergedAt\": \"2026-11-07T12:00:00Z\", \"number\": 41, \"title\": \"contract-a\"}]\n"
+    },
+    {
+      "args": [
+        "api",
+        "repos/{owner}/{repo}/compare/main...contract-a"
+      ],
+      "stdout": "{\"status\": \"diverged\", \"ahead_by\": 1, \"behind_by\": 1, \"total_commits\": 1}\n"
+    }
+  ]
+}

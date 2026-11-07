@@ -1,0 +1,22 @@
+{
+  "scenario": "stacked_base_refused",
+  "source": "hand-written from GitHub's documented behaviour (#823); #824's canary re-records it from a scratch repo",
+  "params": {
+    "bottom": "41",
+    "top": "42",
+    "stack": "43"
+  },
+  "calls": [
+    {
+      "args": [
+        "pr",
+        "edit",
+        "42",
+        "--base",
+        "main"
+      ],
+      "stderr": "GraphQL: Pull request is part of a stack and its base branch cannot be changed. Remove it from the stack first. (updatePullRequest)",
+      "exit": 1
+    }
+  ]
+}

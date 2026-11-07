@@ -1,0 +1,20 @@
+{
+  "scenario": "checks_pending_exit_8",
+  "source": "hand-written from GitHub's documented behaviour (#823); #824's canary re-records it from a scratch repo",
+  "params": {
+    "pr": "41"
+  },
+  "calls": [
+    {
+      "args": [
+        "pr",
+        "checks",
+        "41",
+        "--json",
+        "name,workflow,bucket,link"
+      ],
+      "stdout": "[{\"bucket\": \"pending\", \"link\": \"https://github.com/saddle-contract/scratch/actions/runs/11800000001/job/33000000001\", \"name\": \"ci\", \"workflow\": \"CI\"}]\n",
+      "exit": 8
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "scenario": "stacked_move_unlink_base_relink",
+  "source": "hand-written from GitHub's documented behaviour (#823); #824's canary re-records it from a scratch repo",
+  "params": {
+    "bottom": "41",
+    "top": "43",
+    "stack": "44"
+  },
+  "calls": [
+    {
+      "args": [
+        "api",
+        "repos/{owner}/{repo}"
+      ],
+      "stdout": "{\"full_name\": \"saddle-contract/scratch\", \"html_url\": \"https://github.com/saddle-contract/scratch\", \"default_branch\": \"main\", \"allow_merge_commit\": false, \"allow_squash_merge\": true, \"allow_rebase_merge\": true, \"allow_auto_merge\": true, \"delete_branch_on_merge\": false}\n"
+    },
+    {
+      "args": [
+        "api",
+        "repos/{owner}/{repo}/stacks?per_page=1"
+      ],
+      "stdout": "[{\"number\": 44, \"url\": \"https://api.github.com/repos/saddle-contract/scratch/stacks/44\", \"base\": {\"ref\": \"main\"}, \"open\": true, \"pull_requests\": [{\"number\": 41, \"state\": \"open\", \"draft\": false, \"merged_at\": null}, {\"number\": 42, \"state\": \"open\", \"draft\": false, \"merged_at\": null}, {\"number\": 43, \"state\": \"open\", \"draft\": false, \"merged_at\": null}]}]\n"
+    },
+    {
+      "args": [
+        "api",
+        "repos/{owner}/{repo}/stacks?pull_request=43"
+      ],
+      "stdout": "[{\"number\": 44, \"url\": \"https://api.github.com/repos/saddle-contract/scratch/stacks/44\", \"base\": {\"ref\": \"main\"}, \"open\": true, \"pull_requests\": [{\"number\": 41, \"state\": \"open\", \"draft\": false, \"merged_at\": null}, {\"number\": 42, \"state\": \"open\", \"draft\": false, \"merged_at\": null}, {\"number\": 43, \"state\": \"open\", \"draft\": false, \"merged_at\": null}]}]\n"
+    },
+    {
+      "args": [
+        "stack",
+        "unstack",
+        "44"
+      ],
+      "stdout": "Unstacked stack #44 (3 pull requests)\n"
+    },
+    {
+      "args": [
+        "pr",
+        "edit",
+        "43",
+        "--base",
+        "contract-a"
+      ],
+      "stdout": "https://github.com/saddle-contract/scratch/pull/43\n"
+    },
+    {
+      "args": [
+        "stack",
+        "link",
+        "--base",
+        "main",
+        "41",
+        "43"
+      ],
+      "stdout": "Created stack #45 with 2 PRs\n"
+    },
+    {
+      "args": [
+        "pr",
+        "view",
+        "43",
+        "--json",
+        "baseRefName"
+      ],
+      "stdout": "{\"baseRefName\":\"contract-a\"}\n"
+    }
+  ]
+}

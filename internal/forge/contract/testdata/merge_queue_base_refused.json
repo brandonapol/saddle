@@ -1,0 +1,20 @@
+{
+  "scenario": "merge_queue_base_refused",
+  "source": "hand-written from GitHub's documented behaviour (#823); #824's canary re-records it from a scratch repo",
+  "params": {
+    "pr": "42"
+  },
+  "calls": [
+    {
+      "args": [
+        "pr",
+        "edit",
+        "42",
+        "--base",
+        "contract-a"
+      ],
+      "stderr": "GraphQL: Pull request is in the merge queue and its base branch cannot be changed. (updatePullRequest)",
+      "exit": 1
+    }
+  ]
+}

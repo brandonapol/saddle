@@ -1,0 +1,23 @@
+{
+  "scenario": "rate_limit_secondary",
+  "source": "hand-written from GitHub's documented behaviour (#823); #824's canary re-records it from a scratch repo",
+  "params": {},
+  "calls": [
+    {
+      "args": [
+        "pr",
+        "create",
+        "--base",
+        "main",
+        "--head",
+        "contract-a",
+        "--title",
+        "again",
+        "--body",
+        ""
+      ],
+      "stderr": "pull request create failed: HTTP 403: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. If you reach out to GitHub Support for help, please include the request ID 0400:1A2B:3C4D5E:6F7A8B:672C9F01. (https://api.github.com/graphql)",
+      "exit": 1
+    }
+  ]
+}

@@ -30,7 +30,7 @@ func (s *State) stackOf(n int) *Stack {
 	return found
 }
 
-// stack runs gh stack: --version, link, view and merge. The commands that
+// stack runs gh stack: --version, link, view, merge and unstack. The commands that
 // track stacks locally or push (init, add, submit, sync, push) aren't
 // faked, so a saddle that called them would fail loudly.
 func (c *call) stack(args []string) (int, error) {
@@ -51,8 +51,10 @@ func (c *call) stack(args []string) (int, error) {
 		return exitOK, c.stackView(args[1:])
 	case "merge":
 		return exitOK, c.stackMerge(args[1:])
+	case "unstack":
+		return exitOK, c.stackUnstack(args[1:])
 	}
-	return exitErr, fail("fakegh: unsupported: gh stack %s (saddle may only link, view and merge)", args[0])
+	return exitErr, fail("fakegh: unsupported: gh stack %s (saddle may only link, view, merge and unstack)", args[0])
 }
 
 func (c *call) stacksEnabled() error {
@@ -299,4 +301,28 @@ func prHeads(ps []*PR) []string {
 		out = append(out, p.Head)
 	}
 	return out
+}
+
+// stackUnstack is gh stack unstack <stack|PR>: it dissolves the open stack,
+// leaving its PRs open on their bases, free to change base again.
+func (c *call) stackUnstack(args []string) error {
+	pos, _ := flags(args)
+	if err := c.stacksEnabled(); err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return fail("fakegh: gh stack unstack needs a stack or PR number")
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(pos[0], "#"))
+	if err != nil {
+		return fail("invalid stack or PR number %q", pos[0])
+	}
+	for i, st := range c.s.Stacks {
+		if st.Open && (st.Number == n || slices.Contains(st.PRs, n)) {
+			c.s.Stacks = slices.Delete(c.s.Stacks, i, i+1)
+			fmt.Fprintf(c.out, "Unstacked stack #%d (%d pull requests)\n", st.Number, len(st.PRs))
+			return nil
+		}
+	}
+	return fail("no open stack found for %d", n)
 }

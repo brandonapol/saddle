@@ -6,7 +6,9 @@
 // It implements the subset of gh saddle runs: pr create/edit/view/list/
 // checks/merge/comment/close, label create, issue create/view, run view,
 // repo view, auth status, a few REST and GraphQL api calls, and the
-// gh-stack extension's stack link/view/merge with the stacks REST API.
+// gh-stack extension's stack link/view/merge/unstack with the stacks REST
+// API. It refuses what GitHub refuses, and internal/forge/contract checks
+// it against recorded GitHub transcripts (#823).
 package fakegh
 
 import (
@@ -60,10 +62,32 @@ type State struct {
 	NoStackExt bool `json:"no_stack_ext,omitempty"`
 	// StacksDisabled makes the repo lack Stacked PRs (a per-repo preview).
 	StacksDisabled bool `json:"stacks_disabled,omitempty"`
-	// StackedAsyncOnly makes gh pr merge refuse a PR in an open native
-	// stack, as GitHub does: such a PR merges only through PUT
-	// pulls/{n}/merge-async (#838).
-	StackedAsyncOnly bool `json:"stacked_async_only,omitempty"`
+	// StackBaseUnlocked lets gh pr edit --base change a PR in an open
+	// native stack, which GitHub refuses. It is a stopgap for the journeys
+	// whose saddle code still does that (#897); internal/forge/contract
+	// never sets it, and #897 deletes it.
+	StackBaseUnlocked bool `json:"stack_base_unlocked,omitempty"`
+	// Required are the status checks branch protection lists for Default
+	// when Protected; none means just "ci".
+	Required []string `json:"required,omitempty"`
+	// Throttle makes every call but gh api rate_limit fail with GitHub's
+	// primary or secondary rate-limit answer.
+	Throttle string `json:"throttle,omitempty"`
+	// Quota is what gh api rate_limit reports.
+	Quota Quota `json:"quota"`
+}
+
+// Throttles a test can set.
+const (
+	ThrottlePrimary   = "primary"
+	ThrottleSecondary = "secondary"
+)
+
+// Quota is the core REST rate limit.
+type Quota struct {
+	Limit     int   `json:"limit"`
+	Remaining int   `json:"remaining"`
+	Reset     int64 `json:"reset"` // Unix seconds
 }
 
 // Settings are the repo's merge settings, as the REST API names them.
@@ -95,6 +119,9 @@ type PR struct {
 	HeadOid     string `json:"head_oid,omitempty"`
 	MergeCommit string `json:"merge_commit,omitempty"`
 	MergedBy    string `json:"merged_by,omitempty"` // the method
+	MergedAt    string `json:"merged_at,omitempty"` // RFC 3339
+	// InQueue puts the PR in the merge queue, which locks its base.
+	InQueue bool `json:"in_queue,omitempty"`
 }
 
 // Check is one CI check on a PR.
@@ -120,6 +147,14 @@ type Issue struct {
 	State  string   `json:"state"`
 	Labels []string `json:"labels"`
 	Subs   []int    `json:"subs,omitempty"`
+}
+
+// requiredChecks are the checks branch protection lists for Default.
+func (s *State) requiredChecks() []string {
+	if len(s.Required) > 0 {
+		return s.Required
+	}
+	return []string{"ci"}
 }
 
 // Repo is the fake GitHub of one bare origin.

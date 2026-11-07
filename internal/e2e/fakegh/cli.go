@@ -66,6 +66,9 @@ func Main(dir string, args []string, stdout, stderr io.Writer) int {
 	var err error
 	err = r.Update(func(s *State) error {
 		s.Calls = append(s.Calls, args)
+		if msg := throttled(s, args); msg != "" {
+			return &ghError{msg: msg, code: exitErr}
+		}
 		for prefix, msg := range s.Fail {
 			if strings.HasPrefix(strings.Join(args, " "), prefix) {
 				return &ghError{msg: msg, code: exitErr}
@@ -226,6 +229,14 @@ func (c *call) pr(sub string, args []string) (int, error) {
 		return exitOK, c.print(pick(c.prJSON(p), one(f, "json")), one(f, "q", "jq"))
 	case "edit":
 		if b := one(f, "base"); b != "" {
+			// GitHub locks the base of a PR in the merge queue (#770) and of
+			// one in a native stack; MovePR unstacks first (#820).
+			if p.InQueue {
+				return exitErr, fail("GraphQL: Pull request is in the merge queue and its base branch cannot be changed. (updatePullRequest)")
+			}
+			if st := c.s.stackOf(p.Number); st != nil && st.Open && !c.s.StackBaseUnlocked {
+				return exitErr, fail("GraphQL: Pull request is part of a stack and its base branch cannot be changed. Remove it from the stack first. (updatePullRequest)")
+			}
 			if branchSHA(c.dir, b) == "" {
 				return exitErr, fail("could not edit PR #%d: base branch %s does not exist", p.Number, b)
 			}
@@ -271,8 +282,11 @@ func (c *call) pr(sub string, args []string) (int, error) {
 		if method == "" {
 			return exitErr, fail("--merge, --rebase, or --squash required when not running interactively")
 		}
-		if st := c.s.stackOf(p.Number); c.s.StackedAsyncOnly && st != nil && st.Open {
+		if st := c.s.stackOf(p.Number); st != nil && st.Open {
 			return exitErr, fail("GraphQL: Pull request #%d is part of a stack and must be merged using the asynchronous merge REST API (mergePullRequest)", p.Number)
+		}
+		if msg := requiredChecksPass(c.s, p); msg != "" {
+			return exitErr, fail("GraphQL: %s (mergePullRequest)", msg)
 		}
 		if err := merge(c.dir, c.s, p, method, one(f, "match-head-commit")); err != nil {
 			return exitErr, fail("%v", err)
@@ -405,8 +419,13 @@ func (c *call) prJSON(p *PR) map[string]any {
 	if p.MergeCommit != "" {
 		mc = map[string]any{"oid": p.MergeCommit}
 	}
+	var mergedAt any
+	if p.MergedAt != "" {
+		mergedAt = p.MergedAt
+	}
 	return map[string]any{
-		"number": p.Number, "url": c.s.PRURL(p.Number), "title": p.Title, "body": p.Body, "state": p.State,
+		"mergedAt": mergedAt,
+		"number":   p.Number, "url": c.s.PRURL(p.Number), "title": p.Title, "body": p.Body, "state": p.State,
 		"isDraft": p.Draft, "mergeable": m, "mergeStateStatus": ms, "baseRefName": p.Base, "headRefName": p.Head,
 		"headRefOid": head, "labels": labels, "comments": comments, "statusCheckRollup": rollup, "files": files,
 		"mergeCommit": mc, "closed": p.State != "OPEN", "merged": p.State == "MERGED",
@@ -520,6 +539,9 @@ func (c *call) api(args []string) error {
 		}
 	}
 	jq := one(f, "q", "jq")
+	if ep == "rate_limit" {
+		return c.rateLimit(jq)
+	}
 	if ep == "graphql" {
 		return c.graphql(fields, jq)
 	}
@@ -555,7 +577,9 @@ func (c *call) api(args []string) error {
 		if !c.s.Protected || rest[1] != c.s.Default {
 			return fail("gh: Branch not protected (HTTP 404)")
 		}
-		return c.print(map[string]any{"required_status_checks": map[string]any{"contexts": []string{"ci"}, "checks": []any{}}}, jq)
+		return c.print(map[string]any{"required_status_checks": map[string]any{"contexts": c.s.requiredChecks(), "checks": []any{}}}, jq)
+	case len(rest) == 2 && rest[0] == "compare" && method == "GET":
+		return c.compare(rest[1], jq)
 	case len(rest) == 3 && rest[0] == "pulls" && rest[2] == "merge-async" && method == "PUT":
 		return c.mergeAsync(rest[1], fields, jq)
 	case len(rest) >= 2 && rest[0] == "issues":
