@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The terminal pane's toggle as terminals deliver it. Legacy terminals send
@@ -116,6 +117,11 @@ func TestJourneyTerminalPane(t *testing.T) {
 
 	// esc returns focus to chat, and what is typed right after lands there.
 	u.Keys("Escape")
+	// The TUI holds a bare esc until the next key or idle input decides
+	// whether it was alt+<key>. On a loaded runner the typed text can reach
+	// it before the hold flushes and join the esc, so give the esc time to
+	// land first. What an esc then a fast key does is covered in internal/tui.
+	time.Sleep(500 * time.Millisecond)
 	u.Type("typed-after-esc")
 	u.waitInChat("typed-after-esc")
 	u.clearInput("typed-after-esc")
