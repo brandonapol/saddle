@@ -268,11 +268,22 @@ func TestJourneyTUIMergeViewKeys(t *testing.T) {
 		t.Fatalf("holds after the second h = %q", st.Holds)
 	}
 
-	// main moves under t2: r rebases its stack onto it.
+	// main moves under t2: r rebases its stack onto it. saddle up's sentinel
+	// restacks drift by itself (#775), so it may get there first and r finds
+	// the stack already on main; either way t2 must end up on the new main.
 	must(t, w.GH.MergeByHand(prNumber(t, w.GHState(), urls["t1"]).Number, "squash"))
 	head := w.Task("t2").Branch
 	u.Keys("r")
-	u.WaitScreen("rebased stack t2")
+	Eventually(t, "the TUI to report r's rebase of stack t2", func() error {
+		s, err := w.Tmux.Capture(u.Target)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(s, "rebased stack t2") && !strings.Contains(s, "stack t2 is already on main") {
+			return errorf("no rebase result; screen:\n%s", s)
+		}
+		return nil
+	})
 	w.Git(w.Repo, "fetch", "-q", "origin")
 	if mb, main := w.Git(w.Repo, "merge-base", "origin/main", "origin/"+head), w.Git(w.Repo, "rev-parse", "origin/main"); mb != main {
 		t.Fatalf("t2's branch isn't on the new main after r")
