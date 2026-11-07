@@ -81,6 +81,13 @@ func (s *styledDriver) SendText(id, t string) error {
 	return nil
 }
 
+// setStyled changes the styled pane and its plain twin together.
+func (s *styledDriver) setStyled(p string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.styled, s.pane = p, StripANSI(p)
+}
+
 func (s *styledDriver) keysSent() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -114,17 +121,30 @@ func TestEmptyPromptNeedsNoClear(t *testing.T) {
 func TestNotDeliveredOverRealDraft(t *testing.T) {
 	for _, name := range []string{"claude_draft", "claude_draft_after_suggestion"} {
 		f := newStyled(t, name)
-		SendWhenIdle(f, "@1", "hi", nil)
-		time.Sleep(150 * time.Millisecond)
+		a := newAttempts()
+		SendWhenIdle(f, "@1", "hi", a.needed)
+		a.waitAttempts(t, 2) // a retry saw the draft and held off
 		if f.count() != 0 || len(f.keysSent()) != 0 {
 			t.Fatalf("%s: typed over a draft (sent %d, keys %v)", name, f.count(), f.keysSent())
 		}
 	}
 }
 
+// The draft fixture's footer reads "shift+tab", which holds "hi": with the
+// pane left unchanged after the send, EnsureSubmitted took the text for
+// unsubmitted and pressed Enter in the background, and a check that ran late
+// saw [C-u Enter] (#882). The pane empties once the text is in, as Claude
+// Code's does, and the check waits for the delivery to finish.
 func TestForceClearsDraft(t *testing.T) {
 	f := newStyled(t, "claude_draft")
-	Deliver(f, "@1", "hi", Delivery{Force: true})
+	f.onSend = func() { f.setStyled(fixture(t, "claude_empty")) }
+	sent := make(chan struct{})
+	Deliver(f, "@1", "hi", Delivery{Force: true, Sent: func() { close(sent) }})
+	select {
+	case <-sent:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the delivery never saw the pane change")
+	}
 	if f.count() != 1 {
 		t.Fatalf("sent %d, want 1", f.count())
 	}
@@ -135,18 +155,15 @@ func TestForceClearsDraft(t *testing.T) {
 
 func TestSentAfterPaneChanged(t *testing.T) {
 	f := newStyled(t, "claude_suggestion")
-	f.onSend = func() {
-		go func() {
-			time.Sleep(15 * time.Millisecond)
-			f.setPane("output\n❯ hi\n\nthinking…")
-		}()
-	}
+	f.onSend = func() { f.setPane("output\n❯ hi\n\nthinking…") }
 	var mu sync.Mutex
 	sent := 0
 	Deliver(f, "@1", "hi", Delivery{Sent: func() { mu.Lock(); sent++; mu.Unlock() }})
 	if !waitFor(func() bool { mu.Lock(); defer mu.Unlock(); return sent == 1 }) {
 		t.Fatal("Sent never called after the pane changed")
 	}
+	// A second Sent would be a non-event: sleep past ConfirmFor (60ms, see
+	// fakeDriver.Timing) so one would have shown up.
 	time.Sleep(80 * time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
@@ -160,6 +177,8 @@ func TestNotSentWhenPaneNeverChanges(t *testing.T) {
 	var mu sync.Mutex
 	sent := false
 	Deliver(f, "@1", "hi", Delivery{Sent: func() { mu.Lock(); sent = true; mu.Unlock() }})
+	// Sent must never come, so there is nothing to wait on: sleep well past
+	// ConfirmFor (60ms, see fakeDriver.Timing).
 	time.Sleep(150 * time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
@@ -279,8 +298,9 @@ func TestNotDeliveredIntoApproval(t *testing.T) {
 		f := newStyled(t, name)
 		f.styled = tail(f.styled, 15)
 		f.setPane(tail(f.pane, 15))
-		Deliver(f, "@1", "hi", Delivery{Force: true})
-		time.Sleep(150 * time.Millisecond)
+		a := newAttempts()
+		Deliver(f, "@1", "hi", Delivery{Force: true, Needed: a.needed})
+		a.waitAttempts(t, 2) // a retry saw the approval and held off
 		if f.count() != 0 || len(f.keysSent()) != 0 {
 			t.Fatalf("%s: typed into an approval screen (sent %d, keys %v)", name, f.count(), f.keysSent())
 		}
@@ -293,8 +313,9 @@ func TestDeliverWaitsWhileBlocked(t *testing.T) {
 	f := newStyled(t, "claude_empty")
 	var mu sync.Mutex
 	blocked := true
-	Deliver(f, "@1", "hi", Delivery{Blocked: func(string) bool { mu.Lock(); defer mu.Unlock(); return blocked }})
-	time.Sleep(30 * time.Millisecond)
+	a := newAttempts()
+	Deliver(f, "@1", "hi", Delivery{Needed: a.needed, Blocked: func(string) bool { mu.Lock(); defer mu.Unlock(); return blocked }})
+	a.waitAttempts(t, 2) // a retry saw the prompt and held off
 	if f.count() != 0 {
 		t.Fatalf("sent %d while blocked", f.count())
 	}
