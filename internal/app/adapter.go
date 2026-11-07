@@ -62,17 +62,41 @@ func (a *App) Adapters() []agent.Status {
 }
 
 // adapterStatus lists which adapters can run on this machine.
+// A disabled adapter is never OK, whatever the machine has (#839).
 func (a *App) adapterStatus() []agent.Status {
+	var ss []agent.Status
 	if a.AdapterStatus != nil {
-		return a.AdapterStatus()
+		ss = a.AdapterStatus()
+	} else {
+		cmds := map[string]string{usage.Claude: a.Cfg.Claude.Cmd, usage.Grok: a.Cfg.Grok.Cmd}
+		for n, c := range a.Cfg.Adapters {
+			if c.Cmd != "" {
+				cmds[n] = c.Cmd
+			}
+		}
+		ss = a.applySSOStatus(agent.Availability(cmds))
 	}
-	cmds := map[string]string{usage.Claude: a.Cfg.Claude.Cmd, usage.Grok: a.Cfg.Grok.Cmd}
-	for n, c := range a.Cfg.Adapters {
-		if c.Cmd != "" {
-			cmds[n] = c.Cmd
+	for i := range ss {
+		if a.Cfg.AdapterDisabled(ss[i].Name) {
+			ss[i].OK, ss[i].Disabled, ss[i].Reason = false, true, disabledWhy(ss[i].Name)
 		}
 	}
-	return a.applySSOStatus(agent.Availability(cmds))
+	return ss
+}
+
+// disabledWhy says an adapter is disabled and where.
+func disabledWhy(name string) string {
+	return "disabled by [adapters." + name + "] disabled = true in .saddle/config.toml"
+}
+
+// disabledErr refuses a spawn naming a disabled adapter, force or not, and
+// says how to turn it back on (#839).
+func (a *App) disabledErr(name string) error {
+	if !a.Cfg.AdapterDisabled(name) {
+		return nil
+	}
+	return fmt.Errorf("adapter %s is %s, so saddle never runs workers on it. "+
+		"Spawn without adapter= or name another; the owner can enable it by removing that line", name, disabledWhy(name))
 }
 
 // checkAdapter refuses an adapter that can't run here, naming the reason and

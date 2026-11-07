@@ -310,6 +310,25 @@ type Adapter struct {
 	// Models is the model per difficulty, e.g. {hard = "opus"}; an entry
 	// replaces DefaultRouting's for that difficulty.
 	Models map[string]string `toml:"models"`
+	// Disabled turns the adapter off for good: the chooser, autopilot,
+	// repairs, [fallback] chains and failover handoffs never pick it, and a
+	// spawn naming it is refused, force or not (#839).
+	Disabled bool `toml:"disabled"`
+}
+
+// AdapterDisabled reports whether [adapters.<name>] disabled = true.
+func (c Config) AdapterDisabled(name string) bool { return c.Adapters[name].Disabled }
+
+// DisabledAdapters lists the disabled adapters, sorted.
+func (c Config) DisabledAdapters() []string {
+	var out []string
+	for n, ad := range c.Adapters {
+		if ad.Disabled {
+			out = append(out, n)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // DefaultExcludeModels are the models excluded when [adapters.<name>]
@@ -408,6 +427,12 @@ func (m *AdapterMap) UnmarshalTOML(v any) error {
 					return fmt.Errorf("adapters.%s.model: want a string", name)
 				}
 				ad.Model = s
+			case "disabled":
+				b, ok := v.(bool)
+				if !ok {
+					return fmt.Errorf("adapters.%s.disabled: want true or false", name)
+				}
+				ad.Disabled = b
 			case "cost":
 				switch n := v.(type) {
 				case int64:
@@ -1377,6 +1402,9 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # Models saddle never spawns workers on; a spawn naming one is refused.
 # Unset excludes astra, which burns too many tokens; [] excludes nothing.
 # exclude_models = ["astra"]
+# Turn an adapter off for good: no spawn, repair, fallback or handoff picks
+# it, and adapter= naming it is refused (#839).
+# disabled = false
 # [adapters.grok]
 # cmd = "grok"
 # args = []

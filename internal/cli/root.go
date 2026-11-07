@@ -493,7 +493,10 @@ func writeAdapters(out io.Writer, ss []agent.Status) {
 	}
 	line := "adapters: " + strings.Join(agent.Usable(ss), ", ")
 	for _, s := range ss {
-		if !s.OK {
+		switch {
+		case s.Disabled:
+			line += fmt.Sprintf("; %s disabled ([adapters.%s] disabled = true)", s.Name, s.Name)
+		case !s.OK:
 			line += fmt.Sprintf("; %s unavailable (%s)", s.Name, s.Reason)
 		}
 	}

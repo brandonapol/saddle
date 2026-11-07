@@ -337,11 +337,11 @@ func (a *App) RotationBanner(now time.Time) string {
 	return line
 }
 
-// nextAdapter is from itself when it is not out of quota, else the best
+// nextAdapter is from itself when it is not out of quota or disabled, else the best
 // adapter with quota that can run here, as [adapters] policy ranks them
 // starting from from (#481).
 func (a *App) nextAdapter(from string, ex map[string]Exhaustion) (string, error) {
-	if _, out := ex[from]; !out {
+	if _, out := ex[from]; !out && !a.Cfg.AdapterDisabled(from) {
 		return from, nil
 	}
 	c, err := a.bestAdapter(pickReq{def: from}, ex, time.Now())
@@ -393,6 +393,9 @@ func (a *App) spawnAdapter(requested, model string, r pickReq, force bool) (spaw
 	now := time.Now()
 	ex := a.ExhaustedAdapters(now)
 	if requested != "" {
+		if err := a.disabledErr(requested); err != nil {
+			return spawnPick{}, err
+		}
 		if force {
 			return spawnPick{Name: requested, Why: "requested"}, nil
 		}
