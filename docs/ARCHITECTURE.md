@@ -155,7 +155,13 @@ the MCP `done` tool calls `App.DoneAsync` (`internal/app/done.go`):
    running job and gets its id back. The lock dies with its process, so a
    server that went away mid-gate never blocks the next done.
 4. The job runs the gate under the repo hooks' lock, so gates from every
-   worktree of the repo run one at a time. When it passes, and HEAD's tree
+   worktree of the repo run one at a time. The wait for that lock is
+   one wait, bounded by `[train] gate_timeout`. A queued gate tells the
+   agent who holds the lock (`saddle-hooks/lock.holder`). A gate that
+   runs out of wait isn't run unlocked: done queues the tree and leaves
+   it to the train's lint gate (#799). The repo-hook wrapper waits at
+   most `SADDLE_HOOK_LOCK_WAIT` seconds (default 300) and then skips the
+   heavy hook with a message. When it passes, and HEAD's tree
    is still the one it checked, the task is marked done and queued and the
    agent gets an info notice. A red gate, an interrupt or a branch that
    moved meanwhile sends the agent an action notice (which wakes it) with
