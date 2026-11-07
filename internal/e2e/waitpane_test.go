@@ -42,6 +42,9 @@ func runRecorded(t *testing.T, f func(tb testing.TB)) (msg string) {
 // #882: waitPane returns as soon as the pane satisfies the condition, not
 // after some fixed pause.
 func TestWaitPaneReturnsOnceConditionHolds(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	var calls atomic.Int32
 	capture := func() (string, error) {
 		if calls.Add(1) < 3 {
@@ -70,6 +73,9 @@ func TestWaitPaneReturnsOnceConditionHolds(t *testing.T) {
 // #882: on timeout the failure names what was awaited and prints the last
 // pane text, so a flake can be read from the log.
 func TestWaitPaneFailsWithLastPaneText(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	var n atomic.Int32
 	capture := func() (string, error) {
 		return fmt.Sprintf("frame %d\nstill loading", n.Add(1)), nil
@@ -88,6 +94,9 @@ func TestWaitPaneFailsWithLastPaneText(t *testing.T) {
 
 // A capture error is reported too, so a dead pane isn't a silent timeout.
 func TestWaitPaneReportsCaptureError(t *testing.T) {
+	if Fork(t) {
+		return
+	}
 	capture := func() (string, error) { return "", errors.New("can't find pane: e2e-tui") }
 	msg := runRecorded(t, func(tb testing.TB) {
 		waitPane(tb, 20*time.Millisecond, capture, "the prompt", func(string) bool { return true })
