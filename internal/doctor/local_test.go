@@ -35,7 +35,7 @@ func (s slowSpy) TrainGit(args ...string) (string, error) {
 	return s.fakeEnv.TrainGit(args...)
 }
 
-func (s slowSpy) Leftovers() (int, int, error) {
+func (s slowSpy) Leftovers() (LeftoverCounts, error) {
 	s.t.Error("RunLocal counted leftovers")
 	return s.fakeEnv.Leftovers()
 }

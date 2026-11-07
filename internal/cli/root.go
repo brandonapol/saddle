@@ -316,6 +316,11 @@ func downCmd() *cobra.Command {
 	}
 }
 
+// staleWorktreesLine reports n stale worktrees and how to clear them (#803).
+func staleWorktreesLine(n int) string {
+	return fmt.Sprintf("%d stale worktrees; `saddle gc --dry-run` lists them, `saddle gc` removes them", n)
+}
+
 // parseUpArgs splits saddle up's arguments into an agent name and an epic
 // file (or "-"). A known agent name is always the agent, even when a file of
 // that name exists; ./name reads the file.
@@ -439,6 +444,9 @@ func statusCmd() *cobra.Command {
 			for _, o := range st.DoneOrphaned {
 				fmt.Fprintf(cmd.OutOrStdout(), "done-orphaned: %s called done, was never queued and went quiet; saddle %s it %s ago\n",
 					o.Task, o.Step, time.Since(o.StepAt).Round(time.Minute))
+			}
+			if st.StaleWorktrees > 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), staleWorktreesLine(st.StaleWorktrees))
 			}
 			writeForecast(cmd.OutOrStdout(), st.Forecast)
 			writeWatchers(cmd.OutOrStdout(), a)

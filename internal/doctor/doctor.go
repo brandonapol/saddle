@@ -102,8 +102,9 @@ type Env interface {
 	// session in Root reads: the user's, the repo's and the repo's local ones.
 	ClaudeAllow() []string
 	// Leftovers counts the worktrees, branches and refs saddle gc would
-	// remove, and those it would keep because they hold unmerged work.
-	Leftovers() (remove, kept int, err error)
+	// remove, those it would keep because they hold unmerged work, and the
+	// stale worktrees among them.
+	Leftovers() (LeftoverCounts, error)
 }
 
 // Failed reports whether any check failed.
@@ -933,17 +934,30 @@ func (r *run) stateDB() Result {
 	return ok(CheckStateDB, "writable, migrated")
 }
 
+// LeftoverCounts is what saddle gc would clean up.
+type LeftoverCounts struct {
+	Remove int // worktrees, branches and refs gc would remove
+	Kept   int // those it would keep because they hold unmerged work
+	// StaleWorktrees counts the worktrees whose task ended or is gone (#803).
+	StaleWorktrees int
+}
+
 func (r *run) leftovers() Result {
-	n, kept, err := r.env.Leftovers()
+	c, err := r.env.Leftovers()
 	if err != nil {
 		return warn(CheckLeftovers, "could not count: "+err.Error(), "saddle gc --dry-run")
 	}
 	note := ""
-	if kept > 0 {
-		note = fmt.Sprintf("; %d kept with unmerged work (saddle gc --dry-run says why)", kept)
+	if c.Kept > 0 {
+		note = fmt.Sprintf("; %d kept with unmerged work (saddle gc --dry-run says why)", c.Kept)
 	}
-	if n > 0 {
-		return warn(CheckLeftovers, fmt.Sprintf("%d stale worktrees, branches or refs%s", n, note), "saddle gc --dry-run to list them, saddle gc to remove them")
+	fix := "saddle gc --dry-run to list them, saddle gc to remove them"
+	switch {
+	case c.StaleWorktrees > 0:
+		return warn(CheckLeftovers, fmt.Sprintf("%d stale worktrees; %d stale worktrees, branches or refs in all%s",
+			c.StaleWorktrees, c.Remove, note), fix)
+	case c.Remove > 0:
+		return warn(CheckLeftovers, fmt.Sprintf("%d stale worktrees, branches or refs%s", c.Remove, note), fix)
 	}
 	return ok(CheckLeftovers, "none"+note)
 }

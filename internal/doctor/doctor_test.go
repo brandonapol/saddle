@@ -33,6 +33,7 @@ type fakeEnv struct {
 	hooksErr  error
 	storeErr  error
 	leftovers int
+	staleWT   int
 	kept      int
 	leftErr   error
 	ghCalls   []string
@@ -124,8 +125,10 @@ func (f *fakeEnv) LookPath(name string) (string, error) {
 func (f *fakeEnv) Exists(path string) bool              { return f.paths[path] }
 func (f *fakeEnv) Hooks() ([]refguard.HookState, error) { return f.hooks, f.hooksErr }
 func (f *fakeEnv) OpenStore(string) error               { return f.storeErr }
-func (f *fakeEnv) Leftovers() (int, int, error)         { return f.leftovers, f.kept, f.leftErr }
-func (f *fakeEnv) ClaudeAllow() []string                { return f.allow }
+func (f *fakeEnv) Leftovers() (LeftoverCounts, error) {
+	return LeftoverCounts{Remove: f.leftovers, Kept: f.kept, StaleWorktrees: f.staleWT}, f.leftErr
+}
+func (f *fakeEnv) ClaudeAllow() []string { return f.allow }
 func (f *fakeEnv) TrainGit(args ...string) (string, error) {
 	f.trainRuns = append(f.trainRuns, strings.Join(args, " "))
 	return lookup(f.trainGit, args)
@@ -592,5 +595,29 @@ func TestRunqObserveModeWarns(t *testing.T) {
 	t.Setenv("SADDLE_RUNQ", "off")
 	if r := find(t, Run(f), CheckRunq); r.Status != OK {
 		t.Fatalf("off: %+v", r)
+	}
+}
+
+// #803 step 5: doctor names the stale worktrees, apart from the branches and
+// refs, and points at gc.
+func TestLeftoversCountsStaleWorktrees(t *testing.T) {
+	f := healthy(t)
+	f.leftovers, f.staleWT = 5, 2
+	r := find(t, Run(f), CheckLeftovers)
+	if r.Status != Warn || !strings.HasPrefix(r.Detail, "2 stale worktrees;") || !strings.Contains(r.Fix, "saddle gc") {
+		t.Fatalf("stale worktrees = %s %q (fix %q), want a warning leading with 2 stale worktrees", r.Status, r.Detail, r.Fix)
+	}
+}
+
+// Zero stale worktrees adds nothing to the detail.
+func TestLeftoversNoStaleWorktreesQuiet(t *testing.T) {
+	f := healthy(t)
+	r := find(t, Run(f), CheckLeftovers)
+	if r.Status != OK || r.Detail != "none" {
+		t.Fatalf("clean leftovers = %s %q, want ok none", r.Status, r.Detail)
+	}
+	f.leftovers = 3
+	if r = find(t, Run(f), CheckLeftovers); strings.Contains(r.Detail, "stale worktrees;") {
+		t.Fatalf("branch-only leftovers mention stale worktrees: %q", r.Detail)
 	}
 }
