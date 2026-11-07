@@ -20,6 +20,7 @@ func TestJourneyAutomergeCollapsesRedBottom(t *testing.T) {
 		return
 	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
+	unlockStackBase(t, w)
 	low, high := redBottomStack(t, w)
 	url := w.Task("t2").PR
 	w.MustSaddle("automerge", "on")

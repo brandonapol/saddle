@@ -62,6 +62,11 @@ type State struct {
 	NoStackExt bool `json:"no_stack_ext,omitempty"`
 	// StacksDisabled makes the repo lack Stacked PRs (a per-repo preview).
 	StacksDisabled bool `json:"stacks_disabled,omitempty"`
+	// StackBaseUnlocked lets gh pr edit --base change a PR in an open
+	// native stack, which GitHub refuses. It is a stopgap for the journeys
+	// whose saddle code still does that (#897); internal/forge/contract
+	// never sets it, and #897 deletes it.
+	StackBaseUnlocked bool `json:"stack_base_unlocked,omitempty"`
 	// Required are the status checks branch protection lists for Default
 	// when Protected; none means just "ci".
 	Required []string `json:"required,omitempty"`

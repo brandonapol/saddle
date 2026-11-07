@@ -154,6 +154,7 @@ func TestJourneyStackCollapseRedBottom(t *testing.T) {
 		return
 	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
+	unlockStackBase(t, w)
 	low, high := redBottomStack(t, w)
 	r := w.MustSaddle("stack", "collapse", "t1")
 	if !strings.Contains(r.Stdout, "collapsed stack t1") {
@@ -169,6 +170,7 @@ func TestJourneyAutoCollapseRedBottom(t *testing.T) {
 		return
 	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
+	unlockStackBase(t, w)
 	low, high := redBottomStack(t, w)
 	pr, err := w.App().AutoCollapse("t1", nil)
 	if err != nil || pr != w.Task("t2").PR {

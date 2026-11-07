@@ -234,7 +234,7 @@ func (c *call) pr(sub string, args []string) (int, error) {
 			if p.InQueue {
 				return exitErr, fail("GraphQL: Pull request is in the merge queue and its base branch cannot be changed. (updatePullRequest)")
 			}
-			if st := c.s.stackOf(p.Number); st != nil && st.Open {
+			if st := c.s.stackOf(p.Number); st != nil && st.Open && !c.s.StackBaseUnlocked {
 				return exitErr, fail("GraphQL: Pull request is part of a stack and its base branch cannot be changed. Remove it from the stack first. (updatePullRequest)")
 			}
 			if branchSHA(c.dir, b) == "" {

@@ -20,6 +20,7 @@ func TestJourneyGCAfterSquashMerges(t *testing.T) {
 		return
 	}
 	w := world(t, Options{Tables: "[train]\noutput = \"single\"\n"})
+	unlockStackBase(t, w)
 	urls := landTwo(t, w)
 	w.Spawn("t3", "Gamma work", []string{"gamma/**"},
 		fa.Write("gamma/work.txt", "gamma\n"), fa.Commit("work in gamma"), fa.Wait("never-comes"))
