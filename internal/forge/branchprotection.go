@@ -53,7 +53,7 @@ func notFound(err error) bool {
 // BranchProtection reads `gh api repos/{owner}/{repo}/branches/B/protection`.
 // It needs admin access; without it GitHub answers 403, an error.
 func (g *GitHub) BranchProtection(ctx context.Context, branch string) (Protection, error) {
-	out, err := g.Run(ctx, "api", "repos/{owner}/{repo}/branches/"+branch+"/protection")
+	out, err := g.run(ctx, "api", "repos/{owner}/{repo}/branches/"+branch+"/protection")
 	if err != nil {
 		if notFound(err) {
 			return Protection{Branch: branch}, nil

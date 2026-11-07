@@ -18,11 +18,20 @@ type GitHub struct {
 	// nil means DefaultMergePoll. Sleep waits; nil is time.Sleep.
 	MergePoll []time.Duration
 	Sleep     func(time.Duration)
+
+	facts *factsCache // probed Facts; New shares one per repo
 }
 
 var _ Forge = (*GitHub)(nil)
 
 func (g *GitHub) Provider() string { return config.ForgeGitHub }
+
+// run is Run with its failure classified (see Classify), so every
+// operation returns a typed outcome even over a fake gh.
+func (g *GitHub) run(ctx context.Context, args ...string) (string, error) {
+	out, err := g.Run(ctx, args...)
+	return out, Classify(err)
+}
 
 // prJSON is gh's PR JSON, mapped onto PR.
 type prJSON struct {
@@ -99,7 +108,7 @@ func (g *GitHub) CreatePR(ctx context.Context, p NewPR) (string, error) {
 	if p.Draft {
 		args = append(args, "--draft")
 	}
-	out, err := g.Run(ctx, args...)
+	out, err := g.run(ctx, args...)
 	if err != nil {
 		return "", err
 	}
@@ -107,7 +116,7 @@ func (g *GitHub) CreatePR(ctx context.Context, p NewPR) (string, error) {
 }
 
 func (g *GitHub) PR(ctx context.Context, ref string, f PRFields) (PR, error) {
-	out, err := g.Run(ctx, "pr", "view", ref, "--json", prFields(f))
+	out, err := g.run(ctx, "pr", "view", ref, "--json", prFields(f))
 	if err != nil {
 		return PR{}, err
 	}
@@ -123,7 +132,7 @@ func (g *GitHub) ListPRs(ctx context.Context, q PRQuery, f PRFields) ([]PR, erro
 	if q.Head != "" {
 		args = append(args, "--head", q.Head)
 	}
-	out, err := g.Run(ctx, append(args, "--limit", strconv.Itoa(q.Limit), "--json", prFields(f))...)
+	out, err := g.run(ctx, append(args, "--limit", strconv.Itoa(q.Limit), "--json", prFields(f))...)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +173,7 @@ func (g *GitHub) OpenPRs(ctx context.Context) ([]PR, error) {
 		if cursor != "" {
 			args = append(args, "-f", "endCursor="+cursor)
 		}
-		out, err := g.Run(ctx, args...)
+		out, err := g.run(ctx, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -300,28 +309,28 @@ func parseOpenPRs(out string) ([]PR, string, error) {
 }
 
 func (g *GitHub) SetPRBase(ctx context.Context, ref, base string) error {
-	_, err := g.Run(ctx, "pr", "edit", ref, "--base", base)
+	_, err := g.run(ctx, "pr", "edit", ref, "--base", base)
 	return err
 }
 
 func (g *GitHub) SetPRBody(ctx context.Context, ref, body string) error {
-	_, err := g.Run(ctx, "pr", "edit", ref, "--body", body)
+	_, err := g.run(ctx, "pr", "edit", ref, "--body", body)
 	return err
 }
 
 func (g *GitHub) SetStatus(ctx context.Context, sha, name, state, description string) error {
-	_, err := g.Run(ctx, "api", "-X", "POST", "repos/{owner}/{repo}/statuses/"+sha,
+	_, err := g.run(ctx, "api", "-X", "POST", "repos/{owner}/{repo}/statuses/"+sha,
 		"-f", "state="+state, "-f", "context="+name, "-f", "description="+description)
 	return err
 }
 
 func (g *GitHub) ClosePR(ctx context.Context, ref string) error {
-	_, err := g.Run(ctx, "pr", "close", ref)
+	_, err := g.run(ctx, "pr", "close", ref)
 	return err
 }
 
 func (g *GitHub) Comments(ctx context.Context, ref string) ([]Comment, error) {
-	out, err := g.Run(ctx, "pr", "view", ref, "--json", "comments")
+	out, err := g.run(ctx, "pr", "view", ref, "--json", "comments")
 	if err != nil {
 		return nil, err
 	}
@@ -342,13 +351,13 @@ func (g *GitHub) Comments(ctx context.Context, ref string) ([]Comment, error) {
 }
 
 func (g *GitHub) AddComment(ctx context.Context, ref, body string) error {
-	_, err := g.Run(ctx, "pr", "comment", ref, "--body", body)
+	_, err := g.run(ctx, "pr", "comment", ref, "--body", body)
 	return err
 }
 
 // EditComment edits the comment with GraphQL node id.
 func (g *GitHub) EditComment(ctx context.Context, id, body string) error {
-	_, err := g.Run(ctx, "api", "graphql",
+	_, err := g.run(ctx, "api", "graphql",
 		"-f", "query=mutation($id: ID!, $body: String!) { updateIssueComment(input: {id: $id, body: $body}) { issueComment { id } } }",
 		"-f", "id="+id, "-f", "body="+body)
 	return err
@@ -356,29 +365,13 @@ func (g *GitHub) EditComment(ctx context.Context, id, body string) error {
 
 func (g *GitHub) AddLabel(ctx context.Context, ref, label string) error {
 	return addLabelEnsuring(ctx, g, label, func() error {
-		_, err := g.Run(ctx, "pr", "edit", ref, "--add-label", label)
+		_, err := g.run(ctx, "pr", "edit", ref, "--add-label", label)
 		return err
 	})
 }
 
 func (g *GitHub) RemoveLabel(ctx context.Context, ref, label string) error {
-	_, err := g.Run(ctx, "pr", "edit", ref, "--remove-label", label)
-	return err
-}
-
-// MergePR never passes --admin, so branch protection always applies. A PR
-// in a native stack, which gh pr merge refuses, is merged through the async
-// merge API instead and polled until merged; ErrMergePending means GitHub
-// is still merging it (#838).
-func (g *GitHub) MergePR(ctx context.Context, ref, method, head string) error {
-	args := []string{"pr", "merge", ref, "--" + method}
-	if head != "" {
-		args = append(args, "--match-head-commit", head)
-	}
-	_, err := g.Run(ctx, args...)
-	if NeedsAsyncMerge(err) {
-		return g.mergeAsync(ctx, ref, method, head)
-	}
+	_, err := g.run(ctx, "pr", "edit", ref, "--remove-label", label)
 	return err
 }
 
@@ -392,12 +385,12 @@ func (g *GitHub) EnsureLabel(ctx context.Context, l Label) error {
 	if l.Description != "" {
 		args = append(args, "--description", l.Description)
 	}
-	_, err := g.Run(ctx, args...)
+	_, err := g.run(ctx, args...)
 	return err
 }
 
 func (g *GitHub) RerunFailed(ctx context.Context, id string) error {
-	_, err := g.Run(ctx, "run", "rerun", id, "--failed")
+	_, err := g.run(ctx, "run", "rerun", id, "--failed")
 	return err
 }
 
@@ -405,35 +398,43 @@ func (g *GitHub) RerunFailed(ctx context.Context, id string) error {
 // fields for users without admin or push rights; that is an error, not "all
 // false".
 func (g *GitHub) MergeSettings(ctx context.Context) (MergeSettings, error) {
-	out, err := g.Run(ctx, "api", "repos/{owner}/{repo}")
+	out, err := g.run(ctx, "api", "repos/{owner}/{repo}")
 	if err != nil {
 		return MergeSettings{}, err
 	}
+	ms, _, err := parseRepoSettings(out)
+	return ms, err
+}
+
+// parseRepoSettings reads the merge methods and whether auto-merge is
+// allowed from `gh api repos/{owner}/{repo}`.
+func parseRepoSettings(out string) (MergeSettings, bool, error) {
 	var r struct {
 		FullName string `json:"full_name"`
 		HTMLURL  string `json:"html_url"`
 		Merge    *bool  `json:"allow_merge_commit"`
 		Squash   *bool  `json:"allow_squash_merge"`
 		Rebase   *bool  `json:"allow_rebase_merge"`
+		Auto     bool   `json:"allow_auto_merge"`
 	}
 	if err := json.Unmarshal([]byte(out), &r); err != nil {
-		return MergeSettings{}, fmt.Errorf("parse gh api output: %w", err)
+		return MergeSettings{}, false, fmt.Errorf("parse gh api output: %w", err)
 	}
 	if r.Merge == nil || r.Squash == nil || r.Rebase == nil {
-		return MergeSettings{}, fmt.Errorf("gh api did not return the allow_*_merge fields (they need admin or push access)")
+		return MergeSettings{}, false, fmt.Errorf("gh api did not return the allow_*_merge fields (they need admin or push access)")
 	}
-	return MergeSettings{Repo: r.FullName, URL: r.HTMLURL, Merge: *r.Merge, Squash: *r.Squash, Rebase: *r.Rebase}, nil
+	return MergeSettings{Repo: r.FullName, URL: r.HTMLURL, Merge: *r.Merge, Squash: *r.Squash, Rebase: *r.Rebase}, r.Auto, nil
 }
 
 // DefaultBranch reads the repo's default branch with `gh repo view`, which
 // needs only read access.
 func (g *GitHub) DefaultBranch(ctx context.Context) (string, error) {
-	return g.Run(ctx, "repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name")
+	return g.run(ctx, "repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name")
 }
 
 // MergedPRs lists up to limit PRs merged into base with `gh pr list`.
 func (g *GitHub) MergedPRs(ctx context.Context, base string, limit int) ([]MergedPR, error) {
-	out, err := g.Run(ctx, "pr", "list", "--state", "merged", "--base", base, "--limit", strconv.Itoa(limit), "--json", "number,title,labels,mergedAt")
+	out, err := g.run(ctx, "pr", "list", "--state", "merged", "--base", base, "--limit", strconv.Itoa(limit), "--json", "number,title,labels,mergedAt")
 	if err != nil {
 		return nil, err
 	}
@@ -461,7 +462,7 @@ func (g *GitHub) MergedPRs(ctx context.Context, base string, limit int) ([]Merge
 
 // RateLimit reads the core REST quota every gh call spends.
 func (g *GitHub) RateLimit(ctx context.Context) (RateLimit, error) {
-	out, err := g.Run(ctx, "api", "rate_limit")
+	out, err := g.run(ctx, "api", "rate_limit")
 	if err != nil {
 		return RateLimit{}, err
 	}
@@ -482,7 +483,7 @@ func (g *GitHub) RateLimit(ctx context.Context) (RateLimit, error) {
 }
 
 func (g *GitHub) AuthStatus(ctx context.Context) error {
-	_, err := g.Run(ctx, "auth", "status")
+	_, err := g.run(ctx, "auth", "status")
 	return err
 }
 
@@ -527,7 +528,7 @@ func (g *GitHub) Issue(ctx context.Context, repo string, n int, f IssueFields) (
 	if repo != "" {
 		args = append(args, "-R", repo)
 	}
-	out, err := g.Run(ctx, append(args, "--json", issueFields(f))...)
+	out, err := g.run(ctx, append(args, "--json", issueFields(f))...)
 	if err != nil {
 		return Issue{}, err
 	}
@@ -540,7 +541,7 @@ func (g *GitHub) Issue(ctx context.Context, repo string, n int, f IssueFields) (
 
 // SubIssues asks the REST API, since `gh issue view` doesn't list them.
 func (g *GitHub) SubIssues(ctx context.Context, repo string, n int) ([]Issue, error) {
-	out, err := g.Run(ctx, "api", repoAPI(repo)+"/issues/"+strconv.Itoa(n)+"/sub_issues",
+	out, err := g.run(ctx, "api", repoAPI(repo)+"/issues/"+strconv.Itoa(n)+"/sub_issues",
 		"--jq", "[.[] | {number, title, state, body}]")
 	if err != nil || out == "" {
 		return nil, err
@@ -559,7 +560,7 @@ func (g *GitHub) SubIssues(ctx context.Context, repo string, n int) ([]Issue, er
 // SubIssueNumbers pages through the REST API, since a plan's epic can have
 // more sub-issues than one page holds.
 func (g *GitHub) SubIssueNumbers(ctx context.Context, repo string, n int) ([]int, error) {
-	out, err := g.Run(ctx, "api", repoAPI(repo)+"/issues/"+strconv.Itoa(n)+"/sub_issues", "--paginate", "--jq", ".[].number")
+	out, err := g.run(ctx, "api", repoAPI(repo)+"/issues/"+strconv.Itoa(n)+"/sub_issues", "--paginate", "--jq", ".[].number")
 	if err != nil {
 		return nil, err
 	}
@@ -575,11 +576,11 @@ func (g *GitHub) SubIssueNumbers(ctx context.Context, repo string, n int) ([]int
 // AddSubIssue looks up child's database id, which the REST API links by.
 func (g *GitHub) AddSubIssue(ctx context.Context, repo string, parent, child int) error {
 	api := repoAPI(repo)
-	id, err := g.Run(ctx, "api", api+"/issues/"+strconv.Itoa(child), "--jq", ".id")
+	id, err := g.run(ctx, "api", api+"/issues/"+strconv.Itoa(child), "--jq", ".id")
 	if err != nil {
 		return fmt.Errorf("look up issue #%d: %w", child, err)
 	}
-	_, err = g.Run(ctx, "api", api+"/issues/"+strconv.Itoa(parent)+"/sub_issues", "-X", "POST", "-F", "sub_issue_id="+strings.TrimSpace(id))
+	_, err = g.run(ctx, "api", api+"/issues/"+strconv.Itoa(parent)+"/sub_issues", "-X", "POST", "-F", "sub_issue_id="+strings.TrimSpace(id))
 	return err
 }
 
@@ -597,7 +598,7 @@ func (g *GitHub) ListIssues(ctx context.Context, q IssueQuery, f IssueFields) ([
 		args = append(args, "--label", q.Label)
 	}
 	args = append(args, "--state", q.State, "--limit", strconv.Itoa(q.Limit), "--json", issueFields(f))
-	out, err := g.Run(ctx, args...)
+	out, err := g.run(ctx, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -651,7 +652,7 @@ func parseUnassigned(out string) ([]Issue, error) {
 
 // UnassignedIssues lists the open, unassigned issues a maintainer opened.
 func (g *GitHub) UnassignedIssues(ctx context.Context) ([]Issue, error) {
-	out, err := g.Run(ctx, "api", "repos/{owner}/{repo}/issues?state=open&assignee=none&per_page=100")
+	out, err := g.run(ctx, "api", "repos/{owner}/{repo}/issues?state=open&assignee=none&per_page=100")
 	if err != nil {
 		return nil, err
 	}
@@ -661,7 +662,7 @@ func (g *GitHub) UnassignedIssues(ctx context.Context) ([]Issue, error) {
 // AddIssueLabel labels issue n, creating the label when it doesn't exist.
 func (g *GitHub) AddIssueLabel(ctx context.Context, n int, label string) error {
 	return addLabelEnsuring(ctx, g, label, func() error {
-		_, err := g.Run(ctx, "issue", "edit", strconv.Itoa(n), "--add-label", label)
+		_, err := g.run(ctx, "issue", "edit", strconv.Itoa(n), "--add-label", label)
 		return err
 	})
 }
@@ -675,7 +676,7 @@ func (g *GitHub) CreateIssue(ctx context.Context, i NewIssue) (Issue, error) {
 	if i.Repo != "" {
 		args = append(args, "-R", i.Repo)
 	}
-	out, err := g.Run(ctx, args...)
+	out, err := g.run(ctx, args...)
 	if err != nil {
 		return Issue{}, err
 	}
@@ -685,12 +686,12 @@ func (g *GitHub) CreateIssue(ctx context.Context, i NewIssue) (Issue, error) {
 }
 
 func (g *GitHub) CommentIssue(ctx context.Context, n int, body string) error {
-	_, err := g.Run(ctx, "issue", "comment", strconv.Itoa(n), "--body", body)
+	_, err := g.run(ctx, "issue", "comment", strconv.Itoa(n), "--body", body)
 	return err
 }
 
 func (g *GitHub) EditIssueBody(ctx context.Context, n int, body string) error {
-	_, err := g.Run(ctx, "issue", "edit", strconv.Itoa(n), "--body", body)
+	_, err := g.run(ctx, "issue", "edit", strconv.Itoa(n), "--body", body)
 	return err
 }
 
@@ -700,12 +701,12 @@ func (g *GitHub) CloseIssue(ctx context.Context, n int, comment string) error {
 	if comment != "" {
 		args = append(args, "--comment", comment)
 	}
-	_, err := g.Run(ctx, args...)
+	_, err := g.run(ctx, args...)
 	return err
 }
 
 func (g *GitHub) ReopenIssue(ctx context.Context, n int) error {
-	_, err := g.Run(ctx, "issue", "reopen", strconv.Itoa(n))
+	_, err := g.run(ctx, "issue", "reopen", strconv.Itoa(n))
 	return err
 }
 

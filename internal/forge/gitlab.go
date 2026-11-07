@@ -51,7 +51,8 @@ func (g *GitLab) api(ctx context.Context, method, endpoint string, args ...strin
 		a = append(a, "-X", method)
 	}
 	a = append(a, endpoint)
-	return g.Run(ctx, append(a, args...)...)
+	out, err := g.Run(ctx, append(a, args...)...)
+	return out, Classify(err)
 }
 
 // apiJSON is api decoding the response into v.

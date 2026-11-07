@@ -13,7 +13,7 @@ import (
 // checks but still prints the JSON, so the output is trusted whenever it
 // parses.
 func (g *GitHub) Checks(ctx context.Context, ref string) ([]CICheck, error) {
-	out, err := g.Run(ctx, "pr", "checks", ref, "--json", "name,workflow,bucket,link")
+	out, err := g.run(ctx, "pr", "checks", ref, "--json", "name,workflow,bucket,link")
 	if s := strings.TrimSpace(out); strings.HasPrefix(s, "[") {
 		var cs []CICheck
 		if jerr := json.Unmarshal([]byte(s), &cs); jerr == nil {
@@ -39,7 +39,7 @@ func (g *GitHub) FailedLog(ctx context.Context, link string, lines int) (JobLog,
 		return JobLog{Run: link}, nil
 	}
 	l := JobLog{Run: run}
-	log, err := g.Run(ctx, "run", "view", "--job", job, "--log-failed")
+	log, err := g.run(ctx, "run", "view", "--job", job, "--log-failed")
 	if err != nil && log == "" {
 		return l, err
 	}
