@@ -331,7 +331,7 @@ func (d *Driver) Run(ctx context.Context) error {
 	defer t.Stop()
 	last := ""
 	for {
-		if _, err := d.Tick(); err != nil && !errors.Is(err, forge.ErrRateLimited) {
+		if _, err := d.Tick(); err != nil && !forge.Transient(err) {
 			if msg := err.Error(); msg != last {
 				last = msg
 				d.Env.Event(EventError, msg)
@@ -376,10 +376,11 @@ func (o occupant) overlap(want []string) string {
 	return ""
 }
 
-// logErr logs err from what as EventError, unless it is GitHub's rate
-// limit, which is a wait (#764).
+// logErr logs err from what as EventError, unless it is a transient forge
+// error (forge.Transient: rate limit, net timeout), which is
+// a wait (#764, #809).
 func logErr(env Env, what string, err error) {
-	if !errors.Is(err, forge.ErrRateLimited) {
+	if !forge.Transient(err) {
 		env.Event(EventError, what+": "+err.Error())
 	}
 }
@@ -426,8 +427,8 @@ func (d *Driver) Tick() (Report, error) {
 		logErr(env, "usage", err)
 	}
 	issues, err := env.Ready(st.Label())
-	if errors.Is(err, forge.ErrRateLimited) {
-		// GitHub's quota is spent: wait for the reset (#764).
+	if forge.Transient(err) {
+		// forge is rate-limited or timing out: wait and retry (#764, #809).
 		rep.Decision = "waiting for GitHub's rate limit to reset: " + err.Error()
 		return rep, d.save(&st, gen, &rep)
 	}
@@ -625,7 +626,7 @@ func (d *Driver) Tick() (Report, error) {
 	case st.Draining == "" && ready == 0 && !busy && !st.Infinite:
 		// Only a full scan that finds no eligible ticket ends the run; while
 		// GitHub's rate limit holds, the scan can't say, so the run waits.
-		if el, err := scan(); len(el) == 0 && !errors.Is(err, forge.ErrRateLimited) {
+		if el, err := scan(); len(el) == 0 && !forge.Transient(err) {
 			d.finish(&st, "queue empty", now, true)
 		}
 	}

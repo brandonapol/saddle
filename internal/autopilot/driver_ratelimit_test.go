@@ -42,3 +42,34 @@ func TestTickUnderRateLimitWaits(t *testing.T) {
 		t.Fatalf("rate limit logged autopilot_error: %v", r.env.events)
 	}
 }
+
+// timeoutEnv is fakeEnv with every forge call timing out on the network.
+type timeoutEnv struct{ *fakeEnv }
+
+func timeoutErr(what string) error { return fmt.Errorf("%s: %w", what, forge.ErrNetTimeout) }
+
+func (l timeoutEnv) Ready(string) ([]Issue, error) { return nil, timeoutErr("gh issue list") }
+func (l timeoutEnv) Land() (int, error)            { return 0, timeoutErr("gh pr view") }
+func (l timeoutEnv) Reconcile() ([]string, error)  { return nil, timeoutErr("gh pr view") }
+
+// #809: a net timeout is a transient wait like the rate limit: the tick is
+// skipped, no autopilot_error is logged and nothing is spawned.
+func TestTickOnNetTimeoutWaits(t *testing.T) {
+	r := newRig(t, 4, claimed(1, "a/**"))
+	r.on(Options{})
+	r.d.Env = timeoutEnv{r.env}
+	rep, err := r.d.Tick()
+	if err != nil {
+		t.Fatalf("timed-out tick err = %v, want a skipped tick", err)
+	}
+	if len(r.env.spawns) != 0 {
+		t.Fatalf("spawns %v; want a wait", r.env.spawns)
+	}
+	_ = rep
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = r.d.Run(ctx)
+	if r.env.hasEvent(EventError) {
+		t.Fatalf("net timeout logged autopilot_error: %v", r.env.events)
+	}
+}
