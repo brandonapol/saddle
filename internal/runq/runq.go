@@ -12,8 +12,9 @@
 // contender can reap a dead holder on its next poll without trusting PIDs.
 // Heartbeats are the fallback for holders the flock can't vouch for.
 //
-// The queue starts in observe mode: every run is recorded in history but
-// none waits, so slots can be sized from real data before enforcing them.
+// The queue starts in enforce mode: a run waits for a free slot, the budget
+// and the load gate. mode = "observe" is the opt-in for measuring: every run
+// is recorded in history but none waits.
 package runq
 
 import (
@@ -60,8 +61,8 @@ type Mode string
 
 const (
 	ModeOff     Mode = "off"     // no queue: run at once, record nothing
-	ModeObserve Mode = "observe" // record the run but never wait (the default)
-	ModeEnforce Mode = "enforce" // wait for a slot
+	ModeObserve Mode = "observe" // record the run but never wait (opt-in)
+	ModeEnforce Mode = "enforce" // wait for a slot (the default)
 )
 
 // ParseMode reads a mode name; "on" means enforce.
@@ -113,7 +114,7 @@ const (
 // Options configure a Queue. Zero values take the defaults noted.
 type Options struct {
 	Path         string                       // the database file; DefaultPath() when empty
-	Mode         Mode                         // observe when empty; EnvBypass overrides it
+	Mode         Mode                         // enforce when empty; EnvBypass overrides it
 	Slots        map[string]int               // slots per class, written when a class is first seen (DefaultClasses when nil)
 	DefaultSlots int                          // slots for classes not in Slots (1)
 	Weights      map[string]int               // units of Budget one run of a class uses (DefaultWeights when nil; 1 when unnamed)
@@ -323,7 +324,7 @@ func withDefaults(o Options) Options {
 		o.Path = DefaultPath()
 	}
 	if o.Mode == "" {
-		o.Mode = ModeObserve
+		o.Mode = ModeEnforce
 	}
 	if o.Slots == nil {
 		o.Slots = DefaultClasses

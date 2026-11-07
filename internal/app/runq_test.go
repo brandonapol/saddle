@@ -75,11 +75,11 @@ func TestRunHeavyLogsEvents(t *testing.T) {
 	}
 }
 
-// TestRunHeavyObservesByDefault: with no runq.toml the run never waits and
-// its history says observe.
-func TestRunHeavyObservesByDefault(t *testing.T) {
+// TestRunHeavyObservesWhenConfigured: with mode = "observe" in runq.toml the
+// run never waits and its history says observe. The default is enforce.
+func TestRunHeavyObservesWhenConfigured(t *testing.T) {
 	a, _ := setup(t)
-	heavyTest(t, a, "")
+	heavyTest(t, a, "mode = \"observe\"\n")
 	h := a.Heavy()
 	q, _, err := h.Open()
 	if err != nil {

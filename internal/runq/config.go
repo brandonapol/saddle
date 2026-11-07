@@ -15,7 +15,7 @@ import (
 // defaults, then the user's ~/.config/saddle/runq.toml, whose values win:
 // slot counts are a property of the machine (docs/runq.md Q7).
 //
-//	mode = "observe"        # off | observe | enforce
+//	mode = "enforce"        # off | observe | enforce (observe records, never waits)
 //	heartbeat = "2s"
 //	stale_after = "15s"
 //	aging_step = "30s"

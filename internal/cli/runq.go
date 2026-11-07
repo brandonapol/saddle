@@ -84,8 +84,8 @@ passes SADDLE_RUNQ_LEASE to the command so heavy runs it starts ride on its
 slot instead of queueing behind it.
 
 Modes (SADDLE_RUNQ, else mode in .saddle/runq.toml or ~/.config/saddle/runq.toml):
-  observe   record the run, never wait (the default while slots are sized)
-  enforce   wait for a slot
+  enforce   wait for a slot (the default)
+  observe   record the run, never wait (opt-in while slots are sized)
   off       bypass the queue entirely
 
 In enforce mode a free slot also waits while the box is saturated by other
