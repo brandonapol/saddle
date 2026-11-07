@@ -119,11 +119,26 @@ type Task struct {
 	KilledAt, ReturnedAt time.Time
 }
 
-// State is a non-terminal row: a card, a hold, a train row. A zero Deadline
-// means it has no timeout.
+// State is a row that should have an exit: a card, a hold, a train row. A
+// zero Deadline means it has no timeout. State is a train row's state; a
+// terminal one is never a violation.
 type State struct {
 	What, Subject, Detail string
+	State                 string
 	Deadline              time.Time
+}
+
+// TerminalTrainState reports whether a train row's state is terminal: base
+// has the work (merged), it shipped in another PR (folded), or it never
+// will (superseded). A terminal state has no exit by definition (ADR 0009,
+// docs/GLOSSARY.md), so I5 never flags one (#825). These mirror
+// app.TrainMerged, app.TrainFolded and app.TrainSuperseded.
+func TerminalTrainState(state string) bool {
+	switch state {
+	case "merged", "folded", "superseded":
+		return true
+	}
+	return false
 }
 
 // Repair is a live repair task and the checks it was spawned for.
@@ -210,6 +225,9 @@ func Check(s Snapshot) []Violation {
 		}
 	}
 	for _, st := range s.States {
+		if TerminalTrainState(st.State) {
+			continue
+		}
 		subject := st.What + " " + st.Subject
 		detail := st.Detail
 		if detail != "" {

@@ -113,11 +113,57 @@ func (a *App) CheckInvariants(now time.Time) ([]invariants.Violation, error) {
 	}
 	for _, v := range fresh {
 		a.Store.Event(violationTask(v), EventInvariantViolated, v.String())
-		if err := a.Notify(OrchestratorID, store.NoticeAction, violationNotice(v)); err != nil {
+	}
+	for _, text := range violationNotices(fresh) {
+		if err := a.Notify(OrchestratorID, store.NoticeAction, text); err != nil {
 			return fresh, err
 		}
 	}
 	return fresh, nil
+}
+
+// burstLimit is how many new violations of one kind a tick notifies one by
+// one. Past it, as on a first run over old state, they go in one summary
+// notice (#825); each still logs its own event.
+const burstLimit = 5
+
+// burstShown is how many subjects a summary notice names.
+const burstShown = 3
+
+// violationNotices are the orchestrator's notices for fresh, in order: one
+// per violation, or one summary for a kind with more than burstLimit.
+func violationNotices(fresh []invariants.Violation) []string {
+	byKind := map[invariants.Kind][]invariants.Violation{}
+	var kinds []invariants.Kind
+	for _, v := range fresh {
+		if _, ok := byKind[v.Kind]; !ok {
+			kinds = append(kinds, v.Kind)
+		}
+		byKind[v.Kind] = append(byKind[v.Kind], v)
+	}
+	var out []string
+	for _, k := range kinds {
+		vs := byKind[k]
+		if len(vs) <= burstLimit {
+			for _, v := range vs {
+				out = append(out, violationNotice(v))
+			}
+			continue
+		}
+		out = append(out, burstNotice(k, vs))
+	}
+	return out
+}
+
+// burstNotice is one notice for many new violations of kind.
+func burstNotice(kind invariants.Kind, vs []invariants.Violation) string {
+	var subjects []string
+	for _, v := range vs[:burstShown] {
+		subjects = append(subjects, v.Subject)
+	}
+	return fmt.Sprintf("Invariant violated (%s) on %d subjects: %s and %d more (first: %s). "+
+		"Each is logged as an %s event; saddle only detects these for now (#825), and they show in status and doctor until they clear.",
+		kind, len(vs), strings.Join(subjects, ", "), len(vs)-burstShown, vs[0].Detail, EventInvariantViolated)
 }
 
 // violationNotice is the orchestrator's notice for a new violation.
@@ -253,7 +299,7 @@ func (a *App) snapLatches(s *invariants.Snapshot, now time.Time) {
 }
 
 // snapStates fills I5: killed tasks back in a live status, cards past
-// their timeout, holds and train rows with no exit.
+// their timeout, holds and non-terminal train rows with no exit.
 func (a *App) snapStates(s *invariants.Snapshot, tasks []store.Task, byID map[string]store.Task) {
 	killed, _ := a.Store.LastEventTimes("kill")
 	back, _ := a.Store.LastEventTimes("requeued", "resumed")
@@ -284,12 +330,14 @@ func (a *App) snapStates(s *invariants.Snapshot, tasks []store.Task, byID map[st
 	for _, e := range train {
 		t, ok := byID[e.Task]
 		switch {
+		case invariants.TerminalTrainState(e.State):
+			// merged, folded, superseded: done for good, no exit to have (#825)
 		case e.State == store.OnHold:
-			s.States = append(s.States, invariants.State{What: "hold", Subject: e.Task, Detail: "held in the merge queue"})
+			s.States = append(s.States, invariants.State{What: "hold", Subject: e.Task, State: e.State, Detail: "held in the merge queue"})
 		case !ok:
-			s.States = append(s.States, invariants.State{What: "train row", Subject: e.Task, Detail: e.State + " for a task that doesn't exist"})
+			s.States = append(s.States, invariants.State{What: "train row", Subject: e.Task, State: e.State, Detail: e.State + " for a task that doesn't exist"})
 		case e.State != store.TrainOK && store.Finished(t.Status):
-			s.States = append(s.States, invariants.State{What: "train row", Subject: e.Task, Detail: e.State + " for a task that is " + t.Status})
+			s.States = append(s.States, invariants.State{What: "train row", Subject: e.Task, State: e.State, Detail: e.State + " for a task that is " + t.Status})
 		}
 	}
 }
