@@ -62,3 +62,31 @@ const WaitInstruction = "Nothing will wake you when an agent needs you: the sadd
 // EndWait clears the wait heartbeat as a wait exits, so the hooks see at
 // once that nothing waits; another running wait rewrites it within a poll.
 func (a *App) EndWait() { _ = os.Remove(a.WaitHeartbeatPath()) }
+
+// HookFresh is how long the orchestrator's last hook call counts as a live
+// wake path (#860). The settings hook can't wake an idle session; it hands
+// notices to one that is working, and a working session calls it on every
+// tool use. A session quiet this long is idle, and the hook no longer helps.
+const HookFresh = 10 * time.Minute
+
+// HookHeartbeatPath is the file the orchestrator's settings hook rewrites on
+// each call.
+func (a *App) HookHeartbeatPath() string { return a.stateDir("hook.alive") }
+
+// BeatHook records that the orchestrator's settings hook ran now.
+func (a *App) BeatHook(now time.Time) {
+	p := a.HookHeartbeatPath()
+	if err := os.WriteFile(p, []byte(now.UTC().Format(time.RFC3339)+"\n"), 0o644); err == nil {
+		_ = os.Chtimes(p, now, now)
+	}
+}
+
+// HookActive reports whether the orchestrator's settings hook ran within
+// HookFresh of now.
+func (a *App) HookActive(now time.Time) bool {
+	fi, err := os.Stat(a.HookHeartbeatPath())
+	if err != nil {
+		return false
+	}
+	return now.Sub(fi.ModTime()) < HookFresh
+}
