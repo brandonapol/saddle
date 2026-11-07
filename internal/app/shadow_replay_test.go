@@ -65,6 +65,7 @@ func TestReplayShadow1105(t *testing.T) {
 		w("t395", "saddle/t395-labels", "https://github.com/o/r/pull/811"),
 		w("t396", "saddle/t396-governor", "https://github.com/o/r/pull/812"),
 		w("t397", "saddle/t397-autopilot", "https://github.com/o/r/pull/814"),
+		w("t409", "saddle/t409-flag", "https://github.com/o/r/pull/846"),
 	}, []replayEv{
 		{"14:09:07", "t395", "done_called", "labels"},
 		{"14:52:17", "t395", "done", "labels"},
@@ -83,6 +84,18 @@ func TestReplayShadow1105(t *testing.T) {
 		{"18:26:41", "t396", "ci_repair_spawned", "t402"},
 		{"18:26:46", "t397", "ci_red", "48e00fba8972 ci / lint, ci / test"},
 		{"18:31:56", "t396", "ci_repair_spawned", "t403"},
+		// t409's PR was opened by a restack (no layout event) and merged.
+		{"20:57:16", "t409", "done_called", "flag scope"},
+		{"20:57:16", "t409", "done_gate_started", "t409-x make check"},
+		{"21:00:00", "t409", "done_gate_failed", "t409-x"},
+		{"21:01:00", "t409", "done_called", "flag scope"},
+		{"21:01:00", "t409", "done_gate_started", "t409-y make check"},
+		{"21:06:22", "t409", "done", "flag scope"},
+		{"21:15:24", "t409", "landed", "451458a3817b"},
+		{"21:15:36", "t409", "restack", "refs/heads/saddle/t409-flag 451458a3817b → 525158e2ecd2 (abort=false)"},
+		{"21:17:30", "t409", "automerge_waiting", "https://github.com/o/r/pull/846: its CI is pending"},
+		{"21:27:43", "t409", "automerge_merged", "https://github.com/o/r/pull/846 by squash: checks pass, mergeable, CLEAN"},
+		{"21:27:44", "t409", "unstacked", "merged: main has a commit with Saddle-Task: t409"},
 	})
 	from := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
 	rep, err := ReplayShadow(context.Background(), path, ReplayOptions{From: from, Until: from.Add(24 * time.Hour)})
@@ -111,11 +124,16 @@ func TestReplayShadow1105(t *testing.T) {
 	if has(ShadowPrgraphOnly, prgraph.ActNeedsFix, "t396") || strings.Contains(all, "check:saddle/base") {
 		t.Errorf("prgraph asked to fix saddle/base:\n%s", all)
 	}
+	for _, d := range rep.Divergences {
+		if d.Change == "t409" && d.Kind != prgraph.ActPublish {
+			t.Errorf("t409's gate failure, restack publish and merge are what prgraph would do too: %s", d.Line())
+		}
+	}
 	if rep.Outcomes.LegacyRepairs != 2 || rep.Outcomes.LegacyHostRepairs != 2 {
 		t.Errorf("outcomes = %+v; want 2 legacy repairs, both of saddle/base", rep.Outcomes)
 	}
-	if rep.Outcomes.PrgraphFixes != 1 {
-		t.Errorf("outcomes = %+v; want prgraph to ask one fix (t397)", rep.Outcomes)
+	if rep.Outcomes.PrgraphFixes != 2 {
+		t.Errorf("outcomes = %+v; want prgraph to ask two fixes (t397's red, t409's gate)", rep.Outcomes)
 	}
 }
 

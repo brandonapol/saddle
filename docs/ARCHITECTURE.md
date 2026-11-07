@@ -39,6 +39,14 @@ saddle land | prs | sync | …         ─┘   CI watcher
   takes its place. A crashed holder never wedges the next one, since the
   kernel drops the lock. Agents run in tmux and are unaffected by a
   takeover.
+- **The PR-graph shadow** (#830) is one more supervised loop: every sentinel
+  interval `app.ShadowReconciler` maps the train table, deps, `stacks.json`,
+  `ci-red.json`, automerge holds and `published.json`, plus one batched forge
+  read and git, onto `prgraph.Input` (`app.ShadowInput`), lets prgraph's own
+  transitions settle in memory (`app.SettlePlan`), and logs `reconcile_shadow`
+  events where the plan and saddle's actions (read from events) differ. It
+  has no executor. `saddle reconcile --replay` runs the same adapter over a
+  copy of an old state.db's events (`app.ReplayShadow`).
 - **`saddle hook <event>`** is the Claude Code hook entrypoint. It opens the
   store, returns a verdict, and must be fast. It fails open if it can't.
 - **`saddle mcp`** is a stdio MCP server, one per agent. Each knows its task

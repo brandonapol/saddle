@@ -174,6 +174,8 @@ type rChange struct {
 	checks   map[string]prgraph.CheckStatus
 	repairs  int
 	inBase   bool
+	// stackBelow is the PR below this one in its native stack.
+	stackBelow int
 }
 
 type replayWorld struct {
@@ -187,6 +189,8 @@ type replayWorld struct {
 	required map[string]bool
 	policy   prgraph.Policy
 	base     string
+	// native: saddle linked native stacks (gh-stack), so links compare.
+	native bool
 }
 
 func loadReplayWorld(ctx context.Context, db *sql.DB, o ReplayOptions) (*replayWorld, error) {
@@ -271,17 +275,37 @@ func (c *rChange) push(head string, at time.Time) {
 // legacy action, if ev is one.
 func (w *replayWorld) pre(ev store.Event) (LegacyAction, bool) {
 	c := w.change(ev.Task)
-	if ev.Kind == "automerge_merged" && c != nil {
-		for n := range w.required {
-			c.checks[n] = prgraph.CheckSuccess
+	if c != nil {
+		switch ev.Kind {
+		case "automerge_merged":
+			// What saddle saw: checks green on an open PR.
+			for n := range w.required {
+				c.checks[n] = prgraph.CheckSuccess
+			}
+			c.pushedAt = time.Time{}
+			w.openPR(c, ev.TS)
+		case "done_gate_failed", "train_test_failed", "train_conflict":
+			// The gate's result is a fact prgraph would see too.
+			w.post(ev)
 		}
-		c.pushedAt = time.Time{}
 	}
 	prOf := map[string]int{}
 	if c != nil && c.prOpen {
 		prOf[c.task.ID] = c.pr
 	}
 	switch ev.Kind {
+	case "restack":
+		if c != nil && c.train == store.TrainOK && !c.prOpen && !c.inBase {
+			// A restack opens the PRs of landed layers that have none.
+			return LegacyAction{At: ev.TS, Detail: ev.Kind + " " + ev.Data,
+				Action: prgraph.Action{Kind: prgraph.ActPublish, Change: ev.Task}}, true
+		}
+	case "automerge_merged":
+		la, ok := legacyAction(ev, prOf)
+		if _, how, found := strings.Cut(ev.Data, " by "); found {
+			la.Method, _, _ = strings.Cut(how, ":")
+		}
+		return la, ok
 	case "restack_retarget", EventPRBase:
 		m := arrowRe.FindStringSubmatch(ev.Data)
 		if m == nil || c == nil || c.prBase == "" || m[3] == c.prBase {
@@ -295,6 +319,19 @@ func (w *replayWorld) pre(ev store.Event) (LegacyAction, bool) {
 			Action: prgraph.Action{Kind: prgraph.ActNeedsFix, Change: ev.Task, Cause: prgraph.CauseGate}}, true
 	}
 	return legacyAction(ev, prOf)
+}
+
+// openPR records that c's PR is open: saddle opened it, or an automerge
+// event shows it. Its base is base until an event says otherwise.
+func (w *replayWorld) openPR(c *rChange, at time.Time) {
+	if c.prOpen || c.inBase {
+		return
+	}
+	c.prOpen = true
+	if c.prBase == "" {
+		c.prBase = w.base
+	}
+	c.push("", at)
 }
 
 // post applies ev's effect on the world.
@@ -360,9 +397,25 @@ func (w *replayWorld) post(ev store.Event) {
 			}
 		}
 	case "restack":
+		if c.train == store.TrainOK && !c.prOpen && !c.inBase {
+			w.openPR(c, ev.TS)
+		}
 		if m := shaArrowRe.FindStringSubmatch(ev.Data); m != nil {
 			c.push(m[2], ev.TS)
 		}
+	case "automerge_waiting", "automerge_refused":
+		w.openPR(c, ev.TS)
+	case "gh_stack_link":
+		ids := linkSplit.Split(strings.TrimSpace(ev.Data), -1)
+		for i, id := range ids {
+			if l := w.change(id); l != nil {
+				l.stackBelow = 0
+				if i > 0 && w.change(ids[i-1]) != nil {
+					l.stackBelow = w.change(ids[i-1]).pr
+				}
+			}
+		}
+		w.native = true
 	case EventCIRedKind:
 		for _, n := range ciNames(ev) {
 			c.checks[n] = prgraph.CheckFailure
@@ -409,7 +462,7 @@ func (w *replayWorld) merged(c *rChange) {
 // at now.
 func (w *replayWorld) stores(now time.Time) (ShadowStores, prgraph.ForgeSnapshot, prgraph.GitFacts) {
 	s := ShadowStores{Now: now, Base: w.base, Automerge: true, Since: w.hist.since, Policy: w.policy}
-	snap := prgraph.ForgeSnapshot{}
+	snap := prgraph.ForgeSnapshot{NativeStacks: w.native}
 	for n := range w.required {
 		snap.Required = append(snap.Required, prgraph.RequiredCheck{Base: w.base, Name: n})
 	}
@@ -448,7 +501,7 @@ func (w *replayWorld) stores(now time.Time) (ShadowStores, prgraph.ForgeSnapshot
 			continue
 		}
 		snap.PRs = append(snap.PRs, prgraph.PR{Number: c.pr, Branch: t.Branch, Head: c.head, Base: c.prBase,
-			State: prgraph.PROpen, Mergeable: prgraph.MergeClean})
+			State: prgraph.PROpen, Mergeable: prgraph.MergeClean, StackBelow: c.stackBelow})
 		ran := c.pushedAt.IsZero() || now.Sub(c.pushedAt) >= ShadowCIRun
 		for _, n := range sortedKeys(w.required) {
 			st, ok := c.checks[n]

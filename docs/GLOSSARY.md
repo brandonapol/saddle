@@ -256,7 +256,7 @@ name the kind:
 | dependency hold | a layer stays on its current base while a task it runs `after` has an open PR outside its stack | saddle (`prs`, restack) | event `dependency_hold` (`waitingOn`, `internal/app/prbase.go`) |
 | route-around hold | the layers built on a red layer that was routed around wait off the stack until it merges | saddle (stall budget) | `.saddle/stall-held.json` (`StallHeld`) |
 | write hold | a task may not write some paths until a condition (another task lands, a PR merges, a time) | saddle (spawn, scheduler) | `internal/gate` `Hold`; denied writes say `held (<id>)` |
-| reconcile hold | the PR-graph engine plans but applies no action, until it expires (24h at most) | owner (`saddle reconcile hold --for`, proposed in [ADR 0009](adr/0009-prgraph-engine.md)) | planned, #830 |
+| reconcile hold | the PR-graph engine plans but applies no action, until it expires (24h at most) | owner (`saddle reconcile hold --for`, proposed in [ADR 0009](adr/0009-prgraph-engine.md)) | planned, with the first cutover (#832); the #830 shadow never acts, so has nothing to hold |
 
 Every hold that saddle places must lift on its own or offer a self-service
 escape (#119): a dependency hold drops when the dependency leaves for good
@@ -459,6 +459,13 @@ and reorders or holds entries. States: `queued`, `on_hold`.
 ### queued
 A train entry state: `done` and waiting for `land`.
 
+### reconcile
+`saddle reconcile [--plan] [--replay <state.db> --day YYYY-MM-DD]`: the
+PR-graph engine (`internal/prgraph`, [ADR 0009](adr/0009-prgraph-engine.md))
+in *shadow*. `--plan` (the default) prints what it would do for the stack now;
+`--replay` replays a copy of a state.db's events against it offline and lists
+the divergences and outcome counts. Neither acts. See *shadow*.
+
 ### release
 `saddle release [glob]...`: gives back a task's claims (all if none named).
 Unrelated to `release` in `queue` / `automerge`, which un-hold.
@@ -556,6 +563,16 @@ What the stall budget does to a red layer whose CI repairs ran out and whose
 card got no answer: its PR is labelled `needs-human` and its ci-red hold is
 acknowledged, so it stops holding the layers above it. The agent is not
 stopped. *Avoid:* "parked" (the current `stall_parked` event; #862).
+
+### shadow
+The PR-graph engine running beside saddle's own code without acting (#830,
+ADR 0009 §6): a watcher (`reconcile-shadow`, in `saddle up` and the plugin
+engine) builds prgraph's input from today's stores every sentinel tick and
+logs `reconcile_shadow` events: `prgraph_only <action>` for what prgraph would
+do and saddle didn't within 10 minutes, `legacy_only <action>` for what saddle
+did and prgraph wouldn't. Ticks whose input changed are kept in
+`prgraph_tick` for 14 days, for replay. A cutover to prgraph needs a clean
+shadow first. *Avoid:* "dry run" (that is `--dry-run` on one command).
 
 ### spawn
 `saddle spawn`: starts an agent on its own branch, worktree and tmux window,

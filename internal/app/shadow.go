@@ -403,7 +403,7 @@ func (d *shadowDiff) Observe(now time.Time, plan prgraph.Plan, legacy []LegacyAc
 
 func (d *shadowDiff) prgraphOnly(p pendingAction, now time.Time) ShadowDivergence {
 	return ShadowDivergence{At: p.first, Side: ShadowPrgraphOnly, Kind: p.a.Kind, Change: p.a.Change, Action: p.a.String(),
-		Detail: fmt.Sprintf("planned since %s; saddle hasn't done it (%s)", p.first.UTC().Format("15:04"), now.Sub(p.first).Round(time.Minute))}
+		Detail: fmt.Sprintf("planned for %s and saddle didn't take it", now.Sub(p.first).Round(time.Minute))}
 }
 
 // match finds la in the current plan, the last one or the pending actions,
