@@ -114,14 +114,19 @@ func (s system) OpenStore(path string) error {
 
 // Leftovers counts what saddle gc would remove and keep, the same way gc
 // decides. An uninitialized repo has none.
-func (s system) Leftovers() (remove, kept int, err error) {
+func (s system) Leftovers() (LeftoverCounts, error) {
+	var c LeftoverCounts
 	if _, err := os.Stat(filepath.Join(string(s), ".saddle", "state.db")); errors.Is(err, fs.ErrNotExist) {
-		return 0, 0, nil
+		return c, nil
 	}
 	a, err := app.Open(string(s))
 	if err != nil {
-		return 0, 0, err
+		return c, err
 	}
 	defer a.Close()
-	return a.GCCounts()
+	if c.StaleWorktrees, err = a.StaleWorktrees(); err != nil {
+		return c, err
+	}
+	c.Remove, c.Kept, err = a.GCCounts()
+	return c, err
 }

@@ -181,6 +181,9 @@ type StatusOut struct {
 	// panic (#789); absent while every one is healthy.
 	Watchers []app.WatcherHealth `json:"watchers,omitempty" jsonschema:"background watchers (sentinel, automerge, ci, ...) that are stale while the engine runs or restarted after a panic: name, ago (since the last tick), restarts, last_panic"`
 	Tasks    []TaskView          `json:"tasks"`
+	// StaleWorktrees counts worktrees whose task ended or is gone; saddle gc
+	// removes them (#803). Absent at zero.
+	StaleWorktrees int `json:"stale_worktrees,omitempty" jsonschema:"worktrees under .saddle/worktrees whose task landed, was killed, ended with no change, failed or is gone; saddle gc removes them. Absent at zero"`
 	// Jev is the triage log rolled up (#512). Zero calls is reported, so a
 	// quiet judge is visible rather than absent.
 	Jev JevStatus `json:"jev" jsonschema:"Jev triage so far: how many calls, how many failed, and approximate list-price spend in USD"`
@@ -439,6 +442,11 @@ func Status(a *app.App) (StatusOut, error) {
 		out.Warnings = append(out.Warnings, "forecast: "+err.Error())
 	} else {
 		out.Forecast = f.View()
+	}
+	if n, err := a.StaleWorktrees(); err != nil {
+		out.Warnings = append(out.Warnings, "stale worktrees: "+err.Error())
+	} else {
+		out.StaleWorktrees = n
 	}
 	out.Tasks, err = Tasks(a)
 	return out, err
