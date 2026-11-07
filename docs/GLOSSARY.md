@@ -177,6 +177,8 @@ tag), `no-progress` (an autopilot stall), `done-orphaned` (a task called done
 but its branch never queued), `worker-hung` (an agent stopped answering) and
 `prompt-wait` (an agent waiting at a prompt). A card closes by the owner's
 answer, its timeout default, a `[[preauth]]` rule, or the situation resolving.
+A default that fails is a retry [attempt](#attempt): the card stays open and
+the default is retried, escalating once (#826).
 *Avoid:* "ticket", "alert", "notice" (a notice is a message, not a choice).
 *Maps to:* `.saddle/decisions.json`, events `decision_*`.
 
