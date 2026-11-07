@@ -100,3 +100,22 @@ func TestSweepStaleLayouts(t *testing.T) {
 		t.Error("holder in a busy layout dir was killed")
 	}
 }
+
+// #802: the ci-fix scratch worktree a crashed fixer run left behind is swept
+// like a stale layout run.
+func TestSweepStaleLayoutsTakesCIFix(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	d := a.stateDir("ci-fix")
+	git(t, a.Root, "worktree", "add", "-q", "--detach", d, "HEAD")
+	old := time.Now().Add(-2 * time.Hour)
+	must(t, os.Chtimes(d, old, old))
+
+	res := a.SweepStaleLayouts(time.Hour)
+	if len(res.Dirs) != 1 || res.Dirs[0] != d || exists(d) {
+		t.Fatalf("sweep = %+v, exists=%v; want %s swept", res, exists(d), d)
+	}
+	if strings.Contains(git(t, a.Root, "worktree", "list"), "ci-fix") {
+		t.Error("ci-fix still registered with git")
+	}
+}

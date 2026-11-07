@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -26,6 +27,11 @@ var runMatch = procreap.Match{SkipTmux: true}
 // layoutPrefix starts the name of a layout run's scratch worktree under
 // .saddle (#354).
 const layoutPrefix = "layout-"
+
+// scratchWorktreePrefixes start the names of the scratch worktrees under
+// .saddle that a run which crashed leaves behind: layout runs and the CI
+// fixer's ci-fix tree (#802).
+var scratchWorktreePrefixes = []string{layoutPrefix, "ci-fix"}
 
 // cleanRunDir reaps the processes under task id's run dir and removes it.
 // A dir a process still holds after the reap is kept, with a note.
@@ -54,8 +60,8 @@ type LayoutSweep struct {
 	Dirs []string
 }
 
-// SweepStaleLayouts removes the layout-* worktrees under .saddle that a
-// layout run which died midway left behind: untouched for maxAge and with no
+// SweepStaleLayouts removes the layout-* and ci-fix* worktrees under .saddle
+// that a run which died midway left behind: untouched for maxAge and with no
 // process working in one. Its git registration goes with it.
 func (a *App) SweepStaleLayouts(maxAge time.Duration) LayoutSweep {
 	var res LayoutSweep
@@ -65,7 +71,7 @@ func (a *App) SweepStaleLayouts(maxAge time.Duration) LayoutSweep {
 	}
 	cutoff := time.Now().Add(-maxAge)
 	for _, e := range es {
-		if !e.IsDir() || !strings.HasPrefix(e.Name(), layoutPrefix) {
+		if !e.IsDir() || !slices.ContainsFunc(scratchWorktreePrefixes, func(p string) bool { return strings.HasPrefix(e.Name(), p) }) {
 			continue
 		}
 		fi, err := e.Info()
