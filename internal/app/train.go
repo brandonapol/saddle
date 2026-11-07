@@ -1248,6 +1248,10 @@ type StackLayer struct {
 	// work (its branch drifted, base..head holds other work, its work isn't
 	// on integration); "" if sound.
 	Problem string
+	// Below is the index of the layer its PR is stacked on under [train]
+	// output; -1 when its PR targets base. Layers above a broken one in
+	// its own PR stack depend on it; the rest are independent (#845).
+	Below int
 }
 
 // StackLayers checks every layer of the PR stack the way prs does, without
@@ -1258,19 +1262,37 @@ func (a *App) StackLayers() ([]StackLayer, error) {
 		return nil, err
 	}
 	a.healBranches(stack)
+	// Without a layout, stack every layer on its train predecessor: treating
+	// an independent layer as dependent only labels too much, never too little.
+	layout, _, lerr := a.stackLayout(stack)
 	var out []StackLayer
 	base, baseName := a.baseRef(), a.Cfg.Base
-	for _, l := range stack {
+	for i, l := range stack {
 		prob, err := a.layerProblem(l, base, baseName)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, StackLayer{Task: l.Task, Problem: prob})
+		below := i - 1
+		if lerr == nil && i < len(layout) {
+			below = layout[i].Below
+		}
+		out = append(out, StackLayer{Task: l.Task, Problem: prob, Below: below})
 		if l.Lost == "" {
 			base, baseName = l.To, l.ID+"'s branch"
 		}
 	}
 	return out, nil
+}
+
+// StackedOn reports whether layer j is stacked, directly or through others,
+// on layer at in layers' PR stacks.
+func StackedOn(layers []StackLayer, j, at int) bool {
+	for b, n := layers[j].Below, 0; b >= 0 && b < len(layers) && n <= len(layers); b, n = layers[b].Below, n+1 {
+		if b == at {
+			return true
+		}
+	}
+	return false
 }
 
 // landedClaimsEvent records the claims a task held when it landed.

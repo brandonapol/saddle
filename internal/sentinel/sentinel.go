@@ -491,19 +491,15 @@ func (s *Sentinel) check(restack bool) (rep Report, fix bool, err error) {
 	if t := s.tries[rep.Task]; t.err != "" {
 		rep.Cause += "; the sentinel's restack failed: " + t.err
 	}
-	// needs-human goes on the PRs from the lowest conflict up, unless acked.
+	// needs-human goes on each conflicting PR and the PRs stacked on it in
+	// its own PR stack, unless acked. Independent PRs later in train order
+	// don't depend on the conflict and stay unlabeled (#845).
 	rep.Acked = flagged && flag.Acked && flag.Task == rep.Task
 	var want []string
 	if !rep.Acked {
-		from := -1
-		for _, h := range hits {
-			if h.conflict && (from < 0 || h.from < from) {
-				from = h.from
-			}
-		}
-		for i := from; from >= 0 && i < len(layers); i++ {
-			if pr := layers[i].Task.PR; pr != "" {
-				want = append(want, pr)
+		for i, l := range layers {
+			if l.Task.PR != "" && slices.ContainsFunc(hits, func(h hit) bool { return h.conflict && dependsOn(layers, i, h.from) }) {
+				want = append(want, l.Task.PR)
 			}
 		}
 	}
@@ -685,7 +681,7 @@ func flagComment(layers []app.StackLayer, hits []hit, i int, rep Report, base st
 		}
 	}
 	for _, h := range hits {
-		if h.conflict && h.at < i && h.from <= i {
+		if h.conflict && h.at < i && dependsOn(layers, i, h.from) && dependsOn(layers, i, h.at) {
 			below := layers[h.at].Task
 			why = append(why, fmt.Sprintf("It is stacked on %s (`%s`, %s), where: %s.", below.ID, below.Branch, below.PR, h.cause))
 		}
@@ -705,6 +701,11 @@ func flagComment(layers []app.StackLayer, hits []hit, i int, rep Report, base st
 		"`saddle sentinel ack` acknowledges the flag and takes this label off.\n\n"+
 		"**What clears it:** nothing to do on this PR. Once the conflict is gone, the sentinel removes the label and updates this comment.\n", base)
 	return b.String()
+}
+
+// dependsOn reports whether layer i is layer at or stacked on it.
+func dependsOn(layers []app.StackLayer, i, at int) bool {
+	return i == at || app.StackedOn(layers, i, at)
 }
 
 // clearComment replaces a flag comment once the label is lifted.

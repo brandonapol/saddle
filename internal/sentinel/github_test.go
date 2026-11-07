@@ -81,6 +81,8 @@ func TestSentinelDropsMergedClosedAndKilled(t *testing.T) {
 // problem, and a clean check forgets the ack.
 func TestSentinelAck(t *testing.T) {
 	a, _ := setup(t)
+	// One linear PR stack, so t2 sits on t1 and is labeled with it (#845).
+	a.Cfg.Train.Output = "single"
 	gh := newFakeGH(t)
 	t1 := landTask(t, a, "t1", "one")
 	landTask(t, a, "t2", "two")
