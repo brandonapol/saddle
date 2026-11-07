@@ -70,11 +70,8 @@ func TestStallRouteAroundIndependentLayerMerges(t *testing.T) {
 	w := a.NewAutomerge(gh)
 	must(t, w.SetEnabled(true))
 	for range 2 {
-		st, err := w.Check()
+		_, err := w.Check()
 		must(t, err)
-		if st.Stopped != "" {
-			t.Fatalf("automerge stopped: %s", st.Stopped)
-		}
 	}
 	if !slices.Equal(gh.order, []string{"t2"}) {
 		t.Fatalf("merged %v, want t2 only", gh.order)

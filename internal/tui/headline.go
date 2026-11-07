@@ -57,9 +57,6 @@ func (m *model) headlineInput(now time.Time) app.HeadlineInput {
 			in.Train = append(in.Train, store.TrainEntry{Task: t.ID, State: store.Queued})
 		}
 	}
-	if m.am != nil {
-		in.AutomergeStopped = m.am.Stopped
-	}
 	if m.ap != nil {
 		in.Autopilot = m.ap.On && !m.ap.Paused
 	}

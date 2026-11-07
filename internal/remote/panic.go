@@ -228,7 +228,7 @@ func (s AppSource) StopAuto() (PausedRepo, error) {
 	if err != nil {
 		return r, err
 	}
-	if m.Enabled && m.Stopped == "" {
+	if m.Enabled {
 		if err := a.NewAutomerge(nil).SetEnabled(false); err != nil {
 			return r, err
 		}

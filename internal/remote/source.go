@@ -279,10 +279,7 @@ func (s AppSource) Snapshot() (Snapshot, error) {
 	}
 	am := "off"
 	if m, err := s.A.AutomergeState(); err == nil {
-		switch {
-		case m.Stopped != "":
-			am = "stopped"
-		case m.Enabled:
+		if m.Enabled {
 			am = "on"
 		}
 	}

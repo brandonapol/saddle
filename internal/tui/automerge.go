@@ -128,8 +128,6 @@ func (m *model) amHeader() (long, short string, c lipgloss.Color) {
 		return "", "", cDim
 	}
 	switch {
-	case st.Stopped != "":
-		return "auto-merge stopped: " + st.Stopped, "merge stopped", cAlert
 	case !st.Enabled:
 		return "auto-merge off", "merge off", cDim
 	}
@@ -183,14 +181,14 @@ func (m *model) mergeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 		if m.am == nil {
 			return flashCmd("auto-merge state not read yet"), true
 		}
-		on := !m.am.Enabled || m.am.Stopped != ""
+		on := !m.am.Enabled
 		word := "off"
 		if on {
 			word = "on"
 		}
 		return m.amRun("turning auto-merge "+word, func(x automerger) (string, error) {
 			return "auto-merge " + word, x.SetAutomerge(on)
-		}, func(st *automerge.Status) { st.Enabled, st.Stopped = on, "" }), true
+		}, func(st *automerge.Status) { st.Enabled = on }), true
 	case key.Matches(k, keys.Hold):
 		s, ok := m.selectedStack()
 		if !ok {
@@ -257,9 +255,6 @@ func (m *model) viewStacks(w int) []string {
 		state += color(cAccent, fmt.Sprintf(" · %d held", n))
 	}
 	rows := []string{wrap.Render(state)}
-	if st.Stopped != "" {
-		rows = append(rows, wrap.Render(color(cAlert, "stopped: "+st.Stopped)+sDim.Render(" · ")+sKey.Render(m.keys.AutoMerge.Help().Key)+sDim.Render(" resumes")))
-	}
 	if len(st.Stacks) == 0 {
 		return append(rows, sDim.Render("no open PR stacks"))
 	}

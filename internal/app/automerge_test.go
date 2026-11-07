@@ -109,11 +109,8 @@ func TestAutomergeMergesStackBottomUp(t *testing.T) {
 	}
 	must(t, w.SetEnabled(true))
 	for range 3 {
-		st, err = w.Check()
+		_, err = w.Check()
 		must(t, err)
-		if st.Stopped != "" {
-			t.Fatalf("stopped: %s", st.Stopped)
-		}
 	}
 	if !slices.Equal(gh.order, []string{"t1", "t2"}) {
 		t.Fatalf("merged %v, want t1 then t2", gh.order)
@@ -272,8 +269,8 @@ func TestAutomergeCollapsesRedBottom(t *testing.T) {
 	must(t, w.SetEnabled(true))
 	st, err := w.Check()
 	must(t, err)
-	if st.Merged != t2.PR || st.Stopped != "" {
-		t.Fatalf("check = merged %q stopped %q; want %s collapsed in", st.Merged, st.Stopped, t2.PR)
+	if st.Merged != t2.PR {
+		t.Fatalf("check = merged %q; want %s collapsed in", st.Merged, t2.PR)
 	}
 	if !slices.Equal(h.merged, []string{t2.PR}) {
 		t.Fatalf("merged = %v, want only t2's PR", h.merged)

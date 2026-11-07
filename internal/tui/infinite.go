@@ -73,7 +73,7 @@ func (m *model) toggleInfinite() tea.Cmd {
 		return flashCmd("still switching infinite mode")
 	}
 	on := !m.infiniteOn()
-	wantAm := on && (m.am == nil || !m.am.Enabled || m.am.Stopped != "")
+	wantAm := on && (m.am == nil || !m.am.Enabled)
 	m.apBusy = true
 	x, y := m.infiniter(), m.automerger()
 	return func() tea.Msg {
@@ -103,7 +103,7 @@ func (m *model) infiniteDone(msg apDoneMsg) tea.Cmd {
 		m.apGen++
 	}
 	if msg.amOn {
-		m.applyAm(func(st *automerge.Status) { st.Enabled, st.Stopped = true, "" })
+		m.applyAm(func(st *automerge.Status) { st.Enabled = true })
 	}
 	m.flash, m.flashAt = msg.text, time.Now()
 	return m.refresh()

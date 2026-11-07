@@ -15,6 +15,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/narrator"
+	"github.com/brandonapol/saddle/internal/retry"
 	"github.com/brandonapol/saddle/internal/store"
 	"github.com/brandonapol/saddle/internal/trust"
 )
@@ -39,6 +40,7 @@ const (
 	BlockerTrainEscalated  = "train_escalated"  // a branch failed to land too often
 	BlockerDecisionDefault = "decision_default" // a card's default kept failing, so it gave up (#766)
 	BlockerRouteExpired    = "route_expired"    // a route-around hold outlived stallRouteMaxAge (#776)
+	BlockerRetryEscalated  = "retry_escalated"  // an action failed the same way retry.EscalateAfter times (#826)
 )
 
 // EventHandFix is the events-table kind for a hand fix recorded against a
@@ -683,6 +685,12 @@ func (a *App) blockerFromEvent(e store.Event) (Blocker, bool) {
 		b.Subject = fmt.Sprintf("route around %s held %s for %s with no resolution", e.Task, orUnknown(e.Data), fmtDuration(stallRouteMaxAge))
 		b.Detail = fmt.Sprintf("Saddle routed around %s; it neither merged nor closed within %s, so the route was dropped. %s stay off the stack until requeued by hand (saddle requeue).",
 			e.Task, fmtDuration(stallRouteMaxAge), orUnknown(e.Data))
+	case retry.EventEscalated:
+		what, why, _ := strings.Cut(e.Data, ": ")
+		b.Kind, b.Cause = BlockerRetryEscalated, what+": "+why
+		b.Subject = fmt.Sprintf("%s failed %d times: %s", truncateRunes(what, 50), retry.EscalateAfter, truncateRunes(why, 70))
+		b.Detail = fmt.Sprintf("%s failed the same way %d times in a row. Saddle keeps retrying every %s on its own; fix the cause and the next try goes through: %s",
+			what, retry.EscalateAfter, fmtDuration(retry.SlowCadence()), why)
 	default:
 		return b, false
 	}

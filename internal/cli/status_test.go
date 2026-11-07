@@ -52,8 +52,8 @@ func TestTmuxSegmentFormat(t *testing.T) {
 	if n := utf8.RuneCountInString(plain); n > 48 {
 		t.Errorf("segment is %d wide: %q", n, plain)
 	}
-	over := segment{Usage: usage.Over, UsageNote: "weekly 104%", AutoMerge: "stopped"}.render(false, 0)
-	if over != "0 run · 0 you · 0 queued · am stopped · !! weekly 104%" {
+	over := segment{Usage: usage.Over, UsageNote: "weekly 104%", AutoMerge: "on"}.render(false, 0)
+	if over != "0 run · 0 you · 0 queued · am on · !! weekly 104%" {
 		t.Errorf("over: %q", over)
 	}
 	// A width cap drops the least useful parts first, then clips.

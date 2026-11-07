@@ -81,7 +81,6 @@ func TestHeaderShowsAutomergeState(t *testing.T) {
 	}{
 		{"off", automerge.Status{}, []string{" off"}, nil}, // off trails, so it may be short
 		{"on", automerge.Status{Enabled: true}, []string{"auto-merge on"}, []string{"auto-merge on", "merge on"}},
-		{"stopped", automerge.Status{Enabled: true, Stopped: "merge of #12 failed"}, []string{"auto-merge stopped: merge of #12 failed"}, []string{"stopped"}},
 		{"held", *twoStacks(), []string{"auto-merge on · 1 held"}, []string{"1 held"}},
 	}
 	for _, c := range cases {
@@ -139,12 +138,9 @@ func TestMergeViewShowsStacks(t *testing.T) {
 
 	m := newViewModel(120, 30)
 	m.view = viewMerge
-	m.am = &automerge.Status{Stopped: "merge of #12 failed: not mergeable"}
-	out := m.View()
-	for _, want := range []string{"stopped: merge of #12 failed: not mergeable", "no open PR stacks"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("stopped merge view lacks %q:\n%s", want, out)
-		}
+	m.am = &automerge.Status{Enabled: true}
+	if out := m.View(); !strings.Contains(out, "no open PR stacks") || strings.Contains(out, "stopped") {
+		t.Errorf("empty merge view:\n%s", out)
 	}
 }
 
@@ -194,14 +190,12 @@ func TestMergeKeysDriveAutomerge(t *testing.T) {
 		t.Errorf("the result should be flashed, got %q", m.flash)
 	}
 
-	// Off or stopped, M turns it on.
+	// Off, M turns it on.
 	f.calls = nil
-	m.am = &automerge.Status{Enabled: true, Stopped: "boom"}
-	runKey(m, runeKey('M'))
 	m.am = &automerge.Status{}
 	runKey(m, runeKey('M'))
-	if !slices.Equal(f.calls, []string{"on", "on"}) {
-		t.Errorf("stopped then off: calls = %q, want on, on", f.calls)
+	if !slices.Equal(f.calls, []string{"on"}) {
+		t.Errorf("off: calls = %q, want on", f.calls)
 	}
 
 	// Errors are flashed; no stacks means nothing to hold.

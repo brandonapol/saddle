@@ -294,7 +294,7 @@ func TestStateMovedBeforeConfirm(t *testing.T) {
 		t.Fatal(err)
 	}
 	code := confirmCode(t, res)
-	f.set(func(s *State) { s.AutoMerge.Stopped = "merge failed" })
+	f.set(func(s *State) { s.AutoMerge.Holds = []string{"t1"} })
 	res, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: ConfirmTool, Arguments: map[string]any{"code": code}})
 	if !callErr(res, err) || len(f.got()) != 0 {
 		t.Fatalf("automerge on ran after its state moved: %v %v", f.got(), resText(res))

@@ -183,9 +183,6 @@ func writeAutomerge(out io.Writer, st automerge.Status, base string) {
 		state = "on"
 	}
 	fmt.Fprintf(out, "auto-merge: %s (%s)\n", state, st.Source)
-	if st.Stopped != "" {
-		fmt.Fprintf(out, "stopped: %s\n  run `saddle automerge on` to resume\n", st.Stopped)
-	}
 	if len(st.Holds) > 0 {
 		fmt.Fprintf(out, "held: %s\n", strings.Join(st.Holds, ", "))
 	}

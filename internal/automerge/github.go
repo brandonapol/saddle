@@ -113,3 +113,16 @@ func (g *GH) Merge(url, method, head string) error {
 	}
 	return g.forge().MergePR(context.Background(), url, method, head)
 }
+
+// MergeAsync merges url through the async merge API, the route for a PR
+// GitHub refused to merge any other way (#826). A forge without one is
+// ErrUnsupported.
+func (g *GH) MergeAsync(url, method, head string) error {
+	a, ok := g.Forge.(interface {
+		MergePRAsync(ctx context.Context, ref, method, head string) error
+	})
+	if !ok {
+		return fmt.Errorf("async merge: %w", forge.ErrUnsupported)
+	}
+	return a.MergePRAsync(context.Background(), url, method, head)
+}

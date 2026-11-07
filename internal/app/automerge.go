@@ -34,6 +34,7 @@ func (a *App) NewAutomerge(gh automerge.GitHub) *automerge.Watcher {
 		Lock:     a.TryLockTrain,
 		Collapse: func(s string) (string, error) { return a.AutoCollapse(s, gh) },
 		Event:    a.Store.Event,
+		Attempts: a.Store,
 		Notify: func(action bool, text string) {
 			kind := store.NoticeInfo
 			if action {
@@ -45,7 +46,7 @@ func (a *App) NewAutomerge(gh automerge.GitHub) *automerge.Watcher {
 }
 
 // AutomergeState is the auto-merge state as last saved: on or off and why,
-// holds, a stop after a failure, and the stacks the last check saw. It asks
+// holds, and the stacks the last check saw. It asks
 // GitHub nothing, so the TUI can read it every frame.
 func (a *App) AutomergeState() (automerge.Status, error) {
 	return a.NewAutomerge(noGitHub{}).Status()

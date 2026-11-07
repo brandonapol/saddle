@@ -48,16 +48,15 @@ type HeadlineInput struct {
 	Now   time.Time
 	Tasks []store.Task // every task; the orchestrator, landed and killed ones are skipped
 	// Asks maps a needs-you task to its newest notification.
-	Asks             map[string]store.Event
-	Train            []store.TrainEntry
-	CIRed            CIRedState
-	Flag             *StackFlag // the stack sentinel's flag, nil when clear
-	Exhausted        map[string]Exhaustion
-	Usage            usage.State
-	UsageNote        string // the worst window's name and percent
-	AutomergeStopped string // why auto-merge stopped, "" when it runs or is off
-	Merging          int    // PRs auto-merge can merge now
-	Autopilot        bool
+	Asks      map[string]store.Event
+	Train     []store.TrainEntry
+	CIRed     CIRedState
+	Flag      *StackFlag // the stack sentinel's flag, nil when clear
+	Exhausted map[string]Exhaustion
+	Usage     usage.State
+	UsageNote string // the worst window's name and percent
+	Merging   int    // PRs auto-merge can merge now
+	Autopilot bool
 	// Orphans are the workers flagged done-orphaned (#467).
 	Orphans []DoneOrphan
 	// GitHubHeldUntil is when GitHub's rate limit resets while saddle holds
@@ -151,9 +150,6 @@ func blockedHeadline(in HeadlineInput, live []store.Task) (StateHeadline, bool) 
 		if oldest.IsZero() || (!l.Since.IsZero() && l.Since.Before(oldest)) {
 			oldest = l.Since
 		}
-	}
-	if in.AutomergeStopped != "" {
-		reasons = append(reasons, "auto-merge stopped: "+clipText(in.AutomergeStopped, 60))
 	}
 	if len(reasons) == 0 {
 		return StateHeadline{}, false
@@ -416,7 +412,7 @@ func (a *App) headlineInput(now time.Time) (HeadlineInput, error) {
 	if err != nil {
 		return in, err
 	}
-	in.AutomergeStopped, in.Merging = am.Stopped, merging(am)
+	in.Merging = merging(am)
 	if in.Orphans, err = a.FlaggedOrphans(); err != nil {
 		return in, err
 	}
@@ -428,7 +424,7 @@ func (a *App) headlineInput(now time.Time) (HeadlineInput, error) {
 
 // merging counts the stacks auto-merge would merge now.
 func merging(am automerge.Status) int {
-	if !am.Enabled || am.Stopped != "" {
+	if !am.Enabled {
 		return 0
 	}
 	n := 0

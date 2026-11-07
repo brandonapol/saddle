@@ -71,7 +71,21 @@ its own stack only (#771), not later tasks in train order. `atRisk()` in
 `saddle automerge on|off|status|hold|release|approve`. Off by default. While
 `saddle up` runs, merges the bottom PR of a ready stack (green, mergeable, not
 a draft, not needs-human, not at-risk), restacks, and repeats. A held stack is
-never merged. See [ARCHITECTURE.md](ARCHITECTURE.md#stack-upkeep-when-people-use-github-119-123).
+never merged. A failed merge, restack or collapse is a retry
+[attempt](#attempt); auto-merge never stops itself after a failure (#826). See [ARCHITECTURE.md](ARCHITECTURE.md#stack-upkeep-when-people-use-github-119-123).
+
+### attempt
+One action saddle takes on its own (a merge, a restack, a resume, a repair
+spawn) that failed and is being retried, keyed by the action and what it acts
+on (`internal/retry`, #826). Its last failure is an *outcome*: `transient` or
+`rate_limited` back off (30s to 5m, or until the forge's reset) and never
+count; `refused` by a forge rule saddle handles is routed to that rule's path
+on the next tick; anything else is `deterministic` and backs off 1m, 5m, 30m,
+then every 2h. After three deterministic tries at the same error it is
+[escalated](#escalated) once and keeps retrying. A change to its inputs (a new
+head SHA, base or config) starts a new attempt.
+*Avoid:* "stopped", "latched", "gave up": nothing waits on a human to resume.
+*Maps to:* the `retry_attempts` table in `state.db`; event `retry_escalated`.
 
 ### autopilot
 `saddle autopilot on|off|pause|resume|status|infinite`. Off by default. While
@@ -198,11 +212,13 @@ branches are kept and `saddle up` resumes them.
 ### escalated
 Saddle gave up resolving something itself and told the orchestrator or owner:
 a train conflict that failed twice, or a ci-red layer whose repairs ran out.
-Shows as `train_escalated` / `escalated` in events and state.
+Shows as `train_escalated` / `escalated` in events and state. A retry
+[attempt](#attempt) escalates once and keeps retrying, so escalated never
+means stopped there.
 *Avoid:* "stuck", "failed", "parked" for this.
 *Maps to:* train state `escalated` (`app.TrainEscalated`), events
-`train_escalated`, `ci_red_escalated`; a `saddle-blocker` issue when it
-repeats.
+`train_escalated`, `ci_red_escalated`, `retry_escalated`; a `saddle-blocker`
+issue when it repeats (always, for `retry_escalated`).
 
 ### failed
 A task status: its spawn failed. The id stays burned and the reason is in its

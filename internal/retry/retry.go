@@ -60,6 +60,11 @@ type Attempt struct {
 	UpdatedAt time.Time
 }
 
+// EventEscalated is the events-table kind a caller writes when it
+// escalates an attempt: data is the attempt's Kind, ": ", then its LastErr.
+// The blocker sweep files a blocker issue for each (app/blockerissue.go).
+const EventEscalated = "retry_escalated"
+
 // EscalateAfter is how many deterministic tries in a row at the same error
 // escalate.
 const EscalateAfter = 3

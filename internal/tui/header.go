@@ -105,12 +105,9 @@ func (m *model) viewCounters() string {
 	// The short state is always kept room for.
 	fits := func(s string) bool { return lipgloss.Width(line+"  "+s)+lipgloss.Width(short) < m.width }
 	addAM := func() {
-		room := m.width - lipgloss.Width(line) - lipgloss.Width(short) - 3
 		switch {
 		case fits(amLong):
 			line += "  " + color(amColor, "%s", amLong)
-		case m.am.Stopped != "" && room >= 24:
-			line += "  " + color(amColor, "%s", truncate(amLong, room))
 		case fits(amShort):
 			line += "  " + color(amColor, "%s", amShort)
 		}

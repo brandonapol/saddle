@@ -64,9 +64,9 @@ func TestHeadlinePriority(t *testing.T) {
 			in:   HeadlineInput{Tasks: []store.Task{task("t1", store.Conflict)}, CIRed: redStuck, Usage: usage.Over},
 		},
 		{
-			name: "blocked: stack at risk and auto-merge stopped", class: HeadlineBlocked, color: ColorRed,
-			text: "Blocked: the stack is at risk at t7 (restack conflict); run saddle restack; auto-merge stopped: merge failed.",
-			in:   HeadlineInput{Flag: &StackFlag{Task: "t7", Cause: "restack conflict"}, AutomergeStopped: "merge failed"},
+			name: "blocked: stack at risk", class: HeadlineBlocked, color: ColorRed,
+			text: "Blocked: the stack is at risk at t7 (restack conflict); run saddle restack.",
+			in:   HeadlineInput{Flag: &StackFlag{Task: "t7", Cause: "restack conflict"}},
 		},
 		{
 			name: "acked flag and acked red hold nothing", class: HeadlineIdle, color: ColorGrey,
@@ -78,7 +78,7 @@ func TestHeadlinePriority(t *testing.T) {
 			text: "Needs you 2h: t12 (#366) asks: dismiss the GitGuardian alert.",
 			in: HeadlineInput{
 				Tasks: []store.Task{{ID: "t12", Status: store.NeedsYou, PR: "https://github.com/o/r/pull/366"}, task("t1", store.Running)},
-				Asks:  ask, CIRed: redStuck, AutomergeStopped: "merge failed",
+				Asks:  ask, CIRed: redStuck,
 			},
 		},
 		{
