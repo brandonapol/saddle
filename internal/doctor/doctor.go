@@ -209,6 +209,9 @@ func runChecks(env Env, local bool) []Result {
 	if ue, ok := env.(UnpublishedEnv); ok {
 		add(CheckUnpublished, func() Result { return unpublishedCheck(ue) })
 	}
+	if ie, ok := env.(InvariantsEnv); ok {
+		add(CheckInvariants, func() Result { return invariantsCheck(ie) })
+	}
 	if ee, ok := env.(EngineEnv); ok {
 		add(CheckEngine, func() Result { return engineCheck(ee) })
 	}
