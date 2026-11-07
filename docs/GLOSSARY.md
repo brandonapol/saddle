@@ -290,6 +290,15 @@ destination: work on it is "landed locally", not done, and landing opens the
 task's PR against base right away. See
 [ADR 0003](adr/0003-landed-means-on-main.md).
 
+### invariant violation
+A state that breaks one of [ADR 0004](adr/0004-reconcile-against-github.md)'s
+invariants, such as a landed task with no PR (`done_not_on_main`) or a repair
+of `saddle/base` (`self_repair`). The invariant monitor checks for them every
+sentinel tick (#825) and reports each one once, as an event and a notice to the
+orchestrator, until it clears; open ones show in `saddle status` and
+`saddle doctor`. It only detects; the reconciler heals. *Maps to:* events
+`invariant_violated` and `invariant_cleared`, `.saddle/invariants.json`.
+
 ### kill
 `saddle kill <task>`: stops the agent, releases its claims and removes its
 worktree. Uncommitted work is snapshotted to `refs/saddle/wip/` first. Status

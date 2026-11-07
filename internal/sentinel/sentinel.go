@@ -199,7 +199,8 @@ func (s *Sentinel) Run(ctx context.Context) error {
 }
 
 // cycle runs one round: the stack check, opening the PRs of landed tasks
-// that have none (#819), the stuck-stack alarm and blocker issues. It
+// that have none (#819), the stuck-stack alarm, blocker issues and the
+// invariant monitor (#825). It
 // reports whether the train was busy, so the check was skipped.
 func (s *Sentinel) cycle(ctx context.Context) (busy bool) {
 	if rep, err := s.Check(); deferred(err) {
@@ -227,6 +228,10 @@ func (s *Sentinel) cycle(ctx context.Context) (busy bool) {
 		if _, err := s.Blockers.FileBlockers(ctx); err != nil && !deferred(err) {
 			s.App.Store.Event("", EventError, "blocker issues: "+err.Error())
 		}
+	}
+	// Every ADR 0004 invariant violation is an event and one notice (#825).
+	if _, err := s.App.CheckInvariants(time.Now().UTC()); err != nil && !deferred(err) {
+		s.App.Store.Event("", EventError, "invariant monitor: "+err.Error())
 	}
 	return busy
 }

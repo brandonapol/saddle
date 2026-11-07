@@ -101,6 +101,7 @@ func (a *App) Warnings() []string {
 	if w := a.ScratchWarning(); w != "" {
 		ws = append(ws, w)
 	}
+	ws = append(ws, a.ViolationLines()...) // the invariant monitor's open violations (#825)
 	return append(ws, drift...)
 }
 
