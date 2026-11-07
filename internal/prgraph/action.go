@@ -85,6 +85,14 @@ type Action struct {
 	Guard   Guard  `json:"guard,omitzero"`
 }
 
+// onto is a.Onto, or the zero Onto when it has none.
+func (a Action) onto() Onto {
+	if a.Onto == nil {
+		return Onto{}
+	}
+	return *a.Onto
+}
+
 // Effectful reports whether a changes anything (everything but Wait).
 func (a Action) Effectful() bool { return a.Kind != ActWait }
 
@@ -94,7 +102,7 @@ func (a Action) Effectful() bool { return a.Kind != ActWait }
 func (a Action) AttemptKey() string {
 	switch a.Kind {
 	case ActGate, ActRebase:
-		return string(a.Kind) + "/" + a.Change + "/" + a.Guard.Head + "/" + a.Onto.depsKey()
+		return string(a.Kind) + "/" + a.Change + "/" + a.Guard.Head + "/" + a.onto().depsKey()
 	case ActPublish:
 		return "publish/" + a.Change + "/" + a.Guard.Head + "/" + a.Base
 	case ActMove:
@@ -121,7 +129,7 @@ func (a Action) AttemptKey() string {
 func (a Action) String() string {
 	switch a.Kind {
 	case ActGate, ActRebase:
-		return fmt.Sprintf("%s(%s, %s)", a.Kind, a.Change, a.Onto.Key())
+		return fmt.Sprintf("%s(%s, %s)", a.Kind, a.Change, a.onto().Key())
 	case ActPublish:
 		return fmt.Sprintf("publish(%s, %s)", a.Change, a.Base)
 	case ActMove:

@@ -61,8 +61,11 @@ type ShadowStores struct {
 	AutomergeHolds []string
 	// Published maps tasks published on their own (published.json).
 	Published map[string]publishedPR
-	// Since is when each task's legacy state began, when known. A change's
-	// deadline runs from it; without one the clock starts now.
+	// Since is when each task's legacy state began, when known. It is only
+	// the change's since: the shadow never seeds a deadline. Legacy's timing
+	// isn't prgraph's (prgraph would have published or merged earlier), so a
+	// deadline fired by an action prgraph planned but legacy never took
+	// would cascade into reds that only the shadow sees.
 	Since  map[string]time.Time
 	Policy prgraph.Policy
 }
@@ -172,9 +175,6 @@ func ShadowInput(s ShadowStores, forge prgraph.ForgeSnapshot, git prgraph.GitFac
 		c.Since = s.Now
 		if at, ok := s.Since[c.ID]; ok && !at.IsZero() {
 			c.Since = at
-			if d := stateDeadline(c.State, p); d > 0 {
-				c.Deadline = at.Add(d)
-			}
 		}
 		all = append(all, c)
 	}
@@ -224,15 +224,6 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func stateDeadline(s prgraph.ChangeState, p prgraph.Policy) time.Duration {
-	for _, r := range prgraph.StateTable() {
-		if r.State == s && r.Deadline != nil && s != prgraph.Red {
-			return r.Deadline(p)
-		}
-	}
-	return 0
 }
 
 // shadowSettleRounds bounds SettlePlan's loop.
