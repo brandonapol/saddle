@@ -549,3 +549,68 @@ func TestLeftoversManyBranchesParallel(t *testing.T) {
 		t.Fatalf("GCCounts = %d removable, %d kept; want 0, 12", remove, kept)
 	}
 }
+
+// #802: a leftover gc can't remove is reported as kept with the error, and
+// the removals after it still happen.
+func TestGCContinuesPastFailedRemoval(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	withOrigin(t, a)
+	// A merged branch on origin, then origin goes away: deleting it fails.
+	git(t, a.Root, "update-ref", "refs/remotes/origin/saddle/t98-gone", "HEAD")
+	git(t, a.Root, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	git(t, a.Root, "update-ref", "refs/saddle/wip/t99", "HEAD") // listed after it
+
+	ls, err := a.GC()
+	if err == nil {
+		t.Fatal("gc reported no error for the remote it couldn't delete")
+	}
+	if l, ok := leftover(ls, "remote", "origin/saddle/t98-gone"); !ok || l.Keep == "" {
+		t.Fatalf("failed remote: %+v (found %v), want kept with the error", l, ok)
+	}
+	if _, err := gitx.RevParse(a.Root, "refs/saddle/wip/t99"); err == nil {
+		t.Fatal("gc stopped at the failed remote and left refs/saddle/wip/t99")
+	}
+}
+
+// #802: a branch squash-merged after base changed lines near its own has a
+// different patch-id and file content than base, but merging it into base
+// changes nothing, so gc deletes it.
+func TestGCRemovesSquashMergedBranchAfterBaseMoved(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	other := withOrigin(t, a)
+	lines := func(edit map[int]string) string {
+		var b strings.Builder
+		for i := 1; i <= 10; i++ {
+			l := fmt.Sprint("line ", i)
+			if e, ok := edit[i]; ok {
+				l = e
+			}
+			b.WriteString(l + "\n")
+		}
+		return b.String()
+	}
+	task, err := a.Spawn(SpawnReq{Title: "squashed late"})
+	must(t, err)
+	write(t, task.Worktree, "f.txt", lines(nil))
+	commitAll(t, task.Worktree, "add f")
+	write(t, task.Worktree, "f.txt", lines(map[int]string{5: "five"}))
+	commitAll(t, task.Worktree, "edit line 5")
+	must(t, a.Kill(task.ID, false))
+
+	write(t, other, "f.txt", lines(nil))
+	commitAll(t, other, "add f (#1)")
+	write(t, other, "f.txt", lines(map[int]string{3: "three"}))
+	commitAll(t, other, "someone edits line 3 (#2)")
+	write(t, other, "f.txt", lines(map[int]string{3: "three", 5: "five"}))
+	commitAll(t, other, "edit line 5 (#3)")
+	git(t, other, "push", "-q", "origin", "main")
+	git(t, a.Root, "fetch", "-q", "origin")
+
+	ls, err := a.Leftovers()
+	must(t, err)
+	if l, ok := leftover(ls, "branch", task.Branch); !ok || l.Keep != "" {
+		t.Fatalf("squash-merged branch: %+v (found %v), want removable", l, ok)
+	}
+}

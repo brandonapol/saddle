@@ -20,7 +20,9 @@ func gcCmd() *cobra.Command {
 remote) and refs/saddle/* refs that no live task uses, and removes them. A
 branch counts as merged when it is on the integration branch or base, when its
 commits are on base under other SHAs (squash or rebase merges, matched by tree,
-patch-id or file content), or when its task's PR merged into base at its tip.
+patch-id, file content, or a merge into base that would change nothing), or when
+its task's PR merged into base at its tip. A leftover that fails to go is
+reported as kept, with the error, and the rest still go.
 Branches with unmerged work, the remote branch of a PR still in the stack, the
 checked-out branch and worktrees with uncommitted changes are listed with the
 reason and kept. It also sweeps saddle's scratch (docs/scratch.md): entries
