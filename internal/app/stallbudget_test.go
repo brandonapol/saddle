@@ -293,7 +293,7 @@ func TestRouteAroundStuckTruncatesWhenRedDependsOnBelow(t *testing.T) {
 		t.Fatalf("merged %v, want the layers below t3", gh.order)
 	}
 	// Once the layers below merged, the truncated layers go back on top.
-	must(t, a.releaseHeld())
+	must(t, a.releaseHeld(time.Now()))
 	if held, _ := a.StallHeld(); len(held) != 0 {
 		t.Fatalf("still held after the layers below merged: %+v", held)
 	}

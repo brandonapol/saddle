@@ -38,6 +38,7 @@ const (
 	BlockerStuckStack      = "stuck_stack"      // a red or conflicting layer nobody is fixing
 	BlockerTrainEscalated  = "train_escalated"  // a branch failed to land too often
 	BlockerDecisionDefault = "decision_default" // a card's default kept failing, so it gave up (#766)
+	BlockerRouteExpired    = "route_expired"    // a route-around hold outlived stallRouteMaxAge (#776)
 )
 
 // EventHandFix is the events-table kind for a hand fix recorded against a
@@ -677,6 +678,11 @@ func (a *App) blockerFromEvent(e store.Event) (Blocker, bool) {
 		b.Kind, b.Cause = BlockerDecisionDefault, kind+": "+why
 		b.Subject = fmt.Sprintf("%s card's default for %s failed %d times: %s", kind, orUnknown(e.Task), maxDefaultAttempts, truncateRunes(why, 70))
 		b.Detail = fmt.Sprintf("Nobody answered decision card %s and its default failed %d times the same way, so saddle closed it: %s", id, maxDefaultAttempts, why)
+	case eventStallRouteExpired:
+		b.Kind, b.Cause = BlockerRouteExpired, "route-around hold expired"
+		b.Subject = fmt.Sprintf("route around %s held %s for %s with no resolution", e.Task, orUnknown(e.Data), fmtDuration(stallRouteMaxAge))
+		b.Detail = fmt.Sprintf("Saddle routed around %s; it neither merged nor closed within %s, so the route was dropped. %s stay off the stack until requeued by hand (saddle requeue).",
+			e.Task, fmtDuration(stallRouteMaxAge), orUnknown(e.Data))
 	default:
 		return b, false
 	}

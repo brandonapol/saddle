@@ -258,7 +258,7 @@ name the kind:
 | ci-red hold | the layers above a red layer: not pushed, not auto-merged, until its checks pass | saddle (CI watcher) | `.saddle/ci-red.json`, `ciRedHolds` |
 | at-risk cover | the flagged layer and the layers above it in its own stack: not auto-merged | saddle (sentinel) | `flagCovers`, `.saddle/stack-at-risk.json` |
 | dependency hold | a layer stays on its current base while a task it runs `after` has an open PR outside its stack | saddle (`prs`, restack) | event `dependency_hold` (`waitingOn`, `internal/app/prbase.go`) |
-| route-around hold | the layers built on a red layer that was routed around wait off the stack until it merges | saddle (stall budget) | `.saddle/stall-held.json` (`StallHeld`) |
+| route-around hold | the layers built on a red layer that was routed around wait off the stack until it merges, or are requeued without its work once its PR closes or its task is killed or ends with no change; a route still unresolved after 24h is dropped with a blocker issue | saddle (stall budget) | `.saddle/stall-held.json` (`StallHeld`) |
 | write hold | a task may not write some paths until a condition (another task lands, a PR merges, a time) | saddle (spawn, scheduler) | `internal/gate` `Hold`; denied writes say `held (<id>)` |
 | reconcile hold | the PR-graph engine plans but applies no action, until it expires (24h at most) | owner (`saddle reconcile hold --for`, proposed in [ADR 0009](adr/0009-prgraph-engine.md)) | planned, with the first cutover (#832); the #830 shadow never acts, so has nothing to hold |
 
@@ -530,8 +530,10 @@ What the stall budget does when a red layer has blocked its stack too long:
 the red layer leaves the stack (keeping its own PR), and the layers built on
 it wait off the stack with it (a route-around hold) until it merges; then
 they go back on top. A truncated route-around (#766) has no PR because the
-red layer couldn't stand alone. A route-around must release its layers when
-the red layer is closed or killed too (#776).
+red layer couldn't stand alone. When the red layer will never merge (its PR
+is closed, or its task is killed or ends with no change) its layers are
+requeued to rebuild on base without its work; a route unresolved after 24h
+is dropped with one blocker issue and a `saddle requeue` hint (#776).
 *Maps to:* `.saddle/stall-held.json` (`StallRoute`; rename in #862).
 
 ### run

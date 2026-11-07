@@ -200,7 +200,7 @@ func (a *App) StallTick(now time.Time) ([]DecisionCard, error) {
 	errs := []error{err}
 	done, err := a.ExpireDecisions(now, a.runDefault)
 	done = append(pre, done...)
-	errs = append(errs, err, a.releaseHeld(), a.resumeParked(now))
+	errs = append(errs, err, a.releaseHeld(now), a.resumeParked(now))
 	if _, err := a.DecisionDigestTick(now); err != nil {
 		errs = append(errs, fmt.Errorf("decisions digest: %w", err))
 	}
@@ -342,6 +342,14 @@ type StallRoute struct {
 	Below []string  `json:"below,omitempty"`
 	At    time.Time `json:"at"`
 }
+
+// stallRouteMaxAge is how long a route-around may hold layers before saddle
+// gives up on it: it drops the route and files one blocker issue (#776).
+const stallRouteMaxAge = 24 * time.Hour
+
+// eventStallRouteExpired is written when a route outlives stallRouteMaxAge;
+// the blocker filer turns it into an issue. Data: the held layers.
+const eventStallRouteExpired = "stall_route_expired"
 
 func (a *App) heldPath() string { return a.stateDir("stall-held.json") }
 
@@ -549,8 +557,12 @@ func (a *App) dependentLayers(stack []landedTask, at int, ups []string) []string
 // releaseHeld puts layers held on a routed-around red layer back in the
 // train once base has the red layer's work. A truncated route (no PR) puts
 // the red layer itself back first, on top, once base has the layers that
-// were below it (#766).
-func (a *App) releaseHeld() error {
+// were below it (#766). A red layer that will never merge (its PR closed,
+// its task killed or no_change) releases the layers held on it to rebuild
+// on base without its work; one that can't replay gets the train's usual
+// conflict repair. A route still unresolved after stallRouteMaxAge is
+// dropped with one blocker issue (#776).
+func (a *App) releaseHeld(now time.Time) error {
 	routes, err := a.StallHeld()
 	if err != nil || len(routes) == 0 {
 		return err
@@ -568,12 +580,21 @@ func (a *App) releaseHeld() error {
 	var errs []error
 	for _, r := range routes {
 		var back []string
+		gone := ""
 		switch {
 		case r.PR == "" && !slices.ContainsFunc(r.Below, func(id string) bool { return !merged(id) }):
 			back = append([]string{r.Red}, r.Held...)
 		case r.PR != "" && merged(r.Red):
 			back = r.Held
 		default:
+			if gone = a.redGone(r); gone != "" {
+				back = r.Held
+				break
+			}
+			if !r.At.IsZero() && now.Sub(r.At) > stallRouteMaxAge {
+				errs = append(errs, a.expireRoute(r))
+				continue
+			}
 			keep = append(keep, r)
 			continue
 		}
@@ -583,6 +604,13 @@ func (a *App) releaseHeld() error {
 			}
 		}
 		switch {
+		case gone != "":
+			a.Store.Event(r.Red, "stall_route_released", gone+" held="+strings.Join(back, ","))
+			if len(back) > 0 {
+				errs = append(errs, a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
+					"%s %s, so it won't merge: %s, held on it, %s back in the train to rebuild on %s without its work.",
+					r.Red, gone, strings.Join(back, ", "), isAre(len(back)), a.Cfg.Base)))
+			}
 		case r.PR == "":
 			errs = append(errs, a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
 				"The layers below %s merged, so %s %s back on top of the stack.", r.Red, strings.Join(back, ", "), isAre(len(back)))))
@@ -593,6 +621,47 @@ func (a *App) releaseHeld() error {
 	}
 	errs = append(errs, a.setStallHeld(keep))
 	return errors.Join(errs...)
+}
+
+// redGone says why a routed-around red layer will never merge: its task
+// was killed or ended with no change, or its PR was closed unmerged. It
+// returns "" while it still might, or when the forge can't tell.
+func (a *App) redGone(r StallRoute) string {
+	if t, err := a.Store.Task(r.Red); err == nil {
+		switch t.Status {
+		case store.Killed:
+			return "was killed"
+		case store.NoChange:
+			return "ended with no change"
+		}
+	}
+	if r.PR == "" {
+		return ""
+	}
+	if pr, err := a.ghLookup(r.PR); err == nil && pr.State == forge.StateClosed {
+		return "was closed (its PR " + r.PR + ")"
+	}
+	return ""
+}
+
+// expireRoute gives up on a route that outlived stallRouteMaxAge: the
+// event becomes one blocker issue and the orchestrator hears how to put
+// the held layers back by hand.
+func (a *App) expireRoute(r StallRoute) error {
+	held := append([]string{}, r.Held...)
+	if r.PR == "" {
+		held = append([]string{r.Red}, held...)
+	}
+	a.Store.Event(r.Red, eventStallRouteExpired, strings.Join(held, ","))
+	msg := fmt.Sprintf("Gave up on the route around %s after %s: it neither merged nor closed.", r.Red, fmtDuration(stallRouteMaxAge))
+	if len(held) > 0 {
+		cmds := make([]string, len(held))
+		for i, id := range held {
+			cmds[i] = "saddle requeue " + id
+		}
+		msg += fmt.Sprintf(" %s %s still off the stack; %s puts them back.", strings.Join(held, ", "), isAre(len(held)), strings.Join(cmds, " and "))
+	}
+	return a.Notify(OrchestratorID, store.NoticeAction, msg)
 }
 
 // dropRed is the ci-repair-cap default, as its card says: the red layer

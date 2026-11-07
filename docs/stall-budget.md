@@ -32,7 +32,7 @@ The sentinel runs `CheckStuck` every cycle, and `CheckStuck` then runs
 
 | Card | Default after the budget |
 | --- | --- |
-| `stuck-stack` | The red layer leaves the stack and waits as a standalone PR against base: its own PR if that already targets base, otherwise a fresh one through `publish`. Layers above it that build on it leave with it and stay held. A layer builds on the red one when it runs after it (`deps`), was spawned by it, or changes a file it changes. Serial files don't count. The other layers restack onto base and keep merging. Once base has the red layer's work, the held layers are requeued. |
+| `stuck-stack` | The red layer leaves the stack and waits as a standalone PR against base: its own PR if that already targets base, otherwise a fresh one through `publish`. Layers above it that build on it leave with it and stay held. A layer builds on the red one when it runs after it (`deps`), was spawned by it, or changes a file it changes. Serial files don't count. The other layers restack onto base and keep merging. Once base has the red layer's work, the held layers are requeued. If the red layer will never merge (its PR is closed, or its task is killed or ends with `no_change`), they are requeued to rebuild on base without its work, and a layer that can't replay gets the train's conflict repair. A route still unresolved after 24h is dropped: it files one `route_expired` blocker issue and tells the orchestrator which `saddle requeue` puts the layers back (#776). |
 | `ci-repair-cap` | Parks the red layer: its PR gets `needs-human` and it stops holding the stack. |
 | `risky-prompt` | Parks the worker: its uncommitted work is snapshotted, it is marked paused and its window closes, which frees its slot. `saddle resume <task>` picks it up again. |
 | `ask-owner` | Tells the asker to go ahead on its best guess and say so in its done summary. |
@@ -117,3 +117,5 @@ The stuck-stack alarm's `stack_stuck` event is what the blocker filer
 (#407) turns into a deduplicated GitHub issue. A blocker that gets routed
 around therefore already has its issue. The route-around itself is recorded
 as a `stall_routed` event. The blocker filer comments it onto that issue (never a new one).
+A route that expires writes `stall_route_expired`, which the filer turns into a
+`route_expired` blocker issue.
