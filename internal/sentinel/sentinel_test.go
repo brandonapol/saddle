@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -142,7 +143,13 @@ func manual(a *app.App) *Sentinel {
 
 func landTask(t *testing.T, a *app.App, id, file string) store.Task {
 	t.Helper()
-	tk, err := a.Spawn(app.SpawnReq{ID: id, Title: file})
+	return landReq(t, a, app.SpawnReq{ID: id, Title: file}, file)
+}
+
+// landReq spawns req, commits file.txt in its worktree and lands it.
+func landReq(t *testing.T, a *app.App, req app.SpawnReq, file string) store.Task {
+	t.Helper()
+	tk, err := a.Spawn(req)
 	must(t, err)
 	write(t, tk.Worktree, file+".txt", file+"\n")
 	t.Setenv("SADDLE_TASK", tk.ID) // commit as the task, as the ref guard expects
@@ -507,6 +514,9 @@ func (g *commentGH) only(t *testing.T, url string) string {
 // the stack turns it into a resolution note.
 func TestSentinelExplainsNeedsHumanInPRComment(t *testing.T) {
 	a, _ := setup(t)
+	// One linear PR stack, so t3 sits on t2: only PRs stacked on a conflict
+	// are labeled (#845).
+	a.Cfg.Train.Output = "single"
 	fake := newFakeGH(t)
 	t1 := landTask(t, a, "t1", "one")
 	t2 := landTask(t, a, "t2", "two")
@@ -657,5 +667,54 @@ func TestSentinelCycleOpensPRsOfLandedTasksWithout(t *testing.T) {
 	}
 	if len(events(t, a, app.EventPROpened)) != 2 {
 		t.Fatalf("pr_opened events = %v", events(t, a, app.EventPROpened))
+	}
+}
+
+// #845: a conflict labels only its own PR and the PRs stacked on it, not the
+// independent PRs that follow it in train order. t2 and t4 implement the same
+// issue, so t4 is stacked on t2; t1 and t3 are PRs of their own on base.
+func TestSentinelLabelsOnlyTheConflictedStack(t *testing.T) {
+	a, _ := setup(t)
+	fake := newFakeGH(t)
+	t1 := landTask(t, a, "t1", "one")
+	t2 := landReq(t, a, app.SpawnReq{ID: "t2", Title: "two", Issue: 845}, "two")
+	t3 := landTask(t, a, "t3", "three")
+	t4 := landReq(t, a, app.SpawnReq{ID: "t4", Title: "four", Issue: 845}, "four")
+	if _, err := a.PRs(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tk := range []*store.Task{&t1, &t2, &t3, &t4} {
+		*tk, _ = a.Store.Task(tk.ID)
+		if tk.PR == "" {
+			t.Fatalf("%s has no PR", tk.ID)
+		}
+	}
+	fake.setPR(t2.PR, "OPEN", "CONFLICTING")
+
+	gh := newCommentGH(a)
+	s := New(a)
+	s.GH = gh
+	rep, err := s.Check()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.AtRisk || rep.Task != "t2" {
+		t.Fatalf("report = %+v, want at risk from t2", rep)
+	}
+	if want := []string{t2.PR, t4.PR}; !slices.Equal(rep.PRs, want) {
+		t.Fatalf("labeled %v, want %v (t2 and the PR stacked on it)", rep.PRs, want)
+	}
+	for _, tk := range []store.Task{t1, t3} {
+		if hasCall(fake.log(), "pr edit "+tk.PR+" --add-label "+Label) || len(gh.comments[tk.PR]) != 0 {
+			t.Fatalf("independent %s (%s) was labeled or commented on", tk.ID, tk.PR)
+		}
+	}
+	if body := gh.only(t, t4.PR); !strings.Contains(body, "stacked on t2") {
+		t.Fatalf("t4's comment doesn't name t2 below it:\n%s", body)
+	}
+	flag, _, err := a.Flag()
+	must(t, err)
+	if !slices.Equal(flag.PRs, []string{t2.PR, t4.PR}) {
+		t.Fatalf("flag PRs = %v", flag.PRs)
 	}
 }
