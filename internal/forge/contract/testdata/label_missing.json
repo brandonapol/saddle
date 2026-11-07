@@ -1,0 +1,20 @@
+{
+  "scenario": "label_missing",
+  "source": "hand-written from GitHub's documented behaviour (#823); #824's canary re-records it from a scratch repo",
+  "params": {
+    "pr": "41"
+  },
+  "calls": [
+    {
+      "args": [
+        "pr",
+        "edit",
+        "41",
+        "--add-label",
+        "contract-no-such-label"
+      ],
+      "stderr": "could not add label: 'contract-no-such-label' not found",
+      "exit": 1
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "scenario": "stacked_merge_async_accepted",
+  "source": "hand-written from GitHub's documented behaviour (#823); #824's canary re-records it from a scratch repo",
+  "params": {
+    "bottom": "41",
+    "top": "42",
+    "stack": "43"
+  },
+  "calls": [
+    {
+      "args": [
+        "api",
+        "repos/{owner}/{repo}"
+      ],
+      "stdout": "{\"full_name\": \"saddle-contract/scratch\", \"html_url\": \"https://github.com/saddle-contract/scratch\", \"default_branch\": \"main\", \"allow_merge_commit\": false, \"allow_squash_merge\": true, \"allow_rebase_merge\": true, \"allow_auto_merge\": true, \"delete_branch_on_merge\": false}\n"
+    },
+    {
+      "args": [
+        "api",
+        "repos/{owner}/{repo}/stacks?per_page=1"
+      ],
+      "stdout": "[{\"number\": 43, \"url\": \"https://api.github.com/repos/saddle-contract/scratch/stacks/43\", \"base\": {\"ref\": \"main\"}, \"open\": true, \"pull_requests\": [{\"number\": 41, \"state\": \"open\", \"draft\": false, \"merged_at\": null}, {\"number\": 42, \"state\": \"open\", \"draft\": false, \"merged_at\": null}]}]\n"
+    },
+    {
+      "args": [
+        "api",
+        "repos/{owner}/{repo}/stacks?pull_request=41"
+      ],
+      "stdout": "[{\"number\": 43, \"url\": \"https://api.github.com/repos/saddle-contract/scratch/stacks/43\", \"base\": {\"ref\": \"main\"}, \"open\": true, \"pull_requests\": [{\"number\": 41, \"state\": \"open\", \"draft\": false, \"merged_at\": null}, {\"number\": 42, \"state\": \"open\", \"draft\": false, \"merged_at\": null}]}]\n"
+    },
+    {
+      "args": [
+        "api",
+        "-X",
+        "PUT",
+        "repos/{owner}/{repo}/pulls/41/merge-async",
+        "-f",
+        "merge_method=squash"
+      ],
+      "stdout": "{\"status\": \"pending\", \"details\": {\"uuid\": \"7d4c6a52-0b51-4c1e-9d55-1f3c2b8e9a10\"}}\n"
+    },
+    {
+      "args": [
+        "pr",
+        "view",
+        "41",
+        "--json",
+        "state"
+      ],
+      "stdout": "{\"state\":\"OPEN\"}\n"
+    },
+    {
+      "args": [
+        "pr",
+        "view",
+        "41",
+        "--json",
+        "state"
+      ],
+      "stdout": "{\"state\":\"MERGED\"}\n"
+    },
+    {
+      "args": [
+        "pr",
+        "view",
+        "41",
+        "--json",
+        "state"
+      ],
+      "stdout": "{\"state\":\"MERGED\"}\n"
+    }
+  ]
+}

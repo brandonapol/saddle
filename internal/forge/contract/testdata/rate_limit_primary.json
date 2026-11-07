@@ -1,0 +1,20 @@
+{
+  "scenario": "rate_limit_primary",
+  "source": "hand-written from GitHub's documented behaviour (#823); #824's canary re-records it from a scratch repo",
+  "params": {
+    "pr": "41"
+  },
+  "calls": [
+    {
+      "args": [
+        "pr",
+        "view",
+        "41",
+        "--json",
+        "state"
+      ],
+      "stderr": "GraphQL: API rate limit exceeded for user ID 1000001. If you reach out to GitHub Support for help, please include the request ID 0400:1A2B:3C4D5E:6F7A8B:672C9F00.",
+      "exit": 1
+    }
+  ]
+}

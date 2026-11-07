@@ -18,9 +18,6 @@ func TestMergeAsyncForStackedPRs(t *testing.T) {
 	f := newFixture(t)
 	a, b := f.openStack()
 	f.must("stack", "link", "--base", "main", "1", "2")
-	if err := f.gh.Update(func(s *State) error { s.StackedAsyncOnly = true; return nil }); err != nil {
-		t.Fatal(err)
-	}
 	_, errs, code := f.ghRun("pr", "merge", "1", "--squash")
 	if code == 0 || !strings.Contains(errs, "asynchronous merge REST API") {
 		t.Fatalf("gh pr merge of a stacked PR: exit %d, %q", code, errs)
@@ -66,9 +63,6 @@ func TestForgeMergePRThroughMergeAsync(t *testing.T) {
 	f := newFixture(t)
 	f.openStack()
 	f.must("stack", "link", "--base", "main", "1", "2")
-	if err := f.gh.Update(func(s *State) error { s.StackedAsyncOnly = true; return nil }); err != nil {
-		t.Fatal(err)
-	}
 	g := &forge.GitHub{
 		Run: func(_ context.Context, args ...string) (string, error) {
 			out, errs, code := f.ghRun(args...)

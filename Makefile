@@ -192,6 +192,16 @@ test/e2e: ## Run the end-to-end journeys (RUN=Journey to pick some; needs tmux)
 	E2E_REPORT="$$rep" E2E_GO_TAGS='$(GO_TAGS)' $(GO) test -tags '$(GO_TAGS) e2e' $(E2E_RACE_FLAG) -count=1 -timeout $(E2E_GO_TIMEOUT) $(if $(E2E_PARALLEL),-parallel $(E2E_PARALLEL)) $(if $(RUN),-run '$(RUN)') ./internal/e2e/... ./test/e2e/... ./internal/bench/...; \
 	code=$$?; cat "$$rep"; exit $$code
 
+.PHONY: test/contract
+test/contract: ## Run the forge contract suite: every scenario against its recorded fixture and fakegh (#823)
+	$(GO) test $(GO_TAGFLAG) -count=1 -run 'TestContract|TestEveryFixtureHasAScenario|TestRecorderPinsTheCalls' ./internal/forge/contract
+
+.PHONY: contract-record
+contract-record: ## Re-record the contract fixtures against a scratch GitHub repo (needs network, GH_TOKEN, SADDLE_CONTRACT_REPO)
+	# Not part of make check: it talks to GitHub. The recorder is #824's canary;
+	# until it lands this fails with a pointer to it.
+	SADDLE_CONTRACT_RECORD=1 $(GO) test $(GO_TAGFLAG) -count=1 -run TestRecordFixtures -v ./internal/forge/contract
+
 .PHONY: test/scripts
 test/scripts: ## Test the shell scripts (upgrade, templeak, CI sharding, test summary, install PATH, changed packages)
 	bash scripts/upgrade_test.sh
@@ -237,7 +247,7 @@ test/cover: ## Run tests and write coverage.html
 ##@ Code quality
 
 .PHONY: check
-check: check/format check/tidy check/vet $(CHECK_TESTS) test/scripts check/lint ## Run CI's checks, testing only what changed (CHECK_FULL=1 for all; plugin tests: make test/plugin)
+check: check/format check/tidy check/vet $(CHECK_TESTS) test/contract test/scripts check/lint ## Run CI's checks, testing only what changed (CHECK_FULL=1 for all; plugin tests: make test/plugin)
 
 .PHONY: check/format
 check/format: ## Fail if any Go file needs gofmt

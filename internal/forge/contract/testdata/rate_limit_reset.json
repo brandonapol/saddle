@@ -1,0 +1,14 @@
+{
+  "scenario": "rate_limit_reset",
+  "source": "hand-written from GitHub's documented behaviour (#823); #824's canary re-records it from a scratch repo",
+  "params": {},
+  "calls": [
+    {
+      "args": [
+        "api",
+        "rate_limit"
+      ],
+      "stdout": "{\"resources\": {\"core\": {\"limit\": 5000, \"used\": 5000, \"remaining\": 0, \"reset\": 1762531200}, \"graphql\": {\"limit\": 5000, \"used\": 5000, \"remaining\": 0, \"reset\": 1762531200}}, \"rate\": {\"limit\": 5000, \"used\": 5000, \"remaining\": 0, \"reset\": 1762531200}}\n"
+    }
+  ]
+}

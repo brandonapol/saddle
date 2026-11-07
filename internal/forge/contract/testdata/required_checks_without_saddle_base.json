@@ -1,0 +1,35 @@
+{
+  "scenario": "required_checks_without_saddle_base",
+  "source": "hand-written from GitHub's documented behaviour (#823); #824's canary re-records it from a scratch repo",
+  "params": {},
+  "calls": [
+    {
+      "args": [
+        "api",
+        "repos/{owner}/{repo}"
+      ],
+      "stdout": "{\"full_name\": \"saddle-contract/scratch\", \"html_url\": \"https://github.com/saddle-contract/scratch\", \"default_branch\": \"main\", \"allow_merge_commit\": false, \"allow_squash_merge\": true, \"allow_rebase_merge\": true, \"allow_auto_merge\": true, \"delete_branch_on_merge\": false}\n"
+    },
+    {
+      "args": [
+        "api",
+        "repos/{owner}/{repo}/stacks?per_page=1"
+      ],
+      "stdout": "[]\n"
+    },
+    {
+      "args": [
+        "api",
+        "repos/{owner}/{repo}/rules/branches/main"
+      ],
+      "stdout": "[]\n"
+    },
+    {
+      "args": [
+        "api",
+        "repos/{owner}/{repo}/branches/main/protection"
+      ],
+      "stdout": "{\"required_status_checks\": {\"strict\": false, \"contexts\": [\"ci\"], \"checks\": [{\"context\": \"ci\", \"app_id\": 15368}]}, \"enforce_admins\": {\"enabled\": false}, \"required_signatures\": {\"enabled\": false}, \"allow_force_pushes\": {\"enabled\": false}}\n"
+    }
+  ]
+}
