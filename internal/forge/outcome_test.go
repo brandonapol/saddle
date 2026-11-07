@@ -14,11 +14,11 @@ import (
 // error>: <stderr>".
 var (
 	// PR #811, event 73601.
-	fixtureAsyncMerge = errors.New("gh pr merge: exit status 1: GraphQL: Pull request is part of a stack and must be merged using the asynchronous merge REST API (mergePullRequest)")
+	errFixtureAsyncMerge = errors.New("gh pr merge: exit status 1: GraphQL: Pull request is part of a stack and must be merged using the asynchronous merge REST API (mergePullRequest)")
 	// #341, #814.
-	fixtureBaseLocked = errors.New("gh pr edit: exit status 1: GraphQL: Cannot change the base branch because the pull request is part of a stack. (updatePullRequest)")
+	errFixtureBaseLocked = errors.New("gh pr edit: exit status 1: GraphQL: Cannot change the base branch because the pull request is part of a stack. (updatePullRequest)")
 	// Events 72474, 73218, 73247.
-	fixtureKilled = errors.New("gh pr checks: signal: killed: ")
+	errFixtureKilled = errors.New("gh pr checks: signal: killed: ")
 )
 
 func TestClassifyRefusals(t *testing.T) {
@@ -26,8 +26,8 @@ func TestClassifyRefusals(t *testing.T) {
 		err  error
 		want Reason
 	}{
-		{fixtureAsyncMerge, StackedNeedsAsyncMerge},
-		{fixtureBaseLocked, StackedBaseLocked},
+		{errFixtureAsyncMerge, StackedNeedsAsyncMerge},
+		{errFixtureBaseLocked, StackedBaseLocked},
 		{errors.New("gh pr edit: exit status 1: GraphQL: Cannot change the base branch of a pull request in the merge queue. (updatePullRequest)"), InMergeQueue},
 		{errors.New("gh pr merge: exit status 1: GraphQL: Required status check \"test\" is failing. (mergePullRequest)"), RequiredCheckFailing},
 		{errors.New("gh pr merge: exit status 1: GraphQL: At least 1 approving review is required by reviewers with write access. (mergePullRequest)"), ReviewRequired},
@@ -59,7 +59,7 @@ func TestClassifyRefusals(t *testing.T) {
 
 func TestClassifyTransient(t *testing.T) {
 	for _, err := range []error{
-		fixtureKilled,
+		errFixtureKilled,
 		errors.New("gh pr merge: exit status 1: HTTP 502: Bad Gateway"),
 		errors.New("gh api graphql: exit status 1: Post \"https://api.github.com/graphql\": read tcp: connection reset by peer"),
 		fmt.Errorf("gh pr view: %w", &netx.TimeoutError{Op: "gh pr view", After: time.Minute}),
@@ -102,7 +102,7 @@ func TestClassifyRateLimitAndDeterministic(t *testing.T) {
 		t.Error("Classify(nil) != nil")
 	}
 	// Classifying twice changes nothing.
-	once := Classify(fixtureBaseLocked)
+	once := Classify(errFixtureBaseLocked)
 	if twice := Classify(once); twice != once {
 		t.Errorf("Classify isn't idempotent: %v then %v", once, twice)
 	}
