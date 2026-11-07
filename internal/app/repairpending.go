@@ -226,21 +226,11 @@ func (a *App) conflictPending(kind string, orig store.Task) (PendingRepair, bool
 // lastRepairFailure is why orig's last repair spawn failed, "" when its last
 // repair event isn't a failure.
 func (a *App) lastRepairFailure(orig string) string {
-	es, err := a.Store.Events(-1)
-	if err != nil {
+	e, ok, err := a.Store.LastTaskEvent(orig, eventRepairFailed, eventRepairSpawned)
+	if err != nil || !ok || e.Kind != eventRepairFailed {
 		return ""
 	}
-	for i := len(es) - 1; i >= 0; i-- {
-		if e := es[i]; e.Task == orig {
-			switch e.Kind {
-			case eventRepairFailed:
-				return e.Data
-			case eventRepairSpawned:
-				return ""
-			}
-		}
-	}
-	return ""
+	return e.Data
 }
 
 // retryConflictRepair spawns a conflict repair from its recorded seed.

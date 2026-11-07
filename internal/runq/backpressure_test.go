@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -77,9 +78,12 @@ func TestPressureString(t *testing.T) {
 // checks) never count toward backpressure; worker and background waiters
 // do, with their oldest wait and the class's median run time.
 func TestBacklogsSkipGateRuns(t *testing.T) {
+	// The lease heartbeat goroutine reads the clock, so guard it.
+	var mu sync.Mutex
 	now := time.UnixMilli(time.Now().UnixMilli()) // leases store milliseconds
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
 	o := testOpts(t)
-	o.Now = func() time.Time { return now }
+	o.Now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
 	o.StaleAfter = time.Hour // the fake clock jumps; flock says who is alive
 	q := open(t, o)
 	holder := acquire(t, q, Request{Class: "go-test", Label: "h"})
@@ -92,10 +96,10 @@ func TestBacklogsSkipGateRuns(t *testing.T) {
 			t.Fatal(err)
 		}
 		if i == 0 {
-			now = now.Add(3 * time.Minute) // the gate run is the oldest; it mustn't set Oldest
+			advance(3 * time.Minute) // the gate run is the oldest; it mustn't set Oldest
 		}
 	}
-	now = now.Add(2 * time.Minute)
+	advance(2 * time.Minute)
 	bs, err := q.Backlogs()
 	if err != nil {
 		t.Fatal(err)

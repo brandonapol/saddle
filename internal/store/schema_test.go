@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -109,7 +111,8 @@ func TestMigrationClearsKilledTrainEntries(t *testing.T) {
 		}
 	}
 	// Roll back to before the cleanup migration and reopen.
-	if _, err := s.db.Exec(`PRAGMA user_version = ` + fmt.Sprint(len(migrations)-1)); err != nil {
+	cleanup := slices.IndexFunc(migrations, func(m string) bool { return strings.Contains(m, "DELETE FROM train WHERE state IN") })
+	if _, err := s.db.Exec(`PRAGMA user_version = ` + fmt.Sprint(cleanup)); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Close()
@@ -120,5 +123,27 @@ func TestMigrationClearsKilledTrainEntries(t *testing.T) {
 	es, err := s.Train()
 	if err != nil || len(es) != 1 || es[0].Task != "t2" {
 		t.Fatalf("train = %+v, %v", es, err)
+	}
+}
+
+// #778: migrating adds the events(kind, task) index the repair lookups use,
+// and rerunning it is harmless.
+func TestMigrationIndexesEvents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`DROP INDEX events_kind_task; PRAGMA user_version = ` + fmt.Sprint(len(migrations)-1)); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'events_kind_task'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("events_kind_task indexes = %d, %v; want 1", n, err)
 	}
 }

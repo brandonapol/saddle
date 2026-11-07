@@ -80,7 +80,7 @@ func (a *App) autoRepairBlock(orig string) string {
 		why = fmt.Sprintf("%s's repair %s was killed, so restack won't spawn another: its work looks superseded. "+
 			"%s stays out of the stack and its PR is left alone. Run `saddle repair %s` if it still needs re-landing, or `saddle unstack %s` to drop it.",
 			orig, r, orig, orig, orig)
-	} else if es, err := a.Store.Events(-1); err == nil && repairsToday(es, orig, time.Now()) >= repairDailyCap {
+	} else if es, err := a.Store.TaskEvents(orig, eventRepairSpawned); err == nil && repairsToday(es, orig, time.Now()) >= repairDailyCap {
 		why = fmt.Sprintf("%s already had %d repairs in the last day, so restack won't spawn another until tomorrow. "+
 			"Run `saddle repair %s` to spawn one now.", orig, repairDailyCap, orig)
 	}
