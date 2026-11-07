@@ -148,6 +148,7 @@ func deny(in Input, rule, reason string) *Output {
 func HandleOrchestrator(a *app.App, in Input) *Output {
 	st := a.Store
 	now := time.Now()
+	a.BeatHook(now) // the hook is a wake path while the session works (#860)
 	mod := a.ModActive(now)
 	switch in.Event {
 	case "SessionStart":
@@ -175,25 +176,11 @@ func HandleOrchestrator(a *app.App, in Input) *Output {
 		if len(ns) > 0 {
 			return &Output{Decision: "block", Reason: joinNotes(store.FormatNotices(ns), a.OpenCardsReminder())}
 		}
-		if !a.WaitActive(now) && workersLive(st) {
+		if !a.WaitActive(now) && a.WorkerAtWork() {
 			return &Output{Decision: "block", Reason: "[saddle] " + app.WaitInstruction}
 		}
 	}
 	return nil
-}
-
-// workersLive reports whether any worker is still at work.
-func workersLive(st *store.Store) bool {
-	ts, err := st.Tasks()
-	if err != nil {
-		return false
-	}
-	for _, t := range ts {
-		if t.Role == store.RoleWorker && t.Active() && t.Status != store.Done {
-			return true
-		}
-	}
-	return false
 }
 
 // Run reads hook JSON from r and writes the response to w.

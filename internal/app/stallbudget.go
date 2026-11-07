@@ -216,6 +216,9 @@ func (a *App) StallTick(now time.Time) ([]DecisionCard, error) {
 	if _, err := a.PromptWaitTick(now); err != nil {
 		errs = append(errs, fmt.Errorf("prompt-wait watch: %w", err))
 	}
+	if _, err := a.WakeAlarmTick(now); err != nil {
+		errs = append(errs, fmt.Errorf("wake alarm: %w", err))
+	}
 	if _, _, err := a.WatchdogTick(now); err != nil {
 		errs = append(errs, fmt.Errorf("watchdog: %w", err))
 	}

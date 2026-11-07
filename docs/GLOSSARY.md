@@ -673,6 +673,13 @@ running when it exits.
 ### version
 `saddle version [--long]`: prints the saddle version.
 
+### wake alarm
+Raised by the stall tick when all three of the orchestrator's wake paths are
+absent while workers are at work: the saddle mod (`mod.alive` stale), `saddle
+plugin wait` (no fresh `wait.alive`) and the settings hook (no call in 10m,
+`hook.alive`). It logs a `wake_lost` event and tells t0 and the owner, once per
+outage; any path coming back ends the outage.
+
 ### worktree
 Each task's private git checkout under `.saddle/worktrees/`, on its own branch.
 Removed on `kill`, kept on `down`.
