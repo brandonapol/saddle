@@ -616,14 +616,14 @@ integration branch; "queue" (that is the train).
 *Maps to:* PR bases saved in `.saddle/pr-bases.json`, edges in
 `.saddle/deps/<task>`, owner stacks in `.saddle/stacks.json`.
 
-### stall budget
-How long a needs-you decision card waits for an answer (default 30m) before
-saddle takes its non-destructive route-around default. See [stall-budget.md](stall-budget.md).
-
 ### stale worktree
 A *worktree* under `.saddle/worktrees/` whose task has ended (landed, killed,
 no change or failed) or is gone from the store. `saddle status` and `doctor`
 count them when any remain; `saddle gc` removes them (#803).
+
+### stall budget
+How long a needs-you decision card waits for an answer (default 30m) before
+saddle takes its non-destructive route-around default. See [stall-budget.md](stall-budget.md).
 
 ### status
 `saddle status`: tasks, claims, the train, and heavy runs. A task status is one of
