@@ -70,7 +70,9 @@ func TestSweepEnabledMerges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 2 || calls[1] != "pr merge 7 --squash --match-head-commit abc" {
+	// The forge may probe its facts (is #7 in a native stack?) before it merges.
+	if len(calls) < 2 || calls[0] != "pr list --state open --limit 200 --json number,title,isDraft,mergeable,baseRefName,headRefName,headRefOid,labels,files,statusCheckRollup" ||
+		calls[len(calls)-1] != "pr merge 7 --squash --match-head-commit abc" {
 		t.Fatalf("calls %q", calls)
 	}
 	if len(kinds) != 1 || kinds[0] != "sweep.merged" || !strings.Contains(out.String(), "merged (1)") {
