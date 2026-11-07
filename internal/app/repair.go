@@ -66,15 +66,12 @@ func (a *App) orphaned(task string) bool {
 // that was killed, failed or ended no_change will never land, so it doesn't
 // count (#772).
 func (a *App) repairOf(orig string) (store.Task, bool) {
-	es, err := a.Store.Events(-1)
+	es, err := a.Store.TaskEvents(orig, eventRepairSpawned)
 	if err != nil {
 		return store.Task{}, false
 	}
 	for i := len(es) - 1; i >= 0; i-- {
 		e := es[i]
-		if e.Task != orig || e.Kind != eventRepairSpawned {
-			continue
-		}
 		if t, err := a.Store.Task(e.Data); err == nil && !repairDead(t) {
 			return t, true
 		}
@@ -84,30 +81,20 @@ func (a *App) repairOf(orig string) (store.Task, bool) {
 
 // repairedBy finds the original task the repair task r was spawned for.
 func (a *App) repairedBy(r string) (string, bool) {
-	es, err := a.Store.Events(-1)
-	if err != nil {
+	e, ok, err := a.Store.LastEventWithData(eventRepairSpawned, r)
+	if err != nil || !ok {
 		return "", false
 	}
-	for i := len(es) - 1; i >= 0; i-- {
-		if e := es[i]; e.Kind == eventRepairSpawned && e.Data == r {
-			return e.Task, true
-		}
-	}
-	return "", false
+	return e.Task, true
 }
 
 // lastEvent is the data of the last event of kind on task.
 func (a *App) lastEvent(task, kind string) (string, bool) {
-	es, err := a.Store.Events(-1)
-	if err != nil {
+	e, ok, err := a.Store.LastTaskEvent(task, kind)
+	if err != nil || !ok {
 		return "", false
 	}
-	for i := len(es) - 1; i >= 0; i-- {
-		if e := es[i]; e.Task == task && e.Kind == kind {
-			return e.Data, true
-		}
-	}
-	return "", false
+	return e.Data, true
 }
 
 // markRepairing takes a landed task out of the stack for a repair and

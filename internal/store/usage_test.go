@@ -10,7 +10,7 @@ import (
 	"github.com/brandonapol/saddle/internal/usage"
 )
 
-func openTest(t *testing.T) *Store {
+func openTest(t testing.TB) *Store {
 	t.Helper()
 	s, err := Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {

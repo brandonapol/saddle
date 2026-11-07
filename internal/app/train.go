@@ -1362,11 +1362,8 @@ func (a *App) stackProblems(l landedTask, base, baseName string) ([]string, erro
 // the claims its task held when it landed.
 func (a *App) warnOutsideClaims(l landedTask, base string) {
 	var globs []string
-	evs, _ := a.Store.Events(-1)
-	for _, e := range evs {
-		if e.Task == l.ID && e.Kind == landedClaimsEvent {
-			globs = strings.Split(e.Data, "\n")
-		}
+	if e, ok, _ := a.Store.LastTaskEvent(l.ID, landedClaimsEvent); ok {
+		globs = strings.Split(e.Data, "\n")
 	}
 	if len(globs) == 0 {
 		return
