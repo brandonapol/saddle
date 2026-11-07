@@ -43,6 +43,7 @@ func TestShadowInputMapsLegacyStores(t *testing.T) {
 			shadowTask("t7", store.Landed, ""),
 			shadowTask("t8", store.Landed, "https://github.com/o/r/pull/18"),
 			shadowTask("t9", store.Conflict, ""),
+			shadowTask("t10", store.Killed, ""),
 			{ID: "t0", Role: store.RoleOrchestrator},
 		},
 		Train: []store.TrainEntry{
@@ -55,6 +56,7 @@ func TestShadowInputMapsLegacyStores(t *testing.T) {
 			{Task: "t7", Seq: 7, State: TrainFolded, Note: "x..h7"},
 			{Task: "t8", Seq: 8, State: TrainMerged, Note: "x..h8"},
 			{Task: "t9", Seq: 9, State: store.TrainError},
+			{Task: "t10", Seq: 10, State: TrainEscalated, Note: "tests failed (test_failed)"},
 		},
 		Edges:          []prgraph.Edge{{Change: "t2", Dep: "t1", Kind: prgraph.Declared, Source: "after"}, {Change: "t3", Dep: "t8", Kind: prgraph.Declared, Source: "after"}},
 		Stacks:         []CustomStack{{Name: "s", Tasks: []string{"t1", "t3"}}},
@@ -82,6 +84,12 @@ func TestShadowInputMapsLegacyStores(t *testing.T) {
 		if c.State != w {
 			t.Errorf("%s: state %s, want %s", id, c.State, w)
 		}
+	}
+	// A killed task's change is superseded whatever its train row says
+	// (#705: legacy leaves killed tasks escalated or queued).
+	t10, _ := changeByID(t, st, "t10")
+	if t10.State != prgraph.Superseded || t10.Reason != prgraph.SupersededKilled {
+		t.Errorf("killed t10 = %+v, want superseded(killed)", t10)
 	}
 	for _, id := range []string{"t0", "t5", "t7"} {
 		if _, ok := changeByID(t, st, id); ok {

@@ -172,6 +172,11 @@ func ShadowInput(s ShadowStores, forge prgraph.ForgeSnapshot, git prgraph.GitFac
 				c.State = prgraph.Landed
 			}
 		}
+		if t.Status == store.Killed && !c.State.Terminal() {
+			// ADR 0009: killed is superseded(killed), whatever the train row
+			// says (#705 leaves killed tasks queued or escalated).
+			c.State, c.Reason = prgraph.Superseded, prgraph.SupersededKilled
+		}
 		c.Since = s.Now
 		if at, ok := s.Since[c.ID]; ok && !at.IsZero() {
 			c.Since = at
