@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -198,7 +199,7 @@ func (a *App) OrphanTick(now time.Time) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	evs, err := a.Store.Events(-1)
+	evs, err := a.Store.EventsOfKinds(slices.Collect(maps.Keys(doneOutcomes))...)
 	if err != nil {
 		return nil, err
 	}

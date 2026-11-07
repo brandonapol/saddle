@@ -1113,13 +1113,7 @@ func (a *App) landedAll() ([]landedTask, error) {
 	var landings []store.Event // read only if a note needs it
 	readLandings := func() []store.Event {
 		if landings == nil {
-			evs, _ := a.Store.Events(-1)
-			landings = []store.Event{}
-			for _, e := range evs {
-				if e.Kind == "landed" {
-					landings = append(landings, e)
-				}
-			}
+			landings = a.landingEvents()
 		}
 		return landings
 	}
@@ -1157,6 +1151,16 @@ func (a *App) landedAll() ([]landedTask, error) {
 		out = append(out, l)
 	}
 	return out, nil
+}
+
+// landingEvents is every task's landed event, oldest first, read through
+// the events(kind, task) index; never nil, so callers can cache it.
+func (a *App) landingEvents() []store.Event {
+	evs, _ := a.Store.EventsOfKinds("landed")
+	if evs == nil {
+		evs = []store.Event{}
+	}
+	return evs
 }
 
 // landingRange is the range task's last landing put on integration, from the

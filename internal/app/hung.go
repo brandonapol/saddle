@@ -222,7 +222,7 @@ func (a *App) HungTick(now time.Time) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	evs, err := a.Store.Events(-1)
+	evs, err := a.Store.EventsOfKinds(EventHungKeep, EventHungTakeover)
 	if err != nil {
 		return nil, err
 	}

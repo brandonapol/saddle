@@ -150,7 +150,7 @@ func (a *App) alarmUnpublished(ids []string, cause error) {
 	if len(ids) == 0 {
 		return
 	}
-	evs, _ := a.Store.Events(-1)
+	evs, _ := a.Store.EventsOfKinds(EventLandedNoPR, "landed")
 	raised := map[string]bool{}
 	for _, e := range evs {
 		switch e.Kind {
