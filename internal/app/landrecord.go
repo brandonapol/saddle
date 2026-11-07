@@ -104,13 +104,7 @@ func (a *App) accountLandings(queued []string, rs []LandResult) []LandResult {
 			continue
 		}
 		if landings == nil {
-			evs, _ := a.Store.Events(-1)
-			landings = []store.Event{}
-			for _, e := range evs {
-				if e.Kind == "landed" {
-					landings = append(landings, e)
-				}
-			}
+			landings = a.landingEvents()
 		}
 		if from, to, ok := a.landingRange(r.Task, landings); ok {
 			_ = a.Store.SetTrain(r.Task, store.TrainOK, from+".."+to, false)
