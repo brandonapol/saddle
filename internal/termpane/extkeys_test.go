@@ -9,14 +9,29 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// collector keeps every message Bubble Tea's input parser emits.
+// collector keeps every message Bubble Tea's input parser emits, and quits
+// once it has one parsed can use, so the test waits on the parse rather
+// than a fixed pause (#882).
 type collector struct{ msgs []tea.Msg }
 
 func (c *collector) Init() tea.Cmd { return nil }
 func (c *collector) View() string  { return "" }
 func (c *collector) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	c.msgs = append(c.msgs, msg)
+	if usable(msg) {
+		return c, tea.Quit
+	}
 	return c, nil
+}
+
+// usable is a message that isn't a resize: a key, or what Bubble Tea makes
+// of a sequence it doesn't know.
+func usable(m tea.Msg) bool {
+	if _, ok := m.(tea.WindowSizeMsg); ok {
+		return false
+	}
+	_, ok := m.(interface{ String() string })
+	return ok
 }
 
 // blockAfter reads s, then blocks until the program quits.
@@ -36,16 +51,15 @@ func parsed(t *testing.T, s string) tea.Msg {
 	t.Helper()
 	c := &collector{}
 	p := tea.NewProgram(c, tea.WithInput(blockAfter{strings.NewReader(s)}), tea.WithOutput(io.Discard))
-	go func() { time.Sleep(100 * time.Millisecond); p.Quit() }()
+	// The collector quits once the sequence is parsed; this only ends a
+	// run where it parses to nothing usable.
+	stop := time.AfterFunc(10*time.Second, p.Quit)
+	defer stop.Stop()
 	if _, err := p.Run(); err != nil {
 		t.Fatal(err)
 	}
 	for _, m := range c.msgs {
-		switch m.(type) {
-		case tea.WindowSizeMsg:
-			continue
-		}
-		if _, ok := m.(interface{ String() string }); ok {
+		if usable(m) {
 			return m
 		}
 	}

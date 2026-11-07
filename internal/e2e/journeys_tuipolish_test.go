@@ -109,7 +109,9 @@ func TestJourneyRefreshTmuxExecs(t *testing.T) {
 	log := tmuxShim(t, w)
 	u := w.StartTUI(160, 44)
 	u.WaitScreen("Idle agent t5")
-	time.Sleep(2 * time.Second) // past start-up
+	// This measures a rate (tmux processes per second), so it samples over
+	// wall-clock windows on purpose: skip start-up's burst, then count.
+	time.Sleep(2 * time.Second)
 	before := countCalls(log)
 	const secs = 6
 	time.Sleep(secs * time.Second)

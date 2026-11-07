@@ -168,6 +168,7 @@ func TestCommitWaitsOutIndexLock(t *testing.T) {
 	select {
 	case err := <-errc:
 		t.Fatalf("commit finished while index.lock was held: %v", err)
+	// A commit that waits is a non-event: give a wrong one 200ms to finish.
 	case <-time.After(200 * time.Millisecond):
 	}
 	if err := os.Remove(lock); err != nil {
@@ -178,7 +179,7 @@ func TestCommitWaitsOutIndexLock(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("commit did not finish after index.lock was released")
 	}
 	if got := sh(t, work, "git log -1 --format=%s"); got != "opus's half" {

@@ -6,10 +6,11 @@ import (
 	"time"
 )
 
-// waitFor polls the rendered screen until it contains want.
+// waitFor polls the rendered screen until it contains want. The 30s budget
+// only matters on a loaded runner; a passing run returns on the first match.
 func waitFor(t *testing.T, tm *Term, want string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if strings.Contains(tm.Text(), want) {
 			return

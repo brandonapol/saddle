@@ -28,13 +28,18 @@ func (u *TUI) altBracketThenX() {
 	u.w.T.Helper()
 	for try := 0; ; try++ {
 		u.sendHex("1b", "5b")
+		// The gap is the point: alt+[ must reach saddle in a read of its
+		// own. No screen change marks that read, so this stays a sleep.
 		time.Sleep(100 * time.Millisecond)
 		u.Type("x")
 		u.Keys("Enter")
-		for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		if Poll(3*time.Second, func() error {
 			if strings.Contains(u.Screen(), "^[[x") {
-				return
+				return nil
 			}
+			return errorf("not yet")
+		}) == nil {
+			return
 		}
 		if try == 4 {
 			u.waitInShell("^[[x") // fails with the screen
