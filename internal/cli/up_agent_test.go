@@ -166,3 +166,12 @@ func TestUpFallback(t *testing.T) {
 		})
 	}
 }
+
+// #839: status shows a disabled adapter as disabled, not as unavailable.
+func TestWriteAdaptersShowsDisabled(t *testing.T) {
+	var b strings.Builder
+	writeAdapters(&b, []agent.Status{{Name: "claude", OK: true}, {Name: "grok", Disabled: true, Reason: "disabled"}})
+	if got := b.String(); got != "adapters: claude; grok disabled ([adapters.grok] disabled = true)\n" {
+		t.Errorf("got %q", got)
+	}
+}

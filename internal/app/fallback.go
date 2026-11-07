@@ -66,6 +66,10 @@ func (a *App) chainPick(adapter, model string, ex, exm map[string]Exhaustion) (p
 		if err != nil {
 			continue
 		}
+		if a.Cfg.AdapterDisabled(ea) {
+			skipped = append(skipped, entry+" is disabled")
+			continue
+		}
 		if ea != a.Cfg.Harness && !slices.Contains(usable, ea) {
 			skipped = append(skipped, entry+" can't run here")
 			continue

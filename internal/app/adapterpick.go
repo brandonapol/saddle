@@ -92,8 +92,9 @@ func (a *App) adapterUse(now time.Time) map[string]int64 {
 }
 
 // rankAdapters ranks every adapter the policy knows: [adapters] order and
-// the session default. Ones out of quota or unable to run here rank 0. The
-// session default counts as able to run, as spawns always treated it.
+// the session default. Ones disabled (#839), out of quota or unable to run
+// here rank 0. The session default counts as able to run, as spawns always
+// treated it, unless it is disabled.
 func (a *App) rankAdapters(r pickReq, ex map[string]Exhaustion, now time.Time) []AdapterChoice {
 	names := slices.Clone(a.Cfg.AdapterOrder)
 	if r.def != "" && !slices.Contains(names, r.def) {
@@ -156,6 +157,10 @@ func (a *App) rankAdapters(r pickReq, ex map[string]Exhaustion, now time.Time) [
 	var ok []cand
 	var out []AdapterChoice
 	for _, n := range names {
+		if a.Cfg.AdapterDisabled(n) {
+			out = append(out, AdapterChoice{Name: n, Why: "disabled"})
+			continue
+		}
 		if e, gone := ex[n]; gone {
 			out = append(out, AdapterChoice{Name: n, Why: "out of quota until " + e.when()})
 			continue

@@ -38,8 +38,10 @@ The CLI an agent runs on: `claude`, `codex`, `gemini` or `grok`. Pick one per
 task with `adapter` on spawn; `[adapters] order` is the fallback order when one
 runs out of quota. Claude and Grok run saddle's hooks, so their claims are
 enforced on every write; Codex and Gemini claims are checked when they
-commit and call done. `saddle status` lists which
-adapters can run here. See [ARCHITECTURE.md](ARCHITECTURE.md#providers-per-task-choice-and-rotation-321).
+commit and call done. `[adapters.<name>] disabled = true` turns one off for
+good: no spawn, repair, autopilot ticket, `[fallback]` chain or failover
+handoff picks it, and `adapter=` naming it is refused, force or not (#839).
+`saddle status` lists which adapters can run here and which are disabled. See [ARCHITECTURE.md](ARCHITECTURE.md#providers-per-task-choice-and-rotation-321).
 
 ### after
 An edge saying a task builds on another task's work, so prs stacks its PR on

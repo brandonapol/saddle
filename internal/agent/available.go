@@ -34,6 +34,9 @@ type Status struct {
 	// ExcludedModels are [adapters.<name>] exclude_models: spawns naming
 	// one are refused (#482).
 	ExcludedModels []string `json:"excluded_models,omitempty"`
+	// Disabled is [adapters.<name>] disabled = true: it is never picked
+	// and a spawn naming it is refused (#839). OK is false with it.
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 // Provider describes who serves an adapter's models and what it is good

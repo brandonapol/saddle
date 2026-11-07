@@ -197,6 +197,10 @@ func (e *autopilotEnv) Land() (int, error) {
 // needs, unless its Provider: line names one (#505). An old Model scope
 // names a Claude model; it is a hint Spawn drops on other adapters.
 func (e *autopilotEnv) spawnReq(r autopilot.SpawnReq) SpawnReq {
+	// A Provider: line naming a disabled adapter falls to the chooser (#839).
+	if e.a.Cfg.AdapterDisabled(r.Adapter) {
+		r.Adapter = ""
+	}
 	return SpawnReq{Title: r.Title, Prompt: r.Prompt, Claims: slices.Clone(r.Claims), ModelHint: r.Model, Issue: r.Issue, After: r.After,
 		Adapter: r.Adapter, Difficulty: r.Difficulty, Needs: r.Needs}
 }
