@@ -639,7 +639,7 @@ func (a *App) retargetDependents(branch string) {
 		}
 		done[pr] = true
 		if err := f.SetPRBase(ctx, pr, a.Cfg.Base); err != nil {
-			if !strings.Contains(err.Error(), "closed pull request") {
+			if r, _ := forge.RefusalOf(err); r != forge.PRClosed {
 				a.Store.Event(task, "gc_retarget_failed", pr+": "+err.Error())
 			}
 			return

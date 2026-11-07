@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 )
@@ -757,7 +758,7 @@ func (a *App) republishLayout(rs restackPlan, held map[int]string, info map[stri
 		}
 		live := info[r.PR].BaseRefName
 		if err := a.setPRBase(r.Task, live, base, "restack"); err != nil {
-			if !strings.Contains(err.Error(), "closed pull request") {
+			if r, _ := forge.RefusalOf(err); r != forge.PRClosed {
 				return err
 			}
 			r.From, r.To = r.NewFrom, r.NewTo

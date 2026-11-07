@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/brandonapol/saddle/internal/forge"
 )
 
 type fakeGH struct {
@@ -778,7 +780,7 @@ func TestRateLimitedRestackDoesNotStop(t *testing.T) {
 	limited := true
 	r.restack = func() error {
 		if limited {
-			return errors.New("gh: API rate limit already exceeded for user ID 1")
+			return &forge.RateLimitError{Until: c.now().Add(30 * time.Second), Err: errors.New("gh: API rate limit already exceeded for user ID 1")}
 		}
 		return r.retarget()
 	}
