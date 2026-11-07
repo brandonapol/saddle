@@ -67,35 +67,21 @@ func (u *TUI) Resize(width, height int) {
 // WaitScreen waits until the screen contains every one of want.
 func (u *TUI) WaitScreen(want ...string) string {
 	u.w.T.Helper()
-	var last string
-	Eventually(u.w.T, fmt.Sprintf("the TUI to show %q", want), func() error {
-		s, err := u.w.Tmux.Capture(u.Target)
-		if err != nil {
-			return err
-		}
-		last = s
+	return u.w.Tmux.WaitPane(u.w.T, u.Target, fmt.Sprintf("the TUI to show %q", want), func(s string) bool {
 		for _, x := range want {
 			if !strings.Contains(s, x) {
-				return fmt.Errorf("missing %q; screen:\n%s", x, s)
+				return false
 			}
 		}
-		return nil
+		return true
 	})
-	return last
 }
 
 // WaitGone waits until the screen no longer contains s.
 func (u *TUI) WaitGone(s string) {
 	u.w.T.Helper()
-	Eventually(u.w.T, fmt.Sprintf("the TUI to stop showing %q", s), func() error {
-		scr, err := u.w.Tmux.Capture(u.Target)
-		if err != nil {
-			return err
-		}
-		if strings.Contains(scr, s) {
-			return fmt.Errorf("still there; screen:\n%s", scr)
-		}
-		return nil
+	u.w.Tmux.WaitPane(u.w.T, u.Target, fmt.Sprintf("the TUI to stop showing %q", s), func(scr string) bool {
+		return !strings.Contains(scr, s)
 	})
 }
 

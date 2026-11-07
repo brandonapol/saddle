@@ -36,14 +36,45 @@ func (f *fakeDriver) Timing() Timing {
 		ConfirmEvery: 5 * time.Millisecond, ConfirmFor: 60 * time.Millisecond}
 }
 
+// waitFor polls cond until it holds or 10s pass. The budget is generous so
+// a loaded runner doesn't fail a wait that would succeed; a passing run
+// returns as soon as cond does.
 func waitFor(cond func() bool) bool {
-	for i := 0; i < 100; i++ {
-		if cond() {
-			return true
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			return false
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(time.Millisecond)
 	}
-	return false
+	return true
+}
+
+// attempts counts Deliver's attempts through its Needed hook, which runs
+// before each one, so a test can wait for retries instead of sleeping.
+type attempts struct {
+	mu   sync.Mutex
+	n    int
+	need bool
+}
+
+func newAttempts() *attempts { return &attempts{need: true} }
+
+func (a *attempts) needed() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.n++
+	return a.need
+}
+
+func (a *attempts) count() int { a.mu.Lock(); defer a.mu.Unlock(); return a.n }
+
+// waitAttempts waits until Deliver has made at least n attempts.
+func (a *attempts) waitAttempts(t *testing.T, n int) {
+	t.Helper()
+	if !waitFor(func() bool { return a.count() >= n }) {
+		t.Fatalf("Deliver made %d attempts, want %d", a.count(), n)
+	}
 }
 
 const empty = "output\n╭──────╮\n│ >    │\n╰──────╯"
@@ -70,8 +101,9 @@ func TestSendsWhenEmpty(t *testing.T) {
 
 func TestDefersThenSends(t *testing.T) {
 	f := &fakeDriver{pane: draft, alive: true}
-	SendWhenIdle(f, "@1", "hi", nil)
-	time.Sleep(20 * time.Millisecond)
+	a := newAttempts()
+	SendWhenIdle(f, "@1", "hi", a.needed)
+	a.waitAttempts(t, 2) // a retry looked at the draft and held off
 	if f.count() != 0 {
 		t.Fatal("sent over a draft")
 	}
@@ -83,25 +115,36 @@ func TestDefersThenSends(t *testing.T) {
 
 func TestGivesUp(t *testing.T) {
 	f := &fakeDriver{pane: draft, alive: true}
-	SendWhenIdle(f, "@1", "hi", nil)
+	a := newAttempts()
+	SendWhenIdle(f, "@1", "hi", a.needed)
+	// The retry window opens when the retry goroutine starts, which a
+	// loaded runner can delay; wait for its first attempt.
+	a.waitAttempts(t, 2)
+	// Giving up is the absence of further attempts, so there is no event to
+	// wait on: sleep past RetryFor (100ms, see fakeDriver.Timing) measured
+	// from that first retry, then clear the draft.
 	time.Sleep(200 * time.Millisecond)
 	f.setPane(empty)
+	gaveUpAt := a.count()
+	// Long enough for several retries at RetryEvery (5ms) had it not given
+	// up; again nothing to wait on but time.
 	time.Sleep(50 * time.Millisecond)
-	if f.count() != 0 {
-		t.Fatal("sent after giving up")
+	if f.count() != 0 || a.count() != gaveUpAt {
+		t.Fatalf("sent %d, attempts %d -> %d after giving up", f.count(), gaveUpAt, a.count())
 	}
 }
 
 func TestNoLongerNeeded(t *testing.T) {
 	f := &fakeDriver{pane: draft, alive: true}
-	var mu sync.Mutex
-	need := true
-	SendWhenIdle(f, "@1", "hi", func() bool { mu.Lock(); defer mu.Unlock(); return need })
-	mu.Lock()
-	need = false
-	mu.Unlock()
+	a := newAttempts()
+	SendWhenIdle(f, "@1", "hi", a.needed)
+	a.mu.Lock()
+	a.need = false
+	before := a.n
+	a.mu.Unlock()
 	f.setPane(empty)
-	time.Sleep(50 * time.Millisecond)
+	// The next attempt reads Needed, sees false and ends the delivery.
+	a.waitAttempts(t, before+1)
 	if f.count() != 0 {
 		t.Fatal("sent although no longer needed")
 	}

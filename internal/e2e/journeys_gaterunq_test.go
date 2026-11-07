@@ -51,13 +51,13 @@ func TestJourneyGateHookRidesLease(t *testing.T) {
 	w.WaitTask("t1", "queued in the train", func(v mcpserver.TaskView) bool { return v.Status == "done" && v.Train == "queued" })
 	_ = os.Remove(log) // done may have run the gate's command already
 
-	start := time.Now()
+	// No wall-clock bound on the land (#882): a loaded runner made a fixed
+	// 15s one flake. A hook queued behind its own gate prints "queued:" to
+	// the log (checked below) and gives up at --wait-max, which fails the
+	// commit and so the gate (set -e), and t1 doesn't land.
 	r := w.MustSaddle("land")
 	if v := w.Task("t1"); v.Status != "landed" {
 		t.Fatalf("t1 didn't land: %+v\n%s\nhook log:\n%s", v, r, readFile(log))
-	}
-	if d := time.Since(start); d > 15*time.Second {
-		t.Fatalf("land took %s: the hook queued behind its own gate", d)
 	}
 	out := readFile(log)
 	if strings.Contains(out, "queued:") {
@@ -142,10 +142,10 @@ func readFile(p string) string {
 
 func waitFor(t *testing.T, what string, ok func() bool) {
 	t.Helper()
-	for end := time.Now().Add(Timeout()); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+	Eventually(t, what, func() error {
 		if ok() {
-			return
+			return nil
 		}
-	}
-	t.Fatalf("timed out waiting: %s", what)
+		return errorf("not yet")
+	})
 }

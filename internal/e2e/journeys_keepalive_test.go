@@ -84,6 +84,8 @@ func TestJourneyKilledEngineRevivedByNextMCPCall(t *testing.T) {
 		return nil
 	})
 	w.MustMCP("t0", "status", nil)
+	// Nothing should happen, so there is no condition to wait on: give a
+	// wrongly revived engine a second to take the lock before checking.
 	time.Sleep(time.Second)
 	if a.LockOwner() != "" {
 		t.Fatal("an engine stopped on purpose was revived")

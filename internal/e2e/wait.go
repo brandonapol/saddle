@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"testing"
@@ -43,6 +45,45 @@ func Eventually(t testing.TB, what string, cond func() error) {
 	if err := Poll(Timeout(), cond); err != nil {
 		t.Fatalf("waited %s for %s: %v", time.Since(start).Round(time.Millisecond), what, err)
 	}
+}
+
+// WaitPane polls target's pane until ok holds for its text, within Timeout
+// (E2E_TIMEOUT scales it for loaded machines). It returns the pane that
+// satisfied ok. On timeout it fails t naming what, with the last pane text.
+// Use it instead of sleeping for a pane to settle (#882).
+func (x *Tmux) WaitPane(t testing.TB, target, what string, ok func(pane string) bool) string {
+	t.Helper()
+	return waitPane(t, Timeout(), func() (string, error) { return x.Capture(target) }, what, ok)
+}
+
+var errPaneNotYet = errors.New("condition not met")
+
+// waitPane is WaitPane over any capture, with its timeout given.
+func waitPane(t testing.TB, timeout time.Duration, capture func() (string, error), what string, ok func(string) bool) string {
+	t.Helper()
+	var last string
+	var captureErr error
+	start := time.Now()
+	err := Poll(timeout, func() error {
+		s, err := capture()
+		if err != nil {
+			captureErr = err
+			return err
+		}
+		last, captureErr = s, nil
+		if ok(s) {
+			return nil
+		}
+		return errPaneNotYet
+	})
+	if err != nil {
+		why := ""
+		if captureErr != nil {
+			why = fmt.Sprintf(" (capture: %v)", captureErr)
+		}
+		t.Fatalf("waited %s for %s%s; last pane:\n%s", time.Since(start).Round(time.Millisecond), what, why, last)
+	}
+	return last
 }
 
 // itoa is strconv.Itoa, for building args.
