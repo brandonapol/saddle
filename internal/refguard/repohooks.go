@@ -27,6 +27,15 @@ import (
 // SADDLE_FAST_HOOK=1, and the merge train (SADDLE_TRAIN=1), which runs the
 // repo's gate itself, skips them.
 
+// LockWaitEnv is how many seconds the wrapper waits for the hooks lock
+// before it skips the heavy hook (#799); DefaultLockWait when unset.
+const LockWaitEnv = "SADDLE_HOOK_LOCK_WAIT"
+
+// DefaultLockWait is the wrapper's lock wait in seconds. An agent's commit
+// shouldn't stall behind another worktree's check for long: done and the
+// train check its tree anyway.
+const DefaultLockWait = 300
+
 // heavyHooks run the repo's checks, so they queue and take the fast path.
 var heavyHooks = []string{"pre-commit", "pre-merge-commit", "pre-push"}
 
@@ -131,20 +140,36 @@ if [ "$SADDLE_FAST_HOOK" = 1 ] && [ -n "$tree" ] && [ -f "$stamp" ] && grep -qx 
 	echo "saddle: tree $tree already passed the repo's ` + s.Name + ` hook (SADDLE_FAST_HOOK=1)" >&2
 	exit 0
 fi
-# One heavy hook at a time across every worktree.
+# One heavy hook at a time across every worktree, waiting a bounded time
+# for the lock (#799). Past it the hook is skipped, not run unlocked: saddle
+# done and the merge train run the repo's gate on the tree anyway.
 lock="$state/lock"
+holder="$lock.holder"
+lockwait=${` + LockWaitEnv + `:-` + fmt.Sprint(DefaultLockWait) + `}
+case "$lockwait" in ''|*[!0-9]*) lockwait=` + fmt.Sprint(DefaultLockWait) + ` ;; esac
+held_by() { cat "$holder" 2>/dev/null || echo "unknown"; }
+skip_locked() {
+	echo "saddle: skipped the repo's ` + s.Name + ` hook: the hooks lock stayed held for ${lockwait}s (by: $(held_by)). saddle done and the merge train run the repo's gate on this tree anyway; set ` + LockWaitEnv + ` to wait longer." >&2
+	exit 0
+}
 if command -v flock >/dev/null 2>&1; then
 	exec 9>"$lock"
-	flock 9
+	if ! flock -n 9; then
+		echo "saddle: waiting up to ${lockwait}s for the hooks lock (held by: $(held_by))" >&2
+		flock -w "$lockwait" 9 || skip_locked
+	fi
 else
+	start=$(date +%s)
 	until mkdir "$lock.d" 2>/dev/null; do
 		pid=$(cat "$lock.d/pid" 2>/dev/null)
 		if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then rm -rf "$lock.d"; continue; fi
+		[ $(($(date +%s) - start)) -ge "$lockwait" ] && skip_locked
 		sleep 1
 	done
 	echo $$ > "$lock.d/pid"
 	trap 'rm -rf "$lock.d"' EXIT INT TERM
 fi
+echo "` + s.Name + ` hook in $(basename "$top") (pid $$, since $(date +%H:%M:%S))" > "$holder"
 `)
 	// fd 9 holds the lock: a daemon the check leaves running mustn't keep it.
 	fmt.Fprintf(&b, "{ %s; } 9>&- || exit $?\n", s.Run())
