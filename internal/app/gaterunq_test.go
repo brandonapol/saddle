@@ -346,3 +346,36 @@ func TestGateClassMakeTargetResolvesToWhatItRuns(t *testing.T) {
 		t.Errorf("no Makefile: %q", got)
 	}
 }
+
+// A Makefile "## description" comment is not a dependency list, and a cycle
+// among targets must not recurse forever: fbx67's
+// "test/text/verify: ## Randomized check that ..." made "check" a dependency
+// of its own descendant and overflowed the stack, killing saddle land (#908).
+func TestGateClassMakeTargetCommentsAndCycles(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	mk := "check: a ## The gate\n\tgo test ./...\n\n" +
+		"a: ## Randomized check that it holds\n\techo a\n\n" +
+		"x: y\n\techo x\n\ny: x\n\tflutter test\n\n" +
+		"self:\n\t$(MAKE) self\n\n" +
+		"b c: # shared recipe for b and c\n\tflutter test\n"
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte(mk), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := runq.Config{Classes: map[string]runq.ClassConfig{
+		"go-test":      {Weight: 2, Match: []string{"go test*"}},
+		"flutter-test": {Weight: 4, Match: []string{"flutter test*"}},
+	}}
+	for cmd, want := range map[string]string{
+		"make check": "go-test",
+		"make a":     DefaultGateClass,
+		"make x":     "flutter-test",
+		"make y":     "flutter-test",
+		"make self":  DefaultGateClass,
+		"make c":     "flutter-test",
+	} {
+		if got := GateClassIn(cfg, cmd, root); got != want {
+			t.Errorf("GateClassIn(%q) = %q, want %q", cmd, got, want)
+		}
+	}
+}
