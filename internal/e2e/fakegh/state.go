@@ -51,8 +51,10 @@ type State struct {
 	// Hold makes calls whose args start with one of its prefixes ("" for
 	// every call) wait until it no longer holds them: a GitHub that never
 	// answers. Each held call is logged in Held when it starts waiting.
-	Hold []string   `json:"hold,omitempty"`
-	Held [][]string `json:"held,omitempty"`
+	Hold []string `json:"hold,omitempty"`
+	// Reruns are the run ids gh run rerun was asked for, oldest first.
+	Reruns []string   `json:"reruns,omitempty"`
+	Held   [][]string `json:"held,omitempty"`
 	// NextComment numbers comment node ids.
 	NextComment int `json:"next_comment"`
 	// Stacks are native stacked PRs (gh stack link). Stack numbers share
@@ -131,6 +133,23 @@ type Check struct {
 	State    string `json:"state"` // Pass, Fail or Pending
 	// Log is what `gh run view --log-failed` prints for it.
 	Log string `json:"log,omitempty"`
+	// Head is the commit it ran on. A push moves the PR past it, and then
+	// it reads pending, as GitHub's checks belong to a commit. "" is any
+	// head, for tests that set checks by hand.
+	Head string `json:"head,omitempty"`
+}
+
+// checksAt are p's checks as GitHub shows them at head: one that ran on
+// another commit hasn't reported on this one yet.
+func (p *PR) checksAt(head string) []Check {
+	out := make([]Check, len(p.Checks))
+	for i, ch := range p.Checks {
+		if ch.Head != "" && ch.Head != head {
+			ch.State, ch.Log = Pending, ""
+		}
+		out[i] = ch
+	}
+	return out
 }
 
 // Comment is a PR comment.

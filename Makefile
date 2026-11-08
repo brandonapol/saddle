@@ -185,16 +185,26 @@ test/e2e: ## Run the end-to-end journeys (RUN=Journey to pick some; needs tmux)
 	# hermetic temp repos with a private tmux server. See internal/e2e;
 	# test/e2e holds the remote-control journeys over a real listener.
 	# internal/bench holds the collision bench (TestBenchRunsControlAndACollision).
+	# The soak (internal/e2e/soak) has its own targets: test/soak and test/soak/full.
 	# E2E_RACE=1 also race-builds saddle itself (slow: minutes, not seconds).
 	# Each journey package appends its slowest journeys to E2E_REPORT, shown
 	# after the run whether it passed or not.
 	rep="$$(mktemp)"; trap 'rm -f "$$rep"' EXIT; \
-	E2E_REPORT="$$rep" E2E_GO_TAGS='$(GO_TAGS)' $(GO) test -tags '$(GO_TAGS) e2e' $(E2E_RACE_FLAG) -count=1 -timeout $(E2E_GO_TIMEOUT) $(if $(E2E_PARALLEL),-parallel $(E2E_PARALLEL)) $(if $(RUN),-run '$(RUN)') ./internal/e2e/... ./test/e2e/... ./internal/bench/...; \
+	E2E_REPORT="$$rep" E2E_GO_TAGS='$(GO_TAGS)' $(GO) test -tags '$(GO_TAGS) e2e' $(E2E_RACE_FLAG) -count=1 -timeout $(E2E_GO_TIMEOUT) $(if $(E2E_PARALLEL),-parallel $(E2E_PARALLEL)) $(if $(RUN),-run '$(RUN)') $$($(GO) list ./internal/e2e/... | grep -v '/internal/e2e/soak$$') ./test/e2e/... ./internal/bench/...; \
 	code=$$?; cat "$$rep"; exit $$code
 
 .PHONY: test/contract
 test/contract: ## Run the forge contract suite: every scenario against its recorded fixture and fakegh (#823)
 	$(GO) test $(GO_TAGFLAG) -count=1 -run 'TestContract|TestEveryFixtureHasAScenario|TestRecorderPinsTheCalls' ./internal/forge/contract
+
+.PHONY: test/soak
+test/soak: ## Run the 10-change soak smoke: real saddle, fakegh, fake agents, every fault once (#831; SOAK_SEED=n replays a seed)
+	# The 50-change soak runs nightly: make test/soak/full. Needs tmux.
+	$(GO) test -tags '$(GO_TAGS) e2e' -count=1 -timeout 7m -run 'TestSoakSmoke|TestSoakKnownFaults' ./internal/e2e/soak
+
+.PHONY: test/soak/full
+test/soak/full: ## Run the 50-change soak with a random seed (the nightly's; SOAK_SEED=n replays one)
+	SOAK_FULL=1 $(GO) test -tags '$(GO_TAGS) e2e' -count=1 -timeout 50m -run 'TestSoakFull' -v ./internal/e2e/soak
 
 .PHONY: contract-record
 contract-record: ## Re-record the contract fixtures against a scratch GitHub repo (needs network, GH_TOKEN, SADDLE_CONTRACT_REPO)
@@ -247,7 +257,7 @@ test/cover: ## Run tests and write coverage.html
 ##@ Code quality
 
 .PHONY: check
-check: check/format check/tidy check/vet $(CHECK_TESTS) test/contract test/scripts check/lint ## Run CI's checks, testing only what changed (CHECK_FULL=1 for all; plugin tests: make test/plugin)
+check: check/format check/tidy check/vet $(CHECK_TESTS) test/contract test/soak test/scripts check/lint ## Run CI's checks, testing only what changed (CHECK_FULL=1 for all; plugin tests: make test/plugin)
 
 .PHONY: check/format
 check/format: ## Fail if any Go file needs gofmt

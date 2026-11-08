@@ -41,6 +41,31 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # The 50-change soak (#831): random after edges, real build dependencies
+  # and every injected fault, with nobody at the wheel. Each night draws a
+  # new seed; the summary names it, so `SOAK_SEED=n make test/soak/full`
+  # replays a failure.
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Run the soak
+        run: make test/soak/full 2>&1 | tee soak.log
+      - name: Soak summary
+        if: always()
+        run: |
+          {
+            echo "### Soak"
+            echo '```'
+            grep -E 'soak seed|soak: seed|failed after|passed in|SOAK_SEED' soak.log | tail -20 || echo "no summary (the run died before printing one)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Reachable vulnerabilities in dependencies or the Go toolchain are found
   # as new advisories land, not only when we change code (#542).
   govulncheck:
@@ -59,8 +84,8 @@ jobs:
   # A failing nightly opens one tracking issue and then comments on it, found
   # by its fixed title and label, so repeated failures stay in one place.
   report-failure:
-    needs: [e2e-race, govulncheck]
-    if: ${{ always() && (needs.e2e-race.result == 'failure' || needs.govulncheck.result == 'failure') }}
+    needs: [e2e-race, soak, govulncheck]
+    if: ${{ always() && (needs.e2e-race.result == 'failure' || needs.soak.result == 'failure' || needs.govulncheck.result == 'failure') }}
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -73,7 +98,7 @@ jobs:
       - name: Open or update the tracking issue
         run: |
           url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          body="The nightly race e2e failed: $url ($(date -u +%F))"
+          body="The nightly race e2e, soak or govulncheck failed: $url ($(date -u +%F))"
           gh label create "$LABEL" --description "Nightly race e2e failures" --color B60205 2>/dev/null || true
           n="$(gh issue list --label "$LABEL" --state open --search "\"$TITLE\" in:title" --json number,title \
             --jq "[.[] | select(.title == \"$TITLE\")][0].number // empty")"

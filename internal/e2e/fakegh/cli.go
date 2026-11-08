@@ -171,6 +171,9 @@ func (c *call) run(args []string) (int, error) {
 			return exitOK, c.print(pick(v, one(f, "json")), one(f, "q", "jq"))
 		}
 	case "run":
+		if args[1] == "rerun" {
+			return c.rerun(args[2:])
+		}
 		if args[1] == "view" {
 			_, f := flags(args[2:], "log-failed")
 			job := one(f, "job")
@@ -186,6 +189,30 @@ func (c *call) run(args []string) (int, error) {
 		}
 	}
 	return exitErr, fail("fakegh: unsupported: gh %s", strings.Join(args, " "))
+}
+
+// rerun is gh run rerun ID [--failed]: GitHub queues the run again, so the
+// checks of the PR whose run it is (run 1000+N for PR N, as their links
+// say) go back to pending until a test reports them, and the rerun is
+// logged in Reruns.
+func (c *call) rerun(args []string) (int, error) {
+	pos, f := flags(args, "failed")
+	if len(pos) == 0 {
+		return exitErr, fail("run ID required")
+	}
+	id, err := strconv.Atoi(pos[0])
+	p := c.s.PR(id - 1000)
+	if err != nil || p == nil {
+		return exitErr, fail("could not find any workflow run with ID %s", pos[0])
+	}
+	_, failed := f["failed"]
+	for i := range p.Checks {
+		if !failed || p.Checks[i].State == Fail {
+			p.Checks[i].State = Pending
+		}
+	}
+	c.s.Reruns = append(c.s.Reruns, pos[0])
+	return exitOK, nil
 }
 
 // ref finds the PR a gh pr argument names: number, #number, URL or head branch.
@@ -285,7 +312,7 @@ func (c *call) pr(sub string, args []string) (int, error) {
 		if st := c.s.stackOf(p.Number); st != nil && st.Open {
 			return exitErr, fail("GraphQL: Pull request #%d is part of a stack and must be merged using the asynchronous merge REST API (mergePullRequest)", p.Number)
 		}
-		if msg := requiredChecksPass(c.s, p); msg != "" {
+		if msg := requiredChecksPass(c.s, p, branchSHA(c.dir, p.Head)); msg != "" {
 			return exitErr, fail("GraphQL: %s (mergePullRequest)", msg)
 		}
 		if err := merge(c.dir, c.s, p, method, one(f, "match-head-commit")); err != nil {
@@ -296,9 +323,13 @@ func (c *call) pr(sub string, args []string) (int, error) {
 		if len(p.Checks) == 0 {
 			return exitErr, fail("no checks reported on the '%s' branch", p.Head)
 		}
+		head := p.HeadOid
+		if p.State == "OPEN" {
+			head = branchSHA(c.dir, p.Head)
+		}
 		var out []map[string]any
 		code := exitOK
-		for i, ch := range p.Checks {
+		for i, ch := range p.checksAt(head) {
 			out = append(out, map[string]any{"name": ch.Name, "workflow": ch.Workflow, "bucket": ch.State,
 				"link": fmt.Sprintf("%s/actions/runs/%d/job/%s", c.s.URL(), 1000+p.Number, jobID(p.Number, i))})
 			switch ch.State {
@@ -400,7 +431,7 @@ func (c *call) prJSON(p *PR) map[string]any {
 		comments = append(comments, map[string]any{"id": cm.ID, "body": cm.Body, "author": map[string]any{"login": "e2e"}})
 	}
 	rollup := []map[string]any{}
-	for _, ch := range p.Checks {
+	for _, ch := range p.checksAt(head) {
 		status, concl := "COMPLETED", "SUCCESS"
 		switch ch.State {
 		case Fail:
