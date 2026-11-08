@@ -15,8 +15,14 @@ import (
 func TestSpawnIssueTakesTicketClaims(t *testing.T) {
 	a, _ := stackSetup(t)
 	bin := t.TempDir()
+	// The issue JSON is served from a file: dash's echo would turn its \n
+	// escapes into raw newlines.
+	issue := filepath.Join(bin, "issue-7.json")
+	if err := os.WriteFile(issue, []byte(`{"number":7,"body":"Fix it.\n\nClaims: text-game/src/queries*\n"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	gh := "#!/bin/sh\ncase \"$1 $2 $3\" in\n" +
-		"\"issue view 7\") echo '{\"number\":7,\"body\":\"Fix it.\\n\\nClaims: text-game/src/queries*\\n\"}' ;;\n" +
+		"\"issue view 7\") cat '" + issue + "' ;;\n" +
 		"*) echo \"no such issue\" >&2; exit 1 ;;\nesac\n"
 	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(gh), 0o755); err != nil {
 		t.Fatal(err)
