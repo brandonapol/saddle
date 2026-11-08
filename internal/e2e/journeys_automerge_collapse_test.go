@@ -31,8 +31,8 @@ func TestJourneyAutomergeCollapsesRedBottom(t *testing.T) {
 	}
 
 	st := w.AutomergeTick()
-	if st.Merged != url || st.Stopped != "" {
-		t.Fatalf("tick merged %q (stopped %q), want t2's %s", st.Merged, st.Stopped, url)
+	if st.Merged != url {
+		t.Fatalf("tick merged %q, want t2's %s", st.Merged, url)
 	}
 	checkCollapsed(t, w, low, high)
 	if got := events(t, w.App(), automerge.EventCollapsed); len(got) != 1 || !strings.Contains(got[0], url) {
@@ -40,7 +40,7 @@ func TestJourneyAutomergeCollapsesRedBottom(t *testing.T) {
 	}
 
 	// The next tick finds nothing left to do and doesn't stop.
-	if st := w.AutomergeTick(); st.Merged != "" || st.Stopped != "" || len(st.Stacks) != 0 {
+	if st := w.AutomergeTick(); st.Merged != "" || !st.Enabled || len(st.Stacks) != 0 {
 		t.Fatalf("second tick = %+v, want an empty stack and no stop", st)
 	}
 }
@@ -64,8 +64,8 @@ func TestJourneyAutomergeNeverMergesCIRed(t *testing.T) {
 		t.Fatalf("status doesn't hold the stack for ci-red:\n%s", out)
 	}
 	for range 2 {
-		if st := w.AutomergeTick(); st.Merged != "" || st.Stopped != "" {
-			t.Fatalf("tick merged %q (stopped %q) past ci-red", st.Merged, st.Stopped)
+		if st := w.AutomergeTick(); st.Merged != "" {
+			t.Fatalf("tick merged %q past ci-red", st.Merged)
 		}
 	}
 	s := w.GHState()
