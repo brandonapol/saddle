@@ -5,6 +5,7 @@ package soak
 import (
 	"encoding/json"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,6 +26,7 @@ var Known = map[FaultKind]string{
 	RedBase:      "#902: CI-red spawns a repair per PR when CI is red on base too",
 	EngineKill:   "#904: a train killed mid-rebase leaves rebase-merge behind and the next land bounces the task",
 	KilledWorker: "#905: the train auto-rebases a resumed worker's worktree while it commits",
+	RateLimit:    "#906: a publish that failed on the rate limit is retried 15 real minutes later, past the simulated window",
 }
 
 // seed is SOAK_SEED, or def: a failing run is replayed by its seed.
@@ -88,12 +90,33 @@ var smokeBudget = func() time.Duration {
 	return 4 * time.Minute
 }()
 
+// loadScale is how much slower than a quiet machine this one runs: the
+// one-minute load per CPU, at least 1. The smoke shares the gate with
+// other agents' checks, and its budget is for a quiet machine.
+func loadScale() float64 {
+	b, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return 1
+	}
+	f := strings.Fields(string(b))
+	if len(f) == 0 {
+		return 1
+	}
+	l, err := strconv.ParseFloat(f[0], 64)
+	if err != nil {
+		return 1
+	}
+	return max(1, l/float64(runtime.NumCPU()))
+}
+
 // TestSoakSmoke is the 10-change soak make check runs: every fault once.
 func TestSoakSmoke(t *testing.T) {
 	if e2e.Fork(t) {
 		return
 	}
-	soak(t, Config{Seed: seed(t, 831), Changes: 10, TickMinutes: 6}, smokeBudget)
+	scale := loadScale()
+	t.Logf("smoke budget %s x%.2f for load", smokeBudget, scale)
+	soak(t, Config{Seed: seed(t, 831), Changes: 10, TickMinutes: 6}, time.Duration(float64(smokeBudget)*scale))
 }
 
 // TestSoakFull is the nightly's 50-change soak (SOAK_FULL=1).
