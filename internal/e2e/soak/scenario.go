@@ -56,8 +56,9 @@ var AllFaults = []FaultKind{RedCI, Flaky, KilledWorker, RateLimit, AsyncMerge, R
 // perChange are the faults that ride on one change.
 var perChange = []FaultKind{RedCI, Flaky, KilledWorker, ExcludedAdapter}
 
-// TickMinutes is how much simulated time one harness tick stands for.
-const TickMinutes = 2
+// DefaultTickMinutes is how much simulated time one harness tick stands
+// for unless Config says otherwise.
+const DefaultTickMinutes = 2
 
 // Config shapes a scenario.
 type Config struct {
@@ -70,6 +71,9 @@ type Config struct {
 	// FaultRate is the chance a change carries a per-change fault, past the
 	// one of each kind every scenario has (default 0.15).
 	FaultRate float64
+	// TickMinutes is the simulated minutes per tick (default 2). A coarser
+	// clock makes the 30-minute rate-limit window fewer ticks.
+	TickMinutes int
 	// Skip drops fault kinds (the known-failing ones, each with its issue).
 	Skip map[FaultKind]string
 }
@@ -104,6 +108,8 @@ type Scenario struct {
 	Changes    []Change `json:"changes"`
 	Events     []Event  `json:"events,omitempty"`
 	AsyncMerge bool     `json:"async_merge"`
+	// TickMinutes is the simulated minutes one tick stands for.
+	TickMinutes int `json:"tick_minutes"`
 }
 
 // Change returns the change with id, or false.
@@ -157,9 +163,12 @@ func Generate(c Config) Scenario {
 	if c.FaultRate == 0 {
 		c.FaultRate = 0.15
 	}
+	if c.TickMinutes == 0 {
+		c.TickMinutes = DefaultTickMinutes
+	}
 	r := rand.New(rand.NewSource(c.Seed))
 	skip := func(k FaultKind) bool { _, ok := c.Skip[k]; return ok }
-	sc := Scenario{Seed: c.Seed}
+	sc := Scenario{Seed: c.Seed, TickMinutes: c.TickMinutes}
 	for i := 1; i <= c.Changes; i++ {
 		ch := Change{ID: ChangeID(i), Issue: i}
 		if i > 1 && r.Float64() < c.EdgeRate {
@@ -208,7 +217,7 @@ func Generate(c Config) Scenario {
 	// red base early, the engine kill wherever the train is busy.
 	span := max(4, c.Changes/2)
 	if !skip(RateLimit) {
-		sc.Events = append(sc.Events, Event{Kind: RateLimit, At: 2 + r.Intn(span), Ticks: 30 / TickMinutes})
+		sc.Events = append(sc.Events, Event{Kind: RateLimit, At: 2 + r.Intn(span), Ticks: max(1, 30/c.TickMinutes)})
 	}
 	if !skip(RedBase) {
 		sc.Events = append(sc.Events, Event{Kind: RedBase, At: 2 + r.Intn(span), Ticks: 2 + r.Intn(3)})

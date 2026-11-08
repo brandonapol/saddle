@@ -24,6 +24,9 @@ func TestGenerateIsDeterministicBySeed(t *testing.T) {
 			t.Fatalf("%d changes: seed 7 gave two scenarios:\n%s\n%s", n, a, b)
 		}
 		c, _ := json.Marshal(Generate(Config{Seed: 8, Changes: n}))
+		if d, _ := json.Marshal(Generate(Config{Seed: 7, Changes: n, TickMinutes: 6})); string(d) == string(a) {
+			t.Fatalf("%d changes: the tick length doesn't reach the scenario", n)
+		}
 		if string(a) == string(c) {
 			t.Fatalf("%d changes: seeds 7 and 8 gave the same scenario", n)
 		}
@@ -66,7 +69,7 @@ func TestGenerateShape(t *testing.T) {
 				t.Fatalf("seed %d: %d red-CI changes need more repairs than the cap of %d", seed, red, MaxRepairs(n))
 			}
 			for _, e := range sc.Events {
-				if e.Kind == RateLimit && e.Ticks*TickMinutes != 30 {
+				if e.Kind == RateLimit && e.Ticks*sc.TickMinutes != 30 {
 					t.Fatalf("seed %d: rate-limit window is %d ticks, want 30 simulated minutes", seed, e.Ticks)
 				}
 			}
@@ -241,10 +244,11 @@ func TestResultFailures(t *testing.T) {
 	bad.Outcomes[0].State = Stuck
 	bad.Repairs = []Repair{{Task: "t11", For: "t2", Checks: []string{"saddle/base"}}, {Task: "t12", For: "t3"}}
 	bad.Actions = []string{"decision card left for a human"}
+	bad.Excluded = []string{"t6 (c06 soak change)"}
 	bad.Ledger = &Ledger{}
 	bad.Ledger.Observe(0, []invariants.Violation{v(invariants.SelfRepair, "t11")})
 	f := strings.Join(bad.Failures(DefaultBudgets), "\n")
-	for _, want := range []string{"c01", "never reached a terminal state", "human or orchestrator action", "self_repair t11", "2 repairs for 10 changes, over the cap of 1", "targets saddle-owned check saddle/base"} {
+	for _, want := range []string{"c01", "never reached a terminal state", "human or orchestrator action", "self_repair t11", "2 repairs for 10 changes, over the cap of 1", "targets saddle-owned check saddle/base", "excluded adapter: t6"} {
 		if !strings.Contains(f, want) {
 			t.Errorf("failures lack %q:\n%s", want, f)
 		}

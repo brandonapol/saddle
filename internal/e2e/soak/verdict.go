@@ -137,6 +137,8 @@ type Result struct {
 	// is a failure (the harness itself never takes one; a card answered or
 	// a notice that demands a human is counted here).
 	Actions []string `json:"actions,omitempty"`
+	// Excluded are tasks spawned on an adapter the policy excludes.
+	Excluded []string `json:"excluded,omitempty"`
 }
 
 // MaxRepairs is the repair cap for n changes: a tenth, rounded down.
@@ -152,6 +154,9 @@ func (r Result) Failures(b Budgets) []string {
 	}
 	if missing := len(r.Scenario.Changes) - len(r.Outcomes); missing > 0 {
 		out = append(out, fmt.Sprintf("%d changes have no outcome", missing))
+	}
+	for _, t := range r.Excluded {
+		out = append(out, "spawned on an excluded adapter: "+t)
 	}
 	for _, a := range r.Actions {
 		out = append(out, "human or orchestrator action: "+a)

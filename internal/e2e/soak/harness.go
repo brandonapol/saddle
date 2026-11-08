@@ -64,6 +64,8 @@ type Run struct {
 	ledger Ledger
 	rng    *rand.Rand
 	tick   int
+	// killPending is an engine kill that hasn't caught a land mid-run yet.
+	killPending bool
 	// throttle is fakegh's rate limit this tick ("" for none).
 	throttle string
 	start    time.Time
@@ -117,7 +119,7 @@ func Start(w *e2e.World, sc Scenario, opt Options) *Run {
 	w.Git(w.Repo, "push", "-q", "origin", "main")
 
 	must(t, w.GH.Update(func(s *fakegh.State) error {
-		s.Repo.AllowSquash, s.Repo.AllowMerge, s.Repo.DeleteBranch = true, true, true
+		s.Repo.AllowSquash, s.Repo.AllowMerge, s.Repo.DeleteBranch = true, false, true
 		s.Protected = true
 		s.Required = []string{CheckName}
 		s.DefaultChecks = []fakegh.Check{{Name: CheckName, Workflow: "CI", State: fakegh.Pending}}
@@ -183,9 +185,9 @@ func (r *Run) flaky(branch string) string {
 	return ""
 }
 
-// simNow is the run's simulated clock: TickMinutes per tick.
+// simNow is the run's simulated clock: Sc.TickMinutes per tick.
 func (r *Run) simNow() time.Time {
-	return r.start.Add(time.Duration(r.tick*TickMinutes) * time.Minute)
+	return r.start.Add(time.Duration(r.tick*r.Sc.TickMinutes) * time.Minute)
 }
 
 // Drive ticks until every change is terminal or MaxTicks pass, then
@@ -234,7 +236,10 @@ func (r *Run) Tick() {
 	}
 	r.killHung()
 	if slices.Contains(active, EngineKill) {
-		r.killLand()
+		r.killPending = true
+	}
+	if r.killPending {
+		r.killPending = !r.killLand()
 	}
 	rep, err := r.pilot.Tick()
 	if err != nil {
@@ -286,7 +291,7 @@ func (r *Run) Tick() {
 func (r *Run) quota() {
 	must(r.W.T, r.W.GH.Update(func(s *fakegh.State) error {
 		s.Throttle = r.throttle
-		s.Quota = fakegh.Quota{Limit: 5000, Remaining: 5000, Reset: time.Now().Add(20 * time.Second).Unix()}
+		s.Quota = fakegh.Quota{Limit: 5000, Remaining: 5000, Reset: time.Now().Add(10 * time.Second).Unix()}
 		if r.throttle != "" {
 			s.Quota.Remaining = 0
 		}
@@ -322,25 +327,35 @@ func (r *Run) killHung() {
 }
 
 // killLand runs the train as the engine would and kills it partway: the
-// engine dying mid-reconcile. The next ticks must heal what it left.
-func (r *Run) killLand() {
-	after := time.Duration(200+r.rng.Intn(1500)) * time.Millisecond
+// engine dying mid-reconcile. The next ticks must heal what it left. It
+// reports whether the kill caught a land mid-run; with nothing queued, or
+// a land that finished first, the kill waits for the next tick.
+func (r *Run) killLand() bool {
+	q, err := r.a.Queue()
+	if err != nil || !slices.ContainsFunc(q, func(e store.TrainEntry) bool { return e.State == store.Queued }) {
+		return false
+	}
+	after := time.Duration(100+r.rng.Intn(900)) * time.Millisecond
 	cmd := exec.Command(r.W.Bins.Saddle, "land")
 	cmd.Dir, cmd.Env = r.W.Repo, r.W.Env()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var out strings.Builder
+	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Start(); err != nil {
 		r.Opt.Logf("tick %d: start land: %v", r.tick, err)
-		return
+		return false
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
-		r.Opt.Logf("tick %d: land finished before the kill: %v", r.tick, err)
+		r.Opt.Logf("tick %d: land finished before the kill (%v): %s", r.tick, err, firstLine(out.String()))
+		return false
 	case <-time.After(after):
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-done
 		r.Opt.Logf("tick %d: killed saddle land after %s", r.tick, after)
+		return true
 	}
 }
 
@@ -436,6 +451,13 @@ func (r *Run) Events() []string {
 func (r *Run) Result() Result {
 	res := Result{Scenario: r.Sc, Ticks: r.tick + 1, Outcomes: r.outcomes(), Ledger: &r.ledger, Actions: append([]string(nil), r.actions...)}
 	res.Repairs = r.repairs()
+	if ts, err := r.a.Store.Tasks(); err == nil {
+		for _, t := range ts {
+			if t.Adapter == Excluded {
+				res.Excluded = append(res.Excluded, t.ID+" ("+t.Title+")")
+			}
+		}
+	}
 	if cards, err := r.a.OpenDecisions(); err == nil {
 		for _, c := range cards {
 			res.Actions = append(res.Actions, "decision card left for a human: "+c.ID+": "+c.Headline)
