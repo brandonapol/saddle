@@ -51,8 +51,10 @@ type State struct {
 	// Hold makes calls whose args start with one of its prefixes ("" for
 	// every call) wait until it no longer holds them: a GitHub that never
 	// answers. Each held call is logged in Held when it starts waiting.
-	Hold []string   `json:"hold,omitempty"`
-	Held [][]string `json:"held,omitempty"`
+	Hold []string `json:"hold,omitempty"`
+	// Reruns are the run ids gh run rerun was asked for, oldest first.
+	Reruns []string   `json:"reruns,omitempty"`
+	Held   [][]string `json:"held,omitempty"`
 	// NextComment numbers comment node ids.
 	NextComment int `json:"next_comment"`
 	// Stacks are native stacked PRs (gh stack link). Stack numbers share

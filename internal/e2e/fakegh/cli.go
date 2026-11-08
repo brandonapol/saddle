@@ -171,6 +171,9 @@ func (c *call) run(args []string) (int, error) {
 			return exitOK, c.print(pick(v, one(f, "json")), one(f, "q", "jq"))
 		}
 	case "run":
+		if args[1] == "rerun" {
+			return c.rerun(args[2:])
+		}
 		if args[1] == "view" {
 			_, f := flags(args[2:], "log-failed")
 			job := one(f, "job")
@@ -186,6 +189,30 @@ func (c *call) run(args []string) (int, error) {
 		}
 	}
 	return exitErr, fail("fakegh: unsupported: gh %s", strings.Join(args, " "))
+}
+
+// rerun is gh run rerun ID [--failed]: GitHub queues the run again, so the
+// checks of the PR whose run it is (run 1000+N for PR N, as their links
+// say) go back to pending until a test reports them, and the rerun is
+// logged in Reruns.
+func (c *call) rerun(args []string) (int, error) {
+	pos, f := flags(args, "failed")
+	if len(pos) == 0 {
+		return exitErr, fail("run ID required")
+	}
+	id, err := strconv.Atoi(pos[0])
+	p := c.s.PR(id - 1000)
+	if err != nil || p == nil {
+		return exitErr, fail("could not find any workflow run with ID %s", pos[0])
+	}
+	_, failed := f["failed"]
+	for i := range p.Checks {
+		if !failed || p.Checks[i].State == Fail {
+			p.Checks[i].State = Pending
+		}
+	}
+	c.s.Reruns = append(c.s.Reruns, pos[0])
+	return exitOK, nil
 }
 
 // ref finds the PR a gh pr argument names: number, #number, URL or head branch.

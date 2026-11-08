@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -505,5 +506,31 @@ func TestHoldBlocksCallsUntilReleased(t *testing.T) {
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("released call never returned")
+	}
+}
+
+// gh run rerun ID --failed queues the PR's failed checks again, as GitHub
+// does: they read pending until a test reports them, and the rerun is
+// logged. An unknown run is refused (#831's flaky checks rely on it).
+func TestRunRerunFailedRequeuesChecks(t *testing.T) {
+	f := newFixture(t)
+	f.branch("feat", "a.txt", "a\n")
+	f.must("pr", "create", "--base", "main", "--head", "feat", "--title", "Add a", "--body", "b")
+	if err := f.gh.SetChecks(1, Check{Name: "ci", State: Fail}, Check{Name: "lint", State: Pass}); err != nil {
+		t.Fatal(err)
+	}
+	f.must("run", "rerun", "1001", "--failed")
+	s, err := f.gh.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.PR(1).Checks; got[0].State != Pending || got[1].State != Pass {
+		t.Fatalf("checks after rerun --failed = %+v, want ci pending and lint still passing", got)
+	}
+	if !slices.Equal(s.Reruns, []string{"1001"}) {
+		t.Fatalf("Reruns = %v", s.Reruns)
+	}
+	if _, errs, code := f.ghRun("run", "rerun", "77"); code == 0 || !strings.Contains(errs, "could not find") {
+		t.Fatalf("rerun of an unknown run: exit %d, %q", code, errs)
 	}
 }
