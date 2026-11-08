@@ -41,11 +41,14 @@ func engineCheck(ee EngineEnv) Result {
 	if rep.Owner == "" && len(rep.Watchers) == 0 {
 		return Result{} // never ran here: nothing to say
 	}
-	var lines, bad []string
+	var lines, panicked, hung []string
 	for _, w := range rep.Watchers {
 		lines = append(lines, w.Line())
-		if w.Stale || w.Restarts > 0 {
-			bad = append(bad, w.Name)
+		switch {
+		case w.Restarts > 0:
+			panicked = append(panicked, w.Name)
+		case w.Stale:
+			hung = append(hung, w.Name)
 		}
 	}
 	detail := "not running"
@@ -55,8 +58,8 @@ func engineCheck(ee EngineEnv) Result {
 	if len(lines) > 0 {
 		detail += "; " + strings.Join(lines, "; ")
 	}
-	if rep.Owner != "" && len(bad) > 0 {
-		return warn(CheckEngine, detail, "see the watcher_panic events (saddle log) for "+strings.Join(bad, ", ")+"; restarting the engine starts every watcher fresh")
+	if rep.Owner != "" && (len(panicked) > 0 || len(hung) > 0) {
+		return warn(CheckEngine, detail, engineFix(rep.Owner, panicked, hung))
 	}
 	return ok(CheckEngine, detail)
 }
@@ -78,4 +81,21 @@ func (s system) Engine() (EngineReport, error) {
 	a.Store = st
 	rep.Watchers, err = a.Watchers(time.Now())
 	return rep, err
+}
+
+// engineFix says how to look into, and clear, watchers that panicked or
+// went stale. It names only commands that exist (#908).
+func engineFix(owner string, panicked, hung []string) string {
+	var parts []string
+	if len(panicked) > 0 {
+		parts = append(parts, "`saddle events --kind watcher_panic` shows the stack of each panic in "+strings.Join(panicked, ", "))
+	}
+	if len(hung) > 0 {
+		parts = append(parts, strings.Join(hung, ", ")+" stopped ticking with no panic recorded, so it is hung, not crashed (`saddle events -n 50` shows what happened last)")
+	}
+	restart := "restart the engine to start every watcher fresh: `saddle plugin engine --stop`, then `saddle plugin engine --supervise` in the background"
+	if owner == app.LockUp {
+		restart = "restart the engine to start every watcher fresh: quit saddle up and run it again"
+	}
+	return strings.Join(parts, "; ") + "; " + restart
 }

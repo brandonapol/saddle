@@ -44,3 +44,25 @@ func TestEngineCheck(t *testing.T) {
 		t.Fatalf("read error: %+v", r)
 	}
 }
+
+// #908: the fix names commands that exist. A stale watcher that never
+// panicked is hung, not crashed, so it isn't sent to look for a panic; one
+// that panicked is sent to saddle events, which shows the stack.
+func TestEngineCheckFixNamesRealCommands(t *testing.T) {
+	hung := app.WatcherHealth{Name: "remote", Ago: "14m", Stale: true}
+	r := engineCheck(engineEnv{rep: EngineReport{Owner: app.LockEngine, Watchers: []app.WatcherHealth{hung}}})
+	if strings.Contains(r.Fix, "saddle log") || strings.Contains(r.Fix, "watcher_panic") {
+		t.Errorf("hung watcher fix points at panics: %q", r.Fix)
+	}
+	if !strings.Contains(r.Fix, "remote") || !strings.Contains(r.Fix, "no panic") {
+		t.Errorf("hung watcher fix: %q", r.Fix)
+	}
+	crashed := app.WatcherHealth{Name: "ci", Ago: "5s", Restarts: 2, LastPanic: "boom"}
+	r = engineCheck(engineEnv{rep: EngineReport{Owner: app.LockEngine, Watchers: []app.WatcherHealth{crashed}}})
+	if !strings.Contains(r.Fix, "saddle events --kind watcher_panic") || strings.Contains(r.Fix, "saddle log") {
+		t.Errorf("panicked watcher fix: %q", r.Fix)
+	}
+	if r := engineCheck(engineEnv{err: errors.New("locked")}); r.Status != Warn {
+		t.Fatalf("read error: %+v", r)
+	}
+}

@@ -222,6 +222,12 @@ means stopped there.
 `train_escalated`, `ci_red_escalated`, `retry_escalated`; a `saddle-blocker`
 issue when it repeats (always, for `retry_escalated`).
 
+### events
+`saddle events [--kind K] [--task T] [-n N]`: saddle's event log in
+`.saddle/state.db`, oldest first. A `watcher_panic` event prints its stack.
+*Avoid:* "saddle log" (no such command); "notices" (those are what the
+orchestrator is told, a subset).
+
 ### failed
 A task status: its spawn failed. The id stays burned and the reason is in its
 summary.
