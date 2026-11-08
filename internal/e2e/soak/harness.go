@@ -35,7 +35,7 @@ type Options struct {
 	// Deadline ends a run that hasn't settled by then (zero: none), so a
 	// stalled soak still reports its outcomes instead of timing out.
 	Deadline time.Time
-	Budgets Budgets
+	Budgets  Budgets
 	// Logf logs progress; nil is quiet.
 	Logf func(format string, args ...any)
 }
