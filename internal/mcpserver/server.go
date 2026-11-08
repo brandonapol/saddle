@@ -24,7 +24,7 @@ import (
 type SpawnIn struct {
 	Title  string   `json:"title" jsonschema:"short task title, e.g. 'meter ingestion worker'"`
 	Prompt string   `json:"prompt" jsonschema:"self-contained instructions: goal, files, constraints, how to verify, done-when"`
-	Claims []string `json:"claims,omitempty" jsonschema:"repo-relative path globs this task owns, e.g. internal/meter/**; must not overlap other live tasks"`
+	Claims []string `json:"claims,omitempty" jsonschema:"repo-relative path globs this task owns, e.g. internal/meter/**; must not overlap other live tasks. Omit with issue set to take the ticket's Claims: line, or the paths it names"`
 	Model  string   `json:"model,omitempty" jsonschema:"model for the adapter, e.g. claude's opus, sonnet or haiku; defaults to config for claude and to the CLI's default otherwise. Models in status' excluded_models (codex's astra by default) are refused"`
 	// Adapter picks the agent CLI; see agent.ByName.
 	Adapter string `json:"adapter,omitempty" jsonschema:"agent to run: claude, codex, gemini or grok, any one listed as available in the brief or status. Omitted, the chooser picks from difficulty, needs, kind and [adapters] policy (balanced by default: the most unused quota per running worker); pass it only to override, e.g. for a ticket's Provider: line. Claude and grok run saddle hooks; codex and gemini claims are checked when they commit and call done. An unavailable adapter fails with the reason, never a substitute"`
@@ -64,6 +64,10 @@ type SpawnOut struct {
 	ID     string `json:"id"`
 	Branch string `json:"branch"`
 	Window string `json:"window"`
+	// Claims are the claims the task started with; ClaimsNote says where
+	// they came from when spawn read them from the issue (#908).
+	Claims     []string `json:"claims,omitempty"`
+	ClaimsNote string   `json:"claims_note,omitempty"`
 	// Warning flags a spawn that names an issue without setting issue (#557).
 	Warning string `json:"warning,omitempty"`
 }
@@ -555,11 +559,15 @@ func New(a *app.App, task string) *mcp.Server {
 			if err := self(); err != nil {
 				return nil, SpawnOut{}, err
 			}
-			t, err := a.Spawn(app.SpawnReq{ID: in.ID, Title: in.Title, Prompt: in.Prompt, Claims: in.Claims, Model: in.Model, Adapter: in.Adapter, Kind: in.Kind, Difficulty: in.Difficulty, Needs: in.Needs, Parent: task, Issue: in.Issue, After: in.After, Confirm: in.Confirm})
+			claims, note := in.Claims, ""
+			if in.Issue > 0 && len(claims) == 0 {
+				claims, note = a.IssueClaims(in.Issue) // #908: the ticket's Claims: line, not a guess
+			}
+			t, err := a.Spawn(app.SpawnReq{ID: in.ID, Title: in.Title, Prompt: in.Prompt, Claims: claims, Model: in.Model, Adapter: in.Adapter, Kind: in.Kind, Difficulty: in.Difficulty, Needs: in.Needs, Parent: task, Issue: in.Issue, After: in.After, Confirm: in.Confirm})
 			if err != nil {
 				return nil, SpawnOut{}, err
 			}
-			return nil, SpawnOut{ID: t.ID, Branch: t.Branch, Window: t.Window, Warning: spawnIssueWarning(in)}, nil
+			return nil, SpawnOut{ID: t.ID, Branch: t.Branch, Window: t.Window, Claims: claims, ClaimsNote: note, Warning: spawnIssueWarning(in)}, nil
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "claim", Description: "Reserve paths or globs for your task. Paths that overlap another live task are denied, naming the owner."},
