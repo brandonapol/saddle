@@ -105,3 +105,18 @@ func TestSoakFull(t *testing.T) {
 	}
 	soak(t, Config{Seed: seed(t, time.Now().UnixNano()%1000000), Changes: 50}, 0)
 }
+
+// TestSoakKnownFaults names each fault left out of the soaks above because
+// it exposes a saddle bug, and skips it with its issue. Once the issue is
+// fixed, deleting its Known entry puts the fault back in every soak.
+func TestSoakKnownFaults(t *testing.T) {
+	for _, k := range AllFaults {
+		issue, ok := Known[k]
+		if !ok {
+			continue
+		}
+		t.Run(string(k), func(t *testing.T) {
+			t.Skipf("known failing: %s", issue)
+		})
+	}
+}

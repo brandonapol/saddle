@@ -199,7 +199,7 @@ test/contract: ## Run the forge contract suite: every scenario against its recor
 .PHONY: test/soak
 test/soak: ## Run the 10-change soak smoke: real saddle, fakegh, fake agents, every fault once (#831; SOAK_SEED=n replays a seed)
 	# The 50-change soak runs nightly: make test/soak/full. Needs tmux.
-	$(GO) test -tags '$(GO_TAGS) e2e' -count=1 -timeout 5m -run 'TestSoakSmoke' ./internal/e2e/soak
+	$(GO) test -tags '$(GO_TAGS) e2e' -count=1 -timeout 5m -run 'TestSoakSmoke|TestSoakKnownFaults' ./internal/e2e/soak
 
 .PHONY: test/soak/full
 test/soak/full: ## Run the 50-change soak with a random seed (the nightly's; SOAK_SEED=n replays one)

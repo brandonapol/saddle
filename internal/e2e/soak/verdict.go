@@ -13,8 +13,8 @@ import (
 // the soak fails. A kind missing here gets DefaultBudget.
 type Budgets map[invariants.Kind]int
 
-// DefaultBudget is a violation's budget when Budgets doesn't name its kind:
-// ten ticks, twenty simulated minutes, past which the run fails.
+// DefaultBudget is a violation's budget, in ticks, when Budgets doesn't
+// name its kind: past it the run fails.
 const DefaultBudget = 10
 
 // DefaultBudgets are the soak's budgets. I7 (a repair of a saddle-owned
