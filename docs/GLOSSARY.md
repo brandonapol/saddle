@@ -161,6 +161,12 @@ first write. `saddle release [glob]...` gives them back. Files in the config's
 ### concurrency
 `saddle concurrency [N|reset]`: how many agents may run at once.
 
+### config
+`saddle config get|set <key> [value]` (MCP: `config`): reads or sets one dotted
+setting in `.saddle/config.toml`, keeping its comments, e.g. `saddle config set
+adapters.grok.disabled true`. A running saddle applies adapter and train
+settings on its next spawn or land.
+
 ### conflict
 A task status: its branch came back from the merge train with a conflict (or a
 failed gate) and the agent must `saddle sync` and resolve it. As a train entry
@@ -221,6 +227,12 @@ means stopped there.
 *Maps to:* train state `escalated` (`app.TrainEscalated`), events
 `train_escalated`, `ci_red_escalated`, `retry_escalated`; a `saddle-blocker`
 issue when it repeats (always, for `retry_escalated`).
+
+### events
+`saddle events [--kind K] [--task T] [-n N]`: saddle's event log in
+`.saddle/state.db`, oldest first. A `watcher_panic` event prints its stack.
+*Avoid:* "saddle log" (no such command); "notices" (those are what the
+orchestrator is told, a subset).
 
 ### failed
 A task status: its spawn failed. The id stays burned and the reason is in its

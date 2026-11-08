@@ -82,6 +82,8 @@ var ToolScopes = map[string]Scope{
 	"done":      ScopeLocal,
 	// decisions can add [[preauth]] rules, so it stays off remote for now
 	"decisions": ScopeLocal,
+	// config rewrites .saddle/config.toml, so it stays off remote too (#908)
+	"config": ScopeLocal,
 }
 
 // RemoteOnlyTools exist only on the remote server, not in mcpserver.

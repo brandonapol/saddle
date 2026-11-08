@@ -49,24 +49,26 @@ func GateClassIn(cfg runq.Config, cmd, root string) string {
 		names = append(names, name)
 	}
 	slices.Sort(names)
-	best := ""
-	for _, seg := range splitCompound(cmd) {
-		c := classifySegment(cfg, names, seg, root, 0)
-		if c == "" {
-			continue
-		}
-		if best == "" || classWeight(cfg, c) > classWeight(cfg, best) {
-			best = c
-		}
+	gc := &gateClassifier{cfg: cfg, names: names, seen: map[string]bool{}}
+	if root != "" {
+		gc.rules = parseMakefile(filepath.Join(root, "Makefile"))
 	}
-	if best == "" {
-		return DefaultGateClass
+	if best := gc.compound(cmd); best != "" {
+		return best
 	}
-	return best
+	return DefaultGateClass
 }
 
 func classWeight(cfg runq.Config, class string) int {
 	return max(cfg.Classes[class].Weight, 1)
+}
+
+// heavier is the heavier of classes a and b ("" is lighter than any).
+func heavier(cfg runq.Config, a, b string) string {
+	if b != "" && (a == "" || classWeight(cfg, b) > classWeight(cfg, a)) {
+		return b
+	}
+	return a
 }
 
 // matchPatterns is the first class (in name order) with a pattern matching
@@ -82,15 +84,108 @@ func matchPatterns(cfg runq.Config, names []string, seg string) string {
 	return ""
 }
 
-func classifySegment(cfg runq.Config, names []string, seg, root string, depth int) string {
-	if root != "" && depth < 4 {
-		if target, ok := makeTarget(seg); ok {
-			if c := classifyMakeTarget(cfg, names, root, target, depth); c != "" {
-				return c
-			}
+// gateClassifier classifies one gate command. seen holds the make targets
+// already walked, so a dependency cycle (or a target reached twice) is
+// walked once and classification always terminates (#908).
+type gateClassifier struct {
+	cfg   runq.Config
+	names []string
+	rules map[string]*makeRule // nil without a Makefile
+	seen  map[string]bool
+}
+
+// compound is the heaviest class among cmd's segments, or "".
+func (gc *gateClassifier) compound(cmd string) string {
+	best := ""
+	for _, seg := range splitCompound(cmd) {
+		best = heavier(gc.cfg, best, gc.segment(seg))
+	}
+	return best
+}
+
+func (gc *gateClassifier) segment(seg string) string {
+	if target, ok := makeTarget(seg); ok && gc.rules != nil {
+		if c := gc.target(target); c != "" {
+			return c
 		}
 	}
-	return matchPatterns(cfg, names, seg)
+	return matchPatterns(gc.cfg, gc.names, seg)
+}
+
+// target classifies the recipe lines of target, and of the targets it
+// depends on, taking the heaviest class. A target already walked adds
+// nothing.
+func (gc *gateClassifier) target(target string) string {
+	if gc.seen[target] {
+		return ""
+	}
+	gc.seen[target] = true
+	r := gc.rules[target]
+	if r == nil {
+		return ""
+	}
+	best := ""
+	for _, d := range r.deps {
+		best = heavier(gc.cfg, best, gc.target(d))
+	}
+	for _, rec := range r.recipe {
+		best = heavier(gc.cfg, best, gc.compound(rec))
+	}
+	return best
+}
+
+// makeRule is one target's dependencies and recipe lines.
+type makeRule struct {
+	deps   []string
+	recipe []string
+}
+
+// parseMakefile reads the rules of the Makefile at path: nil if it can't be
+// read. Comments (from #) are dropped, so a "target: ## description" line
+// has no dependencies; "a b: deps" gives a and b the same rule.
+func parseMakefile(path string) map[string]*makeRule {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	rules := map[string]*makeRule{}
+	var cur []*makeRule
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "\t") {
+			rec := strings.TrimLeft(line, "\t @-+")
+			rec = strings.ReplaceAll(rec, "$(MAKE)", "make")
+			rec = strings.ReplaceAll(rec, "${MAKE}", "make")
+			for _, r := range cur {
+				r.recipe = append(r.recipe, rec)
+			}
+			continue
+		}
+		cur = nil
+		if i := strings.IndexByte(line, '#'); i >= 0 {
+			line = line[:i]
+		}
+		head, deps, ok := strings.Cut(line, ":")
+		if !ok || strings.HasPrefix(deps, "=") || strings.HasPrefix(deps, ":=") || strings.ContainsAny(head, "=$%") {
+			continue
+		}
+		deps, _, _ = strings.Cut(deps, ";")
+		var ds []string
+		for _, d := range strings.Fields(deps) {
+			if !strings.ContainsAny(d, "$%|") {
+				ds = append(ds, d)
+			}
+		}
+		for _, t := range strings.Fields(head) {
+			r := rules[t]
+			if r == nil {
+				r = &makeRule{}
+				rules[t] = r
+			}
+			r.deps = append(r.deps, ds...)
+			cur = append(cur, r)
+		}
+	}
+	return rules
 }
 
 // splitCompound splits cmd on the shell operators &&, || and ; outside
@@ -142,47 +237,6 @@ func makeTarget(seg string) (string, bool) {
 		return w, true
 	}
 	return "", false
-}
-
-// classifyMakeTarget classifies the recipe lines of target in root's
-// Makefile, and of the targets it depends on, taking the heaviest class.
-func classifyMakeTarget(cfg runq.Config, names []string, root, target string, depth int) string {
-	b, err := os.ReadFile(filepath.Join(root, "Makefile"))
-	if err != nil {
-		return ""
-	}
-	best := ""
-	consider := func(c string) {
-		if c != "" && (best == "" || classWeight(cfg, c) > classWeight(cfg, best)) {
-			best = c
-		}
-	}
-	in := false
-	for _, line := range strings.Split(string(b), "\n") {
-		if strings.HasPrefix(line, "\t") {
-			if !in {
-				continue
-			}
-			rec := strings.TrimLeft(line, "\t @-+")
-			rec = strings.ReplaceAll(rec, "$(MAKE)", "make")
-			for _, seg := range splitCompound(rec) {
-				consider(classifySegment(cfg, names, seg, root, depth+1))
-			}
-			continue
-		}
-		head, deps, ok := strings.Cut(line, ":")
-		in = false
-		if !ok || strings.TrimSpace(head) != target || strings.HasPrefix(deps, "=") {
-			continue
-		}
-		in = true
-		for _, d := range strings.Fields(deps) {
-			if d != target && !strings.ContainsAny(d, "$%|") {
-				consider(classifyMakeTarget(cfg, names, root, d, depth+1))
-			}
-		}
-	}
-	return best
 }
 
 // matchCmd reports whether cmd matches pattern p, where * matches any run

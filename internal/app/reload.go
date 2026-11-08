@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -13,9 +14,10 @@ import (
 	"github.com/brandonapol/saddle/internal/config"
 )
 
-// trainSections are the parts of the config the merge train acts on. A
-// long-lived saddle (up, mcp) re-reads them before every land, so an edit
-// to .saddle/config.toml takes effect without a restart (#228).
+// trainSections are the parts of the config a long-lived saddle (up, mcp,
+// the engine) re-reads: what the merge train acts on, before every land
+// (#228), and how spawns pick an adapter, before every spawn (#908), so an
+// edit to .saddle/config.toml takes effect without a restart.
 type trainSections struct {
 	Test         config.Test
 	Lint         config.Lint
@@ -23,11 +25,17 @@ type trainSections struct {
 	NoAutoRebase bool
 	Regen        []config.Regen
 	Tmpdir       string
+
+	Adapters      config.AdapterMap
+	AdapterOrder  []string
+	AdapterPolicy config.AdapterPolicy
+	Fallback      map[string][]string
 }
 
 func sectionsOf(c config.Config) trainSections {
 	return trainSections{Test: c.Test, Lint: c.Train.Lint, MaxAttempts: c.Train.MaxAttempts,
-		NoAutoRebase: c.Train.NoAutoRebase, Regen: c.Regen, Tmpdir: c.Train.Tmpdir}
+		NoAutoRebase: c.Train.NoAutoRebase, Regen: c.Regen, Tmpdir: c.Train.Tmpdir,
+		Adapters: c.Adapters, AdapterOrder: c.AdapterOrder, AdapterPolicy: c.AdapterPolicy, Fallback: c.Fallback}
 }
 
 // processStart is when this saddle started. A config file older than that
@@ -41,7 +49,8 @@ var seenSections = struct {
 }{m: map[*App]trainSections{}}
 
 // ReloadTrainConfig re-reads the train's config sections ([test], [train]
-// lint.cmd, max_attempts, no_auto_rebase, tmpdir, [[regen]]) from the config files
+// lint.cmd, max_attempts, no_auto_rebase, tmpdir, [[regen]]) and the adapter
+// ones ([adapters], [adapters.<name>], [fallback]) from the config files
 // and applies the ones that changed since saddle last read them. Only
 // changes are applied, so a setting made in memory (by a test, say) stands
 // until the file changes it. It reports whether anything changed.
@@ -82,6 +91,10 @@ func (a *App) ReloadTrainConfig() (bool, error) {
 	apply(now.NoAutoRebase != seen.NoAutoRebase, func() { a.Cfg.Train.NoAutoRebase = now.NoAutoRebase })
 	apply(!reflect.DeepEqual(now.Regen, seen.Regen), func() { a.Cfg.Regen = now.Regen })
 	apply(now.Tmpdir != seen.Tmpdir, func() { a.Cfg.Train.Tmpdir = now.Tmpdir })
+	apply(!reflect.DeepEqual(now.Adapters, seen.Adapters), func() { a.Cfg.Adapters = now.Adapters })
+	apply(!slices.Equal(now.AdapterOrder, seen.AdapterOrder), func() { a.Cfg.AdapterOrder = now.AdapterOrder })
+	apply(!reflect.DeepEqual(now.AdapterPolicy, seen.AdapterPolicy), func() { a.Cfg.AdapterPolicy = now.AdapterPolicy })
+	apply(!reflect.DeepEqual(now.Fallback, seen.Fallback), func() { a.Cfg.Fallback = now.Fallback })
 	return changed, nil
 }
 
