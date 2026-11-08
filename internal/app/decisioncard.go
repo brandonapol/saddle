@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/forge"
+	"github.com/brandonapol/saddle/internal/retry"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -44,15 +45,12 @@ const (
 	DecidedByTimeout = "timeout"
 	DecidedResolved  = "resolved" // the situation cleared on its own
 	DecidedPreauth   = "preauth"  // a [[preauth]] rule allowed it (#464)
-	// DecidedDefaultFailed closes a card whose default failed the same
-	// deterministic way maxDefaultAttempts times: it is filed as a blocker
-	// issue instead of retried every cycle (#766).
+	// DecidedDefaultFailed is how saddles before #826 closed a card whose
+	// default kept failing. Nothing closes a card that way now: the default
+	// is a retry attempt that escalates once and keeps retrying. Old cards
+	// still read and render.
 	DecidedDefaultFailed = "default_failed"
 )
-
-// maxDefaultAttempts is how many deterministic failures a card's default
-// gets before the card gives up.
-const maxDefaultAttempts = 3
 
 // claimStale is how long a claim on a card's default holds before another
 // process may take it over: a run that died mid-default must not leave the
@@ -67,7 +65,6 @@ const (
 	EventDecisionDefaultFailed = "decision_default_failed"
 	EventDecisionResolved      = "decision_resolved"
 	EventDecisionPreauth       = "decision_preauth"
-	EventDecisionGaveUp        = "decision_default_gave_up" // data: card ID: last error; filed as a blocker
 )
 
 // DefaultDecisionTimeout is how long a card waits for an answer before
@@ -424,12 +421,14 @@ func (a *App) ResolveDecision(id string, now time.Time) error {
 // ExpireDecisions runs the default of every open card whose timeout has run
 // out at now, through run, and closes it. A rate limit or a network timeout
 // is a wait: the card stays open and nothing is counted. Any other failure
-// is an attempt: the card stays open for the next call, and the error is
-// returned (the sentinel's alarm) only when it differs from the last one,
-// so the alarm fires once per state change, not once per cycle. After
-// maxDefaultAttempts the card closes as default_failed with one
-// EventDecisionGaveUp, which the blocker filer turns into an issue (#766).
-// It returns the cards whose default ran.
+// is a retry attempt (internal/retry, #826): the card stays open and the
+// default is tried again after the backoff, and the error is returned (the
+// sentinel's alarm) only when it differs from the last one, so the alarm
+// fires once per state change, not once per cycle. The third try at the
+// same error escalates once (a retry_escalated event the blocker filer
+// files, and an orchestrator notice); it keeps retrying at the slow
+// cadence, so a fixed cause still runs the default. It returns the cards
+// whose default ran.
 func (a *App) ExpireDecisions(now time.Time, run func(DecisionCard, DecisionOption) error) ([]DecisionCard, error) {
 	var due []DecisionCard
 	open, err := a.OpenDecisions()
@@ -443,7 +442,15 @@ func (a *App) ExpireDecisions(now time.Time, run func(DecisionCard, DecisionOpti
 	}
 	var done []DecisionCard
 	var errs []error
+	var task string // the card being run, for its escalation
+	r := a.decisionRetrier(now, &task)
 	for _, c := range due {
+		task = c.Task
+		key, inputs := decisionRetryKey(c), c.DefaultOption().Action
+		if _, ok, err := r.Due(key, inputs); err != nil || !ok {
+			errs = append(errs, err)
+			continue
+		}
 		// Claim it first, under the lock: another process expiring the same
 		// card, or the owner answering it meanwhile, means this one is not
 		// ours to run (#794).
@@ -456,6 +463,11 @@ func (a *App) ExpireDecisions(now time.Time, run func(DecisionCard, DecisionOpti
 		err = run(c, opt)
 		if err != nil {
 			errs = append(errs, a.unclaimDecision(c.ID))
+		}
+		if err != nil {
+			if _, rerr := r.Fail(key, fmt.Sprintf("decision %s's default %q", c.ID, opt.Action), inputs, err); rerr != nil {
+				errs = append(errs, rerr)
+			}
 		}
 		if until, ok := forge.RateLimitUntil(err); ok {
 			// GitHub's quota is spent: a wait, not a failure (#764).
@@ -485,6 +497,7 @@ func (a *App) ExpireDecisions(now time.Time, run func(DecisionCard, DecisionOpti
 			errs = append(errs, err)
 			continue
 		}
+		errs = append(errs, r.Succeed(key))
 		if closed {
 			a.Store.Event(c.Task, EventDecisionDefault, fmt.Sprintf("%s: option %d (%s) after %s", c.ID, c.Default, opt.Action, fmtDuration(c.Timeout)))
 			done = append(done, c)
@@ -507,9 +520,6 @@ func (a *App) defaultFailed(c DecisionCard, opt DecisionOption, ferr error, now 
 			o.Attempts++
 			changed = o.LastError != msg
 			o.LastError = msg
-			if o.Attempts >= maxDefaultAttempts {
-				o.Answer, o.By, o.Closed = c.Default, DecidedDefaultFailed, now.UTC()
-			}
 			(*cs)[i], card = o, o
 			return nil
 		}
@@ -523,11 +533,22 @@ func (a *App) defaultFailed(c DecisionCard, opt DecisionOption, ferr error, now 
 		a.Store.Event(c.Task, EventDecisionDefaultFailed, c.ID+": "+msg)
 		out = fmt.Errorf("decision %s: default %q: %w", c.ID, opt.Action, ferr)
 	}
-	if card.By == DecidedDefaultFailed {
-		a.Store.Event(c.Task, EventDecisionGaveUp, c.ID+": "+msg)
-		out = errors.Join(out, a.Notify(OrchestratorID, store.NoticeAction, card.Line()))
-	}
 	return out
+}
+
+// decisionRetryKey is the retry key of c's default.
+func decisionRetryKey(c DecisionCard) string { return "decision:" + c.ID }
+
+// decisionRetrier is the retry policy over cards' defaults at now; an
+// escalation is a retry_escalated event and an orchestrator notice.
+// task names the card's task when it escalates.
+func (a *App) decisionRetrier(now time.Time, task *string) *retry.Retrier {
+	return &retry.Retrier{Store: a.Store, Now: func() time.Time { return now }, Escalate: func(at retry.Attempt) {
+		id := strings.TrimPrefix(at.Key, "decision:")
+		a.Store.Event(*task, retry.EventEscalated, at.Kind+": "+oneLine(at.LastErr))
+		_ = a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf("Decision %s: nobody answered and its default failed %d times the same way (%s). Saddle keeps retrying it every %s; fix the cause or answer the card.",
+			id, at.N, oneLine(at.LastErr), fmtDuration(retry.SlowCadence())))
+	}}
 }
 
 // claimDecision claims open card id's default for this run at now. It

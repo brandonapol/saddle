@@ -47,9 +47,8 @@ type QueueEntry struct {
 
 // AutoMergeState is the auto-merge toggle and its holds.
 type AutoMergeState struct {
-	On      bool     `json:"on"`
-	Stopped string   `json:"stopped,omitempty"`
-	Holds   []string `json:"holds,omitempty"`
+	On    bool     `json:"on"`
+	Holds []string `json:"holds,omitempty"`
 }
 
 // ConcurrencyState is the bots limit; Runtime means it overrides config.
@@ -146,7 +145,7 @@ func (s AppSource) State() (State, error) {
 		}
 	}
 	if m, err := a.AutomergeState(); err == nil {
-		st.AutoMerge = AutoMergeState{On: m.Enabled, Stopped: m.Stopped, Holds: m.Holds}
+		st.AutoMerge = AutoMergeState{On: m.Enabled, Holds: m.Holds}
 	} else {
 		return st, err
 	}

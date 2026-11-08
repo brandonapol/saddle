@@ -730,28 +730,6 @@ func TestHoldOrOffDuringCheckPreventsMerge(t *testing.T) {
 	}
 }
 
-// A stop cleared by `on` while a check runs stays cleared.
-func TestOnDuringCheckClearsStop(t *testing.T) {
-	r := newRig(t, "", "t1")
-	r.gh.prs["pr/t1"].Checks = ChecksPending
-	r.on(t)
-	s, _ := Load(r.w.Path)
-	s.Stopped = "merging pr/x failed"
-	if err := s.Save(r.w.Path); err != nil {
-		t.Fatal(err)
-	}
-	r.gh.onPR = func(string) {
-		r.gh.onPR = nil
-		if err := r.w.SetEnabled(true); err != nil {
-			t.Error(err)
-		}
-	}
-	check(t, r.w)
-	if saved, _ := r.w.Status(); saved.Stopped != "" {
-		t.Fatalf("stop came back: %q", saved.Stopped)
-	}
-}
-
 // #680: one transient restack failure doesn't turn automerge off; the
 // restack is retried and the watcher keeps going.
 func TestRetriesRestackAfterTransientFailure(t *testing.T) {
@@ -765,8 +743,8 @@ func TestRetriesRestackAfterTransientFailure(t *testing.T) {
 		return r.retarget()
 	}
 	st := check(t, r.w)
-	if st.Stopped != "" || r.restacks != 2 {
-		t.Fatalf("stopped = %q after %d restacks", st.Stopped, r.restacks)
+	if !st.Enabled || r.restacks != 2 {
+		t.Fatalf("enabled = %v after %d restacks", st.Enabled, r.restacks)
 	}
 }
 
@@ -785,14 +763,14 @@ func TestRateLimitedRestackDoesNotStop(t *testing.T) {
 		return r.retarget()
 	}
 	st := check(t, r.w)
-	if st.Stopped != "" {
-		t.Fatalf("a rate limit stopped automerge: %q", st.Stopped)
+	if !st.Enabled {
+		t.Fatal("a rate limit turned automerge off")
 	}
 	limited = false
 	c.add(time.Minute)
 	check(t, r.w) // the deferred restack
 	check(t, r.w) // t2, now retargeted
-	if r.restacks < 2 || st.Stopped != "" {
+	if r.restacks < 2 {
 		t.Fatalf("restack not retried on the next tick: %d", r.restacks)
 	}
 	if len(r.gh.merged) != 2 {

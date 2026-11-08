@@ -239,7 +239,7 @@ func actionTools(env actEnv) []toolDef {
 					args := map[string]any{"action": in.Action}
 					switch in.Action {
 					case "on":
-						return st.AutoMerge.On && st.AutoMerge.Stopped == "", args, nil
+						return st.AutoMerge.On, args, nil
 					case "off":
 						return !st.AutoMerge.On, args, nil
 					case "hold", "release":

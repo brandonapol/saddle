@@ -55,6 +55,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/forge"
+	"github.com/brandonapol/saddle/internal/retry"
 )
 
 // NeedsHuman is the label the stack sentinel puts on PRs a human must decide.
@@ -187,9 +188,8 @@ type Stack struct {
 // Status is the watcher's state and what it would do.
 type Status struct {
 	Enabled bool   `json:"enabled"`
-	Source  string `json:"source"`            // config or runtime
-	Stopped string `json:"stopped,omitempty"` // never set since #838; kept so old readers parse
-	Busy    bool   `json:"busy,omitempty"`    // the train held its lock; nothing was checked
+	Source  string `json:"source"`         // config or runtime
+	Busy    bool   `json:"busy,omitempty"` // the train held its lock; nothing was checked
 	// BusySince is when the watcher first found the lock held in a row of busy ticks.
 	BusySince time.Time `json:"busy_since,omitzero"`
 	Holds     []string  `json:"holds,omitempty"`
@@ -204,20 +204,15 @@ type Status struct {
 type State struct {
 	Enabled *bool    `json:"enabled,omitempty"` // runtime override; nil follows config
 	Holds   []string `json:"holds,omitempty"`   // held tasks or PRs; any one holds its stack
-	// Stopped is the latch older saddles set after a failure. A check
-	// clears it; nothing sets it any more (#838).
-	Stopped string `json:"stopped,omitempty"`
 	// RestackPending is the PR merged whose restack hasn't succeeded yet;
 	// the next ticks retry it before they merge anything else.
 	RestackPending string `json:"restack_pending,omitempty"`
 	// MergePending is the PR GitHub accepted a merge of but hasn't finished
 	// (merge-async), MergePendingTask its task and MergePendingAt when.
-	MergePending     string    `json:"merge_pending,omitempty"`
-	MergePendingTask string    `json:"merge_pending_task,omitempty"`
-	MergePendingAt   time.Time `json:"merge_pending_at,omitzero"`
-	// Attempts are the failed actions backing off, by key (retry.go).
-	Attempts map[string]Attempt `json:"attempts,omitempty"`
-	Behind   map[string]int     `json:"behind,omitempty"` // held stacks already flagged behind
+	MergePending     string         `json:"merge_pending,omitempty"`
+	MergePendingTask string         `json:"merge_pending_task,omitempty"`
+	MergePendingAt   time.Time      `json:"merge_pending_at,omitzero"`
+	Behind           map[string]int `json:"behind,omitempty"` // held stacks already flagged behind
 	// Logged is the last refusal or wait logged per PR, so a reason is
 	// logged once per change even across restarts.
 	Logged map[string]string `json:"logged,omitempty"`
@@ -322,8 +317,12 @@ type Watcher struct {
 	QuietAfter time.Duration
 	MaxPollGap time.Duration
 	Now        func() time.Time
+	// Attempts keeps the failed actions backing off (retry.go): state.db's
+	// retry_attempts table. nil keeps them in memory.
+	Attempts retry.Store
 
-	poll pollCache
+	poll       pollCache
+	escalating string // the task an escalation names, while failed runs
 }
 
 func (w *Watcher) interval() time.Duration {
@@ -374,20 +373,15 @@ func (w *Watcher) enabled(s State) (bool, string) {
 	return w.Default, SourceConfig
 }
 
-// SetEnabled turns auto-merge on or off at runtime, overriding config. On
-// also clears a stop after a failure.
+// SetEnabled turns auto-merge on or off at runtime, overriding config.
 func (w *Watcher) SetEnabled(on bool) error {
 	why := "off"
+	if on {
+		why = "on"
+	}
 	if _, err := update(w.Path, func(s *State) error {
 		s.Enabled = &on
-		if on {
-			why = "on"
-			if s.Stopped != "" {
-				why += "; cleared the stop after: " + s.Stopped
-			}
-			s.Stopped = ""
-		}
-		s.Last.Enabled, s.Last.Source, s.Last.Stopped = on, SourceRuntime, s.Stopped
+		s.Last.Enabled, s.Last.Source = on, SourceRuntime
 		return nil
 	}); err != nil {
 		return err
@@ -454,7 +448,7 @@ func (w *Watcher) Status() (Status, error) {
 	}
 	st := s.Last
 	st.Enabled, st.Source = w.enabled(s)
-	st.Stopped, st.Holds = s.Stopped, s.Holds
+	st.Holds = s.Holds
 	return st, nil
 }
 
@@ -546,12 +540,12 @@ func (w *Watcher) retrying(s *State, stacks []Stack) {
 			continue
 		}
 		if x.Ready {
-			if why := w.backingOff(s, mergeKey(bottom.PR), bottom.head); why != "" {
+			if why := w.backingOff(mergeKey(bottom.PR), bottom.head); why != "" {
 				x.Ready, x.Why, x.wait = false, why, true
 			}
 		}
 		if x.Collapse != "" {
-			if why := w.backingOff(s, collapseKey(x.ID), bottom.head); why != "" {
+			if why := w.backingOff(collapseKey(x.ID), bottom.head); why != "" {
 				x.Collapse = ""
 				x.Why += "; collapse " + why
 			}
@@ -864,10 +858,6 @@ func (w *Watcher) Check() (Status, error) {
 	if s, err = Load(w.Path); err != nil { // what changed while GitHub was read
 		return Status{}, err
 	}
-	if s.Stopped != "" {
-		w.event("", EventToggle, "cleared an old stop; auto-merge no longer latches after a failure: "+s.Stopped)
-		s.Stopped = ""
-	}
 	if s.MergePending != "" && !w.settlePending(&s, nodes) {
 		s.MergePending, s.MergePendingTask, s.MergePendingAt = "", "", time.Time{}
 	}
@@ -880,7 +870,7 @@ func (w *Watcher) Check() (Status, error) {
 			return w.record(s, &st)
 		}
 		if s.RestackPending != "" {
-			if w.backingOff(&s, restackKey(s.RestackPending), "") == "" {
+			if w.backingOff(restackKey(s.RestackPending), "") == "" {
 				release() // restack takes the train lock itself
 				if pr := s.RestackPending; w.finishRestack(&s) {
 					w.notify(false, fmt.Sprintf("Restacked the rest of the stack after merging %s.", pr))
@@ -927,18 +917,16 @@ func (w *Watcher) settlePending(s *State, nodes []Node) bool {
 }
 
 // record saves a check: the fields a check owns (Behind, Logged, Idle and
-// IdleAt, the pending merge and restack, the attempts, and Last) merged into
-// the file as it is now, with Last's toggle and holds taken from it. It
-// clears an old stop.
+// IdleAt, the pending merge and restack, and Last) merged into the file as
+// it is now, with Last's toggle and holds taken from it.
 func (w *Watcher) record(s State, st *Status) (Status, error) {
 	var idle func()
 	_, err := update(w.Path, func(cur *State) error {
 		cur.Behind, cur.Logged, cur.TierNoticed = s.Behind, s.Logged, s.TierNoticed
-		cur.Attempts, cur.RestackPending = s.Attempts, s.RestackPending
+		cur.RestackPending = s.RestackPending
 		cur.MergePending, cur.MergePendingTask, cur.MergePendingAt = s.MergePending, s.MergePendingTask, s.MergePendingAt
-		cur.Stopped = ""
 		st.Enabled, st.Source = w.enabled(*cur)
-		st.Stopped, st.Holds = "", cur.Holds
+		st.Holds = cur.Holds
 		holdStacks(st, cur.Holds)
 		w.explain(st, st.Checked, st.Merged)
 		cur.Idle, cur.IdleAt = s.Idle, s.IdleAt
@@ -1041,27 +1029,33 @@ func (w *Watcher) merge(s *State, st *Status, stack Stack) {
 	what := fmt.Sprintf("merging %s (%s)", n.PR, n.Task)
 	method, err := w.GH.MergeMethod()
 	if err != nil {
-		w.failed(s, key, n.Task, n.head, what+": reading the repo's merge method", err)
+		w.failed(key, n.Task, n.head, what+": reading the repo's merge method", err)
 		return
 	}
 	if why := w.vetoed(stack); why != "" {
 		w.event(n.Task, EventRefused, n.PR+": "+why)
 		return
 	}
-	err = w.GH.Merge(n.PR, method, n.head)
+	merge := w.GH.Merge
+	if a, ok := w.attempt(key, n.head); ok && a.Outcome == retry.Refused && a.Reason == forge.StackedNeedsAsyncMerge.String() {
+		if am, ok := w.GH.(asyncMerger); ok {
+			merge = am.MergeAsync // GitHub said this PR merges only that way
+		}
+	}
+	err = merge(n.PR, method, n.head)
 	switch {
 	case errors.Is(err, forge.ErrMergePending):
-		w.succeeded(s, key)
+		w.succeeded(key)
 		s.MergePending, s.MergePendingTask, s.MergePendingAt = n.PR, n.Task, w.now()
 		w.resetPolls()
 		delete(s.Logged, n.PR)
 		w.event(n.Task, EventWaiting, fmt.Sprintf("%s by %s: GitHub accepted the merge and is finishing it; restack follows once it shows merged", n.PR, method))
 		return
 	case err != nil:
-		w.failed(s, key, n.Task, n.head, what, err)
+		w.failed(key, n.Task, n.head, what, err)
 		return
 	}
-	w.succeeded(s, key)
+	w.succeeded(key)
 	st.Merged = n.PR
 	w.resetPolls()
 	w.event(n.Task, EventMerged, fmt.Sprintf("%s by %s: checks %s, mergeable, CLEAN", n.PR, method, n.Checks))
@@ -1082,7 +1076,7 @@ func (w *Watcher) restackRetry() error {
 	}
 	err := w.Restack()
 	for _, d := range backoff {
-		if err == nil || rateLimited(err) {
+		if err == nil || errors.Is(err, forge.ErrRateLimited) {
 			return err
 		}
 		time.Sleep(d)
@@ -1096,10 +1090,10 @@ func (w *Watcher) restackRetry() error {
 func (w *Watcher) finishRestack(s *State) bool {
 	pr := s.RestackPending
 	if err := w.restackRetry(); err != nil {
-		w.failed(s, restackKey(pr), "", "", "restack after merging "+pr, err)
+		w.failed(restackKey(pr), "", "", "restack after merging "+pr, err)
 		return false
 	}
-	w.succeeded(s, restackKey(pr))
+	w.succeeded(restackKey(pr))
 	s.RestackPending = ""
 	return true
 }
@@ -1115,10 +1109,10 @@ func (w *Watcher) collapse(s *State, st *Status, stack Stack) {
 	key := collapseKey(stack.ID)
 	pr, err := w.Collapse(stack.ID)
 	if err != nil {
-		w.failed(s, key, n.Task, n.head, fmt.Sprintf("collapsing stack %s (red %s) into %s", stack.ID, n.PR, stack.Collapse), err)
+		w.failed(key, n.Task, n.head, fmt.Sprintf("collapsing stack %s (red %s) into %s", stack.ID, n.PR, stack.Collapse), err)
 		return
 	}
-	w.succeeded(s, key)
+	w.succeeded(key)
 	w.resetPolls()
 	if pr == "" {
 		return

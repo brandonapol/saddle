@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/brandonapol/saddle/internal/retry"
 )
 
 // collapseRig is a two-PR stack, t1 then t2, with t1 red from a flaky test
@@ -87,9 +89,8 @@ func TestCollapseNotTried(t *testing.T) {
 		{"pending bottom", nil, func(c *collapseRig) { c.gh.prs["pr/t1"].Checks = ChecksPending }},
 		{"no green PR above", nil, func(c *collapseRig) { c.gh.prs["pr/t2"].Checks = ChecksPending }},
 		{"backing off", nil, func(c *collapseRig) {
-			s, _ := Load(c.w.Path)
-			s.Attempts = map[string]Attempt{collapseKey("t1"): {N: 1, Head: "sha-t1", NextAt: time.Now().Add(time.Hour), LastErr: "earlier failure"}}
-			_ = s.Save(c.w.Path)
+			c.w.Attempts = retry.NewMemStore()
+			_ = c.w.Attempts.PutRetryAttempt(retry.Attempt{Key: collapseKey("t1"), N: 1, Tries: 1, Inputs: "sha-t1", NextAt: time.Now().Add(time.Hour), LastErr: "earlier failure"})
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -149,7 +150,7 @@ func TestCollapseDeclined(t *testing.T) {
 	c.result = ""
 	c.on(t)
 	st := check(t, c.w)
-	if len(c.calls) != 1 || st.Merged != "" || st.Stopped != "" || slices.Contains(c.kinds(), EventCollapsed) {
+	if len(c.calls) != 1 || st.Merged != "" || slices.Contains(c.kinds(), EventCollapsed) {
 		t.Fatalf("declined collapse: calls %v status %+v events %v", c.calls, st, c.kinds())
 	}
 }
@@ -161,8 +162,8 @@ func TestCollapseFailureRetries(t *testing.T) {
 	c.err = errors.New("CI on the combined head is red")
 	c.on(t)
 	st := check(t, c.w)
-	if st.Stopped != "" || !slices.Contains(c.kinds(), EventFailed) {
-		t.Fatalf("stopped = %q events %v", st.Stopped, c.kinds())
+	if !st.Enabled || !slices.Contains(c.kinds(), EventFailed) {
+		t.Fatalf("enabled = %v events %v", st.Enabled, c.kinds())
 	}
 	check(t, c.w)
 	if len(c.calls) != 1 {

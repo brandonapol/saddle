@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/brandonapol/saddle/internal/retry"
 )
 
 // fakeBlockerGH is GitHub's blocker issues in memory.
@@ -324,5 +326,29 @@ func TestFileBlockersCommentsStallRouted(t *testing.T) {
 	must(t, err)
 	if len(g.issues) != 1 || len(g.comments[g.issues[0].Number]) != 1 {
 		t.Errorf("unrelated route-around touched issues: %+v", g.comments)
+	}
+}
+
+// #826: an escalated retry attempt is filed as a blocker issue; the same
+// action and error again comments on it.
+func TestFileBlockersFilesRetryEscalation(t *testing.T) {
+	t.Parallel()
+	f, g := blockerFiler(t)
+	a := f.App
+	ctx := context.Background()
+	_, err := f.FileBlockers(ctx) // starts the cursor
+	must(t, err)
+	a.Store.Event("t1", retry.EventEscalated, "merging pr/12 (t1): required review missing")
+	res, err := f.FileBlockers(ctx)
+	must(t, err)
+	if len(res) != 1 || !res[0].Created || len(g.issues) != 1 {
+		t.Fatalf("sweep: %+v, issues %d", res, len(g.issues))
+	}
+	if is := g.issues[0]; !strings.Contains(is.Title, "required review missing") || !strings.Contains(is.Body, "keeps retrying") {
+		t.Fatalf("issue = %q\n%s", is.Title, is.Body)
+	}
+	a.Store.Event("t1", retry.EventEscalated, "merging pr/12 (t1): required review missing")
+	if res, err = f.FileBlockers(ctx); err != nil || len(res) != 1 || res[0].Created {
+		t.Fatalf("second escalation: %+v %v", res, err)
 	}
 }

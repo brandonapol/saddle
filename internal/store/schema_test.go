@@ -134,7 +134,8 @@ func TestMigrationIndexesEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`DROP INDEX events_kind_task; PRAGMA user_version = ` + fmt.Sprint(len(migrations)-1)); err != nil {
+	index := slices.IndexFunc(migrations, func(m string) bool { return strings.Contains(m, "events_kind_task") })
+	if _, err := s.db.Exec(`DROP INDEX events_kind_task; PRAGMA user_version = ` + fmt.Sprint(index)); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Close()

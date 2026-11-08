@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/brandonapol/saddle/internal/forge"
+	"github.com/brandonapol/saddle/internal/retry"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -70,11 +71,8 @@ func TestStallRouteAroundIndependentLayerMerges(t *testing.T) {
 	w := a.NewAutomerge(gh)
 	must(t, w.SetEnabled(true))
 	for range 2 {
-		st, err := w.Check()
+		_, err := w.Check()
 		must(t, err)
-		if st.Stopped != "" {
-			t.Fatalf("automerge stopped: %s", st.Stopped)
-		}
 	}
 	if !slices.Equal(gh.order, []string{"t2"}) {
 		t.Fatalf("merged %v, want t2 only", gh.order)
@@ -304,45 +302,59 @@ func TestRouteAroundStuckTruncatesWhenRedDependsOnBelow(t *testing.T) {
 	}
 }
 
-// #766: a default that keeps failing the same way is tried 3 times, alarms
-// once, then closes as default_failed with one blocker event, instead of
-// failing every sentinel cycle forever.
-func TestExpireDecisionsGivesUpAfterThreeDeterministicFailures(t *testing.T) {
+// #826 (was #766's give-up): a default that keeps failing the same way
+// backs off, alarms once per new error, escalates exactly once after three
+// tries (a retry_escalated event the blocker sweep files, and a notice),
+// and keeps retrying at the slow cadence with the card left open, so it
+// still runs once the cause is fixed.
+func TestExpireDecisionsEscalatesOnceAndKeepsRetrying(t *testing.T) {
 	t.Parallel()
 	a, _ := setup(t)
 	now := time.Now().UTC()
 	c := testCard("stuck-stack:t1|ci-red")
 	c.Opened = now
 	must(t, a.OpenDecision(c))
-	fail := func(DecisionCard, DecisionOption) error { return errors.New("t2's own commits don't apply to main") }
+	runs := 0
+	fail := func(DecisionCard, DecisionOption) error {
+		runs++
+		return errors.New("t2's own commits don't apply to main")
+	}
 	var alarms int
-	for i := range 5 {
-		_, err := a.ExpireDecisions(now.Add(time.Hour+time.Duration(i)*time.Minute), fail)
-		if err != nil {
+	at := now.Add(time.Hour)
+	for range 6 {
+		if _, err := a.ExpireDecisions(at, fail); err != nil {
 			alarms++
 		}
+		at = at.Add(retry.SlowCadence())
 	}
-	if alarms != 1 {
-		t.Fatalf("alarmed %d times, want once for the one failure", alarms)
+	if alarms != 1 || runs != 6 {
+		t.Fatalf("alarmed %d times over %d runs, want once over 6", alarms, runs)
+	}
+	// Inside the backoff it isn't run again.
+	if _, _ = a.ExpireDecisions(at.Add(-retry.SlowCadence()+time.Minute), fail); runs != 6 {
+		t.Fatalf("ran inside the backoff: %d", runs)
 	}
 	cs, err := a.Decisions()
 	must(t, err)
-	if len(cs) != 1 || cs[0].Open() || cs[0].By != DecidedDefaultFailed || cs[0].Attempts != 3 || !strings.Contains(cs[0].LastError, "don't apply") {
-		t.Fatalf("cards = %+v, want it closed as default_failed after 3 attempts", cs)
+	if len(cs) != 1 || !cs[0].Open() || cs[0].Attempts != 6 || !strings.Contains(cs[0].LastError, "don't apply") {
+		t.Fatalf("cards = %+v, want it open after 6 failed tries", cs)
 	}
 	es, err := a.Store.Events(400)
 	must(t, err)
-	var gaveUp []store.Event
+	var escalated []store.Event
 	for _, e := range es {
-		if e.Kind == EventDecisionGaveUp {
-			gaveUp = append(gaveUp, e)
+		if e.Kind == retry.EventEscalated {
+			escalated = append(escalated, e)
 		}
 	}
-	if len(gaveUp) != 1 {
-		t.Fatalf("gave-up events = %+v, want exactly one", gaveUp)
+	if len(escalated) != 1 {
+		t.Fatalf("escalation events = %+v, want exactly one", escalated)
 	}
-	if b, ok := a.blockerFromEvent(gaveUp[0]); !ok || b.Kind != BlockerDecisionDefault {
-		t.Fatalf("blocker = %+v %v, want a decision-default blocker filed", b, ok)
+	if b, ok := a.blockerFromEvent(escalated[0]); !ok || b.Kind != BlockerRetryEscalated || !strings.Contains(b.Subject, "don't apply") {
+		t.Fatalf("blocker = %+v %v, want a retry-escalated blocker", b, ok)
+	}
+	if got, err := a.ExpireDecisions(at, func(DecisionCard, DecisionOption) error { return nil }); err != nil || len(got) != 1 {
+		t.Fatalf("fixed default: closed %+v, err %v; want it run and closed", got, err)
 	}
 }
 

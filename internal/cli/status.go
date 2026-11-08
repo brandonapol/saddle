@@ -81,8 +81,6 @@ func loadSegment(a *app.App, now time.Time) (segment, error) {
 		return s, err
 	}
 	switch {
-	case am.Stopped != "":
-		s.AutoMerge = "stopped"
 	case am.Enabled:
 		s.AutoMerge = "on"
 	default:
@@ -124,9 +122,6 @@ func (s segment) render(color bool, width int) string {
 	}
 	if s.NeedsYou > 0 {
 		parts[1].color = "red"
-	}
-	if s.AutoMerge == "stopped" {
-		parts[3].color = "yellow"
 	}
 	switch s.Usage {
 	case usage.Warn:

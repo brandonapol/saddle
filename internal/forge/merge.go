@@ -60,6 +60,13 @@ func (g *GitHub) sleep(d time.Duration) {
 	time.Sleep(d)
 }
 
+// MergePRAsync merges ref through the async merge API without trying gh pr
+// merge first, for a caller GitHub already told that ref merges only that
+// way (forge.StackedNeedsAsyncMerge, #826). Outcomes are MergePR's.
+func (g *GitHub) MergePRAsync(ctx context.Context, ref, method, head string) error {
+	return g.mergeAsync(ctx, ref, method, head)
+}
+
 // mergeAsync merges ref with PUT pulls/{n}/merge-async, the only merge
 // GitHub accepts for a PR in a native stack, then reads the PR's state until
 // it shows MERGED. head, when set, is passed as sha so GitHub merges only

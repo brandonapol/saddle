@@ -1,8 +1,10 @@
 package automerge
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -41,9 +43,6 @@ func TestMergeFailureRetriesWithoutLatch(t *testing.T) {
 	r.on(t)
 	r.gh.mergeErr = errors.New("must be merged using the asynchronous merge REST API")
 	st := check(t, r.w)
-	if st.Stopped != "" {
-		t.Fatalf("stopped = %q; a failure must not latch", st.Stopped)
-	}
 	if st.Stacks[0].Ready || !strings.Contains(st.Stacks[0].Why, "retrying") {
 		t.Fatalf("stack = %+v, want it backing off with the reason", st.Stacks[0])
 	}
@@ -208,8 +207,8 @@ func TestRestackFailureRetries(t *testing.T) {
 	r.on(t)
 	r.restack = func() error { return errors.New("stale info") }
 	st := check(t, r.w)
-	if st.Stopped != "" || len(r.gh.merged) != 1 {
-		t.Fatalf("stopped %q merged %v", st.Stopped, r.gh.merged)
+	if !st.Enabled || len(r.gh.merged) != 1 {
+		t.Fatalf("enabled %v merged %v", st.Enabled, r.gh.merged)
 	}
 	r.restack = r.retarget
 	c.add(time.Hour)
@@ -225,11 +224,16 @@ func TestRestackFailureRetries(t *testing.T) {
 func TestLegacyStopIsCleared(t *testing.T) {
 	r := newRig(t, "", "t1")
 	r.on(t)
-	if _, err := update(r.w.Path, func(s *State) error { s.Stopped = "merging pr/x failed"; return nil }); err != nil {
+	b, err := os.ReadFile(r.w.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = bytes.Replace(b, []byte("{"), []byte(`{"stopped": "merging pr/x failed", "attempts": {"merge:pr/t1": {"n": 9}},`), 1)
+	if err := os.WriteFile(r.w.Path, b, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	st := check(t, r.w)
-	if st.Stopped != "" || st.Merged != "pr/t1" {
+	if st.Merged != "pr/t1" {
 		t.Fatalf("legacy stop still latches: %+v", st)
 	}
 }
@@ -254,5 +258,67 @@ func TestRemoteMovedRestackIsTransient(t *testing.T) {
 	}
 	if transient(errors.New("required review missing")) {
 		t.Fatal("a review failure is transient")
+	}
+}
+
+// asyncGH is a forge whose plain merge GitHub refuses for a PR in a native
+// stack; only its async merge path merges.
+type asyncGH struct {
+	*fakeGH
+	async []string
+}
+
+func (a *asyncGH) Merge(url, method, head string) error {
+	return &forge.RefusedError{Reason: forge.StackedNeedsAsyncMerge,
+		Err: errors.New("This pull request is part of a stack and must be merged using the asynchronous merge REST API")}
+}
+
+func (a *asyncGH) MergeAsync(url, method, head string) error {
+	a.async = append(a.async, url)
+	return a.fakeGH.Merge(url, method, head)
+}
+
+// #826, PR #811's case: GH.Merge returns the async-merge refusal. Auto-merge
+// doesn't stop or escalate, and the next tick merges through the async path.
+func TestAsyncMergeRefusalRoutesToAsyncPath(t *testing.T) {
+	r := newRig(t, "", "t1")
+	withClock(r)
+	gh := &asyncGH{fakeGH: r.gh}
+	r.w.GH = gh
+	r.on(t)
+	st := check(t, r.w)
+	if !st.Enabled || st.Merged != "" || len(gh.async) != 0 {
+		t.Fatalf("first tick = %+v async %v", st, gh.async)
+	}
+	st = check(t, r.w) // no clock change: a routed refusal is due at once
+	if st.Merged != "pr/t1" || len(gh.async) != 1 {
+		t.Fatalf("next tick didn't use the async path: %+v async %v", st, gh.async)
+	}
+	if actions(r.notices) != 0 {
+		t.Fatalf("a routed refusal escalated: %+v", r.notices)
+	}
+}
+
+// The escalation is also an event the blocker sweep files an issue for.
+func TestEscalationWritesEvent(t *testing.T) {
+	r := newRig(t, "", "t1")
+	c := withClock(r)
+	r.on(t)
+	r.gh.mergeErr = errors.New("required review missing")
+	for range 5 {
+		check(t, r.w)
+		c.add(3 * time.Hour)
+	}
+	n := 0
+	for _, e := range r.events {
+		if e.kind == EventEscalated {
+			n++
+			if e.task != "t1" || !strings.Contains(e.data, "required review missing") {
+				t.Fatalf("escalation event = %+v", e)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d escalation events, want 1", n)
 	}
 }

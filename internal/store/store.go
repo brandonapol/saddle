@@ -180,6 +180,22 @@ CREATE INDEX symbol_claims_path ON symbol_claims(path);
 DELETE FROM train WHERE state IN ('queued', 'conflict', 'test_failed', 'on_hold') AND task IN (SELECT id FROM tasks WHERE status = 'killed');
 `, `
 CREATE INDEX IF NOT EXISTS events_kind_task ON events(kind, task);
+`, `
+CREATE TABLE IF NOT EXISTS retry_attempts(
+  key TEXT PRIMARY KEY,
+  kind TEXT NOT NULL DEFAULT '',
+  outcome TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  n INTEGER NOT NULL DEFAULT 0,
+  tries INTEGER NOT NULL DEFAULT 0,
+  next_at INTEGER NOT NULL DEFAULT 0,
+  first_err TEXT NOT NULL DEFAULT '',
+  last_err TEXT NOT NULL DEFAULT '',
+  sig TEXT NOT NULL DEFAULT '',
+  inputs TEXT NOT NULL DEFAULT '',
+  escalated INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
 `}
 
 // Open opens (creating if needed) the database at path and applies migrations,
