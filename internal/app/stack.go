@@ -132,7 +132,7 @@ func (a *App) restack() (RestackResult, error) {
 		return res, err
 	}
 	if len(all) == 0 {
-		return res, errors.New("nothing has landed yet")
+		return res, a.restackEmpty(&res)
 	}
 	stack := stacked(all)
 	for _, l := range stack {
@@ -782,4 +782,31 @@ func (a *App) republishLayout(rs restackPlan, held map[int]string, info map[stri
 	}
 	a.linkStacks(linked, groups)
 	return nil
+}
+
+// restackEmpty restacks when nothing has landed: integration holds no task's
+// work, so when base already contains it, it fast-forwards onto base. That
+// is what the integration_behind notice asks for after the owner pushes
+// straight to base, and new tasks then start from base's tip (#908).
+func (a *App) restackEmpty(res *RestackResult) error {
+	if !gitx.BranchExists(a.Root, a.Cfg.Integration) {
+		return errors.New("nothing has landed yet")
+	}
+	integ, err := gitx.RevParse(a.Root, a.Cfg.Integration)
+	if err != nil {
+		return err
+	}
+	if integ == res.Base {
+		return errors.New("nothing has landed yet, and " + a.Cfg.Integration + " is already on origin/" + a.Cfg.Base)
+	}
+	if ahead, err := gitx.CommitsBetween(a.Root, res.Base, integ); err != nil {
+		return err
+	} else if ahead > 0 {
+		return fmt.Errorf("nothing has landed yet, but %s has %d commits origin/%s lacks; nothing was moved", a.Cfg.Integration, ahead, a.Cfg.Base)
+	}
+	if err := a.moveStack(nil, integ, res.Base, res); err != nil {
+		return err
+	}
+	return a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf("Nothing has landed yet; moved %s onto origin/%s at %s, so new tasks start from it.",
+		a.Cfg.Integration, a.Cfg.Base, short(res.Base)))
 }
