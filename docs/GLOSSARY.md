@@ -161,6 +161,12 @@ first write. `saddle release [glob]...` gives them back. Files in the config's
 ### concurrency
 `saddle concurrency [N|reset]`: how many agents may run at once.
 
+### config
+`saddle config get|set <key> [value]` (MCP: `config`): reads or sets one dotted
+setting in `.saddle/config.toml`, keeping its comments, e.g. `saddle config set
+adapters.grok.disabled true`. A running saddle applies adapter and train
+settings on its next spawn or land.
+
 ### conflict
 A task status: its branch came back from the merge train with a conflict (or a
 failed gate) and the agent must `saddle sync` and resolve it. As a train entry

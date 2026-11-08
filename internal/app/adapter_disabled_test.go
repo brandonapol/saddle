@@ -134,3 +134,15 @@ func TestAutopilotSkipsDisabledProvider(t *testing.T) {
 		t.Fatalf("autopilot routes to %q", ad)
 	}
 }
+
+// #908: the owner says "do not use grok" mid-session. Disabling it in
+// .saddle/config.toml after this saddle opened (a long-lived MCP server or
+// engine) takes effect on the next spawn, without a restart.
+func TestDisableAdapterInConfigAppliesToRunningSaddle(t *testing.T) {
+	a, _ := setup(t)
+	write(t, a.Root, ".saddle/config.toml", "[adapters.grok]\ndisabled = true\n")
+	_, err := a.Spawn(SpawnReq{Title: "on grok", Adapter: usage.Grok})
+	if err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("spawn on grok after disabling it in config: err = %v", err)
+	}
+}

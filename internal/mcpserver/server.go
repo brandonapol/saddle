@@ -642,6 +642,12 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, AskOut{Owner: owner, Message: "Asked " + owner + "; the answer will arrive as a [saddle] message. Keep working on what you can meanwhile."}, nil
 		})
 
+	mcp.AddTool(s, &mcp.Tool{Name: "config", Description: configDesc},
+		func(_ context.Context, _ *mcp.CallToolRequest, in ConfigIn) (*mcp.CallToolResult, ConfigOut, error) {
+			out, err := configTool(a, task, in)
+			return nil, out, err
+		})
+
 	mcp.AddTool(s, &mcp.Tool{Name: "decisions", Description: decisionsDesc},
 		func(_ context.Context, _ *mcp.CallToolRequest, in DecisionsIn) (*mcp.CallToolResult, DecisionsOut, error) {
 			out, err := decisionsTool(a, task, in)
