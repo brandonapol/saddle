@@ -534,3 +534,38 @@ func TestRunRerunFailedRequeuesChecks(t *testing.T) {
 		t.Fatalf("rerun of an unknown run: exit %d, %q", code, errs)
 	}
 }
+
+// A check belongs to the commit it ran on: once the PR's head moves, it
+// reads pending in pr checks and the rollup, and branch protection waits
+// for it, as on GitHub (#831: a stale red must not be read on a new head).
+func TestChecksBelongToTheirHead(t *testing.T) {
+	f := newFixture(t)
+	f.branch("feat", "a.txt", "a\n")
+	f.must("pr", "create", "--base", "main", "--head", "feat", "--title", "Add a", "--body", "b")
+	head := run(t, f.clone, "git", "rev-parse", "feat")
+	if err := f.gh.Update(func(s *State) error {
+		s.Protected = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.gh.SetChecks(1, Check{Name: "ci", State: Fail, Head: head}); err != nil {
+		t.Fatal(err)
+	}
+	if out, _, code := f.ghRun("pr", "checks", "1"); code == 0 || !strings.Contains(out, `"bucket":"fail"`) {
+		t.Fatalf("checks on the head they ran on: exit %d, %s", code, out)
+	}
+	f.write("a.txt", "a2\n")
+	f.commit("more")
+	run(t, f.clone, "git", "push", "-q", "origin", "feat")
+	if out, _, code := f.ghRun("pr", "checks", "1"); code != exitPending || !strings.Contains(out, `"bucket":"pending"`) {
+		t.Fatalf("a red from the old head shows on the new one: exit %d, %s", code, out)
+	}
+	roll := f.view("1")["statusCheckRollup"].([]any)
+	if st := roll[0].(map[string]any)["status"]; st != "IN_PROGRESS" {
+		t.Fatalf("rollup status = %v, want IN_PROGRESS", st)
+	}
+	if _, errs, code := f.ghRun("pr", "merge", "1", "--squash"); code == 0 || !strings.Contains(errs, "is expected") {
+		t.Fatalf("merged on a stale check: exit %d, %s", code, errs)
+	}
+}

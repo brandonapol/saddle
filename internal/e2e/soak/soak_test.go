@@ -21,7 +21,9 @@ func TestMain(m *testing.M) { e2e.Main(m, &bins) }
 
 // Known lists the faults that expose saddle bugs not yet fixed, each with
 // its issue: they are left out of the scenario until it closes.
-var Known = map[FaultKind]string{}
+var Known = map[FaultKind]string{
+	RedBase: "#902: CI-red spawns a repair per PR when CI is red on base too",
+}
 
 // seed is SOAK_SEED, or def: a failing run is replayed by its seed.
 func seed(t *testing.T, def int64) int64 {

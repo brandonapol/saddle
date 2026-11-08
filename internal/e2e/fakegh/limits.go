@@ -34,18 +34,19 @@ func (c *call) rateLimit(jq string) error {
 }
 
 // requiredChecksPass refuses a merge into a protected default branch while
-// a check its protection requires is failing, pending or missing: the
+// a check its protection requires is failing, pending or missing at head: the
 // refusal, or "".
-func requiredChecksPass(s *State, p *PR) string {
+func requiredChecksPass(s *State, p *PR, head string) string {
 	if !s.Protected || p.Base != s.Default {
 		return ""
 	}
+	cs := p.checksAt(head)
 	for _, name := range s.requiredChecks() {
-		i := slices.IndexFunc(p.Checks, func(ch Check) bool { return ch.Name == name })
+		i := slices.IndexFunc(cs, func(ch Check) bool { return ch.Name == name })
 		switch {
-		case i < 0 || p.Checks[i].State == Pending:
+		case i < 0 || cs[i].State == Pending:
 			return fmt.Sprintf("Required status check %q is expected.", name)
-		case p.Checks[i].State == Fail:
+		case cs[i].State == Fail:
 			return fmt.Sprintf("Required status check %q is failing.", name)
 		}
 	}

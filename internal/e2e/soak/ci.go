@@ -14,22 +14,27 @@ import (
 // CheckName is the soak CI's one required check.
 const CheckName = "ci"
 
-// FlakyReports is how many times a flaky change's CI fails on a head
-// before it passes there.
-const FlakyReports = 2
+// FlakyReports is how many times a flaky change's CI fails, over all its
+// heads, before it passes. A flake is an infrastructure failure GitHub
+// would pass on a rerun, so its log says so.
+const FlakyReports = 1
+
+// FlakyLog is a flaky failure's log: the runner dropped, as when a hosted
+// runner is lost mid-job.
+const FlakyLog = "Error: The hosted runner lost communication with the server."
 
 // CI plays GitHub Actions for the soak: each open PR's head is checked out
 // and built, and its "ci" check set from the build and the red markers.
 // While RedBase is on, every PR is red with main's failure.
 type CI struct {
 	RedBase bool
-	// Flaky reports whether a PR head branch is a flaky change's.
-	Flaky func(branch string) bool
+	// Flaky names the flaky change a PR head branch belongs to, or "".
+	Flaky func(branch string) string
 
 	w      *e2e.World
 	logf   func(string, ...any)
 	graded map[string]string // "pr@head" -> the verdict key last set
-	flakes map[string]int    // "pr@head" -> failed reports so far
+	flakes map[string]int    // flaky change -> failed reports so far
 	tmp    string
 }
 
@@ -63,16 +68,17 @@ func (c *CI) Grade() {
 		verdict := state
 		if c.RedBase {
 			state, log, verdict = fakegh.Fail, "--- FAIL: TestMainIsRed (red on main too)", "redbase"
-		} else if state == fakegh.Pass && c.Flaky != nil && c.Flaky(p.Head) && c.flakes[key] < FlakyReports {
-			c.flakes[key]++
-			state, log = fakegh.Fail, "--- FAIL: TestFlaky (timed out talking to the test server)"
-			verdict = fmt.Sprintf("flake%d", c.flakes[key])
+		} else if fc := c.flaky(p.Head); state == fakegh.Pass && fc != "" && c.flakes[fc] < FlakyReports {
+			c.flakes[fc]++
+			state, log = fakegh.Fail, FlakyLog
+			verdict = fmt.Sprintf("flake%d", c.flakes[fc])
 		}
 		if c.graded[key] == verdict && !c.hasNoCheck(p) {
 			continue
 		}
 		c.graded[key] = verdict
-		reps = append(reps, report{p.Number, fakegh.Check{Name: CheckName, Workflow: "CI", State: state,
+		c.logf("ci: PR #%d (%s) at %.7s: %s %s", p.Number, p.Head, head, state, firstLine(log))
+		reps = append(reps, report{p.Number, fakegh.Check{Name: CheckName, Workflow: "CI", State: state, Head: head,
 			Log: "CI\tgo test\t2026-11-07T10:00:00.0000000Z " + strings.ReplaceAll(strings.TrimSpace(log), "\n", "\nCI\tgo test\t2026-11-07T10:00:00.0000000Z ")}})
 	}
 	if len(reps) == 0 {
@@ -97,6 +103,13 @@ func (c *CI) Grade() {
 	if err != nil {
 		c.logf("ci: %v", err)
 	}
+}
+
+func (c *CI) flaky(branch string) string {
+	if c.Flaky == nil {
+		return ""
+	}
+	return c.Flaky(branch)
 }
 
 func (c *CI) hasNoCheck(p *fakegh.PR) bool {

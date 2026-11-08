@@ -167,19 +167,20 @@ func (r *Run) ready(string) ([]autopilot.Issue, error) {
 	return out, nil
 }
 
-// flaky reports whether branch is a flaky change's task branch.
-func (r *Run) flaky(branch string) bool {
+// flaky names the flaky change whose task branch is branch, or "".
+func (r *Run) flaky(branch string) string {
 	ts, err := r.a.Store.Tasks()
 	if err != nil {
-		return false
+		return ""
 	}
 	for _, t := range ts {
 		if t.Branch == branch {
-			c, ok := r.Sc.ByIssue(t.Issue)
-			return ok && c.Has(Flaky)
+			if c, ok := r.changeOf(t); ok && c.Has(Flaky) {
+				return c.ID
+			}
 		}
 	}
-	return false
+	return ""
 }
 
 // simNow is the run's simulated clock: TickMinutes per tick.
@@ -253,6 +254,12 @@ func (r *Run) Tick() {
 		r.Opt.Logf("tick %d: sentinel: %v", r.tick, err)
 	}
 	lap("sentinel")
+	// The sentinel's stall budget, on the simulated clock: cards whose
+	// budget ran out take their default, as they would unattended.
+	if _, err := r.a.StallTick(r.simNow()); err != nil {
+		r.Opt.Logf("tick %d: stall: %v", r.tick, err)
+	}
+	lap("stall")
 	if st, err := r.a.NewAutomerge(nil).Check(); err != nil {
 		r.Opt.Logf("tick %d: automerge: %v", r.tick, err)
 	} else if st.Merged != "" {
@@ -366,7 +373,7 @@ func (r *Run) settle() {
 
 // hung reports whether t is a killed-worker change still hanging.
 func (r *Run) hung(t store.Task) bool {
-	c, ok := r.Sc.ByIssue(t.Issue)
+	c, ok := r.changeOf(t)
 	if !ok || !c.Has(KilledWorker) {
 		return false
 	}
@@ -374,7 +381,9 @@ func (r *Run) hung(t store.Task) bool {
 	return err != nil
 }
 
-// taskOf is the latest task working on c's issue.
+// taskOf is the latest task autopilot spawned for c: the one titled as
+// its issue. Repairs carry the issue number too, so the title tells them
+// apart.
 func (r *Run) taskOf(c Change) (store.Task, bool) {
 	ts, err := r.a.Store.Tasks()
 	if err != nil {
@@ -383,11 +392,20 @@ func (r *Run) taskOf(c Change) (store.Task, bool) {
 	var best store.Task
 	found := false
 	for _, t := range ts {
-		if t.Role == store.RoleWorker && t.Issue == c.Issue {
+		if t.Role == store.RoleWorker && t.Title == IssueTitle(c) {
 			best, found = t, true
 		}
 	}
 	return best, found
+}
+
+// changeOf is the change task t was spawned for, or false for a repair.
+func (r *Run) changeOf(t store.Task) (Change, bool) {
+	c, ok := r.Sc.ByIssue(t.Issue)
+	if !ok || t.Title != IssueTitle(c) {
+		return Change{}, false
+	}
+	return c, true
 }
 
 // settled reports whether every change is terminal.
@@ -518,7 +536,7 @@ func (r *Run) repairs() []Repair {
 		if t.Role != store.RoleWorker {
 			continue
 		}
-		if _, ok := r.Sc.ByIssue(t.Issue); ok {
+		if _, ok := r.changeOf(t); ok {
 			continue
 		}
 		f := fors[t.ID]

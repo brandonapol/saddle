@@ -30,8 +30,8 @@ const (
 	// RedCI: the change's CI goes red (a failing test the local gate
 	// doesn't run), at whatever layer of its stack it sits.
 	RedCI FaultKind = "red_ci"
-	// Flaky: the change's CI fails on its first reports, then passes on the
-	// same head.
+	// Flaky: the change's CI fails once on a lost runner, which GitHub
+	// passes on a rerun.
 	Flaky FaultKind = "flaky"
 	// KilledWorker: the change's agent hangs and its window is killed.
 	KilledWorker FaultKind = "killed_worker"
