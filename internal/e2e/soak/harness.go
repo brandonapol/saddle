@@ -31,7 +31,10 @@ type Options struct {
 	// MaxTicks ends a run that hasn't settled (default 40 + 4 per change).
 	MaxTicks int
 	// Settle is the longest a tick waits for running agents (default 8s).
-	Settle  time.Duration
+	Settle time.Duration
+	// Deadline ends a run that hasn't settled by then (zero: none), so a
+	// stalled soak still reports its outcomes instead of timing out.
+	Deadline time.Time
 	Budgets Budgets
 	// Logf logs progress; nil is quiet.
 	Logf func(format string, args ...any)
@@ -136,6 +139,12 @@ func Start(w *e2e.World, sc Scenario, opt Options) *Run {
 	_, err = r.pilot.SetInfinite(true)
 	must(t, err)
 	opt.Logf("soak: %s", sc)
+	for _, c := range sc.Changes {
+		opt.Logf("soak: %s (#%d) after %v faults %v", c.ID, c.Issue, c.After, c.Faults)
+	}
+	for _, e := range sc.Events {
+		opt.Logf("soak: %s at tick %d for %d", e.Kind, e.At, e.Ticks)
+	}
 	return r
 }
 
@@ -192,6 +201,10 @@ func (r *Run) Drive() Result {
 			}
 		}
 		if r.settled() {
+			break
+		}
+		if !r.Opt.Deadline.IsZero() && time.Now().After(r.Opt.Deadline) {
+			r.Opt.Logf("tick %d: out of time", r.tick)
 			break
 		}
 	}
@@ -385,6 +398,20 @@ func (r *Run) settled() bool {
 		}
 	}
 	return true
+}
+
+// Events is saddle's event log, oldest first, one line each, for a
+// failing run's report.
+func (r *Run) Events() []string {
+	evs, err := r.a.Store.EventsSince(0)
+	if err != nil {
+		return []string{err.Error()}
+	}
+	out := make([]string, 0, len(evs))
+	for _, e := range evs {
+		out = append(out, fmt.Sprintf("%s %s: %s", e.Task, e.Kind, firstLine(e.Data)))
+	}
+	return out
 }
 
 // Result is the run so far.

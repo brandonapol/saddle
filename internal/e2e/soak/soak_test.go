@@ -45,7 +45,11 @@ func soak(t *testing.T, cfg Config, limit time.Duration) {
 	w := e2e.New(t, bins, WorldOptions())
 	t.Cleanup(w.Diagnose)
 	began := time.Now()
-	r := Start(w, sc, Options{Logf: t.Logf})
+	opt := Options{Logf: t.Logf}
+	if d, ok := t.Deadline(); ok {
+		opt.Deadline = d.Add(-90 * time.Second)
+	}
+	r := Start(w, sc, opt)
 	res := r.Drive()
 	took := time.Since(began)
 	for _, s := range res.Ledger.All() {
@@ -55,6 +59,9 @@ func soak(t *testing.T, cfg Config, limit time.Duration) {
 		t.Logf("%s %s: %s %s", o.Change, o.Task, o.State, o.Detail)
 	}
 	if fails := res.Failures(DefaultBudgets); len(fails) > 0 {
+		for _, e := range r.Events() {
+			t.Logf("event %s", e)
+		}
 		b, _ := json.MarshalIndent(sc, "", "  ")
 		t.Fatalf("soak %s failed after %d ticks (replay with SOAK_SEED=%d):\n  %s\nscenario: %s",
 			sc, res.Ticks, sc.Seed, strings.Join(fails, "\n  "), b)

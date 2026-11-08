@@ -196,6 +196,15 @@ test/e2e: ## Run the end-to-end journeys (RUN=Journey to pick some; needs tmux)
 test/contract: ## Run the forge contract suite: every scenario against its recorded fixture and fakegh (#823)
 	$(GO) test $(GO_TAGFLAG) -count=1 -run 'TestContract|TestEveryFixtureHasAScenario|TestRecorderPinsTheCalls' ./internal/forge/contract
 
+.PHONY: test/soak
+test/soak: ## Run the 10-change soak smoke: real saddle, fakegh, fake agents, every fault once (#831; SOAK_SEED=n replays a seed)
+	# The 50-change soak runs nightly: make test/soak/full. Needs tmux.
+	$(GO) test -tags '$(GO_TAGS) e2e' -count=1 -timeout 5m -run 'TestSoakSmoke' ./internal/e2e/soak
+
+.PHONY: test/soak/full
+test/soak/full: ## Run the 50-change soak with a random seed (the nightly's; SOAK_SEED=n replays one)
+	SOAK_FULL=1 $(GO) test -tags '$(GO_TAGS) e2e' -count=1 -timeout 50m -run 'TestSoakFull' -v ./internal/e2e/soak
+
 .PHONY: contract-record
 contract-record: ## Re-record the contract fixtures against a scratch GitHub repo (needs network, GH_TOKEN, SADDLE_CONTRACT_REPO)
 	# Not part of make check: it talks to GitHub. The recorder is #824's canary;
@@ -247,7 +256,7 @@ test/cover: ## Run tests and write coverage.html
 ##@ Code quality
 
 .PHONY: check
-check: check/format check/tidy check/vet $(CHECK_TESTS) test/contract test/scripts check/lint ## Run CI's checks, testing only what changed (CHECK_FULL=1 for all; plugin tests: make test/plugin)
+check: check/format check/tidy check/vet $(CHECK_TESTS) test/contract test/soak test/scripts check/lint ## Run CI's checks, testing only what changed (CHECK_FULL=1 for all; plugin tests: make test/plugin)
 
 .PHONY: check/format
 check/format: ## Fail if any Go file needs gofmt
