@@ -33,6 +33,11 @@ type Config struct {
 	Serial []string `toml:"serial"`
 	// CloseOnLand kills a task's tmux window and removes its worktree once it lands.
 	CloseOnLand bool `toml:"close_on_land"`
+	// LegacyTrain sends done down the legacy merge train (queue, then
+	// `saddle land`) instead of publishing the task's own PR (ADR 0012).
+	// Off by default; only the e2e and soak harnesses set it, for journeys
+	// of the train, until #938 deletes the train and this switch.
+	LegacyTrain bool `toml:"legacy_train"`
 	// Regen lists derived files (go.sum, lockfiles, generated code) the merge
 	// train regenerates instead of text-merging when they conflict.
 	Regen []Regen `toml:"regen"`

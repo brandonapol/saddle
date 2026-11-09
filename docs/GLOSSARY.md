@@ -44,8 +44,11 @@ handoff picks it, and `adapter=` naming it is refused, force or not (#839).
 `saddle status` lists which adapters can run here and which are disabled. See [ARCHITECTURE.md](ARCHITECTURE.md#providers-per-task-choice-and-rotation-321).
 
 ### after
-An edge saying a task builds on another task's work, so prs stacks its PR on
-that task's even when their files don't overlap. Set at spawn (`after`) or
+An edge saying a task builds on another task's work. While that task is
+unmerged, the new task's branch is cut from its branch and its PR targets it
+(ADR 0012, #932); spawn refuses two unmerged *after* tasks, since a branch
+has one base. Once it merges, the base is main again. The legacy prs stacks
+its PR on that task's even when their files don't overlap. Set at spawn (`after`) or
 later with `saddle after <task> <dep>...` (MCP tool `after`); both write
 `.saddle/deps/<task>`. When a layer fails the pre-publish gate on something a
 sibling adds, prs names the probable edge and the command, but never records
@@ -209,9 +212,15 @@ grouped by who fixes each problem.
 
 ### done
 `saddle done`: an agent marks its task finished. The repo's gate (e.g. `make
-check`) must pass, then the task is queued in the merge train. Status `done`
-means queued, not delivered: the work counts as done for the owner only once
-its PR has merged into base (see *delivery*).
+check`) must pass in its worktree; then saddle publishes it (ADR 0012, #933):
+rebases the branch onto its base, refuses if any commit isn't the task's own
+(naming them), pushes it and opens or updates its one PR. The task becomes
+*pr_open*. A rebase conflict goes back to the task's own agent and the task
+stays running. Status `done` now means the gate passed but publishing waits:
+a push or forge failure retried with backoff, or a repo with no remote. It
+counts as done for the owner only once its PR has merged into base (see
+*delivery*). The legacy train path (`App.DoneToTrain`) is no longer reached
+by done and goes with #938.
 
 ### down
 `saddle down`: stops every agent. Running tasks become `paused`; worktrees and
@@ -474,6 +483,18 @@ based on and what its branch holds, found by replaying the layer's commits
 onto that base in a scratch worktree (`openLayout`, `.saddle/layout-*`).
 *Avoid:* "restack" (that moves already-published layers after base moved).
 
+### pr_open
+A task status: `done` published the task (ADR 0012, #933). Its branch was
+rebased onto its base, checked to hold only its own commits (each commit's
+`Saddle-Task` trailer names the task, or no other task's branch has it),
+pushed, and its one PR opened or updated against that base. Claims are
+released. It is not done for the owner until the PR merges (*merged*), and
+it is not finished: a conflict or red CI brings it back to its own branch
+(#936). Calling done again at the same head is a no-op.
+*Avoid:* "landed", "queued" for this.
+*Maps to:* `tasks.status = 'pr_open'`, `tasks.pr`, events `done_pr_opened`,
+`pr_updated`, `publish_noop`.
+
 ### prs
 `saddle prs [--dry-run|--push-only|--gate-only]`: checks each landed layer on
 its PR's base, pushes the branches and opens or updates the stack of PRs in
@@ -674,8 +695,11 @@ ships on its own. Restack drops its commits from integration.
 and tested, bottom first. Off until `[sweeper] enabled = true`.
 
 ### sync
-`saddle sync`: rebases this task's branch onto the integration branch, following
-directory moves. Agents run it after something lands.
+`saddle sync`: fetches and rebases this task's branch onto its base: the
+remote's base branch (`origin/main`), or the branch of the unmerged task it
+runs *after* (ADR 0012, #932). Never the integration branch, so it brings in
+main's new commits and nothing from unmerged tasks. Agents run it after
+something merges, or to fix a conflict done reported.
 
 ### task
 The unit of work: an id (`t7`), a branch `saddle/<id>-<slug>`, a worktree, claims

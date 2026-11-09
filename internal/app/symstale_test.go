@@ -27,6 +27,7 @@ func staleSetup(t *testing.T) (*App, store.Task) {
 	t.Helper()
 	withStaleBudget(t, time.Minute)
 	a, _ := setup(t)
+	a.Cfg.LegacyTrain = true // legacy train behavior; #938 deletes this test with the train
 	a.Cfg.Claims.Granularity = config.GranularitySymbol
 	write(t, a.Root, "pkg/f.go", staleBase)
 	commitAll(t, a.Root, "add pkg")

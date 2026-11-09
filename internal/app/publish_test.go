@@ -44,7 +44,7 @@ func TestPublishLandedTasksAsIndependentPRs(t *testing.T) {
 	commitAll(t, tk.Worktree, "add two\n\nCloses #42")
 	write(t, tk.Worktree, "three.txt", "three\n")
 	commitAll(t, tk.Worktree, "add three")
-	must(t, a.Done(tk.ID, "two and three"))
+	must(t, a.DoneToTrain(tk.ID, "two and three"))
 	if _, err := a.Land(); err != nil {
 		t.Fatal(err)
 	}

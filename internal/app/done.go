@@ -14,13 +14,15 @@ import (
 	"github.com/brandonapol/saddle/internal/store"
 )
 
-// Done marks a task finished and queues its branch in the merge train. It
-// runs the repo's gate inline, however long it takes: the CLI's way. The
-// MCP done tool uses DoneAsync.
+// Done finishes a task and publishes its branch (ADR 0012, #933): once the
+// repo's gate passes in its worktree, the branch is rebased onto its base,
+// checked to hold only the task's own commits, pushed, and its one PR opened
+// or updated. It runs the gate inline, however long it takes: the CLI's
+// way. The MCP done tool uses DoneAsync.
 func (a *App) Done(task, summary string) error {
 	t, err := a.doneReady(task)
 	if errors.Is(err, errNothingToLand) {
-		return a.finishNoChange(t, summary, "its branch has no commits "+a.Cfg.Integration+" lacks")
+		return a.finishNoChange(t, summary, "its branch has no commits "+a.resolveBase(t, false).Onto+" lacks")
 	}
 	if err != nil {
 		return err
@@ -49,6 +51,8 @@ type DoneJob struct {
 	// NoChange is set when the branch had nothing to land, so the task
 	// finished with no change instead of queueing (#452).
 	NoChange bool
+	// PR is the task's PR once done published it inline.
+	PR string
 }
 
 // DoneAsync is done that doesn't hold its caller for the gate (#368). An
@@ -74,11 +78,11 @@ func (a *App) DoneAsync(task, summary string) (DoneJob, error) {
 	g := a.LintGate()
 	state, tree := hooksState(t.Worktree), cleanTree(t.Worktree)
 	if g.Cmd == "" || state == "" || tree == "" || passedLint(state, tree, g) {
-		return DoneJob{}, a.Done(task, summary)
+		return a.doneInline(task, summary)
 	}
 	lock, id, ok, err := takeDoneJob(state, task)
 	if err != nil {
-		return DoneJob{}, a.Done(task, summary)
+		return a.doneInline(task, summary)
 	}
 	if !ok {
 		return DoneJob{ID: id, Running: true, Joined: true}, nil
@@ -92,6 +96,18 @@ func (a *App) DoneAsync(task, summary string) (DoneJob, error) {
 		a.runDoneJob(t, id, tree, summary, since)
 	}()
 	return DoneJob{ID: id, Running: true}, nil
+}
+
+// doneInline is Done for DoneAsync, with the PR it published.
+func (a *App) doneInline(task, summary string) (DoneJob, error) {
+	if err := a.Done(task, summary); err != nil {
+		return DoneJob{}, err
+	}
+	var job DoneJob
+	if t, err := a.Store.Task(task); err == nil && t.Status == store.PROpen {
+		job.PR = t.PR
+	}
+	return job, nil
 }
 
 // EventDoneGateDropped is a done gate that finished after its task was
@@ -127,7 +143,7 @@ func (a *App) runDoneJob(t store.Task, id, tree, summary string, since int64) {
 	head, _ := gitx.RevParse(t.Worktree, "HEAD")
 	err := a.lintDone(t)
 	if errors.Is(err, ErrGateInterrupted) {
-		fail("done_gate_interrupted", "saddle stopped the gate before it finished. Your branch is not queued; call the saddle done tool again.")
+		fail("done_gate_interrupted", "saddle stopped the gate before it finished. Your branch is not published; call the saddle done tool again.")
 		return
 	}
 	var envErr *DoneEnvError
@@ -145,7 +161,7 @@ func (a *App) runDoneJob(t store.Task, id, tree, summary string, since int64) {
 		return
 	}
 	if files := a.rebaseConflicts(t.ID, since); len(files) > 0 {
-		fail("done_gate_failed", fmt.Sprintf("the gate passed, but work that landed on %s while it ran conflicts with your branch in %s, so it is not queued. "+
+		fail("done_gate_failed", fmt.Sprintf("the gate passed, but work that landed on %s while it ran conflicts with your branch in %s, so it is not published. "+
 			"Run `saddle sync`, resolve the conflicts keeping both sides' intent, run the tests, then call the saddle done tool again.",
 			a.Cfg.Integration, strings.Join(files, ", ")))
 		return
@@ -157,21 +173,28 @@ func (a *App) runDoneJob(t store.Task, id, tree, summary string, since int64) {
 		// where every landing would restart the gate (#467, #525).
 		next, ok := a.rebasedOnly(t, head)
 		if !ok {
-			fail("done_gate_stale", "your branch moved while the gate checked it, so it is not queued. Commit everything, then call the saddle done tool again.")
+			fail("done_gate_stale", "your branch moved while the gate checked it, so it is not published. Commit everything, then call the saddle done tool again.")
 			return
 		}
 		a.Store.Event(t.ID, "done_gate_rebased", id+" "+short(head)+" → "+short(next))
 	}
-	if err := a.finishDone(t, summary); errors.Is(err, store.ErrFinished) {
+	res, err := a.publishOnDone(t, summary)
+	var refused *PublishRefusedError
+	switch {
+	case errors.Is(err, store.ErrFinished):
 		// Killed (or otherwise finished) while the gate ran: it stays that
 		// way and its agent is gone, so there is nobody to tell (#784).
 		a.Store.Event(t.ID, EventDoneGateDropped, id+": "+err.Error())
 		return
-	} else if err != nil {
-		fail("done_gate_failed", "the gate passed but queueing failed: "+err.Error()+"\nCall the saddle done tool again.")
+	case errors.As(err, &refused):
+		// The task stays running: its own agent fixes its branch.
+		fail("done_gate_failed", "the gate passed, but "+refused.Msg)
+		return
+	case err != nil:
+		fail("done_gate_failed", "the gate passed but publishing failed: "+err.Error()+"\nCall the saddle done tool again.")
 		return
 	}
-	_ = a.Notify(t.ID, store.NoticeInfo, fmt.Sprintf("done gate %s passed; your branch is queued in the merge train. You can stop now.", id))
+	_ = a.Notify(t.ID, store.NoticeInfo, fmt.Sprintf("done gate %s passed; %s You can stop now.", id, res.told()))
 }
 
 // rebaseConflicts is the files the last auto-rebase of task after event
@@ -243,14 +266,22 @@ func takeDoneJob(state, task string) (lock *os.File, id string, ok bool, err err
 	return f, id, true, nil
 }
 
-// errNothingToLand is doneReady's answer for a branch with no work
-// integration lacks: done finishes it with no change (#452).
-var errNothingToLand = errors.New("branch has no commits beyond the integration branch; nothing to land")
+// errNothingToLand is doneReady's answer for a branch with no work its base
+// lacks: done finishes it with no change (#452).
+var errNothingToLand = errors.New("branch has no commits beyond its base; nothing to publish")
 
 // doneReady checks t can be done at all: a worker with a clean worktree
-// and commits to land. It returns errNothingToLand, with t, when every
-// commit is already on integration or there are none.
+// and commits of its own. It returns errNothingToLand, with t, when every
+// commit is already on its base or there are none.
 func (a *App) doneReady(task string) (store.Task, error) {
+	if a.Cfg.LegacyTrain {
+		return a.doneReadyOn(task, func(store.Task) string { return a.Cfg.Integration })
+	}
+	return a.doneReadyOn(task, func(t store.Task) string { return a.resolveBase(t, false).Onto })
+}
+
+// doneReadyOn is doneReady with the ref t's commits are counted beyond.
+func (a *App) doneReadyOn(task string, base func(store.Task) string) (store.Task, error) {
 	t, err := a.Store.Task(task)
 	if err != nil {
 		return t, err
@@ -268,9 +299,9 @@ func (a *App) doneReady(task string) (store.Task, error) {
 	if len(dirty) > 0 {
 		return t, fmt.Errorf("worktree has uncommitted changes; commit them first:\n%s", strings.Join(dirty, "\n"))
 	}
-	// Commits whose patch integration already has (another task landed the
-	// same fix) don't count: the train would rebase them away (#452).
-	out, err := gitx.Run(t.Worktree, "rev-list", "--count", "--cherry-pick", "--right-only", a.Cfg.Integration+"...HEAD")
+	// Commits whose patch the base already has (another task merged the
+	// same fix) don't count: the rebase would drop them (#452).
+	out, err := gitx.Run(t.Worktree, "rev-list", "--count", "--cherry-pick", "--right-only", base(t)+"...HEAD")
 	if err != nil {
 		return t, err
 	}
@@ -317,8 +348,69 @@ func (a *App) finishNoChange(t store.Task, summary, why string) error {
 	return a.Notify(OrchestratorID, store.NoticeAction, msg)
 }
 
-// finishDone marks t done and queues it, once its gate passed.
+// finishDone publishes t once its gate passed (ADR 0012, #933).
 func (a *App) finishDone(t store.Task, summary string) error {
+	_, err := a.publishOnDone(t, summary)
+	return err
+}
+
+// publishOnDone is publishDone with done's bookkeeping: the done event, and a
+// refusal on a killed task.
+func (a *App) publishOnDone(t store.Task, summary string) (publishResult, error) {
+	if a.Cfg.LegacyTrain {
+		return publishResult{Legacy: true}, a.queueInTrain(t, summary)
+	}
+	if a.finishedTask(t.ID) {
+		return publishResult{}, fmt.Errorf("%s is finished; not publishing it: %w", t.ID, store.ErrFinished)
+	}
+	res, err := a.publishDone(t, summary)
+	if err != nil || res.Noop && res.URL == "" {
+		return res, err
+	}
+	a.Store.Event(t.ID, "done", summary)
+	return res, nil
+}
+
+// told is what the agent hears about a publish that went through.
+func (r publishResult) told() string {
+	switch {
+	case r.Legacy:
+		return "your branch is queued in the merge train."
+	case r.Local:
+		return "this repo has no remote, so your branch is kept as it is."
+	case r.Pending:
+		return "pushing your branch or opening its PR failed (" + oneLine(r.Err.Error()) + "); saddle retries it."
+	case r.Noop:
+		return "your branch is already published at this head: " + r.URL + "."
+	case r.Opened:
+		return "your PR " + r.URL + " is open against " + r.Base + "."
+	}
+	return "your PR " + r.URL + " is updated."
+}
+
+// DoneToTrain is the legacy done: gate, then queue the branch in the merge
+// train for `saddle land`. Done no longer takes this path (ADR 0012); it is
+// kept only while the train exists and is deleted with it (#938).
+func (a *App) DoneToTrain(task, summary string) error {
+	t, err := a.doneReadyOn(task, func(store.Task) string { return a.Cfg.Integration })
+	if errors.Is(err, errNothingToLand) {
+		return a.finishNoChange(t, summary, "its branch has no commits "+a.Cfg.Integration+" lacks")
+	}
+	if err != nil {
+		return err
+	}
+	if err := a.lintDone(t); err != nil {
+		var envErr *DoneEnvError
+		if errors.As(err, &envErr) {
+			return errors.New(a.holdDoneForEnv(t, "", summary, envErr))
+		}
+		return err
+	}
+	return a.queueInTrain(t, summary)
+}
+
+// queueInTrain marks t done and queues it in the legacy merge train.
+func (a *App) queueInTrain(t store.Task, summary string) error {
 	task := t.ID
 	if summary != "" {
 		if err := a.Store.SetField(task, "summary", summary); err != nil {

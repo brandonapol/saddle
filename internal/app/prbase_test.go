@@ -21,7 +21,7 @@ func landSpec(t *testing.T, a *App, req SpawnReq, files map[string]string) store
 		write(t, tk.Worktree, rel, body)
 	}
 	commitAll(t, tk.Worktree, req.Title)
-	must(t, a.Done(tk.ID, req.Title+" summary"))
+	must(t, a.DoneToTrain(tk.ID, req.Title+" summary"))
 	rs, err := a.Land()
 	must(t, err)
 	for _, r := range rs {

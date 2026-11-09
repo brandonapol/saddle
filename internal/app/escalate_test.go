@@ -32,8 +32,8 @@ func TestConflictEscalatesAfterMaxAttempts(t *testing.T) {
 	commitAll(t, t1.Worktree, "one")
 	write(t, t2.Worktree, "README.md", "two\n")
 	commitAll(t, t2.Worktree, "two")
-	must(t, a.Done(t1.ID, "one"))
-	must(t, a.Done(t2.ID, "two"))
+	must(t, a.DoneToTrain(t1.ID, "one"))
+	must(t, a.DoneToTrain(t2.ID, "two"))
 	if _, err := a.Land(); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestConflictEscalatesAfterMaxAttempts(t *testing.T) {
 	woken := len(ft.sent[t2.Window])
 
 	// The producer calls done again without fixing anything.
-	must(t, a.Done(t2.ID, "two again"))
+	must(t, a.DoneToTrain(t2.ID, "two again"))
 	rs, err := a.Land()
 	if err != nil {
 		t.Fatal(err)
@@ -80,12 +80,12 @@ func TestRedTestsEscalate(t *testing.T) {
 	t1, _ := a.Spawn(SpawnReq{Title: "one"})
 	write(t, t1.Worktree, "x.txt", "x\n")
 	commitAll(t, t1.Worktree, "one")
-	must(t, a.Done(t1.ID, "one"))
+	must(t, a.DoneToTrain(t1.ID, "one"))
 	rs, _ := a.Land()
 	if len(rs) != 1 || rs[0].State != store.TestFailed {
 		t.Fatalf("first land = %+v", rs)
 	}
-	must(t, a.Done(t1.ID, "one"))
+	must(t, a.DoneToTrain(t1.ID, "one"))
 	rs, _ = a.Land()
 	if len(rs) != 1 || rs[0].State != TrainEscalated || !strings.Contains(rs[0].Note, "tests failed") {
 		t.Fatalf("second land = %+v", rs)
@@ -104,8 +104,8 @@ func TestMessageWakesEscalatedTask(t *testing.T) {
 	commitAll(t, t1.Worktree, "one")
 	write(t, t2.Worktree, "README.md", "two\n")
 	commitAll(t, t2.Worktree, "two")
-	must(t, a.Done(t1.ID, "one"))
-	must(t, a.Done(t2.ID, "two"))
+	must(t, a.DoneToTrain(t1.ID, "one"))
+	must(t, a.DoneToTrain(t2.ID, "two"))
 	if _, err := a.Land(); err != nil {
 		t.Fatal(err)
 	}

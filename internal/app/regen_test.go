@@ -35,8 +35,8 @@ func TestLandRegeneratesDerivedFileOnConflict(t *testing.T) {
 	write(t, t2.Worktree, "b.txt", "B\n")
 	write(t, t2.Worktree, "gen.txt", "a\nB\n")
 	commitAll(t, t2.Worktree, "two")
-	must(t, a.Done(t1.ID, "one"))
-	must(t, a.Done(t2.ID, "two"))
+	must(t, a.DoneToTrain(t1.ID, "one"))
+	must(t, a.DoneToTrain(t2.ID, "two"))
 	rs, err := a.Land()
 	if err != nil {
 		t.Fatal(err)
@@ -65,8 +65,8 @@ func TestRegenLeavesOtherConflictsToProducer(t *testing.T) {
 	write(t, t2.Worktree, "README.md", "two\n")
 	write(t, t2.Worktree, "gen.txt", "a\nB\n")
 	commitAll(t, t2.Worktree, "two")
-	must(t, a.Done(t1.ID, "one"))
-	must(t, a.Done(t2.ID, "two"))
+	must(t, a.DoneToTrain(t1.ID, "one"))
+	must(t, a.DoneToTrain(t2.ID, "two"))
 	rs, err := a.Land()
 	if err != nil {
 		t.Fatal(err)
@@ -87,8 +87,8 @@ func TestRegenFailureReturnsToProducer(t *testing.T) {
 	commitAll(t, t1.Worktree, "one")
 	write(t, t2.Worktree, "gen.txt", "a\nB\n")
 	commitAll(t, t2.Worktree, "two")
-	must(t, a.Done(t1.ID, "one"))
-	must(t, a.Done(t2.ID, "two"))
+	must(t, a.DoneToTrain(t1.ID, "one"))
+	must(t, a.DoneToTrain(t2.ID, "two"))
 	rs, err := a.Land()
 	if err != nil {
 		t.Fatal(err)

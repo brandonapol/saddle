@@ -143,7 +143,7 @@ func stackSetup(t *testing.T) (a *app.App, other string) {
 	t.Setenv("SADDLE_TASK", tk.ID) // as t1's agent, so the ref guard lets it move its branch
 	git(t, tk.Worktree, "commit", "-qam", "readme")
 	t.Setenv("SADDLE_TASK", "")
-	if err := a.Done(tk.ID, "readme"); err != nil {
+	if err := a.DoneToTrain(tk.ID, "readme"); err != nil {
 		t.Fatal(err)
 	}
 	rs, err := a.Land()

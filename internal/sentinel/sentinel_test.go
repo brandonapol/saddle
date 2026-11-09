@@ -154,7 +154,7 @@ func landReq(t *testing.T, a *app.App, req app.SpawnReq, file string) store.Task
 	write(t, tk.Worktree, file+".txt", file+"\n")
 	t.Setenv("SADDLE_TASK", tk.ID) // commit as the task, as the ref guard expects
 	commitAll(t, tk.Worktree, file)
-	must(t, a.Done(tk.ID, file+" summary"))
+	must(t, a.DoneToTrain(tk.ID, file+" summary"))
 	rs, err := a.Land()
 	must(t, err)
 	for _, r := range rs {

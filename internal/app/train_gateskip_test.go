@@ -31,7 +31,7 @@ func TestLandSkipsTheGateOnATreeDoneAlreadyGated(t *testing.T) {
 	must(t, err)
 	write(t, tk.Worktree, "gated.txt", "gated\n")
 	commitAll(t, tk.Worktree, "gated")
-	must(t, a.Done(tk.ID, "gated"))
+	must(t, a.DoneToTrain(tk.ID, "gated"))
 	if n := runs(); n != 1 {
 		t.Fatalf("done ran the gate %d times, want 1", n)
 	}
@@ -58,7 +58,7 @@ func TestLandRunsTheGateWhenTheRebasedTreeDiffers(t *testing.T) {
 		must(t, err)
 		write(t, tk.Worktree, title+".txt", title+"\n")
 		commitAll(t, tk.Worktree, title)
-		must(t, a.Done(tk.ID, title))
+		must(t, a.DoneToTrain(tk.ID, title))
 		ts = append(ts, tk)
 	}
 	if n := runs(); n != 2 {

@@ -18,7 +18,7 @@ You are one of several %s agents working on this repo in parallel. Saddle coordi
 
 - Worktree: %s
 - Branch: %s (cut from %s)
-`, t.ID, t.Title, a.harnessName(), t.Worktree, t.Branch, a.Cfg.Integration)
+`, t.ID, t.Title, a.harnessName(), t.Worktree, t.Branch, a.taskBase(t))
 	if t.Parent != "" {
 		fmt.Fprintf(&b, "- Spawned by: %s\n", t.Parent)
 	}
@@ -35,13 +35,13 @@ You are one of several %s agents working on this repo in parallel. Saddle coordi
 	fmt.Fprintf(&b, `
 ## Rules
 1. Stay in your worktree. A hook denies any write to a file another task has claimed, and the denial names the owner. Work around it (code against an interface, stub it in tests) instead of fighting it. Use the saddle `+"`claim`"+` tool to reserve paths before a large change.
-2. Commit small, coherent commits on your branch as you go. Follow the repository's commit and PR title conventions (including conventional commits when required). Never add a saddle: subject prefix or other tool attribution to commits or PR titles. Saddle preserves your commit subjects when landing. Do not push, merge, or rebase onto other branches. To pick up work that already landed, run `+"`saddle sync`"+`. Only the merge train pushes or moves %s.
+2. Commit small, coherent commits on your branch as you go. Follow the repository's commit and PR title conventions (including conventional commits when required). Never add a saddle: subject prefix or other tool attribution to commits or PR titles. Saddle preserves your commit subjects when landing. Do not push, merge, or rebase onto other branches, and never carry another task's commits: your PR holds only this task's work. To pick up work that merged into %s since, run `+"`saddle sync`"+`. Saddle pushes your branch and opens its PR when you call done.
 3. If part of your task is independent and touches files you don't need, hand it off with the saddle `+"`spawn`"+` tool, giving it disjoint claims. Don't spawn for small things.
 4. Tests: when you find something that does not work right, write a failing test that reproduces it first, then fix it. New behavior ships with tests. Name the tests that cover your change in your done summary.
-5. When you finish: tests pass, everything is committed, then call the saddle `+"`done`"+` tool with a 2–4 sentence summary. That becomes your PR description. Saddle lands branches one at a time and opens stacked PRs.
+5. When you finish: tests pass, everything is committed, then call the saddle `+"`done`"+` tool with a 2–4 sentence summary. That becomes your PR description. Saddle rebases your branch onto its base, checks every commit on it is this task's own, pushes it and opens its one PR.
 6. Messages starting with "[saddle]" come from Saddle or the orchestrator. If one says your branch conflicted or failed tests, fix it, then call `+"`done`"+` again.
 7. Don't wait on other agents in a loop. If you're blocked, say so in your done summary, or ask through the orchestrator.
-`, a.Cfg.Integration)
+`, a.taskBase(t))
 	b.WriteString(gateRule(a.LintGate()))
 	return b.String()
 }
@@ -56,7 +56,7 @@ func gateRule(g lintgate.Gate) string {
 	if g.Fix != "" {
 		fix = fmt.Sprintf(" (`%s` fixes some of it)", g.Fix)
 	}
-	return fmt.Sprintf("8. This repo's check is `%s`%s. Run it and make it pass before you call done; done runs it too and refuses while it is red, and the merge train runs it again before landing. %s\n", g.Cmd, fix, never)
+	return fmt.Sprintf("8. This repo's check is `%s`%s. Run it and make it pass before you call done; done runs it too and refuses while it is red, and CI runs on your PR. %s\n", g.Cmd, fix, never)
 }
 
 func (a *App) orchestratorBrief() string {

@@ -21,7 +21,7 @@ func landSecond(t *testing.T, a *app.App) {
 	}
 	gitRun(t, tk.Worktree, "add", "-A")
 	gitRun(t, tk.Worktree, "commit", "-qm", "two")
-	if err := a.Done(tk.ID, "two"); err != nil {
+	if err := a.DoneToTrain(tk.ID, "two"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.Land(); err != nil {

@@ -172,8 +172,11 @@ type SpawnReq struct {
 	// pick, unlike Model (#505).
 	ModelHint string
 	Parent    string
-	Base      string // defaults to the integration branch
-	Issue     int    // GitHub issue the task implements; its PR will close it
+	// Base, when set, is where the branch starts instead of the task's base
+	// (main or its after task's branch). Only internal callers set it; a
+	// task branch here hands that task's commits to this one (EventAdopts).
+	Base  string
+	Issue int // GitHub issue the task implements; its PR will close it
 	// After lists tasks whose unmerged work this one builds on. Its PR
 	// stacks on theirs even when their files don't overlap (#193).
 	After []string
@@ -308,7 +311,9 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if err := a.Init(); err != nil {
 		return t, err
 	}
-	if err := a.ensureIntegration(); err != nil {
+	// The integration branch is legacy state the worker-side checks still
+	// diff against; it is never a task's base (ADR 0012, #938 removes it).
+	if err := a.ensureIntegrationFetch(a.Cfg.LegacyTrain); err != nil {
 		return t, err
 	}
 	// Claims are checked before the row exists, so a conflict leaves nothing behind.
@@ -344,15 +349,31 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 		return t, err
 	}
 	name := id + "-" + slug(r.Title)
-	base := r.Base
-	if base == "" {
-		base = a.Cfg.Integration
+	// The base is main, or the one unmerged after task's branch (ADR 0012,
+	// #932). Parent, issue and task text never change it.
+	base, start, err := a.spawnBase(id, after)
+	if err != nil {
+		return t, err
+	}
+	if a.Cfg.LegacyTrain {
+		start = a.Cfg.Integration // the legacy train's cut (#938 deletes it)
+	}
+	adopt := ""
+	if r.Base != "" {
+		// An internal caller (a finisher, a legacy repair) starts the branch
+		// on another task's branch: that task's commits count as this one's
+		// at done, since it carries them on.
+		start = r.Base
+		if o, ok := a.taskOnBranch(r.Base); ok {
+			adopt = o
+		}
 	}
 	model := a.spawnModel(pick, r)
 	hint := a.retryHint(r.Title)
 	t = store.Task{
 		ID: id, Title: r.Title, Prompt: r.Prompt, Parent: r.Parent, Role: store.RoleWorker, Model: model, Adapter: ad.Name(),
 		Branch: "saddle/" + name, Worktree: a.stateDir("worktrees", name), Status: store.Running, Issue: r.Issue,
+		Base: base,
 	}
 	hadBranch := gitx.BranchExists(a.Root, t.Branch)
 	if err := a.Store.CreateTask(t); err != nil {
@@ -373,7 +394,10 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if err := a.setAfter(id, after); err != nil {
 		return t, a.spawnFailed(t, false, hadBranch, err)
 	}
-	if err := gitx.WorktreeAdd(a.Root, t.Worktree, t.Branch, base); err != nil {
+	if adopt != "" {
+		a.Store.Event(id, EventAdopts, adopt)
+	}
+	if err := gitx.WorktreeAdd(a.Root, t.Worktree, t.Branch, start); err != nil {
 		return t, a.spawnFailed(t, false, hadBranch, fmt.Errorf("worktree add: %w", err))
 	}
 	win, err := a.launch(t, r.Claims, ad)

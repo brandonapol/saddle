@@ -34,6 +34,11 @@ const (
 	// Failed is a task whose spawn failed: its claims are released and no
 	// agent ever ran. Its id stays burned (#797).
 	Failed = "failed"
+	// PROpen is a task whose done published it (ADR 0012, #933): its branch
+	// is rebased onto its base, pushed, and has one open PR against that
+	// base. Its claims are released; it is not finished, so a fix in place
+	// can bring it back to running.
+	PROpen = "pr_open"
 )
 
 // Train entry states.
@@ -77,6 +82,10 @@ type Task struct {
 	PR        string
 	Issue     int    // GitHub issue this task works on; its PR closes it
 	Adapter   string // claude, codex, gemini or grok; "" on rows from before it was recorded (#507)
+	// Base is the branch the task's branch is cut from and its PR targets:
+	// the repo's base (main), or the branch of the one unmerged task it runs
+	// after (ADR 0012, #932). "" on rows from before it was recorded.
+	Base      string
 	CreatedAt time.Time
 }
 
@@ -196,6 +205,8 @@ CREATE TABLE IF NOT EXISTS retry_attempts(
   escalated INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL DEFAULT 0
 );
+`, `
+ALTER TABLE tasks ADD COLUMN base TEXT NOT NULL DEFAULT '';
 `}
 
 // Open opens (creating if needed) the database at path and applies migrations,
@@ -235,13 +246,22 @@ func (s *Store) migrate() error {
 			return nil
 		}
 		for i := v; i < len(migrations); i++ {
-			if _, err := tx.Exec(migrations[i]); err != nil {
+			if _, err := tx.Exec(migrations[i]); err != nil && !addedAlready(migrations[i], err) {
 				return fmt.Errorf("migration %d: %w", i+1, err)
 			}
 		}
 		_, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, len(migrations)))
 		return err
 	})
+}
+
+// addedAlready reports whether migration m is a single ADD COLUMN whose
+// column is already there, so rerunning it from a lowered user_version is
+// harmless.
+func addedAlready(m string, err error) bool {
+	m = strings.TrimSpace(m)
+	return strings.Count(m, ";") <= 1 && strings.HasPrefix(m, "ALTER TABLE") && strings.Contains(m, "ADD COLUMN") &&
+		strings.Contains(err.Error(), "duplicate column name")
 }
 
 // tx runs fn in an immediate (write-locked) transaction.
@@ -259,21 +279,21 @@ func (s *Store) tx(fn func(*sql.Tx) error) error {
 
 func now() int64 { return time.Now().Unix() }
 
-const taskCols = `id, title, prompt, parent, role, model, branch, worktree, window, status, summary, session_id, pr, issue, created_at, adapter`
+const taskCols = `id, title, prompt, parent, role, model, branch, worktree, window, status, summary, session_id, pr, issue, created_at, adapter, base`
 
 func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	var created int64
 	err := row.Scan(&t.ID, &t.Title, &t.Prompt, &t.Parent, &t.Role, &t.Model, &t.Branch, &t.Worktree,
-		&t.Window, &t.Status, &t.Summary, &t.SessionID, &t.PR, &t.Issue, &created, &t.Adapter)
+		&t.Window, &t.Status, &t.Summary, &t.SessionID, &t.PR, &t.Issue, &created, &t.Adapter, &t.Base)
 	t.CreatedAt = time.Unix(created, 0)
 	return t, err
 }
 
 func (s *Store) CreateTask(t Task) error {
-	_, err := s.db.Exec(`INSERT INTO tasks(`+taskCols+`, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err := s.db.Exec(`INSERT INTO tasks(`+taskCols+`, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Title, t.Prompt, t.Parent, t.Role, t.Model, t.Branch, t.Worktree, t.Window, t.Status,
-		t.Summary, t.SessionID, t.PR, t.Issue, now(), t.Adapter, now())
+		t.Summary, t.SessionID, t.PR, t.Issue, now(), t.Adapter, t.Base, now())
 	return err
 }
 
@@ -305,7 +325,7 @@ func (s *Store) Tasks() ([]Task, error) {
 // SetField updates one column of a task. Only known column names are accepted.
 func (s *Store) SetField(id, field, value string) error {
 	switch field {
-	case "status", "window", "summary", "session_id", "pr", "worktree", "model", "adapter":
+	case "status", "window", "summary", "session_id", "pr", "worktree", "model", "adapter", "base":
 	default:
 		return fmt.Errorf("unknown task field %q", field)
 	}

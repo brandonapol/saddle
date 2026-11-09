@@ -216,7 +216,7 @@ func TestPRsFollowRepoTemplate(t *testing.T) {
 	write(t, tk.Worktree, "login.go", "package x\n")
 	write(t, tk.Worktree, "login_test.go", "package x\n")
 	commitAll(t, tk.Worktree, "feat: add login")
-	must(t, a.Done(tk.ID, "Adds a login handler."))
+	must(t, a.DoneToTrain(tk.ID, "Adds a login handler."))
 	if _, err := a.Land(); err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestPublishFollowsQuarkTemplate(t *testing.T) {
 	must(t, err)
 	write(t, tk.Worktree, "login.go", "package x\n")
 	commitAll(t, tk.Worktree, "fix: login crash")
-	must(t, a.Done(tk.ID, "Stops the crash."))
+	must(t, a.DoneToTrain(tk.ID, "Stops the crash."))
 	if _, err := a.Land(); err != nil {
 		t.Fatal(err)
 	}

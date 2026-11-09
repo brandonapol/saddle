@@ -64,7 +64,7 @@ func queueTwo(t *testing.T, a *app.App) {
 		git(t, tk.Worktree, "add", "-A")
 		git(t, tk.Worktree, "commit", "-qm", id)
 		t.Setenv("SADDLE_TASK", "")
-		if err := a.Done(id, id); err != nil {
+		if err := a.DoneToTrain(id, id); err != nil {
 			t.Fatal(err)
 		}
 	}

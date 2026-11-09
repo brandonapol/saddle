@@ -376,10 +376,10 @@ func TestLandFollowsDirectoryMove(t *testing.T) {
 	write(t, adder.Worktree, "tax/rates.go", "package tax\n")
 	commitAll(t, adder.Worktree, "add tax")
 
-	if err := a.Done(mover.ID, "moved billing"); err != nil {
+	if err := a.DoneToTrain(mover.ID, "moved billing"); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Done(adder.ID, "added tax"); err != nil {
+	if err := a.DoneToTrain(adder.ID, "added tax"); err != nil {
 		t.Fatal(err)
 	}
 	rs, err := a.Land()
@@ -417,7 +417,7 @@ func TestLandBroadcastsRenamesAndRemapsClaims(t *testing.T) {
 	must(t, os.MkdirAll(filepath.Join(mover.Worktree, "docs"), 0o755))
 	git(t, mover.Worktree, "mv", "README.md", "docs/README.md")
 	commitAll(t, mover.Worktree, "move readme")
-	must(t, a.Done(mover.ID, "moved"))
+	must(t, a.DoneToTrain(mover.ID, "moved"))
 	if _, err := a.Land(); err != nil {
 		t.Fatal(err)
 	}
@@ -430,14 +430,15 @@ func TestLandBroadcastsRenamesAndRemapsClaims(t *testing.T) {
 func TestConflictReturnsToProducer(t *testing.T) {
 	t.Parallel()
 	a, ft := setup(t)
+	a.Cfg.LegacyTrain = true // legacy train behavior; #938 deletes this test with the train
 	t1, _ := a.Spawn(SpawnReq{Title: "one"})
 	t2, _ := a.Spawn(SpawnReq{Title: "two"})
 	write(t, t1.Worktree, "README.md", "one\n")
 	commitAll(t, t1.Worktree, "one")
 	write(t, t2.Worktree, "README.md", "two\n")
 	commitAll(t, t2.Worktree, "two")
-	must(t, a.Done(t1.ID, "one"))
-	must(t, a.Done(t2.ID, "two"))
+	must(t, a.DoneToTrain(t1.ID, "one"))
+	must(t, a.DoneToTrain(t2.ID, "two"))
 	rs, err := a.Land()
 	if err != nil {
 		t.Fatal(err)
@@ -482,8 +483,12 @@ func TestBriefsCarryStackRules(t *testing.T) {
 		}
 	}
 	w := a.workerBrief(store.Task{ID: "t1", Title: "x", Branch: "saddle/t1-x"}, nil)
-	if want := "Only the merge train pushes or moves " + a.Cfg.Integration + "."; !strings.Contains(w, want) {
-		t.Errorf("worker brief lacks %q", want)
+	// ADR 0012: the branch is cut from main, carries only the task's own
+	// commits, and done publishes it.
+	for _, want := range []string{"(cut from main)", "never carry another task's commits", "Saddle pushes your branch and opens its PR when you call done"} {
+		if !strings.Contains(w, want) {
+			t.Errorf("worker brief lacks %q", want)
+		}
 	}
 }
 
@@ -517,7 +522,7 @@ func TestSpawnNeedsConfirmWhenClaimsOnlyCoverTrainWork(t *testing.T) {
 	must(t, err)
 	write(t, q.Worktree, "README.md", "queued\n")
 	commitAll(t, q.Worktree, "readme")
-	must(t, a.Done(q.ID, "readme"))
+	must(t, a.DoneToTrain(q.ID, "readme"))
 	_, err = a.Spawn(SpawnReq{ID: "t4", Title: "fix readme PR", Claims: []string{"README.md", "billing/meter.go"}})
 	if !errors.Is(err, ErrNeedsConfirm) || !strings.Contains(err.Error(), "t3") {
 		t.Fatalf("spawn over queued work: err = %v", err)

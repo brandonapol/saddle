@@ -135,7 +135,7 @@ func TestDependencyExplainsPendingSibling(t *testing.T) {
 	must(t, err)
 	write(t, t4.Worktree, "lint.yml", "run: make test/e2e\n")
 	commitAll(t, t4.Worktree, "lint job")
-	must(t, a.Done("t4", "lint job"))
+	must(t, a.DoneToTrain("t4", "lint job"))
 	_, err = a.Land()
 	must(t, err)
 	if sib, _, ok := a.dependencyExplains("t4", noE2ETarget); ok {

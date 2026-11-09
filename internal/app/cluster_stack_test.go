@@ -108,7 +108,7 @@ func TestPRsStacksTasksSharingAnIssue(t *testing.T) {
 		must(t, err)
 		write(t, tk.Worktree, file, id+"\n")
 		commitAll(t, tk.Worktree, id)
-		must(t, a.Done(tk.ID, id))
+		must(t, a.DoneToTrain(tk.ID, id))
 		_, err = a.Land()
 		must(t, err)
 		return tk
@@ -277,7 +277,7 @@ func TestPRsStacksExplicitDependency(t *testing.T) {
 		must(t, err)
 		write(t, tk.Worktree, file, id+"\n")
 		commitAll(t, tk.Worktree, id)
-		must(t, a.Done(tk.ID, id))
+		must(t, a.DoneToTrain(tk.ID, id))
 		_, err = a.Land()
 		must(t, err)
 		return tk

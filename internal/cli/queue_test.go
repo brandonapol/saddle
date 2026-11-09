@@ -66,7 +66,7 @@ func queueRepo(t *testing.T) *app.App {
 		gitRun(t, tk.Worktree, "add", "-A")
 		gitRun(t, tk.Worktree, "commit", "-qm", id)
 		t.Setenv("SADDLE_TASK", "")
-		if err := a.Done(id, id); err != nil {
+		if err := a.DoneToTrain(id, id); err != nil {
 			t.Fatal(err)
 		}
 	}

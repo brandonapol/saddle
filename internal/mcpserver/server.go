@@ -668,7 +668,7 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, out, err
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "done", Description: "Finish your task: requires a clean, committed worktree. Queues your branch in the merge train. When the repo's gate has to check your tree, it returns at once with a job id and checks in the background; you get a [saddle] notice when the job ends. Calling done again while it runs starts no second check."},
+	mcp.AddTool(s, &mcp.Tool{Name: "done", Description: "Finish your task: requires a clean, committed worktree. Once the repo's gate passes, saddle rebases your branch onto its base, checks every commit on it is this task's own, pushes it and opens (or updates) its one PR. When the repo's gate has to check your tree, it returns at once with a job id and checks in the background; you get a [saddle] notice when the job ends. Calling done again while it runs starts no second check."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in DoneIn) (*mcp.CallToolResult, OK, error) {
 			if err := self(); err != nil {
 				return nil, OK{}, err
@@ -921,11 +921,13 @@ func New(a *app.App, task string) *mcp.Server {
 func doneMessage(job app.DoneJob) string {
 	switch {
 	case job.NoChange:
-		return "Your branch has no commits the integration branch lacks, so there is nothing to land. The task is finished with no change and the orchestrator was told. You can stop now."
+		return "Your branch has no commits its base lacks, so there is nothing to publish. The task is finished with no change and the orchestrator was told. You can stop now."
 	case job.Joined:
-		return fmt.Sprintf("Done gate %s is already checking your branch; no second check started. You can stop now: a [saddle] notice says when it is queued, or why not.", job.ID)
+		return fmt.Sprintf("Done gate %s is already checking your branch; no second check started. You can stop now: a [saddle] notice says when it is published, or why not.", job.ID)
 	case job.Running:
-		return fmt.Sprintf("Done gate %s is checking your branch in the background; it is queued in the merge train when the gate passes. You can stop now: a [saddle] notice says when it is queued, or why not. Don't call done again unless that notice asks.", job.ID)
+		return fmt.Sprintf("Done gate %s is checking your branch in the background; when it passes, saddle rebases your branch onto its base, pushes it and opens its PR. You can stop now: a [saddle] notice says when it is published, or why not. Don't call done again unless that notice asks.", job.ID)
+	case job.PR != "":
+		return "Published: your branch is rebased onto its base and pushed, and its PR is " + job.PR + ". You can stop now. If its CI goes red or it conflicts, you will be told."
 	}
-	return "Queued in the merge train. You can stop now. If it conflicts or fails tests, you will be told."
+	return "Done: your branch passed its gate. You can stop now."
 }

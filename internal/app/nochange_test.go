@@ -66,7 +66,7 @@ func TestDoneWithNoCommitsFinishesWithNoChange(t *testing.T) {
 	a := trainSetup(t)
 	tk, err := a.Spawn(SpawnReq{Title: "already fixed", Claims: []string{"x.go"}})
 	must(t, err)
-	must(t, a.Done(tk.ID, "the issue was already fixed"))
+	must(t, a.DoneToTrain(tk.ID, "the issue was already fixed"))
 	assertNoChange(t, a, tk.ID)
 	rs, err := a.Land()
 	must(t, err)
@@ -88,7 +88,7 @@ func TestDoneWithWorkAlreadyOnIntegrationFinishesWithNoChange(t *testing.T) {
 	// Someone else's landing already carried the same patch.
 	pickOntoIntegration(t, a, sha)
 
-	must(t, a.Done(tk.ID, "dup"))
+	must(t, a.DoneToTrain(tk.ID, "dup"))
 	assertNoChange(t, a, tk.ID)
 }
 

@@ -102,7 +102,7 @@ esac
 	gitRun(t, tk.Worktree, "add", "-A")
 	gitRun(t, tk.Worktree, "commit", "-qm", "one")
 	t.Setenv("SADDLE_TASK", "")
-	if err := a.Done(tk.ID, "one"); err != nil {
+	if err := a.DoneToTrain(tk.ID, "one"); err != nil {
 		t.Fatal(err)
 	}
 	rs, err := a.Land()

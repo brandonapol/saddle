@@ -91,7 +91,7 @@ func TestPreauthUnblocksPendingDependencyAndItLands(t *testing.T) {
 	// t34 goes ahead and its work lands.
 	write(t, tk.Worktree, "s3.go", "package main\n")
 	commitAll(t, tk.Worktree, "s3 upload")
-	must(t, a.Done("t34", "s3 upload"))
+	must(t, a.DoneToTrain("t34", "s3 upload"))
 	rs, err := a.Land()
 	must(t, err)
 	if len(rs) != 1 || rs[0].State != store.TrainOK {

@@ -207,6 +207,9 @@ func (a *App) StallTick(now time.Time) ([]DecisionCard, error) {
 	if _, err := a.OrphanTick(now); err != nil {
 		errs = append(errs, fmt.Errorf("done-orphan watch: %w", err))
 	}
+	if _, err := a.PublishRetryTick(now); err != nil {
+		errs = append(errs, fmt.Errorf("publish retry: %w", err))
+	}
 	if _, err := a.DonePendingEnvTick(now); err != nil {
 		errs = append(errs, fmt.Errorf("done-pending-env retry: %w", err))
 	}

@@ -168,7 +168,7 @@ func TestCustomStackMembersLeaveAutomaticClusters(t *testing.T) {
 		must(t, err)
 		write(t, tk.Worktree, id+".txt", id+"\n")
 		commitAll(t, tk.Worktree, id)
-		must(t, a.Done(tk.ID, id))
+		must(t, a.DoneToTrain(tk.ID, id))
 		_, err = a.Land()
 		must(t, err)
 		return tk
