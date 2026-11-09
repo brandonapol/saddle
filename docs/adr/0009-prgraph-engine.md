@@ -1,6 +1,6 @@
 # ADR 0009: One pure PR-graph engine owns the stack: one schema, one state machine, one Reconcile
 
-- Status: Proposed
+- Status: Proposed; amended by [ADR 0012](0012-branches-are-the-truth.md) (declared `after` edges only, no shadow rollout, legacy deleted)
 - Issue: #779 (step 1, the ADR). Implementation: #829, #830, #831, then
   #832, #833, #834, #835, #836. Related: ADR 0003, ADR 0004 (#820), ADR 0005,
   ADR 0007, ADR 0008, #804, #862, #863

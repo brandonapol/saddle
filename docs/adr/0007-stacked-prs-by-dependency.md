@@ -1,6 +1,6 @@
 # ADR 0007: Stacked PRs by default, stacked only by dependency
 
-- Status: Accepted (backfilled 2026-11-06)
+- Status: Superseded by [ADR 0012](0012-branches-are-the-truth.md)
 - Issue: #52 (stacked PRs by default). Refined by #193, #358 (dependencies
   stack whatever the files), #226 and #751 (file overlap does not stack).
   Related: #779, #805

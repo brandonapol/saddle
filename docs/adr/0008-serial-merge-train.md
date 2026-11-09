@@ -1,6 +1,6 @@
 # ADR 0008: One serial merge train lands all work
 
-- Status: Accepted (backfilled 2026-11-06)
+- Status: Superseded by [ADR 0012](0012-branches-are-the-truth.md)
 - Issue: #25 (serial train: queue, rebase, test gate, fast-forward). Related:
   #26 (rename map), #819 and ADR 0003, #836, #779, #805
 

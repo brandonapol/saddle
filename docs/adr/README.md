@@ -13,15 +13,16 @@ defined in [GLOSSARY.md](../GLOSSARY.md).
 |---|---|---|
 | [0001](0001-forge-layer.md) | One forge interface over `gh` and `glab` | Accepted |
 | [0002](0002-orchestrator-on-any-agent.md) | The orchestrator runs on codex or grok, not only Claude Code | Accepted |
-| [0003](0003-landed-means-on-main.md) | Landing opens the PR; only merged into base is done | Accepted |
+| [0003](0003-landed-means-on-main.md) | Landing opens the PR; only merged into base is done | Superseded by 0012 |
 | [0004](0004-reconcile-against-github.md) | Reconcile saddle's state against GitHub; no failure latches | Proposed |
 | [0005](0005-no-daemon.md) | No daemon: saddle runs in-process on SQLite | Accepted |
 | [0006](0006-never-the-expensive-model-as-synchronizer.md) | Never use the expensive model to synchronize | Accepted |
-| [0007](0007-stacked-prs-by-dependency.md) | Stacked PRs by default, stacked only by dependency | Accepted |
-| [0008](0008-serial-merge-train.md) | One serial merge train lands all work | Accepted |
-| [0009](0009-prgraph-engine.md) | One pure PR-graph engine owns the stack: one schema, one state machine, one Reconcile | Proposed |
+| [0007](0007-stacked-prs-by-dependency.md) | Stacked PRs by default, stacked only by dependency | Superseded by 0012 |
+| [0008](0008-serial-merge-train.md) | One serial merge train lands all work | Superseded by 0012 |
+| [0009](0009-prgraph-engine.md) | One pure PR-graph engine owns the stack: one schema, one state machine, one Reconcile | Proposed; amended by 0012 |
 | [0010](0010-headless-workers.md) | Unattended workers run headless, one invocation per attempt, with a typed result | Proposed |
-| [0011](0011-batch-stack-merged-once.md) | A batch is one linear stack, merged once by fast-forward | Proposed |
+| [0011](0011-batch-stack-merged-once.md) | A batch is one linear stack, merged once by fast-forward | Superseded by 0012 |
+| [0012](0012-branches-are-the-truth.md) | One task, one branch, one PR: cut from main, fixed in place, merged by a plain queue | Accepted |
 
 ## When a change needs an ADR
 

@@ -13,6 +13,7 @@ right, open an issue that answers the recorded reason; don't just build it.
 | [Stacking tasks because they touch the same files](stack-by-file-overlap.md) | #226, #751, ADR 0007 |
 | [Shipping release binaries](release-binaries.md) | #544 |
 | [Guards that only a human can clear](human-only-latches.md) | #119, ADR 0004 |
+| [An integration branch, and stacks inferred from it](integration-branch-and-inferred-stacks.md) | #930, ADR 0012 |
 
 ## Format
 
