@@ -1,6 +1,6 @@
 # ADR 0011: A batch is one linear stack, merged once by fast-forward
 
-- Status: Proposed
+- Status: Superseded by [ADR 0012](0012-branches-are-the-truth.md)
 - Issue: #913. Related: #912, #908, ADR 0003, ADR 0007, ADR 0008, ADR 0009,
   #832, #833, #836
 

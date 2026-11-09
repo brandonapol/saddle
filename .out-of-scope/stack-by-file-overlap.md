@@ -13,7 +13,5 @@ should have been about 10 stacks (#226), then a 17-deep stack in which one
 merge into a non-main base lost work and closed about 25 PRs (#751).
 
 ## What saddle does instead
-Only dependencies stack: `after`, a spawn parent, a named earlier task, a
-hand retarget, or what the pre-publish gate shows a layer needs. Everything
-else gets its own PR on base. See
-[ADR 0007](../docs/adr/0007-stacked-prs-by-dependency.md).
+Only a declared `after` stacks. Everything else gets its own PR on main. See
+[ADR 0012](../docs/adr/0012-branches-are-the-truth.md).

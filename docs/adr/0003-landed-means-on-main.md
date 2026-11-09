@@ -1,6 +1,6 @@
 # ADR 0003: Landing opens the PR; only merged into base is done
 
-- Status: Accepted
+- Status: Superseded by [ADR 0012](0012-branches-are-the-truth.md)
 - Issue: #819. Related: #805 (glossary and ADRs), #779 (prgraph engine)
 
 ## Context
