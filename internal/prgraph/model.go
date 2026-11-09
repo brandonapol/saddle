@@ -78,25 +78,14 @@ type Change struct {
 	Gen int64 `json:"gen"`
 }
 
-// EdgeKind says how a dependency was learned.
-type EdgeKind string
-
-// Edge kinds.
-const (
-	Declared EdgeKind = "declared"
-	Inferred EdgeKind = "inferred"
-	// Verified: the head doesn't build on the candidate base and does build
-	// with the dependency (a gate fact). "Commits apply" is never enough.
-	Verified EdgeKind = "verified"
-)
-
-// Edge is one row of prgraph_edge: Change depends on Dep.
+// Edge is one row of prgraph_edge: Change declared `after: Dep` (ADR 0012
+// rule 8). It is the only kind of edge: nothing is inferred from a parent,
+// an issue, free text, a hand retarget or the gate. A change has at
+// most one unmerged dependency; Reconcile waits rather than stack a change
+// with two.
 type Edge struct {
-	Change string   `json:"change"`
-	Dep    string   `json:"dep"`
-	Kind   EdgeKind `json:"kind"`
-	// Source is after | parent | issue | owner_stack | hand_retarget | gate.
-	Source string `json:"source"`
+	Change string `json:"change"`
+	Dep    string `json:"dep"`
 }
 
 // Attempt is one row of prgraph_attempt (#826): the retry history of one

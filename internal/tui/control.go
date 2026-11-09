@@ -298,7 +298,7 @@ func (m *model) viewLeft(w, h int) string {
 				lines[i] = truncate(l, w-3)
 			}
 			body = sText.Render(strings.Join(lines, "\n"))
-		} else if t.Window == "" || t.Status == store.Landed || t.Status == store.Killed || t.Status == store.NoChange {
+		} else if t.Window == "" || store.Finished(t.Status) {
 			body = sDim.Render(" Window closed (" + statusLabel(t.Status) + ").")
 			if t.PR != "" {
 				body += "\n " + sDim.Render(t.PR)

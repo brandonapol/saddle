@@ -1,6 +1,7 @@
 package app
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -58,8 +59,7 @@ func TestShadowInputMapsLegacyStores(t *testing.T) {
 			{Task: "t9", Seq: 9, State: store.TrainError},
 			{Task: "t10", Seq: 10, State: TrainEscalated, Note: "tests failed (test_failed)"},
 		},
-		Edges:          []prgraph.Edge{{Change: "t2", Dep: "t1", Kind: prgraph.Declared, Source: "after"}, {Change: "t3", Dep: "t8", Kind: prgraph.Declared, Source: "after"}},
-		Stacks:         []CustomStack{{Name: "s", Tasks: []string{"t1", "t3"}}},
+		Edges:          []prgraph.Edge{{Change: "t2", Dep: "t1"}, {Change: "t3", Dep: "t8"}},
 		Automerge:      true,
 		AutomergeHolds: []string{"t2"},
 		CIRed: CIRedState{
@@ -116,15 +116,11 @@ func TestShadowInputMapsLegacyStores(t *testing.T) {
 	if t9.Reason != prgraph.CauseConflict {
 		t.Errorf("t9 reason = %q", t9.Reason)
 	}
-	hasEdge := func(c, d, src string) bool {
-		for _, e := range st.Edges {
-			if e.Change == c && e.Dep == d && e.Source == src {
-				return true
-			}
-		}
-		return false
+	hasEdge := func(c, d string) bool {
+		return slices.Contains(st.Edges, prgraph.Edge{Change: c, Dep: d})
 	}
-	if !hasEdge("t2", "t1", "after") || !hasEdge("t3", "t1", "owner_stack") || !hasEdge("t3", "t8", "after") {
+	// #934: only declared after edges; an owner stack is not an edge.
+	if !hasEdge("t2", "t1") || hasEdge("t3", "t1") || !hasEdge("t3", "t8") {
 		t.Errorf("edges = %+v", st.Edges)
 	}
 	var fix prgraph.Attempt

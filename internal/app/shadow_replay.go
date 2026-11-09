@@ -339,7 +339,8 @@ func (w *replayWorld) openPR(c *rChange, at time.Time) {
 func (w *replayWorld) post(ev store.Event) {
 	w.hist.add(ev)
 	if ev.Kind == EventDependsOn {
-		for _, e := range shadowEdges(ev.Task, ev.Data) {
+		edges, _ := shadowEdges(ev.Task, ev.Data)
+		for _, e := range edges {
 			w.edges[e.Change+">"+e.Dep] = e
 		}
 		return

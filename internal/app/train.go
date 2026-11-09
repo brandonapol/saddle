@@ -865,11 +865,6 @@ func (a *App) publishMode(pushOnly bool) (published, error) {
 	}
 	landed := stacked(all)
 	a.healBranches(landed)
-	// Dependencies nobody declared stack too, whatever the file overlap
-	// (#358, #359; see prbase.go).
-	if err := a.noteDependencies(landed, info); err != nil {
-		return res, err
-	}
 	flag, flagged, err := a.Flag()
 	if err != nil {
 		return res, err

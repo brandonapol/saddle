@@ -8,7 +8,7 @@ import (
 
 // SchemaVersion is prgraph's own migration version, kept in prgraph_meta
 // apart from the host's.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // schemaV1 is ADR 0009 §1's tables. Every table is prefixed prgraph_ so the
 // package can later move to its own database file. Two attempt columns go
@@ -52,6 +52,20 @@ CREATE TABLE IF NOT EXISTS prgraph_tick(
 CREATE INDEX IF NOT EXISTS prgraph_tick_ts ON prgraph_tick(ts);
 `
 
+// schemaV2 narrows prgraph_edge to declared after edges (ADR 0012 rule 8,
+// #934): the kind and source columns go, and so does every row that wasn't
+// kind 'declared' from source 'after'. SQLite can't drop a column with a
+// CHECK on it, so the table is rebuilt.
+const schemaV2 = `
+CREATE TABLE prgraph_edge_v2(
+  change TEXT NOT NULL, dep TEXT NOT NULL,
+  PRIMARY KEY(change, dep));
+INSERT INTO prgraph_edge_v2(change, dep)
+  SELECT change, dep FROM prgraph_edge WHERE kind = 'declared' AND source = 'after';
+DROP TABLE prgraph_edge;
+ALTER TABLE prgraph_edge_v2 RENAME TO prgraph_edge;
+`
+
 // Migrate creates or upgrades prgraph's tables in db, whatever database the
 // host passes. It is idempotent.
 func Migrate(ctx context.Context, db *sql.DB) error {
@@ -63,10 +77,36 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if _, err := tx.ExecContext(ctx, schemaV1); err != nil {
 		return fmt.Errorf("prgraph: migrate v1: %w", err)
 	}
+	if old, err := edgeHasKind(ctx, tx); err != nil {
+		return fmt.Errorf("prgraph: migrate v2: %w", err)
+	} else if old {
+		if _, err := tx.ExecContext(ctx, schemaV2); err != nil {
+			return fmt.Errorf("prgraph: migrate v2: %w", err)
+		}
+	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO prgraph_meta(key, value) VALUES('schema_version', ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`, fmt.Sprint(SchemaVersion)); err != nil {
 		return fmt.Errorf("prgraph: migrate: version: %w", err)
 	}
 	return tx.Commit()
+}
+
+// edgeHasKind reports whether prgraph_edge still has v1's kind column.
+func edgeHasKind(ctx context.Context, tx *sql.Tx) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT name FROM pragma_table_info('prgraph_edge')`)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, err
+		}
+		if name == "kind" {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }

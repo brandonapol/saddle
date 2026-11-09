@@ -82,32 +82,6 @@ func TestPRsDoesNotStackOnIssueCitation(t *testing.T) {
 	}
 }
 
-// #358, as narrowed by #734: t2's prompt names t1 by its task id, which only
-// a spawner writes on purpose. prs records the edge and stacks t2 on t1.
-func TestPRsStacksTaskWhosePromptNamesAnother(t *testing.T) {
-	t.Parallel()
-	a := trainSetup(t)
-	a.Cfg.Test.Cmd = needsOne
-	_, ghLog := originWithGh(t, a)
-	t1 := landSpec(t, a, SpawnReq{ID: "t1", Title: "resync on reconnect"}, map[string]string{"one.txt": "one\n"})
-	t2 := landSpec(t, a, SpawnReq{ID: "t2", Title: "drop reconnect listeners",
-		Prompt: "Builds on t1's resync: drop the listeners it made redundant."}, map[string]string{"two.txt": "two\n"})
-
-	if _, err := a.PRs(); err != nil {
-		t.Fatal(err)
-	}
-	bases := prBases(ghLog())
-	if bases[t1.Branch] != "main" || bases[t2.Branch] != t1.Branch {
-		t.Fatalf("PR bases = %v, want t1 on main and t2 on %s", bases, t1.Branch)
-	}
-	if !eventWith(t, a, "t2", EventDependsOn, "names t1") {
-		t.Fatal("no depends_on event naming how the edge was found")
-	}
-	if !eventWith(t, a, "t2", EventPRStacked, "t2 runs after t1") {
-		t.Fatal("no pr_stacked event saying why t2 isn't on main")
-	}
-}
-
 // #358 item 2: with no edge to find, the pre-publish gate checks t2 at its
 // PR head, on main without t1, not at the integration tip that has t1
 // underneath: it fails there, so t2 isn't published, and t1 is.
@@ -157,47 +131,6 @@ func TestRestackGatesPRHeadNotIntegrationTip(t *testing.T) {
 	}
 	if remoteRev(t, origin, t2.Branch) != was2 {
 		t.Fatal("restack pushed t2's red PR head")
-	}
-}
-
-// #359: two independent layers go up on main; the owner retargets t2 onto
-// t1's branch with gh pr edit --base. Restack keeps that base, records the
-// edge, and t2's PR head carries t1's work.
-func TestRestackKeepsManualRetarget(t *testing.T) {
-	t.Parallel()
-	a := trainSetup(t)
-	origin, ghLog := originWithGh(t, a)
-	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
-	t2 := landTask(t, a, "t2", "two", map[string]string{"two.txt": "two\n"})
-	if _, err := a.PRs(); err != nil {
-		t.Fatal(err)
-	}
-	t2, _ = a.Store.Task(t2.ID)
-	setPR(t, t2.PR, "OPEN", t1.Branch) // gh pr edit --base, by hand
-	before := len(ghLog())
-
-	if _, err := a.Restack(); err != nil {
-		t.Fatal(err)
-	}
-	// It already targets t1's branch, so it isn't edited at all (#341).
-	if got, ok := baseEdits(ghLog()[before:])[t2.PR]; ok && got != t1.Branch {
-		t.Fatalf("restack set t2's base to %q, want the hand-set %s", got, t1.Branch)
-	}
-	if !slices.Contains(a.TaskAfter("t2"), "t1") || !eventWith(t, a, "t2", EventDependsOn, "manual retarget") {
-		t.Fatalf("t2's after edges = %v, want t1 recorded from the retarget", a.TaskAfter("t2"))
-	}
-	head := remoteRev(t, origin, t2.Branch)
-	if files := git(t, origin, "ls-tree", "-r", "--name-only", head); !strings.Contains(files, "one.txt") {
-		t.Fatalf("t2's PR head doesn't sit on t1's work:\n%s", files)
-	}
-
-	// prs keeps it too.
-	before = len(ghLog())
-	if _, err := a.PRs(); err != nil {
-		t.Fatal(err)
-	}
-	if got, ok := baseEdits(ghLog()[before:])[t2.PR]; ok && got != t1.Branch {
-		t.Fatalf("prs set t2's base to %q, want %s", got, t1.Branch)
 	}
 }
 
@@ -300,26 +233,5 @@ func TestMergedDependencyNamesItsDependents(t *testing.T) {
 	}
 	if !eventWith(t, a, "t1", "dependents_unblocked", "t2") {
 		t.Fatal("no dependents_unblocked event naming t2")
-	}
-}
-
-func TestNamesNeedsAWholeReference(t *testing.T) {
-	t.Parallel()
-	dep := store.Task{ID: "t1", Issue: 31, PR: "https://github.com/o/r/pull/40", Branch: "saddle/t1-resync"}
-	for text, want := range map[string]bool{
-		"Builds on t1's resync.":               true,
-		"follow-up to #31":                     false,
-		"see https://github.com/o/r/pull/40":   true,
-		"needs #40 first":                      false,
-		"on top of saddle/t1-resync":           true,
-		"t12 and t10 only":                     false,
-		"closes #312":                          false,
-		"other/repo#31 is unrelated, as is #4": false,
-		"st1 is a word, so is t1x":             false,
-		"nothing here":                         false,
-	} {
-		if _, got := names(text, dep); got != want {
-			t.Errorf("names(%q) = %v, want %v", text, got, want)
-		}
 	}
 }

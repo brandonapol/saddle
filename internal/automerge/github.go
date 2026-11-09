@@ -73,12 +73,18 @@ func (g *GH) OpenPRs() ([]PR, error) {
 func forgePR(p forge.PR) PR {
 	pr := PR{URL: p.URL, State: p.State, Draft: p.Draft, Mergeable: p.Mergeable, MergeState: p.MergeState,
 		Base: p.Base, Head: p.Head, HeadSHA: p.HeadSHA, Labels: p.Labels}
-	rollup := make([]Check, 0, len(p.Checks))
-	for _, c := range p.Checks {
+	pr.Checks = Rollup(p.Checks)
+	return pr
+}
+
+// Rollup folds check runs into ChecksPass, ChecksPending, ChecksFail or
+// ChecksNone.
+func Rollup(cs []forge.CheckRun) string {
+	rollup := make([]Check, 0, len(cs))
+	for _, c := range cs {
 		rollup = append(rollup, Check{Status: c.Status, Conclusion: c.Conclusion, State: c.State})
 	}
-	pr.Checks = summarize(rollup)
-	return pr
+	return summarize(rollup)
 }
 
 // MergeMethod is squash when the repo allows it, else rebase. Saddle needs

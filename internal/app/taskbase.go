@@ -72,6 +72,8 @@ func (a *App) depMerged(dep store.Task, main string) bool {
 	switch dep.Status {
 	case store.Running, store.Idle, store.NeedsYou, store.Conflict, store.Done:
 		return false
+	case store.Merged:
+		return true // the merge queue merged its PR (#935)
 	}
 	if _, err := gitx.Run(a.Root, "merge-base", "--is-ancestor", dep.Branch, main); err == nil {
 		return true

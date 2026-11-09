@@ -632,7 +632,7 @@ func rank(status string) int {
 		return 3
 	case store.Done:
 		return 4
-	case store.Landed, store.NoChange, store.PROpen:
+	case store.Landed, store.NoChange, store.PROpen, store.Merged:
 		return 5
 	}
 	return 6
@@ -1816,7 +1816,7 @@ func glyph(status string) (string, lipgloss.Color) {
 		return "◆", cAccent
 	case store.Conflict:
 		return "✗", cAlert
-	case store.Landed, store.PROpen:
+	case store.Landed, store.PROpen, store.Merged:
 		return "✓", cDone
 	}
 	return "·", cFaint

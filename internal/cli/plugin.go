@@ -350,7 +350,7 @@ func writeBrief(w io.Writer, a *app.App) error {
 
 func activeStatus(s string) bool {
 	switch s {
-	case store.Killed, store.Landed, store.NoChange:
+	case store.Killed, store.Landed, store.NoChange, store.Merged:
 		return false
 	}
 	return true

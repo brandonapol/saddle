@@ -69,13 +69,6 @@ func buildGraph(changes []Change, edges []Edge, inBase map[string]bool) *graph {
 	return g
 }
 
-// reaches reports whether from depends on to, directly or through others.
-func (g *graph) reaches(from, to string) bool {
-	fi, ok1 := g.idx[from]
-	ti, ok2 := g.idx[to]
-	return ok1 && ok2 && g.anc[fi][ti]
-}
-
 // closure returns every change id depends on, transitively, sorted.
 func (g *graph) closure(id string) []string {
 	i, ok := g.idx[id]

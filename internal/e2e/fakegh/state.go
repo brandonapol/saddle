@@ -40,12 +40,15 @@ type State struct {
 	// Protected makes the branch protection API answer for Default.
 	Protected bool `json:"protected"`
 	// DefaultChecks are given to every new PR, so tests can hold CI pending.
-	DefaultChecks []Check    `json:"default_checks,omitempty"`
-	Next          int        `json:"next"`
-	PRs           []*PR      `json:"prs"`
-	Issues        []*Issue   `json:"issues"`
-	Labels        []string   `json:"labels"`
-	Calls         [][]string `json:"calls"`
+	DefaultChecks []Check `json:"default_checks,omitempty"`
+	// BranchChecks are the check runs on a branch's tip outside any PR
+	// (commits/REF/check-runs), by branch name: main's own CI.
+	BranchChecks map[string][]Check `json:"branch_checks,omitempty"`
+	Next         int                `json:"next"`
+	PRs          []*PR              `json:"prs"`
+	Issues       []*Issue           `json:"issues"`
+	Labels       []string           `json:"labels"`
+	Calls        [][]string         `json:"calls"`
 	// Fail makes the next calls whose args start with a key fail with its value.
 	Fail map[string]string `json:"fail,omitempty"`
 	// Hold makes calls whose args start with one of its prefixes ("" for

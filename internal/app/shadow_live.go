@@ -27,29 +27,26 @@ const shadowTickKeep = 14 * 24 * time.Hour
 // and edge kinds when it starts.
 const shadowEventLookback = 5000
 
-// shadowEdge reads one depends_on event as edges: a comma list at spawn
-// (declared after edges), or one learned edge with how saddle learned it.
-func shadowEdges(task, data string) []prgraph.Edge {
+// shadowEdges reads one depends_on event as declared after edges: a comma
+// list at spawn, or one added with `saddle after`. An edge saddle once
+// inferred (from task text or a hand retarget) is not one: prgraph's only
+// edges are declared (ADR 0012 rule 8, #934), so it gives none, and
+// learned reports it so the deps file's copy is left out too.
+func shadowEdges(task, data string) (edges []prgraph.Edge, learned string) {
 	data = strings.TrimSpace(data)
 	if dep, why, ok := strings.Cut(data, " ("); ok {
-		why = strings.TrimSuffix(why, ")")
-		e := prgraph.Edge{Change: task, Dep: strings.TrimSpace(dep), Kind: prgraph.Declared, Source: "after"}
-		switch {
-		case strings.HasPrefix(why, "inferred"):
-			e.Kind, e.Source = prgraph.Inferred, "issue"
-		case strings.Contains(why, "saddle after"):
-		default:
-			e.Source = "hand_retarget"
+		dep = strings.TrimSpace(dep)
+		if strings.Contains(why, "saddle after") {
+			return []prgraph.Edge{{Change: task, Dep: dep}}, ""
 		}
-		return []prgraph.Edge{e}
+		return nil, dep
 	}
-	var out []prgraph.Edge
 	for _, d := range strings.Split(data, ",") {
 		if d = strings.TrimSpace(d); d != "" {
-			out = append(out, prgraph.Edge{Change: task, Dep: d, Kind: prgraph.Declared, Source: "after"})
+			edges = append(edges, prgraph.Edge{Change: task, Dep: d})
 		}
 	}
-	return out
+	return edges, ""
 }
 
 // shadowSinceKinds are the events that start a legacy state, for the
@@ -59,16 +56,16 @@ var shadowSinceKinds = map[string]bool{
 }
 
 // shadowHistory is what the shadow learns from the event log as it goes:
-// when each task's legacy state began, how each after edge was learned,
-// and which tasks had a PR.
+// when each task's legacy state began, which after edges were inferred
+// rather than declared, and which tasks had a PR.
 type shadowHistory struct {
-	since map[string]time.Time
-	edges map[string]prgraph.Edge // "task>dep"
-	prOf  map[string]int
+	since   map[string]time.Time
+	learned map[string]bool // "task>dep": inferred by old saddle, not declared
+	prOf    map[string]int
 }
 
 func newShadowHistory() *shadowHistory {
-	return &shadowHistory{since: map[string]time.Time{}, edges: map[string]prgraph.Edge{}, prOf: map[string]int{}}
+	return &shadowHistory{since: map[string]time.Time{}, learned: map[string]bool{}, prOf: map[string]int{}}
 }
 
 func (h *shadowHistory) add(ev store.Event) {
@@ -76,8 +73,8 @@ func (h *shadowHistory) add(ev store.Event) {
 		h.since[ev.Task] = ev.TS
 	}
 	if ev.Kind == EventDependsOn {
-		for _, e := range shadowEdges(ev.Task, ev.Data) {
-			h.edges[e.Change+">"+e.Dep] = e
+		if _, dep := shadowEdges(ev.Task, ev.Data); dep != "" {
+			h.learned[ev.Task+">"+dep] = true
 		}
 	}
 }
@@ -94,15 +91,10 @@ func (a *App) shadowStores(now time.Time, h *shadowHistory) (ShadowStores, error
 	}
 	for _, e := range s.Train {
 		for _, d := range a.TaskAfter(e.Task) {
-			edge, ok := h.edges[e.Task+">"+d]
-			if !ok {
-				edge = prgraph.Edge{Change: e.Task, Dep: d, Kind: prgraph.Declared, Source: "after"}
+			if !h.learned[e.Task+">"+d] {
+				s.Edges = append(s.Edges, prgraph.Edge{Change: e.Task, Dep: d})
 			}
-			s.Edges = append(s.Edges, edge)
 		}
-	}
-	if s.Stacks, err = a.CustomStacks(); err != nil {
-		return s, err
 	}
 	if s.CIRed, err = a.CIRed(); err != nil {
 		return s, err

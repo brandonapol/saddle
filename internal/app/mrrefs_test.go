@@ -75,23 +75,3 @@ func TestDigestNamesGitLabMRs(t *testing.T) {
 		t.Fatalf("digest %q doesn't name the MRs !12 !13", sent)
 	}
 }
-
-// #652, as narrowed by #734: a task's text names an earlier layer's MR or
-// PR by its URL. A short "!12" or "#12" doesn't count: it reads the same as
-// an issue cited for context.
-func TestNamesGitLabMR(t *testing.T) {
-	t.Parallel()
-	mr := store.Task{ID: "t1", PR: "https://gitlab.com/g/r/-/merge_requests/12"}
-	if got, ok := names("build on https://gitlab.com/g/r/-/merge_requests/12 first", mr); !ok || got != mr.PR {
-		t.Errorf("names(MR URL) = %q, %v; want the URL", got, ok)
-	}
-	for _, text := range []string{"build on !12 first", "see !120"} {
-		if _, ok := names(text, mr); ok {
-			t.Errorf("names(%q) named the MR", text)
-		}
-	}
-	pr := store.Task{ID: "t1", PR: "https://github.com/o/r/pull/12"}
-	if _, ok := names("needs #12", pr); ok {
-		t.Error("names(#12) named the PR")
-	}
-}

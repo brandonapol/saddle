@@ -39,7 +39,7 @@ func TestSQLStoreLoadRoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := s.PutEdge(ctx, Edge{Change: "c2", Dep: "c1", Kind: Declared, Source: "after"}); err != nil {
+	if err := s.PutEdge(ctx, Edge{Change: "c2", Dep: "c1"}); err != nil {
 		t.Fatal(err)
 	}
 	att := Attempt{Key: "merge/7/h1", Kind: "merge", Inputs: "h1", N: 2, Last: OutcomeRefused,
@@ -60,7 +60,7 @@ func TestSQLStoreLoadRoundTrip(t *testing.T) {
 	if got := st.Changes[1]; got != b {
 		t.Errorf("c2 = %+v, want %+v", got, b)
 	}
-	if len(st.Edges) != 1 || st.Edges[0] != (Edge{Change: "c2", Dep: "c1", Kind: Declared, Source: "after"}) {
+	if len(st.Edges) != 1 || st.Edges[0] != (Edge{Change: "c2", Dep: "c1"}) {
 		t.Errorf("edges = %+v", st.Edges)
 	}
 	if len(st.Attempts) != 1 || st.Attempts[0] != att {

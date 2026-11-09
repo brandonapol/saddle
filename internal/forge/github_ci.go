@@ -80,3 +80,44 @@ func cleanLog(log string, n int) (step, tail string) {
 	}
 	return step, strings.Join(lines, "\n")
 }
+
+// branchChecker is a forge that reads the check runs on a commit or branch
+// outside any PR.
+type branchChecker interface {
+	BranchChecks(ctx context.Context, ref string) ([]CheckRun, error)
+}
+
+// ReadBranchChecks lists the CI check runs on ref (a branch or commit), for
+// the merge queue's "is main itself red" (#935). A forge without it returns
+// ErrUnsupported.
+func ReadBranchChecks(ctx context.Context, f Forge, ref string) ([]CheckRun, error) {
+	if b, ok := f.(branchChecker); ok {
+		return b.BranchChecks(ctx, ref)
+	}
+	return nil, fmt.Errorf("read branch checks: %w", ErrUnsupported)
+}
+
+// BranchChecks reads `gh api repos/{owner}/{repo}/commits/REF/check-runs`.
+func (g *GitHub) BranchChecks(ctx context.Context, ref string) ([]CheckRun, error) {
+	out, err := g.run(ctx, "api", "repos/{owner}/{repo}/commits/"+ref+"/check-runs")
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Runs []struct {
+			Name       string `json:"name"`
+			Status     string `json:"status"`
+			Conclusion string `json:"conclusion"`
+			StartedAt  string `json:"started_at"`
+		} `json:"check_runs"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		return nil, fmt.Errorf("parse gh api output: %w", err)
+	}
+	cs := make([]CheckRun, 0, len(resp.Runs))
+	for _, r := range resp.Runs {
+		cs = append(cs, CheckRun{Kind: KindJob, Name: r.Name, Status: strings.ToUpper(r.Status),
+			Conclusion: strings.ToUpper(r.Conclusion), StartedAt: r.StartedAt})
+	}
+	return cs, nil
+}

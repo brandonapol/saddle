@@ -154,15 +154,19 @@ func TestForgeSnapshotChecks(t *testing.T) {
 
 func TestShadowEdgesFromDependsOn(t *testing.T) {
 	t.Parallel()
-	got := shadowEdges("t5", "t1,t2")
-	if len(got) != 2 || got[1].Dep != "t2" || got[0].Kind != prgraph.Declared {
+	got, _ := shadowEdges("t5", "t1,t2")
+	if len(got) != 2 || got[1] != (prgraph.Edge{Change: "t5", Dep: "t2"}) {
 		t.Errorf("spawn edges = %+v", got)
 	}
-	if e := shadowEdges("t396", "t395 (inferred: t396's task text names t395)"); len(e) != 1 || e[0].Kind != prgraph.Inferred || e[0].Dep != "t395" {
-		t.Errorf("inferred = %+v", e)
+	if e, _ := shadowEdges("t7", "t5 (recorded with saddle after)"); len(e) != 1 || e[0].Dep != "t5" {
+		t.Errorf("saddle after = %+v", e)
 	}
-	if e := shadowEdges("t6", "t4 (its PR was retargeted onto t4's branch)"); len(e) != 1 || e[0].Source != "hand_retarget" {
-		t.Errorf("retarget = %+v", e)
+	// #934: an edge old saddle inferred is not an edge.
+	if e, learned := shadowEdges("t396", "t395 (inferred: t396's task text names t395)"); len(e) != 0 || learned != "t395" {
+		t.Errorf("inferred = %+v, %q", e, learned)
+	}
+	if e, learned := shadowEdges("t6", "t4 (manual retarget: x was moved onto y outside saddle)"); len(e) != 0 || learned != "t4" {
+		t.Errorf("retarget = %+v, %q", e, learned)
 	}
 }
 

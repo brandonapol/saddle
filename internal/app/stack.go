@@ -144,11 +144,6 @@ func (a *App) restack() (RestackResult, error) {
 	if err := a.checkDrift(stack); err != nil {
 		return res, err
 	}
-	// A retarget someone made by hand, or a dependency the task's text
-	// names, is an edge the layout keeps (#358, #359; see prbase.go).
-	if err := a.noteDependencies(stack, info); err != nil {
-		return res, err
-	}
 	integ, err := gitx.RevParse(a.Root, a.Cfg.Integration)
 	if err != nil {
 		return res, err

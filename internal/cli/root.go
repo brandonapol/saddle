@@ -257,7 +257,7 @@ type watcher struct {
 func watcherSet(a *app.App) []watcher {
 	ws := []watcher{
 		{"sentinel", func(ctx context.Context) { _ = sentinel.New(a).Run(ctx) }},
-		{"automerge", func(ctx context.Context) { _ = a.NewAutomerge(nil).Run(ctx) }}, // merges only when on
+		mergeWatcher(a), // the merge queue, or with legacy_train the old auto-merge watcher; merges only when on
 		{"compact", func(ctx context.Context) { _ = a.NewCompactWatcher().Run(ctx) }}, // notices and compacts
 		{"digest", a.RunDigest},        // routine notices as one digest line
 		{"resume", a.RunResumeWatcher}, // new windows for tasks that lost theirs (#254)
@@ -275,6 +275,16 @@ func watcherSet(a *app.App) []watcher {
 		}
 	}
 	return ws
+}
+
+// mergeWatcher is the loop that merges PRs: the merge queue over pr_open
+// tasks (ADR 0012, #935), or, with legacy_train on, the old auto-merge
+// watcher over the train's landed stack. Only one of them ever merges.
+func mergeWatcher(a *app.App) watcher {
+	if a.Cfg.LegacyTrain {
+		return watcher{"automerge", func(ctx context.Context) { _ = a.NewAutomerge(nil).Run(ctx) }}
+	}
+	return watcher{"queue", func(ctx context.Context) { a.NewMergeQueue(nil).Run(ctx) }}
 }
 
 // startWatchersWith runs ws under g: a panic in one is recovered, recorded
@@ -517,7 +527,7 @@ func writeAdapters(out io.Writer, ss []agent.Status) {
 // on and why (#505).
 func writeTaskPicks(out io.Writer, ts []mcpserver.TaskView) {
 	for _, t := range ts {
-		if t.Pick == "" || t.Status == store.Landed || t.Status == store.Killed || t.Status == store.NoChange {
+		if t.Pick == "" || store.Finished(t.Status) {
 			continue
 		}
 		fmt.Fprintf(out, "%s on %s\n", t.ID, t.Pick)

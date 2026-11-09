@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"context"
+
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/automerge"
 )
@@ -36,4 +38,15 @@ func (w *World) open() *app.App {
 	must(w.T, err)
 	a.Bin = w.Bins.Saddle
 	return a
+}
+
+// QueueTick runs one tick of the merge queue (#935), the loop `saddle up`
+// and `saddle plugin engine` run while legacy_train is off, with no wait.
+func (w *World) QueueTick() app.QueueTick {
+	w.T.Helper()
+	a := w.open()
+	defer func() { _ = a.Close() }()
+	tk, err := a.NewMergeQueue(nil).Tick(context.Background())
+	must(w.T, err)
+	return tk
 }
