@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/brandonapol/saddle/internal/forge"
+	"github.com/brandonapol/saddle/internal/gitx"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -267,7 +268,7 @@ func TestFlattenConflictLeavesPRAndReopensTask(t *testing.T) {
 	}
 	tk, err := a.Store.Task("t1")
 	must(t, err)
-	if tk.Status != store.Fixing || tk.FixReason != "conflict: README.md" || tk.Base != "main" {
+	if tk.Status != store.Fixing || !strings.HasPrefix(tk.FixReason, "conflict: README.md") || tk.Base != "main" {
 		t.Errorf("t1 = %s %q base %q, want fixing with conflict: README.md on main", tk.Status, tk.FixReason, tk.Base)
 	}
 }
@@ -375,5 +376,112 @@ func TestFlattenRepairKeepsRepairTaskAndDropsPrefix(t *testing.T) {
 	}
 	if t5.Status != store.Killed || t5.KilledBy != KilledBySupersededByFlatten {
 		t.Errorf("t5 = %s killed_by %q, want killed superseded_by_flatten", t5.Status, t5.KilledBy)
+	}
+}
+
+// #937: after a flatten conflict, a task with no live agent has its local
+// branch moved, in its clean worktree, to main plus its own commits up to
+// the conflicting one; the rest are named in order in its fix reason, the
+// PR keeps its old head, and once the agent applies the rest its done
+// passes the own-commits check.
+func TestFlattenConflictMovesBranchToOwnWorkOnMain(t *testing.T) {
+	t.Parallel()
+	w := flattenSetup(t)
+	a := w.a
+	// t0 below, t1 stacked on it: t1 carries t0's commit.
+	git(t, w.clone, "checkout", "-q", "-b", "b0", "main")
+	w.commit(t, "t0 work", "t0.txt", "t0\n", "2026-01-01T00:00:00")
+	w.push(t, "saddle/t0")
+	git(t, w.clone, "checkout", "-q", "-b", "b1")
+	w.commit(t, "t1 a", "t1a.txt", "a\n", "2026-01-01T00:00:01")
+	pick1 := w.commit(t, "t1 readme", "README.md", "t1\n", "2026-01-01T00:00:02")
+	pick2 := w.commit(t, "t1 c", "t1c.txt", "c\n", "2026-01-01T00:00:03")
+	w.push(t, "saddle/t1")
+	git(t, w.clone, "checkout", "-q", "main")
+	w.commit(t, "main readme", "README.md", "main\n", "2026-01-02T00:00:00")
+	w.push(t, "main")
+	w.landed(t, "t0", "Zero", "saddle/t0", "main")
+	w.landed(t, "t1", "One", "saddle/t1", "saddle/t0")
+	// Both tasks' old local branches, t1's checked out in its worktree.
+	git(t, a.Root, "fetch", "-q", "origin", "saddle/t0:saddle/t0", "saddle/t1:saddle/t1")
+	wt := filepath.Join(t.TempDir(), "t1")
+	git(t, a.Root, "worktree", "add", "-q", wt, "saddle/t1")
+	must(t, a.Store.SetField("t1", "worktree", wt))
+	oldHead := w.f.rev("saddle/t1")
+
+	res, err := a.Flatten(t.Context(), w.f, false)
+	must(t, err)
+	if len(res.PRs) != 2 || res.PRs[1].Task != "t1" || res.PRs[1].Outcome != FlattenFix {
+		t.Fatalf("PRs = %+v, want t1 fixing", res.PRs)
+	}
+	if w.f.rev("saddle/t1") != oldHead {
+		t.Error("the PR's head moved; done force-pushes it, not flatten")
+	}
+	if got := git(t, a.Root, "log", "--format=%s", "--reverse", "origin/main..saddle/t1"); got != "t1 a" {
+		t.Errorf("origin/main..saddle/t1 = %q, want only t1's commit before the conflict", got)
+	}
+	if st := git(t, wt, "status", "--porcelain"); st != "" {
+		t.Errorf("the worktree isn't clean: %q", st)
+	}
+	if _, err := gitx.Run(wt, "rev-parse", "-q", "--verify", "CHERRY_PICK_HEAD"); err == nil {
+		t.Error("a cherry-pick was left in the worktree")
+	}
+	tk, err := a.Store.Task("t1")
+	must(t, err)
+	want := "conflict: README.md; cherry-pick in order: " + short(pick1) + " t1 readme, " + short(pick2) + " t1 c"
+	if tk.FixReason != want {
+		t.Errorf("fix_reason = %q, want %q", tk.FixReason, want)
+	}
+	if note := fixNote(tk, 2); !strings.Contains(note, "your branch now holds only your own work on main. Cherry-pick these in order, resolve the conflict in README.md, then call done.") {
+		t.Errorf("fix note = %q", note)
+	}
+	// The fix pass starting its agent must not reset it to the PR's old
+	// stacked head.
+	a.adoptRemoteHead(tk, false)
+	if got := git(t, a.Root, "log", "--format=%s", "origin/main..saddle/t1"); got != "t1 a" {
+		t.Errorf("after adoptRemoteHead origin/main..saddle/t1 = %q", got)
+	}
+	// The agent applies the rest.
+	if _, err := gitx.Run(wt, "cherry-pick", pick1); err == nil {
+		t.Fatal("the README pick should conflict")
+	}
+	write(t, wt, "README.md", "main\nt1\n")
+	git(t, wt, "add", "README.md")
+	gitEnv(t, wt, []string{"GIT_EDITOR=true"}, "cherry-pick", "--continue")
+	git(t, wt, "cherry-pick", pick2)
+	tk, _ = a.Store.Task("t1")
+	foreign, err := a.foreignCommits(tk, "origin/main")
+	must(t, err)
+	if len(foreign) != 0 {
+		t.Errorf("done's own-commits check refuses: %v", foreign)
+	}
+}
+
+// #937: a dirty worktree is not moved; the fix reason says so.
+func TestFlattenConflictLeavesDirtyWorktree(t *testing.T) {
+	t.Parallel()
+	w := flattenSetup(t)
+	a := w.a
+	git(t, w.clone, "checkout", "-q", "-b", "b1", "main")
+	w.commit(t, "t1 work", "README.md", "t1\n", "2026-01-01T00:00:00")
+	w.push(t, "saddle/t1")
+	git(t, w.clone, "checkout", "-q", "main")
+	w.commit(t, "main work", "README.md", "main\n", "2026-01-02T00:00:00")
+	w.push(t, "main")
+	w.landed(t, "t1", "One", "saddle/t1", "main")
+	git(t, a.Root, "fetch", "-q", "origin", "saddle/t1:saddle/t1")
+	wt := filepath.Join(t.TempDir(), "t1")
+	git(t, a.Root, "worktree", "add", "-q", wt, "saddle/t1")
+	must(t, a.Store.SetField("t1", "worktree", wt))
+	write(t, wt, "scratch.txt", "wip\n")
+	before := git(t, wt, "rev-parse", "HEAD")
+	_, err := a.Flatten(t.Context(), w.f, false)
+	must(t, err)
+	if h := git(t, wt, "rev-parse", "HEAD"); h != before {
+		t.Error("a dirty worktree was moved")
+	}
+	tk, _ := a.Store.Task("t1")
+	if !strings.Contains(tk.FixReason, "its branch was not moved: its worktree has uncommitted changes") {
+		t.Errorf("fix_reason = %q", tk.FixReason)
 	}
 }

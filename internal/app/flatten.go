@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/brandonapol/saddle/internal/forge"
 	"github.com/brandonapol/saddle/internal/gitx"
@@ -53,6 +54,7 @@ const (
 	EventFlattenLeft     = "flatten_left"     // left alone; data: why
 	EventFlattenConflict = "flatten_conflict" // the replay conflicted; data: files
 	EventFlattenFolded   = "flatten_folded"   // an original folded into its repair's PR; data: the repair
+	EventFlattenMoved    = "flatten_moved"    // a conflicting task's local branch was moved onto main; data: old → new
 )
 
 // KilledBySupersededByFlatten is an original task whose work a repair
@@ -115,6 +117,10 @@ type FlattenPR struct {
 	Outcome string `json:"outcome,omitempty"`
 	head    string
 	newHead string
+	// On a conflict: main plus the own commits that applied before it, and
+	// the own commits from the conflicting one on.
+	cleanHead string
+	rest      []FlattenCommit
 }
 
 // FlattenResult is a flatten run.
@@ -541,12 +547,13 @@ func (a *App) planFlatten(fp *flatPR, mainRef, mainTip string) {
 			return
 		}
 	}
-	head, conflicts, err := a.replayOwn(mainTip, pl.Keep)
+	head, conflicts, at, err := a.replayOwn(mainTip, pl.Keep)
 	switch {
 	case err != nil:
 		pl.Action, pl.Reason = FlattenLeave, "replaying its commits failed: "+oneLine(err.Error())
 	case len(conflicts) > 0:
 		pl.Action, pl.Conflicts = FlattenFix, conflicts
+		pl.cleanHead, pl.rest = head, pl.Keep[at:]
 		pl.Reason = "replaying its own commits onto " + a.Cfg.Base + " conflicts in " + strings.Join(conflicts, ", ")
 	case head == mainTip:
 		pl.Action, pl.Reason = FlattenClose, "its commits' changes are all on "+a.Cfg.Base+" already"
@@ -569,32 +576,34 @@ func (a *App) cleanFlattenScratch() {
 }
 
 // replayOwn cherry-picks cs, oldest first, onto onto in the scratch
-// worktree. It returns the new head, or the files the first conflicting
-// commit conflicts in. A commit whose change onto already has is dropped.
-func (a *App) replayOwn(onto string, cs []FlattenCommit) (string, []string, error) {
+// worktree. It returns the new head; or, on a conflict, the head before
+// the conflicting commit, the files it conflicts in and its index in cs. A
+// commit whose change onto already has is dropped.
+func (a *App) replayOwn(onto string, cs []FlattenCommit) (string, []string, int, error) {
 	a.cleanFlattenScratch()
 	defer a.cleanFlattenScratch()
 	dir := a.flattenScratch()
 	if err := os.MkdirAll(a.stateDir(), 0o755); err != nil {
-		return "", nil, err
+		return "", nil, 0, err
 	}
 	if _, err := gitx.Run(a.Root, "worktree", "add", "--detach", dir, onto); err != nil {
-		return "", nil, err
+		return "", nil, 0, err
 	}
-	for _, c := range cs {
+	for i, c := range cs {
 		if _, err := trainGit(dir, "-c", "rerere.enabled=false", "cherry-pick", "--empty=drop", c.SHA); err != nil {
 			conf, _ := gitx.Run(dir, "diff", "--name-only", "--diff-filter=U")
 			if conf != "" {
 				_, _ = trainGit(dir, "cherry-pick", "--abort")
-				return "", strings.Split(conf, "\n"), nil
+				head, herr := gitx.RevParse(dir, "HEAD")
+				return head, strings.Split(conf, "\n"), i, herr
 			}
 			if _, serr := trainGit(dir, "cherry-pick", "--skip"); serr != nil {
-				return "", nil, fmt.Errorf("cherry-pick %s: %w", short(c.SHA), err)
+				return "", nil, 0, fmt.Errorf("cherry-pick %s: %w", short(c.SHA), err)
 			}
 		}
 	}
 	head, err := gitx.RevParse(dir, "HEAD")
-	return head, nil, err
+	return head, nil, 0, err
 }
 
 // applyFlatten carries out fp's plan. A failure is fp's outcome; the other
@@ -692,6 +701,15 @@ func (a *App) flattenFix(fp *flatPR) error {
 		return err
 	}
 	reason := "conflict: " + strings.Join(pl.Conflicts, ", ")
+	if why := a.moveToOwnWork(t, pl); why != "" {
+		reason += "; its branch was not moved: " + why
+	} else {
+		var picks []string
+		for _, c := range pl.rest {
+			picks = append(picks, short(c.SHA)+" "+c.Subject)
+		}
+		reason += flattenPicks + strings.Join(picks, ", ")
+	}
 	if err := a.Store.Reopen(t.ID, reason, 1); err != nil {
 		return err
 	}
@@ -704,6 +722,53 @@ func (a *App) flattenFix(fp *flatPR) error {
 	return a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
 		"saddle flatten: %s %q's own commits conflict with %s in %s, so its PR %s was left as it was and %s is reopened to fix it on its own branch.",
 		t.ID, t.Title, a.Cfg.Base, strings.Join(pl.Conflicts, ", "), pl.PR, t.ID))
+}
+
+// flattenPicks marks a fix reason whose task flatten moved onto main: the
+// commits after it are the ones left to cherry-pick, in order.
+const flattenPicks = "; cherry-pick in order: "
+
+// moveToOwnWork points t's local branch at main plus its own commits that
+// replayed cleanly, so its fix starts from its own work on main and not
+// the old stacked branch. Its PR keeps the old head until done pushes. It
+// says why when it can't: a live agent, a worktree not on the branch or
+// with uncommitted changes.
+func (a *App) moveToOwnWork(t store.Task, pl *FlattenPR) string {
+	if pl.cleanHead == "" {
+		return "the replay left no head"
+	}
+	if a.agentAlive(t, time.Now()) {
+		return "its agent is alive"
+	}
+	if fi, err := os.Stat(t.Worktree); t.Worktree == "" || err != nil || !fi.IsDir() {
+		// No worktree: move the branch itself; relaunch recreates one on it.
+		if !gitx.BranchExists(a.Root, t.Branch) {
+			return "it has no local branch"
+		}
+		if _, err := trainGit(a.Root, "branch", "--force", t.Branch, pl.cleanHead); err != nil {
+			return "moving " + t.Branch + " failed: " + oneLine(err.Error())
+		}
+		a.Store.Event(t.ID, EventFlattenMoved, t.Branch+" → "+short(pl.cleanHead))
+		return ""
+	}
+	if cur, err := gitx.Run(t.Worktree, "symbolic-ref", "--quiet", "--short", "HEAD"); err != nil || cur != t.Branch {
+		return "its worktree isn't on " + t.Branch
+	}
+	if gitx.RebaseInProgress(t.Worktree) {
+		return "its worktree has a rebase in progress"
+	}
+	if _, err := gitx.Run(t.Worktree, "rev-parse", "-q", "--verify", "CHERRY_PICK_HEAD"); err == nil {
+		return "its worktree has a cherry-pick in progress"
+	}
+	if dirty, err := gitx.Dirty(t.Worktree); err != nil || len(dirty) > 0 {
+		return "its worktree has uncommitted changes"
+	}
+	old, _ := gitx.RevParse(t.Worktree, "HEAD")
+	if _, err := trainGit(t.Worktree, "reset", "--quiet", "--hard", pl.cleanHead); err != nil {
+		return "reset failed: " + oneLine(err.Error())
+	}
+	a.Store.Event(t.ID, EventFlattenMoved, t.Branch+" "+short(old)+" → "+short(pl.cleanHead))
+	return ""
 }
 
 // flattenToNew moves t from the old train to the new model: base main, its

@@ -305,6 +305,11 @@ func fixNote(t store.Task, max int) string {
 	what := "Its CI is red. Read the failing checks (the link above), reproduce the failure locally, write a failing test if one is missing, and fix it."
 	if strings.HasPrefix(t.FixReason, "conflict") {
 		what = "It conflicts with its base. Run `saddle sync`: it rebases this branch and stops at the conflicts. Resolve them keeping both sides' intent, `git add` them and `git rebase --continue`."
+		if files, picks, ok := strings.Cut(strings.TrimPrefix(t.FixReason, "conflict: "), flattenPicks); ok {
+			// saddle flatten moved the branch onto main (#937).
+			what = "saddle flatten moved this task off the old stacked PRs: your branch now holds only your own work on main. Cherry-pick these in order, resolve the conflict in " +
+				files + ", then call done. The commits: " + picks + "."
+		}
 	}
 	return fmt.Sprintf("[saddle] Your PR %s needs a fix: %s (attempt %d of %d). %s "+
 		"Fix it here, on branch %s in this worktree: never a new branch, task or PR. Run the tests, commit, and call the saddle done tool. "+
@@ -377,6 +382,11 @@ func (a *App) adoptRemoteHead(t store.Task, alive bool) {
 			a.Store.Event(t.ID, EventFixKept, "it has commits the PR's head lacks")
 			return
 		}
+	}
+	if e, ok, _ := a.Store.LastTaskEvent(t.ID, EventFlattenMoved, EventPRUpdated, EventDonePROpened, EventQueueRebased, EventQueueMoved); ok && e.Kind == EventFlattenMoved {
+		// saddle flatten moved the branch onto main on purpose; the PR's
+		// old stacked head is what it moved off (#937).
+		return
 	}
 	_ = alive // an agent at its prompt sees the new head in git log; nothing else to tell it
 	if _, err := trainGit(t.Worktree, "reset", "--quiet", "--hard", remote); err != nil {
