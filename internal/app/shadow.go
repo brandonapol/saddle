@@ -43,18 +43,18 @@ const ShadowWindow = 10 * time.Minute
 const shadowHold = 24 * time.Hour
 
 // ShadowStores is what today's stores say about the stack, read once per
-// tick: the train table, tasks, deps/<task> edges, stacks.json,
-// ci-red.json, automerge.json's holds and published.json. The pure adapter
-// ShadowInput maps it onto prgraph's desired state.
+// tick: the train table, tasks, deps/<task> edges, ci-red.json,
+// automerge.json's holds and published.json. The pure adapter ShadowInput
+// maps it onto prgraph's desired state. Owner stacks (stacks.json) are not
+// edges: prgraph's only edges are declared after edges (ADR 0012, #934).
 type ShadowStores struct {
 	Now   time.Time
 	Base  string
 	Tasks []store.Task
 	Train []store.TrainEntry
-	// Edges are the after edges (deps/<task> and depends_on events).
-	Edges  []prgraph.Edge
-	Stacks []CustomStack
-	CIRed  CIRedState
+	// Edges are the declared after edges (deps/<task>).
+	Edges []prgraph.Edge
+	CIRed CIRedState
 	// Automerge is whether auto-merge is on; AutomergeHolds are the held
 	// tasks or PRs.
 	Automerge      bool
@@ -181,11 +181,6 @@ func ShadowInput(s ShadowStores, forge prgraph.ForgeSnapshot, git prgraph.GitFac
 		all = append(all, c)
 	}
 	edges := append([]prgraph.Edge(nil), s.Edges...)
-	for _, st := range s.Stacks {
-		for i := 1; i < len(st.Tasks); i++ {
-			edges = append(edges, prgraph.Edge{Change: st.Tasks[i], Dep: st.Tasks[i-1], Kind: prgraph.Declared, Source: "owner_stack"})
-		}
-	}
 	// Keep every change legacy still has in play, and the finished ones a
 	// live change depends on or whose PR is still open.
 	keep := map[string]bool{}

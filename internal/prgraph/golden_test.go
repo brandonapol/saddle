@@ -15,10 +15,11 @@ func indexOf(p Plan, match func(Action) bool) int {
 	return -1
 }
 
-// golden1105 is 2026-11-05: t395-t400 form one stack, t395 <- t396 <- t397
-// <- t398 <- t399, plus t400 alone on main. t397 (#814) uses logErr from
-// t396 (a verified edge from the gate), yet its PR was laid on main because
-// its commits applied there. t398 and t399 sit on it and went red.
+// golden1105 is 2026-11-05: t395 <- t396 and t397 <- t398 <- t399 by
+// declared after edges, plus t400 alone on main. In 2026 t397 (#814) also
+// had a "verified" edge onto t396 from the gate; since ADR 0012 rule 8 that
+// edge is gone, so #814 on main is where it belongs. t398 and t399 sit on it
+// and went red.
 func golden1105() *world {
 	w := &world{
 		now: t0, bases: map[string]string{"main": "m1"}, heads: map[string]string{},
@@ -51,34 +52,27 @@ func golden1105() *world {
 	}
 	w.relink()
 	w.st.Edges = []Edge{
-		{Change: "t396", Dep: "t395", Kind: Declared, Source: "after"},
-		{Change: "t397", Dep: "t396", Kind: Verified, Source: "gate"},
-		{Change: "t398", Dep: "t397", Kind: Declared, Source: "after"},
-		{Change: "t399", Dep: "t398", Kind: Declared, Source: "after"},
+		{Change: "t396", Dep: "t395"},
+		{Change: "t398", Dep: "t397"},
+		{Change: "t399", Dep: "t398"},
 	}
 	w.checks = append(w.checks, Check{Head: "m1", Name: "ci", Status: CheckSuccess, Required: true})
 	return w
 }
 
-func TestGolden20261105MovesBeforeMerge(t *testing.T) {
+// Rewritten for #934 (was TestGolden20261105MovesBeforeMerge, which moved
+// #814 onto t396's branch by the gate's verified edge): with declared after
+// edges only, #814 stays on main and nothing is stacked on a guess.
+func TestGolden20261105NoStackWithoutAfter(t *testing.T) {
 	w := golden1105()
 	p := Reconcile(w.input())
 	t.Log(p.Actions)
-	mv := indexOf(p, func(a Action) bool {
-		return a.Kind == ActMove && a.PR == 814 && a.Base == "b/t396" && a.Stack == "t395"
-	})
-	if mv < 0 {
-		t.Fatalf("want move(#814, b/t396, stack t395); plan %v", p.Actions)
-	}
-	if m := indexOf(p, func(a Action) bool { return a.Kind == ActMerge }); m >= 0 && m < mv {
-		t.Errorf("merge %v comes before the move", p.Actions[m])
-	}
 	for _, a := range p.Actions {
-		if a.Kind == ActNeedsFix {
-			t.Errorf("%v: t398/t399 are red because #814 is on the wrong base; that is a move, not a fix", a)
+		if a.Kind == ActMove {
+			t.Errorf("%v: every PR is on its declared after's branch or main already", a)
 		}
-		if a.Kind == ActMerge && a.Change != "t395" && a.Change != "t400" {
-			t.Errorf("%v: only t395 and t400 have no unmerged deps", a)
+		if a.Kind == ActMerge && a.Change != "t395" && a.Change != "t397" && a.Change != "t400" {
+			t.Errorf("%v: only t395, t397 and t400 have no unmerged deps", a)
 		}
 	}
 	// And the world heals: apply plans until nothing is left to do.

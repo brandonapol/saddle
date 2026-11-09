@@ -398,16 +398,15 @@ func genWorld(r *rand.Rand, o genOpts) *world {
 		}
 		for j := range i {
 			if r.Intn(4) == 0 {
-				kind := []EdgeKind{Declared, Inferred, Verified}[r.Intn(3)]
-				w.st.Edges = append(w.st.Edges, Edge{Change: id, Dep: fmt.Sprintf("c%02d", j), Kind: kind, Source: "after"})
+				w.st.Edges = append(w.st.Edges, Edge{Change: id, Dep: fmt.Sprintf("c%02d", j)})
 			}
 		}
 	}
 	if r.Intn(10) == 0 && n > 1 {
-		w.st.Edges = append(w.st.Edges, Edge{Change: "c00", Dep: fmt.Sprintf("c%02d", n-1), Kind: Inferred, Source: "issue"}) // a cycle
+		w.st.Edges = append(w.st.Edges, Edge{Change: "c00", Dep: fmt.Sprintf("c%02d", n-1)}) // a cycle
 	}
 	if r.Intn(10) == 0 {
-		w.st.Edges = append(w.st.Edges, Edge{Change: "c00", Dep: "ghost", Kind: Declared, Source: "after"}) // unknown dep
+		w.st.Edges = append(w.st.Edges, Edge{Change: "c00", Dep: "ghost"}) // unknown dep
 	}
 	if o.clean {
 		return w
@@ -592,25 +591,15 @@ func oraclePath(w *world, from, to string) bool {
 	return walk(from)
 }
 
-// oracleDesiredBase: the nearest unmerged dep's branch, else base; ok is
-// false when the unmerged deps aren't in one chain.
+// oracleDesiredBase: the one unmerged dep's branch, else base; ok is false
+// with two or more unmerged deps (ADR 0012: at most one).
 func oracleDesiredBase(w *world, id string) (string, bool) {
 	c := w.change(id)
-	u := oracleUnmerged(w, id)
-	if len(u) == 0 {
+	switch u := oracleUnmerged(w, id); len(u) {
+	case 0:
 		return c.Base, true
-	}
-	for _, cand := range u {
-		all := true
-		for _, o := range u {
-			if o != cand && !oraclePath(w, cand, o) {
-				all = false
-				break
-			}
-		}
-		if all {
-			return w.change(cand).Branch, true
-		}
+	case 1:
+		return w.change(u[0]).Branch, true
 	}
 	return "", false
 }

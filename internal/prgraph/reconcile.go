@@ -12,7 +12,7 @@ const (
 	WaitHold          = "hold"
 	WaitRetry         = "retry"
 	WaitForge         = "forge_degraded"
-	WaitDepsNotChain  = "deps_not_in_one_chain"
+	WaitTwoUnmerged   = "two_unmerged_deps"
 	WaitDepsUnmerged  = "deps_unmerged"
 	WaitBelowMoving   = "below_moving"
 	WaitBaseRed       = "base_red"
@@ -193,24 +193,16 @@ func (r *run) unmerged(id string) []string {
 	return out
 }
 
-// desired returns the desired base branch and the nearest unmerged dep
-// ("" for base). ok is false when the unmerged deps aren't in one chain.
+// desired returns the desired base branch and the unmerged dep it stacks on
+// ("" for base). A change has at most one unmerged dependency (ADR 0012
+// rule 1): with two or more, ok is false and the change waits until all but
+// one have merged. It never stacks on anything but a declared after.
 func (r *run) desired(c *Change) (base, nearest string, ok bool) {
-	u := r.unmerged(c.ID)
-	if len(u) == 0 {
+	switch u := r.unmerged(c.ID); len(u) {
+	case 0:
 		return c.Base, "", true
-	}
-	for _, cand := range u {
-		all := true
-		for _, o := range u {
-			if o != cand && !r.g.reaches(cand, o) {
-				all = false
-				break
-			}
-		}
-		if all {
-			return r.g.byID[cand].Branch, cand, true
-		}
+	case 1:
+		return r.g.byID[u[0]].Branch, u[0], true
 	}
 	return "", "", false
 }
@@ -609,8 +601,8 @@ func (r *run) change(c *Change) {
 	}
 	want, nearest, ok := r.desired(c)
 	if !ok {
-		// Two unmerged deps in different stacks: wait until one merges.
-		r.wait(c, WaitDepsNotChain, time.Time{}, r.unmerged(c.ID)[0])
+		// Two unmerged deps: no branch is cut from both. Wait until one merges.
+		r.wait(c, WaitTwoUnmerged, time.Time{}, r.unmerged(c.ID)[0])
 		return
 	}
 	switch c.State {

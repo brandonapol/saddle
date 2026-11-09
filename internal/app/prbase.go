@@ -3,28 +3,17 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
-	"regexp"
 	"slices"
-	"strings"
 
 	"github.com/brandonapol/saddle/internal/store"
 )
 
 // Which branch a PR targets (#358, #359). The layout stacks a task on the
-// earlier tasks it depends on (see clusterLayers); file overlap finds most of
-// those, but not a task whose work only makes sense on top of another's in
-// disjoint files. Before prs and restack lay the stack out, noteDependencies
-// records the edges saddle can see beyond the explicit after ones:
-//
-//   - the task's title, prompt or issue names an earlier stacked task: its
-//     id, issue, PR or branch ("follow-up to #3093");
-//   - someone retargeted the task's PR onto the branch of a stacked task
-//     that landed before it, outside saddle (gh pr edit --base). Saddle
-//     remembers the base it last set on each PR, so a base it didn't set is
-//     a person's.
+// earlier tasks it depends on (see clusterLayers). The only after edges are
+// the ones a spawner declared: saddle no longer infers one from a task's
+// text or from a hand retarget (ADR 0012 rule 8, #934).
 //
 // Saddle changes a PR's base only out loud: when the base it sets differs
 // from the one GitHub has, it logs a pr_base event naming both, and tells the
@@ -70,92 +59,6 @@ func (a *App) saveBase(task, base string) error {
 		return err
 	}
 	return os.Rename(tmp, a.prBasesPath())
-}
-
-// taskText is what a task's spawner wrote about its work: its title and
-// prompt. Its issue's body is not read: issues cite each other as context
-// ("see #3543", "related: #3552"), and reading every citation as a
-// dependency stacked unrelated work into one long stack (#734).
-func taskText(t store.Task) string {
-	return t.Title + "\n" + t.Prompt
-}
-
-// names reports what of t's text names: its id, PR URL or branch. An id must
-// stand alone, so t1 doesn't match t12. A short reference such as #31 or !31
-// doesn't count: it can't be told apart from an issue cited for context, and
-// an issue or PR number is how task text cites background work (#734).
-func names(text string, t store.Task) (string, bool) {
-	word := func(w string) bool {
-		re := regexp.MustCompile(`(^|[^\w-])` + regexp.QuoteMeta(w) + `($|[^\w])`)
-		return re.MatchString(text)
-	}
-	switch {
-	case t.ID != "" && word(t.ID):
-		return t.ID, true
-	case t.PR != "" && strings.Contains(text, t.PR):
-		return t.PR, true
-	case t.Branch != "" && strings.Contains(text, t.Branch):
-		return t.Branch, true
-	}
-	return "", false
-}
-
-// noteDependencies records the after edges of stack's layers that saddle can
-// see but nobody declared: an earlier layer the task's title or prompt names
-// by id, PR URL or branch (#358, #734), and
-// a stacked branch someone retargeted the task's PR onto outside saddle
-// (#359). info is what GitHub said about each open PR (see ReconcileStack).
-func (a *App) noteDependencies(stack []landedTask, info map[string]PRInfo) error {
-	saved := a.savedBases()
-	var errs []error
-	for i, l := range stack {
-		var text string
-		for j := range i {
-			e := stack[j]
-			if slices.Contains(a.TaskAfter(l.ID), e.ID) {
-				continue
-			}
-			if text == "" {
-				text = taskText(l.Task)
-			}
-			if what, ok := names(text, e.Task); ok {
-				_, err := a.addAfter(l.ID, e.ID, fmt.Sprintf("inferred: %s's task text names %s", l.ID, what))
-				errs = append(errs, err)
-			}
-		}
-		live := info[l.PR].BaseRefName
-		if l.PR == "" || live == "" || live == saved[l.ID] || live == a.Cfg.Base {
-			continue
-		}
-		// A layer that landed before it can sit under it. A saddle task out
-		// of the stack is a dependency too: the layer stays put while that
-		// task's PR is open (see waitingOn). A retarget onto a later layer,
-		// or onto a branch saddle doesn't know, is changed back, out loud
-		// (see notePRBase).
-		why := fmt.Sprintf("manual retarget: %s was moved onto %s outside saddle", l.PR, live)
-		if j := slices.IndexFunc(stack, func(o landedTask) bool { return o.Branch == live }); j >= 0 {
-			if j < i {
-				errs = append(errs, a.noteRetarget(l, stack[j].ID, why, "keeps it stacked there"))
-			}
-			continue
-		}
-		if dep, ok := a.taskOnBranch(live); ok && dep != l.ID {
-			errs = append(errs, a.noteRetarget(l, dep, why, "leaves it there until "+dep+"'s PR merges"))
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// noteRetarget records that l depends on dep because someone retargeted l's
-// PR onto dep's branch, and tells the orchestrator the first time.
-func (a *App) noteRetarget(l landedTask, dep, why, keeps string) error {
-	added, err := a.addAfter(l.ID, dep, why)
-	if added {
-		_ = a.Notify(OrchestratorID, store.NoticeInfo, fmt.Sprintf(
-			"%s's PR %s was retargeted onto %s's branch outside saddle. Saddle recorded that %s depends on %s and %s.",
-			l.ID, l.PR, dep, l.ID, dep, keeps))
-	}
-	return err
 }
 
 // taskOnBranch names the saddle task whose branch is branch.

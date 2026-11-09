@@ -66,13 +66,13 @@ func (s *SQLStore) Load(ctx context.Context) (State, error) {
 	if err := closeRows(rows); err != nil {
 		return st, err
 	}
-	rows, err = s.DB.QueryContext(ctx, `SELECT change, dep, kind, source FROM prgraph_edge ORDER BY change, dep`)
+	rows, err = s.DB.QueryContext(ctx, `SELECT change, dep FROM prgraph_edge ORDER BY change, dep`)
 	if err != nil {
 		return st, err
 	}
 	for rows.Next() {
 		var e Edge
-		if err := rows.Scan(&e.Change, &e.Dep, &e.Kind, &e.Source); err != nil {
+		if err := rows.Scan(&e.Change, &e.Dep); err != nil {
 			_ = rows.Close()
 			return st, err
 		}
@@ -133,11 +133,10 @@ func (s *SQLStore) PutChange(ctx context.Context, c Change) error {
 	return nil
 }
 
-// PutEdge inserts or replaces one dependency edge.
+// PutEdge records one declared after edge.
 func (s *SQLStore) PutEdge(ctx context.Context, e Edge) error {
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO prgraph_edge(change, dep, kind, source) VALUES(?,?,?,?)
-		ON CONFLICT(change, dep) DO UPDATE SET kind=excluded.kind, source=excluded.source`,
-		e.Change, e.Dep, string(e.Kind), e.Source)
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO prgraph_edge(change, dep) VALUES(?,?)
+		ON CONFLICT(change, dep) DO NOTHING`, e.Change, e.Dep)
 	if err != nil {
 		return fmt.Errorf("prgraph: put edge %s->%s: %w", e.Change, e.Dep, err)
 	}

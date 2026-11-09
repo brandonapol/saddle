@@ -638,3 +638,53 @@ func TestP12CollapseIsAView(t *testing.T) {
 		return true
 	})
 }
+
+// P13 (#934, ADR 0012 rule 8): Reconcile never stacks a change on anything
+// but its declared after. Every Publish and Move targets the change's base
+// or the branch of a change it declared after, and that one only while it
+// is the change's single unmerged dependency. Every Gate and Rebase is onto
+// base plus at most that one dependency's head.
+func TestP13StacksOnlyOnDeclaredAfter(t *testing.T) {
+	t.Parallel()
+	forSeeds(t, 600, func(t *testing.T, r *rand.Rand) bool {
+		w := genWorld(r, genOpts{})
+		declared := map[string]map[string]bool{}
+		for _, e := range w.st.Edges {
+			if declared[e.Change] == nil {
+				declared[e.Change] = map[string]bool{}
+			}
+			declared[e.Change][e.Dep] = true
+		}
+		branchOf := map[string]string{}
+		for _, c := range w.st.Changes {
+			branchOf[c.Branch] = c.ID
+		}
+		for _, a := range Reconcile(w.input()).Actions {
+			c := w.change(a.Change)
+			if c == nil {
+				continue
+			}
+			switch a.Kind {
+			case ActPublish, ActMove:
+				if a.Base == c.Base {
+					continue
+				}
+				dep, ok := branchOf[a.Base]
+				if !ok || !declared[c.ID][dep] {
+					t.Errorf("%v: %s stacks on %s, which it didn't declare after", a, c.ID, a.Base)
+					return false
+				}
+				if u := oracleUnmerged(w, c.ID); len(u) != 1 || u[0] != dep {
+					t.Errorf("%v: %s has unmerged deps %v; it stacks only on its one unmerged after", a, c.ID, u)
+					return false
+				}
+			case ActGate, ActRebase:
+				if a.Onto == nil || len(a.Onto.Deps) > 1 {
+					t.Errorf("%v: onto more than base and one declared after", a)
+					return false
+				}
+			}
+		}
+		return true
+	})
+}
