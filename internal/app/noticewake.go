@@ -39,7 +39,7 @@ func (a *App) wakeState() *wakeState {
 // or failed tests, or escalated (#189).
 func waitsAtPrompt(t store.Task) bool {
 	switch t.Status {
-	case store.Idle, store.Done, store.Conflict, store.NeedsYou:
+	case store.Idle, store.Done, store.PROpen, store.Conflict, store.NeedsYou:
 		return true
 	}
 	return false

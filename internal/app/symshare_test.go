@@ -24,6 +24,7 @@ func shareSetup(t *testing.T, ownerAdapter string) (a *App, owner, b store.Task)
 	t.Cleanup(SetShareBudget(time.Minute))
 	withStaleBudget(t, time.Minute)
 	a, _ = setup(t)
+	a.Cfg.LegacyTrain = true // legacy train behavior; #938 deletes this test with the train
 	a.Cfg.Claims.Granularity = config.GranularitySymbol
 	write(t, a.Root, "pkg/x.go", shareBase)
 	commitAll(t, a.Root, "add pkg")

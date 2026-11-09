@@ -21,6 +21,7 @@ func trainSetup(t *testing.T) *App {
 	t.Helper()
 	a, _ := setup(t)
 	a.Cfg.Test.Cmd = "none"
+	a.Cfg.LegacyTrain = true // train tests drive the legacy train (#938 deletes it)
 	return a
 }
 
@@ -165,6 +166,7 @@ func landTask(t *testing.T, a *App, id, title string, commits ...map[string]stri
 // waits in the train.
 func queueTask(t *testing.T, a *App, id, title string, commits ...map[string]string) store.Task {
 	t.Helper()
+	a.Cfg.LegacyTrain = true // the legacy train these helpers drive (#938 deletes it)
 	tk, err := a.Spawn(SpawnReq{ID: id, Title: title})
 	must(t, err)
 	for i, files := range commits {
@@ -177,7 +179,7 @@ func queueTask(t *testing.T, a *App, id, title string, commits ...map[string]str
 		}
 		commitAll(t, tk.Worktree, msg)
 	}
-	must(t, a.Done(tk.ID, title+" summary"))
+	must(t, a.DoneToTrain(tk.ID, title+" summary"))
 	return tk
 }
 
@@ -188,7 +190,7 @@ func TestLandRefusesWithoutTestCmd(t *testing.T) {
 	must(t, err)
 	write(t, tk.Worktree, "one.txt", "one\n")
 	commitAll(t, tk.Worktree, "one")
-	must(t, a.Done(tk.ID, "one"))
+	must(t, a.DoneToTrain(tk.ID, "one"))
 	before := git(t, a.Root, "rev-parse", a.Cfg.Integration)
 
 	a.Cfg.Test.Cmd = ""
@@ -381,7 +383,7 @@ func TestFlaggedStackFreezesPRsAndLand(t *testing.T) {
 	must(t, err)
 	write(t, tk.Worktree, "one.txt", "one\ntwo\n")
 	commitAll(t, tk.Worktree, "two")
-	must(t, a.Done(tk.ID, "two"))
+	must(t, a.DoneToTrain(tk.ID, "two"))
 	before := git(t, a.Root, "rev-parse", a.Cfg.Integration)
 
 	must(t, a.SetFlag(StackFlag{Task: t1.ID, Cause: "GitHub reports its PR conflicts with its base"}))

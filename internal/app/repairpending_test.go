@@ -153,8 +153,8 @@ func TestEnsureRepairKeepsClaimsUntilSpawned(t *testing.T) {
 	commitAll(t, t1.Worktree, "one")
 	write(t, t2.Worktree, "README.md", "two\n")
 	commitAll(t, t2.Worktree, "two")
-	must(t, a.Done(t1.ID, "one"))
-	must(t, a.Done(t2.ID, "two"))
+	must(t, a.DoneToTrain(t1.ID, "one"))
+	must(t, a.DoneToTrain(t2.ID, "two"))
 	must(t, ft.KillWindow(t2.Window))
 	busy := fillCap(t, a)
 	if _, err := a.Land(); err != nil {
@@ -194,7 +194,7 @@ func TestRestackRepairAtCapIsReservedAndRetried(t *testing.T) {
 	must(t, err)
 	write(t, t1.Worktree, "README.md", "one\n")
 	commitAll(t, t1.Worktree, "one")
-	must(t, a.Done(t1.ID, "README now says one."))
+	must(t, a.DoneToTrain(t1.ID, "README now says one."))
 	if _, err := a.Land(); err != nil {
 		t.Fatal(err)
 	}

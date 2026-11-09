@@ -139,6 +139,19 @@ touching the agent's index.
 
 ### Done and its background gate (#368)
 
+Since ADR 0012 (#932, #933), "queued" below means *published*: a task's
+branch is cut from main, or from the branch of the one unmerged task it
+declared `after` (`tasks.base`), and once the gate passes done rebases it
+onto that base (`origin/main` after a fetch), refuses commits that aren't the
+task's own (`Saddle-Task` trailer, or no other task's branch holds them),
+pushes it and opens or updates its one PR (`internal/app/donepublish.go`).
+The task becomes `pr_open`. A conflict goes back to its own agent; a push or
+forge failure is retried with backoff (`publish:<task>` in
+`retry_attempts`, `PublishRetryTick`). Nothing on this path touches the
+train, the integration branch, the pre-publish gate or commit statuses. The
+top-level `legacy_train = true` key restores the old train path; only the
+e2e and soak harnesses set it, and #938 deletes it with the train.
+
 A worker's `done` must pass the repo's own gate (`[train] lint.cmd`, or the
 detected pre-commit gate such as `make check`) before it is queued. Run inside
 the MCP call, that gate could keep the call silent for over 30 minutes on a

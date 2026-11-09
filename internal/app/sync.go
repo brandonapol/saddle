@@ -8,11 +8,12 @@ import (
 	"github.com/brandonapol/saddle/internal/store"
 )
 
-// Sync rebases a task's branch onto the integration branch. Commits whose
-// work integration already holds under other SHAs (squash-landed) are not
-// replayed. Conflicts are left in place for the agent to resolve; any other
-// failure is aborted, and a rebase already in progress is reported rather
-// than started over.
+// Sync rebases a task's branch onto its base (ADR 0012, #932): the freshly
+// fetched <remote>/<base>, or the branch of the unmerged task it runs after.
+// Never the integration branch, so it gains main's new commits and nothing
+// from unmerged tasks. Conflicts are left in place for the agent to resolve;
+// any other failure is aborted, and a rebase already in progress is reported
+// rather than started over.
 func (a *App) Sync(task string) (gitx.RebaseResult, error) {
 	t, err := a.Store.Task(task)
 	if err != nil {
@@ -24,13 +25,20 @@ func (a *App) Sync(task string) (gitx.RebaseResult, error) {
 	if dirty, _ := gitx.Dirty(t.Worktree); len(dirty) > 0 {
 		return gitx.RebaseResult{}, fmt.Errorf("commit your changes before syncing:\n%s", strings.Join(dirty, "\n"))
 	}
-	from, skipped, err := a.replayFrom(t, a.Cfg.Integration)
-	if err != nil {
-		return gitx.RebaseResult{}, err
+	if a.Cfg.LegacyTrain {
+		// The legacy train's sync onto integration (#938 deletes it).
+		from, skipped, err := a.replayFrom(t, a.Cfg.Integration)
+		if err != nil {
+			return gitx.RebaseResult{}, err
+		}
+		rr, err := gitx.RebaseOnto(t.Worktree, a.Cfg.Integration, from, false)
+		rr.Skipped = skipped
+		a.Store.Event(task, "sync", fmt.Sprintf("ok=%v skipped=%d conflicts=%s", rr.OK, skipped, strings.Join(rr.Conflicts, ",")))
+		return rr, err
 	}
-	rr, err := gitx.RebaseOnto(t.Worktree, a.Cfg.Integration, from, false)
-	rr.Skipped = skipped
-	a.Store.Event(task, "sync", fmt.Sprintf("ok=%v skipped=%d conflicts=%s", rr.OK, skipped, strings.Join(rr.Conflicts, ",")))
+	tg := a.resolveBase(t, true)
+	rr, err := gitx.RebaseOnto(t.Worktree, tg.Onto, tg.From, false)
+	a.Store.Event(task, "sync", fmt.Sprintf("onto=%s ok=%v conflicts=%s", tg.Onto, rr.OK, strings.Join(rr.Conflicts, ",")))
 	return rr, err
 }
 

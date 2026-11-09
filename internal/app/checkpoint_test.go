@@ -58,7 +58,7 @@ func TestLandAndKillPruneCheckpoints(t *testing.T) {
 	}
 
 	commitAll(t, landed.Worktree, "one")
-	must(t, a.Done(landed.ID, "one"))
+	must(t, a.DoneToTrain(landed.ID, "one"))
 	rs, err := a.Land()
 	must(t, err)
 	if len(rs) != 1 || rs[0].State != store.TrainOK {

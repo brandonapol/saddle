@@ -50,6 +50,7 @@ func hasEvent(t *testing.T, a *App, kind, sub string) bool {
 func TestIntegrationCutFromOrigin(t *testing.T) {
 	t.Parallel()
 	a, _ := setup(t)
+	a.Cfg.LegacyTrain = true // legacy train behavior; #938 deletes this test with the train
 	other := withOrigin(t, a)
 	pushCommit(t, other, "upstream1.txt")
 

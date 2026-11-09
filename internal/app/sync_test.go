@@ -31,6 +31,7 @@ func commitOnIntegration(t *testing.T, a *App, msg string, files map[string]stri
 func syncSquashed(t *testing.T, between bool) (*App, string) {
 	t.Helper()
 	a, _ := setup(t)
+	a.Cfg.LegacyTrain = true // legacy train behavior; #938 deletes this test with the train
 	must(t, a.Init())
 	must(t, a.ensureIntegration())
 	tk, err := a.Spawn(SpawnReq{Title: "late"})
@@ -84,6 +85,7 @@ func TestSyncSkipsSquashLandedCommits(t *testing.T) {
 // branch) aborts rather than leaving the worktree mid-rebase.
 func TestSyncAbortsFailedRebase(t *testing.T) {
 	a, _ := setup(t)
+	a.Cfg.LegacyTrain = true // legacy train behavior; #938 deletes this test with the train
 	must(t, a.Init())
 	must(t, a.ensureIntegration())
 	tk, err := a.Spawn(SpawnReq{Title: "guarded"})
@@ -108,6 +110,7 @@ func TestSyncAbortsFailedRebase(t *testing.T) {
 // second sync reports the rebase in progress instead of stacking on it.
 func TestSyncNeverStacksOnARebaseInProgress(t *testing.T) {
 	a, _ := setup(t)
+	a.Cfg.LegacyTrain = true // legacy train behavior; #938 deletes this test with the train
 	must(t, a.Init())
 	must(t, a.ensureIntegration())
 	tk, err := a.Spawn(SpawnReq{Title: "clash"})
@@ -163,7 +166,7 @@ func TestLandAutoRebasesLiveWorktrees(t *testing.T) {
 	commitAll(t, clash.Worktree, "notes")
 	clashBefore := git(t, clash.Worktree, "rev-parse", "HEAD")
 
-	must(t, a.Done(mover.ID, "moved"))
+	must(t, a.DoneToTrain(mover.ID, "moved"))
 	rs, err := a.Land()
 	must(t, err)
 	if len(rs) != 1 || rs[0].State != "landed" {
@@ -222,7 +225,7 @@ func TestAutoRebaseCanBeTurnedOff(t *testing.T) {
 	write(t, other.Worktree, "b.txt", "b\n")
 	commitAll(t, other.Worktree, "b")
 	before := git(t, other.Worktree, "rev-parse", "HEAD")
-	must(t, a.Done(lander.ID, "a"))
+	must(t, a.DoneToTrain(lander.ID, "a"))
 	_, err = a.Land()
 	must(t, err)
 	if git(t, other.Worktree, "rev-parse", "HEAD") != before {
@@ -270,7 +273,7 @@ func TestLandSkipsCommitsSquashLandedAfterRestack(t *testing.T) {
 			}
 			write(t, t2.Worktree, "two.txt", "two\n")
 			commitAll(t, t2.Worktree, "two")
-			must(t, a.Done(t2.ID, "two"))
+			must(t, a.DoneToTrain(t2.ID, "two"))
 			if _, err := a.PRs(); err != nil {
 				t.Fatal(err)
 			}

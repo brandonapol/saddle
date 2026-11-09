@@ -15,7 +15,7 @@ func TestNoChangeRemovesWorktree(t *testing.T) {
 	a := trainSetup(t)
 	tk, err := a.Spawn(SpawnReq{Title: "already fixed"})
 	must(t, err)
-	must(t, a.Done(tk.ID, "the issue was already fixed"))
+	must(t, a.DoneToTrain(tk.ID, "the issue was already fixed"))
 	assertNoChange(t, a, tk.ID)
 	if exists(tk.Worktree) {
 		t.Fatal("a no-change task kept its worktree")

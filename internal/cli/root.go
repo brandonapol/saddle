@@ -626,7 +626,7 @@ func doneCmd() *cobra.Command {
 	var task, summary string
 	cmd := &cobra.Command{
 		Use:   "done",
-		Short: "Mark a task finished and queue it in the merge train",
+		Short: "Finish a task: gate, rebase onto its base, push and open its PR",
 		RunE: withApp(func(cmd *cobra.Command, a *app.App, _ []string) error {
 			id, err := resolveTask(a, task)
 			if err != nil {
@@ -636,10 +636,13 @@ func doneCmd() *cobra.Command {
 				return err
 			}
 			if t, err := a.Store.Task(id); err == nil && t.Status == store.NoChange {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s finished with no change: nothing to land\n", id)
+				fmt.Fprintf(cmd.OutOrStdout(), "%s finished with no change: nothing to publish\n", id)
+				return nil
+			} else if err == nil && t.PR != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s published: %s\n", id, t.PR)
 				return nil
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s queued\n", id)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s done\n", id)
 			return nil
 		}),
 	}
@@ -683,7 +686,8 @@ func syncCmd() *cobra.Command {
 				return err
 			}
 			if rr.OK {
-				fmt.Fprintf(cmd.OutOrStdout(), "synced onto %s\n", a.Cfg.Integration)
+				t, _ := a.Store.Task(id)
+				fmt.Fprintf(cmd.OutOrStdout(), "synced onto %s\n", t.Base)
 				return nil
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "rebase stopped with conflicts in:\n  %s\nResolve them, `git add` the files, then `git rebase --continue`.\n",

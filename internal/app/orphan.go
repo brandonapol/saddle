@@ -136,7 +136,7 @@ func (a *App) writeOrphans(m map[string]DoneOrphan) error {
 var doneOutcomes = map[string]bool{
 	EventDoneCalled: true, "done_gate_started": true, "done_gate_restarted": true,
 	"done_gate_interrupted": true, "done_gate_stale": true, "done_gate_failed": true,
-	"lint_failed": true, "done": true, "no_change": true, EventOrphanRegate: true,
+	"lint_failed": true, "done": true, "no_change": true, EventOrphanRegate: true, EventPublishRefused: true,
 	// Saddle retries a gate that failed on the environment itself (#785).
 	EventDonePendingEnv: true,
 }

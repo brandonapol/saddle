@@ -21,7 +21,7 @@ func orphanRepair(t *testing.T) (*App, store.Task, store.Task) {
 	must(t, err)
 	write(t, t1.Worktree, "README.md", "one\n")
 	commitAll(t, t1.Worktree, "one")
-	must(t, a.Done(t1.ID, "README now says one."))
+	must(t, a.DoneToTrain(t1.ID, "README now says one."))
 	if _, err := a.Land(); err != nil {
 		t.Fatal(err)
 	}

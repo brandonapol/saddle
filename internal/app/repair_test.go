@@ -50,7 +50,7 @@ func TestRestackOrphanConflictSpawnsOneRepair(t *testing.T) {
 	must(t, err)
 	write(t, t1.Worktree, "README.md", "one\n")
 	commitAll(t, t1.Worktree, "one")
-	must(t, a.Done(t1.ID, "README now says one."))
+	must(t, a.DoneToTrain(t1.ID, "README now says one."))
 	if _, err := a.Land(); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestRepairLandSupersedesOriginal(t *testing.T) {
 	r := rs[0]
 	write(t, r.Worktree, "README.md", "main\none\n")
 	commitAll(t, r.Worktree, "one, on the new main")
-	must(t, a.Done(r.ID, "Re-lands t1 on main."))
+	must(t, a.DoneToTrain(r.ID, "Re-lands t1 on main."))
 	out, err := a.Land()
 	if err != nil || len(out) != 1 || out[0].State != store.TrainOK {
 		t.Fatalf("repair land = %+v, %v", out, err)
@@ -189,6 +189,7 @@ func TestRestackConflictLiveOwnerGetsNoRepair(t *testing.T) {
 func TestLandConflictOrphanSpawnsRepair(t *testing.T) {
 	t.Parallel()
 	a, ft := setup(t)
+	a.Cfg.LegacyTrain = true // legacy train behavior; #938 deletes this test with the train
 	a.Cfg.Test.Cmd = "none"
 	t1, _ := a.Spawn(SpawnReq{Title: "one"})
 	t2, _ := a.Spawn(SpawnReq{Title: "two", Claims: []string{"two/**"}})
@@ -196,8 +197,8 @@ func TestLandConflictOrphanSpawnsRepair(t *testing.T) {
 	commitAll(t, t1.Worktree, "one")
 	write(t, t2.Worktree, "README.md", "two\n")
 	commitAll(t, t2.Worktree, "two")
-	must(t, a.Done(t1.ID, "one"))
-	must(t, a.Done(t2.ID, "two"))
+	must(t, a.DoneToTrain(t1.ID, "one"))
+	must(t, a.DoneToTrain(t2.ID, "two"))
 	must(t, ft.KillWindow(t2.Window))
 	rs, err := a.Land()
 	if err != nil {
@@ -224,7 +225,7 @@ func TestLandConflictOrphanSpawnsRepair(t *testing.T) {
 
 	// The repair resolves on a fresh branch and lands normally.
 	git(t, r.Worktree, "cherry-pick", "-X", "theirs", t2.Branch)
-	must(t, a.Done(r.ID, "two, merged with one"))
+	must(t, a.DoneToTrain(r.ID, "two, merged with one"))
 	out, err := a.Land()
 	if err != nil || len(out) != 1 || out[0].State != store.TrainOK {
 		t.Fatalf("repair land = %+v, %v", out, err)

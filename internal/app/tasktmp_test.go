@@ -66,7 +66,7 @@ func TestLandRemovesTaskTmp(t *testing.T) {
 	write(t, p, "blob", "x")
 	write(t, tk.Worktree, "one/a.txt", "a\n")
 	commitAll(t, tk.Worktree, "one")
-	must(t, a.Done(tk.ID, "one"))
+	must(t, a.DoneToTrain(tk.ID, "one"))
 	if !dirExists(p) {
 		t.Fatalf("done removed %s; the agent may still be sent back to fix its branch", p)
 	}

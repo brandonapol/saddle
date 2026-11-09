@@ -16,7 +16,7 @@ func queued(t *testing.T, a *App, n int) []store.Task {
 		must(t, err)
 		write(t, tk.Worktree, tk.ID+".txt", tk.ID+"\n")
 		commitAll(t, tk.Worktree, tk.ID)
-		must(t, a.Done(tk.ID, tk.ID))
+		must(t, a.DoneToTrain(tk.ID, tk.ID))
 		out = append(out, tk)
 	}
 	return out
@@ -64,7 +64,7 @@ func TestHoldSkipsLandUntilReleased(t *testing.T) {
 	a := trainSetup(t)
 	ts := queued(t, a, 2)
 	must(t, a.Hold(ts[0].ID, "waiting on design review"))
-	must(t, a.Done(ts[0].ID, "again")) // the agent calls done again: still held
+	must(t, a.DoneToTrain(ts[0].ID, "again")) // the agent calls done again: still held
 	rs, err := a.Land()
 	must(t, err)
 	if len(rs) != 1 || rs[0].Task != ts[1].ID || rs[0].State != store.TrainOK {

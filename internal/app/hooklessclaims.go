@@ -67,7 +67,7 @@ func (a *App) CheckCommit(task string, files []string, allow bool) error {
 // claimedByOthers lists the files t's branch changes from integration that
 // another task claims, as "file (claimed by owner, glob)", sorted.
 func (a *App) claimedByOthers(t store.Task) []string {
-	out, err := gitx.Run(t.Worktree, "diff", "--name-only", "--no-renames", a.Cfg.Integration+"...HEAD")
+	out, err := gitx.Run(t.Worktree, "diff", "--name-only", "--no-renames", a.resolveBase(t, false).Onto+"...HEAD")
 	if err != nil || out == "" {
 		return nil
 	}
@@ -103,5 +103,5 @@ func (a *App) doneClaims(t store.Task) error {
 	return fmt.Errorf("[saddle] done refused: %s runs no saddle hooks, and its branch changes files other tasks claim: %s. "+
 		"Restore them from %s (git checkout %s -- <file>) and commit, or ask each owner (message tool) or the orchestrator to release the file (`saddle release --task <owner> <file>`), then call done again. "+
 		"If the change truly must land with this task, run done with %s=1; saddle records the override and tells the orchestrator",
-		t.ID, strings.Join(lines, "; "), a.Cfg.Integration, a.Cfg.Integration, agent.AllowClaimedEnv)
+		t.ID, strings.Join(lines, "; "), a.taskBase(t), a.taskBase(t), agent.AllowClaimedEnv)
 }

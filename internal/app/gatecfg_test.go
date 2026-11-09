@@ -18,13 +18,13 @@ func TestDoneReloadsGateCmdBetweenDones(t *testing.T) {
 	commitAll(t, tk.Worktree, "work")
 
 	write(t, a.Root, ".saddle/config.toml", "[test]\ncmd = \"none\"\n[train]\nlint.cmd = 'echo old gate; exit 1'\n")
-	err = a.Done(tk.ID, "s")
+	err = a.DoneToTrain(tk.ID, "s")
 	if err == nil || !strings.Contains(err.Error(), "echo old gate; exit 1") {
 		t.Fatalf("first done, with a red gate configured after Open: %v", err)
 	}
 
 	write(t, a.Root, ".saddle/config.toml", "[test]\ncmd = \"none\"\n[train]\nlint.cmd = 'true'\n")
-	must(t, a.Done(tk.ID, "s"))
+	must(t, a.DoneToTrain(tk.ID, "s"))
 	if !inTrain(t, a, tk.ID) {
 		t.Fatal("second done, after lint.cmd changed to a green gate, did not queue the task")
 	}

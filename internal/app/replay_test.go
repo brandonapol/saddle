@@ -286,7 +286,7 @@ func TestReplayStackIncident(t *testing.T) {
 			t.Fatalf("%s branched from %s, not origin/main %s", w.id, b, base)
 		}
 		r.commit(tk.Worktree, w.id, w.title, map[string]string{w.file: "package x // " + w.title + "\n"})
-		if err := a.Done(w.id, w.title+" summary"); err != nil {
+		if err := a.DoneToTrain(w.id, w.title+" summary"); err != nil {
 			t.Fatalf("done %s: %v", w.id, err)
 		}
 	}
@@ -552,7 +552,7 @@ func TestReplayGitHubHumansIncident(t *testing.T) {
 			t.Fatalf("spawn %s: %v", id, err)
 		}
 		r.commit(tk.Worktree, id, "work "+id, map[string]string{file(id): "package " + id + "\n"})
-		if err := a.Done(id, "work "+id); err != nil {
+		if err := a.DoneToTrain(id, "work "+id); err != nil {
 			t.Fatalf("done %s: %v", id, err)
 		}
 	}

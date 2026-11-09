@@ -98,7 +98,7 @@ func (e *autopilotEnv) Tasks() ([]autopilot.Task, error) {
 		at := autopilot.Task{
 			ID: t.ID, Issue: t.Issue, Claims: all[t.ID],
 			Live:    liveStatus(t.Status) || t.Status == StatusPaused,
-			Queued:  t.Status == store.Done,
+			Queued:  t.Status == store.Done || t.Status == store.PROpen,
 			Paused:  t.Status == StatusPaused,
 			Landed:  t.Status == store.Landed,
 			Summary: t.Summary,
@@ -330,7 +330,7 @@ func (e *autopilotEnv) Snapshot(time.Time) (autopilot.Snapshot, error) {
 	byID := map[string]store.Task{}
 	for _, t := range ts {
 		byID[t.ID] = t
-		if t.Role != store.RoleWorker || !t.Active() || t.Status == store.Done {
+		if t.Role != store.RoleWorker || !t.Active() || t.Status == store.Done || t.Status == store.PROpen {
 			continue
 		}
 		s.Tasks = append(s.Tasks, t.ID+" "+t.Status)

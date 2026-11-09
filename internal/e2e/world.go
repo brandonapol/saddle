@@ -32,6 +32,11 @@ type Options struct {
 	// TestCmd is [test] cmd; empty means "test ! -e FAIL_TESTS", so an agent
 	// fails the train's tests by committing a FAIL_TESTS file.
 	TestCmd string
+	// Publish runs done's default path (ADR 0012, #933): rebase onto the
+	// task's base, push and open its PR. Without it the harness sets
+	// legacy_train, since most journeys drive the legacy merge train
+	// (queue, then saddle land) until #938 deletes it and them.
+	Publish bool
 }
 
 // World is one hermetic saddle sandbox.
@@ -140,8 +145,12 @@ func (w *World) WriteConfig(opts Options) {
 	if test == "" {
 		test = "test ! -e FAIL_TESTS"
 	}
-	cfg := fmt.Sprintf("%s\n[test]\ncmd = %q\n\n[claude]\ncmd = %q\n\n[triage]\ndisabled = true\n\n%s\n",
-		opts.Top, test, filepath.Join(w.Bin, "claude"), opts.Tables)
+	legacy := "legacy_train = true\n"
+	if opts.Publish {
+		legacy = ""
+	}
+	cfg := fmt.Sprintf("%s%s\n[test]\ncmd = %q\n\n[claude]\ncmd = %q\n\n[triage]\ndisabled = true\n\n%s\n",
+		legacy, opts.Top, test, filepath.Join(w.Bin, "claude"), opts.Tables)
 	must(w.T, os.WriteFile(filepath.Join(w.Repo, ".saddle", "config.toml"), []byte(cfg), 0o644))
 }
 

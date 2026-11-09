@@ -9,6 +9,7 @@ import (
 
 	"github.com/brandonapol/saddle/internal/app"
 	"github.com/brandonapol/saddle/internal/config"
+	"github.com/brandonapol/saddle/internal/store"
 )
 
 // #368: the done tool answers while a slow gate still runs, and a retry
@@ -53,7 +54,12 @@ func TestDoneToolReturnsWhileGateRuns(t *testing.T) {
 	if b, _ := os.ReadFile(runs); strings.Count(string(b), "run") != 1 {
 		t.Fatalf("gate ran %q", b)
 	}
-	if got := queueOrder(t, a); got != "t2:queued" {
-		t.Fatalf("queue = %q", got)
+	// ADR 0012: the passed gate publishes the branch rather than queueing
+	// it; with no remote it is kept as it is, done, and never queued.
+	if got := queueOrder(t, a); got != "" {
+		t.Fatalf("queue = %q, want nothing queued", got)
+	}
+	if tk, err := a.Store.Task("t2"); err != nil || tk.Status != store.Done {
+		t.Fatalf("t2 = %+v, %v; want done", tk, err)
 	}
 }
