@@ -69,6 +69,9 @@ var CIRedExplained = func(a *App, task string, fails []CIRedFailure) (string, bo
 // fixer for a lint failure and spawn the repair. It returns a sentence for
 // the orchestrator's notice.
 func (a *App) CIRedRepair(task string, fails []CIRedFailure) (string, error) {
+	if !a.Cfg.LegacyTrain {
+		return "", errNoRepairs(task)
+	}
 	s, err := a.CIRed()
 	if err != nil {
 		return "", err

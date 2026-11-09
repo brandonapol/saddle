@@ -177,9 +177,8 @@ rule 8: prgraph decides rebasing, retargeting and merging) and
   origin/main <old base tip>` once that task merges, force-pushed, and
   retargeted to main with a plain base edit; `tasks.base` becomes main.
 - A conflicting rebase leaves the PR untouched: event
-  `queue_fix_in_place` marks that head, the owner hears once, and the queue
-  skips the task until its branch has a new head. Nothing is spawned; #936
-  reopens the task on its branch.
+  `queue_fix_in_place` marks that head and the task is reopened on its own
+  branch (below). Nothing is spawned.
 - Main red on its own checks pauses the queue: one notice, the reason in
   `automerge.json` `queue_paused`, and no rebases or merges until main is
   green, when it resumes and says so.
@@ -187,6 +186,39 @@ rule 8: prgraph decides rebasing, retargeting and merging) and
   keyed `queue:<action>:<task>` with the head and main's tip as inputs, so
   it backs off and resets when either moves; nothing latches. Saddle posts
   no statuses.
+
+### Fix in place (#936)
+
+The queue's tick also follows `fixing` and `gave_up` tasks' PRs, and before
+planning runs the fix-in-place pass (`internal/app/fixinplace.go`, ADR 0012
+rule 6). A problem on a PR is fixed by its own task on its own branch:
+
+- Red CI on a `pr_open` PR, a conflicting queue rebase, or (with merging
+  off) a PR the forge says conflicts, checked with `git merge-tree`, makes
+  the task `fixing` with `tasks.fix_reason` (`conflict: <files>` or
+  `ci: <checks> failed (<PR>/checks)`). The task leaves the queue's
+  candidates; a PR stacked on it waits on it as before. No file freezes,
+  claims or reservations.
+- Its agent, if alive (its own window, not flagged hung, a heartbeat within
+  `[stall] hung_after`), gets an action notice and a wake. Otherwise the old
+  window is closed and the task is relaunched in its worktree through the
+  same path `saddle resume` uses (quota rerouting, session resume when the
+  adapter supports it), with the reason, the PR link and the original
+  prompt. Before either, the local branch adopts the PR's remote head when
+  the queue moved it, the worktree is clean and no local commit is missing
+  from it (`git cherry`).
+- The agent's `done` is the normal publish: rebase, own-commits check,
+  `--force-with-lease` push of the same branch, the same PR, `pr_open`.
+- `tasks.fix_attempts` counts reopens and restarts of a gone agent; it
+  resets when the PR is green or on `saddle retry`. Past `[merge]
+  fix_attempts` (default 2) the PR gets `needs-human`, the agent stops, the
+  owner is told once and the task is `gave_up`. Removing the label, or
+  `saddle retry`, sends it back to `pr_open`.
+- While main is red no fix starts. A PR closed without merging kills its
+  task (`tasks.killed_by = pr_closed`), leaving worktree and branch.
+- With `legacy_train` off the ci-red and CI watchers, the sentinel's stack
+  check, landed publishing and stuck-stack alarm don't run, and no path
+  spawns a repair (`SpawnReq.For`) or a CI fix task.
 
 A worker's `done` must pass the repo's own gate (`[train] lint.cmd`, or the
 detected pre-commit gate such as `make check`) before it is queued. Run inside

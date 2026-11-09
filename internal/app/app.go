@@ -255,6 +255,9 @@ func (a *App) Spawn(r SpawnReq) (store.Task, error) {
 	if err := repairOfRepairErr(r.Title); err != nil {
 		return t, err
 	}
+	if err := a.noRepairSpawn(r); err != nil {
+		return t, err
+	}
 	// A long-lived saddle picks up an adapter disabled or reordered in the
 	// config since it opened (#908).
 	if _, err := a.ReloadTrainConfig(); err != nil {

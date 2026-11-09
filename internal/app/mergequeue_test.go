@@ -302,8 +302,9 @@ func TestQueueRedPRDoesNotBlockGreen(t *testing.T) {
 	if got.Applied == nil || got.Applied.Kind != prgraph.ActMerge || got.Applied.Change != "t2" {
 		t.Fatalf("tick applied %v, want merge(t2) past red t1", got.Applied)
 	}
-	if s := taskStatus(t, a, "t1"); s != store.PROpen {
-		t.Fatalf("t1 is %s, want still pr_open", s)
+	// Its red CI is its own to fix in place (#936).
+	if s := taskStatus(t, a, "t1"); s != store.Fixing {
+		t.Fatalf("t1 is %s, want fixing", s)
 	}
 	if got := tick(t, q); got.Applied != nil {
 		t.Fatalf("the queue acted on red t1: %v", got.Applied)
@@ -351,7 +352,7 @@ func TestQueueRetargetsStackedPRAfterItsBaseMerges(t *testing.T) {
 
 // #935: a conflicting rebase leaves the PR untouched, tells the owner once
 // and the queue skips the task until its branch has a new head. Nothing is
-// spawned.
+// spawned: the task itself is reopened on its branch (#936).
 func TestQueueConflictingRebaseLeavesPRUntouched(t *testing.T) {
 	t.Parallel()
 	a, f, q := queueSetup(t)
@@ -374,15 +375,27 @@ func TestQueueConflictingRebaseLeavesPRUntouched(t *testing.T) {
 	if !hasEvent(t, a, EventQueueFix, "head="+was) {
 		t.Fatal("no fix-in-place mark on the head")
 	}
-	ns, _ := a.Store.PeekNotices(OrchestratorID, false)
-	if len(ns) != 1 || !strings.Contains(ns[0].Text, "README.md") {
-		t.Fatalf("notices = %+v, want one naming the conflict", ns)
+	told := func() int {
+		es, _ := a.Store.EventsOfKinds(EventNoticeDigest, EventNoticeInterrupt)
+		n := 0
+		for _, e := range es {
+			if strings.Contains(e.Data, "README.md") {
+				n++
+			}
+		}
+		return n
+	}
+	if told() != 1 {
+		t.Fatalf("the owner heard of the conflict %d times, want once", told())
+	}
+	if s := taskStatus(t, a, "t1"); s != store.Fixing {
+		t.Fatalf("t1 is %s, want fixing", s)
 	}
 	if got := tick(t, q); got.Applied != nil {
 		t.Fatalf("the queue retried the same head: %v", got.Applied)
 	}
-	if ns, _ := a.Store.PeekNotices(OrchestratorID, false); len(ns) != 1 {
-		t.Fatalf("told the owner %d times", len(ns))
+	if told() != 1 {
+		t.Fatalf("told the owner %d times", told())
 	}
 	if after, _ := a.Store.Tasks(); len(after) != len(tasks) {
 		t.Fatalf("the queue spawned tasks: %d → %d", len(tasks), len(after))

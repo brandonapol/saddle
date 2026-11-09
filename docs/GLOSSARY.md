@@ -250,6 +250,27 @@ orchestrator is told, a subset).
 A task status: its spawn failed. The id stays burned and the reason is in its
 summary.
 
+### fixing
+A task status (ADR 0012 rule 6, #936): a *pr_open* task reopened on its own
+branch because its PR conflicts with its base or its CI is red. The reason is
+stored on the task: `conflict: <files>` or `ci: <failed checks> failed
+(<PR>/checks)`. If the task's agent is alive (its window is up and it showed a
+sign of life within `[stall] hung_after`) it is sent the reason; an agent that
+exited or sat idle longer is gone, and a new one is started *as the same
+task* in its worktree on its branch (its session resumed when the adapter
+can), with the reason, the PR link and the original prompt. Before it starts,
+the local branch adopts the PR's remote head when the queue moved it and the
+worktree is clean. Its `done` force-pushes the same PR and makes it
+*pr_open* again. Each reopen, and each restart of a gone agent, counts
+against `[merge] fix_attempts` (default 2); the count resets when the PR goes
+green or on *retry*. Past it: *gave_up*. A fixing PR holds only itself and
+the PRs stacked on it: no file freezes, claims or reservations. While main is
+red no fix starts. Never a new task, branch or PR.
+*Avoid:* "repair", "repairing", "fix task".
+*Maps to:* `tasks.status = 'fixing'`, `tasks.fix_reason`,
+`tasks.fix_attempts`; events `fix_opened`, `fix_told`, `fix_started`,
+`fix_adopted_remote`, `fix_green`.
+
 ### folded
 A train entry state: a CI repair whose commits joined the red PR it repaired.
 It has no PR of its own and is out of the landed list; its work ships in that
@@ -269,6 +290,16 @@ A check that must pass before work moves on. Kinds:
 - **write gate**: the conditions in `internal/gate` behind a *write hold*.
 *Avoid:* "CI" for any of these (CI is the forge's checks on a pushed PR, see
 *ci-red*); "the gate" without the kind when more than one could apply.
+
+### gave_up
+A task status (#936): its PR still needed a fix after `[merge] fix_attempts`
+*fixing* rounds, so saddle labeled the PR `needs-human`, stopped its agent
+(worktree and branch kept) and told the owner once. Only this adds
+`needs-human` to a saddle PR. It stays until anyone removes the label or the
+owner runs *retry*; then it is *pr_open* again with its fix count reset. A
+merge or close on the forge still ends it (*merged*, *killed*).
+*Avoid:* "escalated", "parked", "stuck".
+*Maps to:* `tasks.status = 'gave_up'`, event `fix_gave_up`.
 
 ### gc
 `saddle gc [--dry-run]`: removes worktrees, branches and refs of killed, failed
@@ -353,7 +384,10 @@ worktree. Uncommitted work is snapshotted to `refs/saddle/wip/` first. Status
 `killed`.
 
 ### killed
-A task status: see *kill*. A killed task leaves the PR stack.
+A task status: see *kill*. A killed task leaves the PR stack. A task whose
+PR was closed without merging is killed too, with `killed_by = pr_closed`;
+its worktree and branch are left alone (#936).
+*Maps to:* `tasks.status = 'killed'`, `tasks.killed_by`, event `pr_closed`.
 
 ### land
 `saddle land`: runs the merge train. For each queued branch, one at a time:
@@ -496,7 +530,7 @@ rebased onto its base, checked to hold only its own commits (each commit's
 `Saddle-Task` trailer names the task, or no other task's branch has it),
 pushed, and its one PR opened or updated against that base. Claims are
 released. It is not done for the owner until the PR merges (*merged*), and
-it is not finished: a conflict or red CI brings it back to its own branch
+it is not finished: a conflict or red CI makes it *fixing* on its own branch
 (#936). Calling done again at the same head is a no-op.
 *Avoid:* "landed", "queued" for this.
 *Maps to:* `tasks.status = 'pr_open'`, `tasks.pr`, events `done_pr_opened`,
@@ -525,7 +559,7 @@ Red CI skips a PR; a PR behind main or conflicting is rebased in the queue's
 own scratch worktree and force-pushed; a green, mergeable one is merged with
 the repo's merge method and its task becomes *merged*. A PR stacked on its
 *after* is rebased onto main and retargeted once that task merges. A
-conflicting rebase leaves the PR untouched and tells the owner once. Main
+conflicting rebase leaves the PR untouched and makes its task *fixing*. Main
 red on its own checks pauses it, with one notice, until main is green.
 Failures are retry *attempts*. With `legacy_train` on, *automerge* merges
 instead.
@@ -556,7 +590,7 @@ Unrelated to `release` in `queue` / `automerge`, which un-hold.
 see and steer this saddle. See [remote-control.md](remote-control.md).
 
 ### repair
-A new task saddle spawns to fix another task's landed work, because the task
+Legacy train only (`legacy_train` on): a new task saddle spawns to fix another task's landed work, because the task
 that wrote it can't (its window is gone, or it already failed). Kinds:
 - **conflict repair** (#172): restack or land hit a conflict; the repair re-lands
   the original's work on a fresh branch. The original is *repairing* until the
@@ -601,6 +635,15 @@ git by hand or a worker. `--continue` / `--abort` recover an interrupted run
 ### resume
 `saddle resume <task>`: opens a new window for a paused or orphaned task,
 continuing its agent session. `saddle up` does this for every windowless task.
+
+### retry
+`saddle retry <task>` (and the `retry` MCP tool, #936): lets saddle fix a
+task's PR in place again. It removes the `needs-human` label, resets the
+task's fix count and puts a *gave_up* task back to *pr_open*. On a *pr_open*
+or *fixing* task it only resets the count. Removing the label by hand does
+the same for a *gave_up* task.
+*Avoid:* "requeue" (that puts a landed task back in the legacy train).
+*Maps to:* `tasks.fix_attempts = 0`, event `fix_retry`.
 
 ### route-around
 What the stall budget does when a red layer has blocked its stack too long:

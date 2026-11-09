@@ -70,7 +70,7 @@ func (a *App) WorkerAtWork() bool {
 		return false
 	}
 	for _, t := range ts {
-		if t.Role == store.RoleWorker && t.Active() && t.Status != store.Done && t.Status != store.PROpen {
+		if t.Role == store.RoleWorker && t.Active() && t.Status != store.Done && t.Status != store.PROpen && t.Status != store.GaveUp {
 			return true
 		}
 	}

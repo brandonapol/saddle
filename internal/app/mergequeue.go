@@ -123,9 +123,11 @@ func (q *MergeQueue) Tick(ctx context.Context) (QueueTick, error) {
 	if err != nil {
 		return out, err
 	}
+	// pr_open tasks are the queue's; fixing and gave_up ones are only
+	// followed for fix in place (#936).
 	var live []store.Task
 	for _, t := range ts {
-		if t.Role == store.RoleWorker && t.Status == store.PROpen && t.PR != "" {
+		if fixTracked(t) {
 			live = append(live, t)
 		}
 	}
@@ -147,6 +149,9 @@ func (q *MergeQueue) Tick(ctx context.Context) (QueueTick, error) {
 	if len(in.BaseRed) == 0 && in.Paused {
 		q.resume()
 		in.Paused = false
+	}
+	if taken := q.fixPass(in, r, tasks); len(taken) > 0 {
+		in.Changes = slices.DeleteFunc(in.Changes, func(c prgraph.QueueChange) bool { return taken[c.ID] })
 	}
 	out.Plan = prgraph.Queue(in)
 	for _, act := range out.Plan.Effectful() {
@@ -226,7 +231,9 @@ func (q *MergeQueue) input(ctx context.Context, r string, live []store.Task) (pr
 			}
 		}
 		tasks[t.ID] = mqTask{t: t, pr: p}
-		in.Changes = append(in.Changes, q.change(r, t, p, st))
+		if t.Status == store.PROpen {
+			in.Changes = append(in.Changes, q.change(r, t, p, st))
+		}
 	}
 	return in, tasks, nil
 }
@@ -436,11 +443,11 @@ func (q *MergeQueue) rebase(ctx context.Context, r string, act prgraph.Action, q
 		return fmt.Errorf("rebase %s onto %s: %w", t.Branch, a.Cfg.Base, err)
 	}
 	if !rr.OK {
-		return q.fixInPlace(act, qt, fmt.Sprintf("rebasing it onto %s conflicts in %s", a.Cfg.Base, strings.Join(rr.Conflicts, ", ")))
+		return q.fixInPlace(act, qt, strings.Join(rr.Conflicts, ", "))
 	}
 	if len(taken) > 0 {
 		if out, err := regenerate(dir, a.Cfg.Regen, taken); err != nil {
-			return q.fixInPlace(act, qt, fmt.Sprintf("rebasing it onto %s kept %s's copy of %s, and regenerating them failed: %s", a.Cfg.Base, a.Cfg.Base, strings.Join(taken, ", "), oneLine(out)))
+			return q.fixInPlace(act, qt, fmt.Sprintf("%s (rebasing onto %s kept its copy, and regenerating them failed: %s)", strings.Join(taken, ", "), a.Cfg.Base, oneLine(out)))
 		}
 	}
 	head, err := gitx.RevParse(dir, "HEAD")
@@ -467,13 +474,15 @@ func (q *MergeQueue) rebase(ctx context.Context, r string, act prgraph.Action, q
 }
 
 // fixInPlace leaves the PR untouched for its own task to fix: the head is
-// marked so the queue skips it until a new one is pushed, and the
-// orchestrator hears once. Nothing is spawned (#936 reopens the task).
-func (q *MergeQueue) fixInPlace(act prgraph.Action, qt mqTask, why string) error {
+// marked so the queue skips it until a new one is pushed, and the task is
+// reopened on its own branch (#936), which tells the orchestrator once.
+// Nothing is spawned.
+func (q *MergeQueue) fixInPlace(act prgraph.Action, qt mqTask, conflict string) error {
 	a := q.a
-	a.Store.Event(act.Change, EventQueueFix, "head="+act.Guard.Head+" "+why)
-	_ = a.Notify(OrchestratorID, store.NoticeAction, fmt.Sprintf("%s %q: its PR %s can't merge yet: %s. The PR was left untouched; the conflict is %s's to fix on its own branch (saddle sync, resolve, done). The queue skips it until its branch has a new head.",
-		act.Change, qt.t.Title, qt.t.PR, why, act.Change))
+	a.Store.Event(act.Change, EventQueueFix, "head="+act.Guard.Head+" conflict: "+conflict)
+	if err := a.reopenForFix(qt.t, "conflict: "+conflict, q.Now(), q.labeler()); err != nil {
+		a.Store.Event(act.Change, EventFixFailed, "reopen: "+oneLine(err.Error()))
+	}
 	return errQueueConflict
 }
 

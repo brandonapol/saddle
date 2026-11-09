@@ -425,6 +425,7 @@ func TestSentinelSkipsWhileTrainBusy(t *testing.T) {
 // minutes.
 func TestSentinelRunRetriesSoonWhenTrainBusy(t *testing.T) {
 	a, _ := setup(t)
+	a.Cfg.LegacyTrain = true // pins the legacy train's repairs and stack checks (#936)
 	gh := newFakeGH(t)
 	t1 := landTask(t, a, "t1", "one")
 	if _, err := a.PRs(); err != nil {
@@ -616,6 +617,7 @@ func TestGHComments(t *testing.T) {
 // #223: each sentinel cycle runs the stuck-stack alarm.
 func TestSentinelRunRaisesStuckStackAlarm(t *testing.T) {
 	a, _ := setup(t)
+	a.Cfg.LegacyTrain = true // pins the legacy train's repairs and stack checks (#936)
 	newFakeGH(t)
 	landTask(t, a, "t1", "one")
 	a.Cfg.Train.StuckAfter = time.Minute
@@ -646,6 +648,7 @@ func TestSentinelRunRaisesStuckStackAlarm(t *testing.T) {
 // heals it by opening the PR, so no one has to remember prs.
 func TestSentinelCycleOpensPRsOfLandedTasksWithout(t *testing.T) {
 	a, _ := setup(t)
+	a.Cfg.LegacyTrain = true // pins the legacy train's repairs and stack checks (#936)
 	gh := newFakeGH(t)
 	landTask(t, a, "t1", "one")
 	landTask(t, a, "t2", "two")

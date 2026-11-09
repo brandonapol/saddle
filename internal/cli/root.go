@@ -45,7 +45,7 @@ func Root() *cobra.Command {
 	root.AddCommand(
 		restackCmd(), afterCmd(),
 		versionCmd(), migrateCmd(), changelogCmd(), initCmd(), upCmd(), downCmd(), spawnCmd(), withTmux(statusCmd()), catchupCmd(), briefCmd(), claimCmd(), releaseCmd(), doneCmd(),
-		landCmd(), syncCmd(), prsCmd(), peekCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(), repairCmd(), concurrencyCmd(), configCmd(), pluginCmd(), grokBridgeCmd(), codexBridgeCmd(), openCodeBridgeCmd(), ssoCmd(), publishCmd(), noticesCmd(), eventsCmd(), trustCmd(), untrustCmd(), resumeCmd(), rescueCmd(), heavyRunCmd(), runqCmd(), autopilotCmd(), blockersCmd(), decisionsCmd(), sreCmd(), benchCmd(), reconcileCmd(), remote.Command(open),
+		landCmd(), syncCmd(), prsCmd(), peekCmd(), killCmd(), gcCmd(), messageCmd(), checkCmd(), hookCmd(), mcpCmd(), exitedCmd(), sweepCmd(), refguardCmd(), perfCmd(), unstackCmd(), sentinelCmd(), requeueCmd(), retryCmd(), queueCmd(), planCmd(), doctorCmd(), automergeCmd(), stackCmd(), repairCmd(), concurrencyCmd(), configCmd(), pluginCmd(), grokBridgeCmd(), codexBridgeCmd(), openCodeBridgeCmd(), ssoCmd(), publishCmd(), noticesCmd(), eventsCmd(), trustCmd(), untrustCmd(), resumeCmd(), rescueCmd(), heavyRunCmd(), runqCmd(), autopilotCmd(), blockersCmd(), decisionsCmd(), sreCmd(), benchCmd(), reconcileCmd(), remote.Command(open),
 	)
 	addGlossaryHelp(root)
 	return root
@@ -268,7 +268,10 @@ func watcherSet(a *app.App) []watcher {
 		{"reconcile-shadow", a.RunShadowReconciler},                                     // prgraph in shadow: logs reconcile_shadow divergences, never acts (#830)
 		{"gc", a.RunGC}, // dead tasks' worktrees, branches and refs, old backups, events and loose objects every 30m (#802)
 	}
-	if !a.Cfg.CI.Disabled {
+	// The CI and ci-red watchers belong to the legacy train: on the new path
+	// red CI and conflicts on a PR reopen its own task, from the merge
+	// queue's tick (fix in place, #936), so no repair watcher runs.
+	if !a.Cfg.CI.Disabled && a.Cfg.LegacyTrain {
 		ws = append(ws, watcher{"ci-red", func(ctx context.Context) { _ = sentinel.NewCIRed(a).Run(ctx) }}) // holds layers above red CI
 		if ci, err := a.NewCIWatcher(nil); err == nil {
 			ws = append(ws, watcher{"ci", ci.Run}) // gh errors are recorded as events

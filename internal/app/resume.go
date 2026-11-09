@@ -105,6 +105,26 @@ func (a *App) canResume(t store.Task) bool {
 // resume opens a new window for t in its worktree, resuming its session
 // when it can and relaunching with the original brief when it can't.
 func (a *App) resume(t store.Task) (Resumed, error) {
+	r, err := a.relaunch(t, relaunchNote, resumedNote)
+	if err != nil {
+		return r, err
+	}
+	if err := a.Store.SetStatus(t.ID, store.Running); err != nil {
+		return r, err
+	}
+	how := "relaunched"
+	if r.Session != "" {
+		how = "session " + r.Session
+	}
+	a.Store.Event(t.ID, "resumed", how+" window "+r.Window)
+	return r, nil
+}
+
+// relaunch opens a new window for t in its worktree (recreated if it is
+// gone), on the adapter the quota policy allows: its session resumed with
+// resumedNote when it can, else a fresh agent with t's prompt and
+// freshNote. It leaves t's status alone.
+func (a *App) relaunch(t store.Task, freshNote, resumedNote string) (Resumed, error) {
 	r := Resumed{Task: t.ID}
 	fresh := false // a recreated worktree has no session to resume
 	if fi, err := os.Stat(t.Worktree); err != nil || !fi.IsDir() {
@@ -117,7 +137,7 @@ func (a *App) resume(t store.Task) (Resumed, error) {
 	if err != nil {
 		return r, err
 	}
-	prompt := strings.TrimSpace(t.Prompt + "\n\n" + relaunchNote)
+	prompt := strings.TrimSpace(t.Prompt + "\n\n" + freshNote)
 	ad := a.taskAdapter(t)
 	// An adapter or model out of quota would only park it again: relaunch
 	// it on the next one with quota (#321, #483). Its session can't move
@@ -145,14 +165,6 @@ func (a *App) resume(t store.Task) (Resumed, error) {
 		return r, fmt.Errorf("%s: %w", t.ID, err)
 	}
 	r.Window = win
-	if err := a.Store.SetStatus(t.ID, store.Running); err != nil {
-		return r, err
-	}
-	how := "relaunched"
-	if r.Session != "" {
-		how = "session " + r.Session
-	}
-	a.Store.Event(t.ID, "resumed", how+" window "+win)
 	return r, nil
 }
 

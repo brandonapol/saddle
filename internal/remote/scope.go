@@ -58,6 +58,7 @@ var ToolScopes = map[string]Scope{
 	"automerge":     ScopeAct,
 	"concurrency":   ScopeAct,
 	"keep":          ScopeAct, // only ever stops saddle killing a task (#625)
+	"retry":         ScopeAct, // lets saddle fix a PR in place again (#936)
 	"unstack":       ScopeAct,
 	"after":         ScopeAct,
 	"requeue":       ScopeAct,
