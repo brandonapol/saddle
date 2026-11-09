@@ -125,10 +125,10 @@ func TestStateWithoutExitFlagsRevivedKillsAndStuckStates(t *testing.T) {
 	none(t, past)
 }
 
-// I7, #820: ci-red repair spawned workers for saddle/base, a status saddle
-// itself sets on every stacked PR.
+// I7, #820: ci-red repair spawned workers for a status saddle itself set
+// on every stacked PR (saddle/legacy here).
 func TestSelfRepairFlagsRepairsOfSaddlesOwnChecks(t *testing.T) {
-	s := Snapshot{Now: now, Repairs: []Repair{{Repair: "t402", For: "t396", Checks: []string{"saddle/base"}}}}
+	s := Snapshot{Now: now, Repairs: []Repair{{Repair: "t402", For: "t396", Checks: []string{"saddle/legacy"}}}}
 	only(t, s, SelfRepair, "t402")
 	s.Repairs[0].Checks = []string{"test"}
 	none(t, s)

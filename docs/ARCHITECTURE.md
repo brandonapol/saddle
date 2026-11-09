@@ -581,7 +581,7 @@ Saddle reaches its git host through `internal/forge` and nowhere else
   sentinel and the ci-red watcher) and `planner.Push` each declare the small
   slice of `forge.Forge` they use and are built from `App.Forge()`, so
   `[forge]` applies to them too. On `ErrUnsupported` each degrades quietly:
-  the CI watchers watch nothing, labels and stack comments are skipped, and
+  the CI watchers watch nothing, labels are skipped, and
   auto-merge leaves its PRs unread. gh arguments appear only in
   `internal/forge`: `TestNoGHArgsOutsideForge` fails when any other package
   builds them (#649; `ghstack`, `e2e` and `bench` are no longer exempt).

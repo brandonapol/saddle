@@ -192,6 +192,7 @@ func TestChecks(t *testing.T) {
 		{"no orchestrator allowlist", CheckOrchAllow, func(f *fakeEnv) { f.allow = []string{"Read"} }, Warn, `"Bash(saddle:*)", "mcp__saddle"`},
 
 		{"config error", CheckConfig, func(f *fakeEnv) { f.cfgErr = errors.New("train.output \"x\"") }, Fail, "config.toml"},
+		{"batch mode removed", CheckConfig, func(f *fakeEnv) { f.cfg.Train.Removed = "batch" }, Warn, "delete `output` from [train]"},
 
 		{"no remote", CheckRemote, func(f *fakeEnv) { f.git["remote"] = res{out: ""} }, Fail, "git remote add origin"},
 		{"upstream remote preferred", CheckRemote, func(f *fakeEnv) {

@@ -82,7 +82,6 @@ func (p prJSON) pr() PR {
 		pr.Checks = append(pr.Checks, CheckRun{Kind: kind, Name: r.Name, Workflow: r.Workflow, Context: r.Context,
 			Status: r.Status, Conclusion: r.Conclusion, State: r.State, StartedAt: r.StartedAt})
 	}
-	pr.Checks = withoutSaddleOwned(pr.Checks)
 	return pr
 }
 
@@ -297,7 +296,6 @@ func parseOpenPRs(out string) ([]PR, string, error) {
 				}
 				pr.Checks = append(pr.Checks, c.check())
 			}
-			pr.Checks = withoutSaddleOwned(pr.Checks)
 		}
 		prs = append(prs, pr)
 	}
@@ -315,12 +313,6 @@ func (g *GitHub) SetPRBase(ctx context.Context, ref, base string) error {
 
 func (g *GitHub) SetPRBody(ctx context.Context, ref, body string) error {
 	_, err := g.run(ctx, "pr", "edit", ref, "--body", body)
-	return err
-}
-
-func (g *GitHub) SetStatus(ctx context.Context, sha, name, state, description string) error {
-	_, err := g.run(ctx, "api", "-X", "POST", "repos/{owner}/{repo}/statuses/"+sha,
-		"-f", "state="+state, "-f", "context="+name, "-f", "description="+description)
 	return err
 }
 

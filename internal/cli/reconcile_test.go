@@ -13,7 +13,8 @@ import (
 )
 
 // replayFixture writes a state.db where t2's PR went red only on
-// saddle/base and saddle spawned t3 to repair it.
+// host/order, a status the host posts itself, and saddle spawned t3 to
+// repair it.
 func replayFixture(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
@@ -35,7 +36,7 @@ func replayFixture(t *testing.T) string {
 		{"t2", "done_called", "x"},
 		{"t2", "landed", "abc123"},
 		{"t2", "pr_layout", "abc123 published as def456 on main"},
-		{"t2", "ci_red", "def456 saddle/base"},
+		{"t2", "ci_red", "def456 host/order"},
 		{"t2", "ci_repair_spawned", "t3"},
 	} {
 		if _, err := db.Exec(`INSERT INTO events(ts, task, kind, data) VALUES(?,?,?,?)`, day.Add(time.Duration(i)*time.Minute).Unix(), e[0], e[1], e[2]); err != nil {
@@ -50,13 +51,13 @@ func replayFixture(t *testing.T) string {
 func TestReconcileReplay(t *testing.T) {
 	t.Chdir(t.TempDir())
 	path := replayFixture(t)
-	out := run(t, "reconcile", "--replay", path, "--day", "2026-11-05")
-	for _, want := range []string{"divergences", "legacy_only needs_fix(t2", "ci_repair_spawned t3", "legacy repairs 1 (1 of saddle/base)", "assumes"} {
+	out := run(t, "reconcile", "--replay", path, "--day", "2026-11-05", "--host-check", "host/order")
+	for _, want := range []string{"divergences", "legacy_only needs_fix(t2", "ci_repair_spawned t3", "legacy repairs 1 (1 red only on host checks)", "assumes"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
 	}
-	js := run(t, "reconcile", "--replay", path, "--day", "2026-11-05", "--json")
+	js := run(t, "reconcile", "--replay", path, "--day", "2026-11-05", "--host-check", "host/order", "--json")
 	var rep app.ReplayReport
 	if err := json.Unmarshal([]byte(js), &rep); err != nil {
 		t.Fatalf("--json: %v\n%s", err, js)

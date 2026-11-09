@@ -116,12 +116,6 @@ type PRQuery struct {
 	Limit int
 }
 
-// Commit status states for SetStatus.
-const (
-	StatusSuccess = "success"
-	StatusFailure = "failure"
-)
-
 // Comment is a comment on a PR. ID is what EditComment takes.
 type Comment struct {
 	ID   string
@@ -197,9 +191,6 @@ type Forge interface {
 	SetPRBase(ctx context.Context, ref, base string) error
 	SetPRBody(ctx context.Context, ref, body string) error
 	ClosePR(ctx context.Context, ref string) error
-	// SetStatus sets commit status name on sha to StatusSuccess or
-	// StatusFailure, with a one-line description.
-	SetStatus(ctx context.Context, sha, name, state, description string) error
 	Comments(ctx context.Context, ref string) ([]Comment, error)
 	AddComment(ctx context.Context, ref, body string) error
 	EditComment(ctx context.Context, id, body string) error
@@ -378,9 +369,6 @@ func (u Unsupported) OpenPRs(context.Context) ([]PR, error) {
 func (u Unsupported) SetPRBase(context.Context, string, string) error { return u.err("retarget PR") }
 func (u Unsupported) SetPRBody(context.Context, string, string) error { return u.err("edit PR") }
 func (u Unsupported) ClosePR(context.Context, string) error           { return u.err("close PR") }
-func (u Unsupported) SetStatus(context.Context, string, string, string, string) error {
-	return u.err("commit status")
-}
 func (u Unsupported) Comments(context.Context, string) ([]Comment, error) {
 	return nil, u.err("read comments")
 }

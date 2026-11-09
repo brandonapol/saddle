@@ -242,13 +242,13 @@ func TestResultFailures(t *testing.T) {
 	bad := ok
 	bad.Outcomes = append([]Outcome(nil), ok.Outcomes...)
 	bad.Outcomes[0].State = Stuck
-	bad.Repairs = []Repair{{Task: "t11", For: "t2", Checks: []string{"saddle/base"}}, {Task: "t12", For: "t3"}}
+	bad.Repairs = []Repair{{Task: "t11", For: "t2", Checks: []string{"saddle/legacy"}}, {Task: "t12", For: "t3"}}
 	bad.Actions = []string{"decision card left for a human"}
 	bad.Excluded = []string{"t6 (c06 soak change)"}
 	bad.Ledger = &Ledger{}
 	bad.Ledger.Observe(0, []invariants.Violation{v(invariants.SelfRepair, "t11")})
 	f := strings.Join(bad.Failures(DefaultBudgets), "\n")
-	for _, want := range []string{"c01", "never reached a terminal state", "human or orchestrator action", "self_repair t11", "2 repairs for 10 changes, over the cap of 1", "targets saddle-owned check saddle/base", "excluded adapter: t6"} {
+	for _, want := range []string{"c01", "never reached a terminal state", "human or orchestrator action", "self_repair t11", "2 repairs for 10 changes, over the cap of 1", "targets saddle-owned check saddle/legacy", "excluded adapter: t6"} {
 		if !strings.Contains(f, want) {
 			t.Errorf("failures lack %q:\n%s", want, f)
 		}

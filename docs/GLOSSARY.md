@@ -98,20 +98,6 @@ merged PRs, the train) and asks for a lookahead step instead of a status. The
 same unchanged idle state is nudged at most three times; then the owner hears
 once and the nudges stop until something changes. See also *infinite mode*.
 
-### batch
-`[train] output = "batch"` (alt+b in the TUI flips it with `per-task`): every
-landed task is one layer of one linear [stack](#stack) in train order, each
-PR published at the commit the train landed and tested. Auto-merge merges a
-batch once: it fast-forwards base to the highest layer whose CI is green,
-which carries every layer below it, and the forge marks those PRs merged.
-Red CI on a layer holds nothing back and gets no [repair](#repair) while a
-layer above it is green or running. See
-[ADR 0011](adr/0011-batch-stack-merged-once.md).
-*Avoid:* "train" or "wave" for a batch; "merging the stack" for the batch's
-single fast-forward.
-*Maps to:* `train.output`, events `batch_merged`, `batch_waiting`,
-`ci_repair_carried`.
-
 ### bench
 `saddle bench list|run|score`. The collision bench: works a scenario's dummy
 tickets (`bench/scenarios`) with autopilot and fake agents on a copy of
@@ -343,9 +329,9 @@ task's PR against base right away. See
 ### invariant violation
 A state that breaks one of [ADR 0004](adr/0004-reconcile-against-github.md)'s
 invariants, such as a landed task with no PR (`done_not_on_main`) or a repair
-of `saddle/base` (`self_repair`). The invariant monitor checks for them every
-sentinel tick (#825) and reports each one once, as an event and a notice to the
-orchestrator, until it clears; open ones show in `saddle status` and
+of a `saddle/…` status (`self_repair`). The invariant monitor checks for
+them every sentinel tick (#825) and reports each one once, as an event and a
+notice to the orchestrator, until it clears; open ones show in `saddle status` and
 `saddle doctor`. It only detects; the reconciler heals. *Maps to:* events
 `invariant_violated` and `invariant_cleared`, `.saddle/invariants.json`.
 
@@ -650,8 +636,7 @@ the orchestrator. See [sso.md](sso.md).
 One chain of PRs: each PR's base is the PR of a task it depends on (`after`,
 a spawn parent, the same issue, or what the pre-publish gate needs), and the
 bottom PR's base is base. A landed task with no dependencies is a stack of
-one, with its PR on base (#751). A [batch](#batch) is the one exception: one
-linear stack of every landed task, by the owner's choice. Sharing a file does not put two tasks in one
+one, with its PR on base (#751). Sharing a file does not put two tasks in one
 stack. *Custom stacks* are owner-defined (`saddle stack
 create|add|remove|delete|list|show|link|merge|collapse|rebase`); a *native
 stack* is the same chain linked on GitHub with gh-stack. `saddle stack` draws

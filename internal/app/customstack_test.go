@@ -147,16 +147,6 @@ func TestCustomStackOverridesClustering(t *testing.T) {
 	if !strings.Contains(pushed[0], t3.Branch) && !strings.Contains(pushed[1], t3.Branch) {
 		t.Fatalf("t3's PR wasn't opened before t1's: %q", pushed)
 	}
-	// The managed PR comment lists the stack in its order.
-	body := lastStackComment(t, mustTask(t, a, t1.ID).PR)
-	i3, i1 := strings.Index(body, "t3 work"), strings.Index(body, "t1 work")
-	if i3 < 0 || i1 < 0 || !strings.Contains(body, "**Stack**") {
-		t.Fatalf("t1's body doesn't list the stack:\n%s", body)
-	}
-	// Numbered bottom first, printed top first: t1 (2.) before t3 (1.).
-	if i1 > i3 || !strings.Contains(body, "2. ") {
-		t.Fatalf("stack listed out of order:\n%s", body)
-	}
 	// Publishing again is stable.
 	if _, err := a.PRs(); err != nil {
 		t.Fatal(err)

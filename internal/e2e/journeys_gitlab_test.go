@@ -101,9 +101,8 @@ func TestJourneyGitLabPublish(t *testing.T) {
 }
 
 // TestJourneyGitLabStackRetarget: prs opens a two-MR stack, t2's MR
-// targeting t1's branch with saddle's stack note; once t1's MR is merged in
-// GitLab by hand, restack retargets t2's MR to main and rebuilds its branch,
-// updating the note rather than adding one.
+// targeting t1's branch, with no note from saddle; once t1's MR is merged in
+// GitLab by hand, restack retargets t2's MR to main and rebuilds its branch.
 func TestJourneyGitLabStackRetarget(t *testing.T) {
 	if Fork(t) {
 		return
@@ -114,13 +113,12 @@ func TestJourneyGitLabStackRetarget(t *testing.T) {
 	if low.Target != "main" || high.Target != low.Source {
 		t.Fatalf("stack targets: %s into %s, %s into %s; want t2 on t1 on main", low.Source, low.Target, high.Source, high.Target)
 	}
-	notes := high.UserNotes()
-	if len(notes) != 1 || !strings.Contains(notes[0].Body, "<!-- saddle:stack -->") || !strings.Contains(notes[0].Body, "Base: `"+low.Source+"`") {
-		t.Fatalf("top MR lacks its stack note: %+v", high.Notes)
+	if notes := high.UserNotes(); len(notes) != 0 {
+		t.Fatalf("saddle noted on the top MR (ADR 0012 rule 7): %+v", notes)
 	}
 	w.MustSaddle("prs")
-	if n := mrAt(t, w, urls["t2"]).UserNotes(); len(n) != 1 {
-		t.Fatalf("repeat prs duplicated the stack note: %+v", n)
+	if n := mrAt(t, w, urls["t2"]).UserNotes(); len(n) != 0 {
+		t.Fatalf("repeat prs added a note: %+v", n)
 	}
 
 	must(t, w.GL.MergeByHand(low.IID))
@@ -134,8 +132,8 @@ func TestJourneyGitLabStackRetarget(t *testing.T) {
 	if files := w.Git(w.Repo, "diff", "--name-only", "origin/main...origin/"+high.Source); files != "beta/work.txt" {
 		t.Fatalf("t2's MR diff = %q, want only its own file", files)
 	}
-	if n := high.UserNotes(); len(n) != 1 || !strings.Contains(n[0].Body, "Base: `main`") {
-		t.Fatalf("stack note after restack = %+v, want it updated to main", n)
+	if n := high.UserNotes(); len(n) != 0 {
+		t.Fatalf("restack added a note: %+v", n)
 	}
 	if !slices.ContainsFunc(high.Notes, func(n fakeglab.Note) bool { return n.System && strings.Contains(n.Body, "changed target branch") }) {
 		t.Fatalf("GitLab logged no retarget: %+v", high.Notes)

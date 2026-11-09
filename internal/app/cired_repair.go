@@ -31,7 +31,6 @@ const TrainFolded = "folded"
 // CI repair events, on the red task.
 const (
 	eventCIRepairSpawned = "ci_repair_spawned" // data: repair task id
-	eventCIRepairCarried = "ci_repair_carried" // data: the green batch layer above it
 	eventCIRepairFailed  = "ci_repair_failed"  // data: why it couldn't be spawned
 	eventCIRepairFolded  = "ci_repair_folded"  // data: repair task id
 	eventCIRepairKilled  = "ci_repair_killed"  // data: repair task id and its status
@@ -117,18 +116,6 @@ func (a *App) CIRedRepair(task string, fails []CIRedFailure) (string, error) {
 			s.Repairs[i].Retried = true
 		}
 	}
-	if carrier, green := a.batchCarrier(task); carrier != "" {
-		// In a batch the merge carries a red layer past it once a layer above
-		// it is green, so a repair would only add a layer (#912, #913).
-		if green {
-			s.Repairs = append(s.Repairs, CIRepairRecord{Task: task, Head: l.Head, State: ciRepairCarried, Note: carrier})
-			a.Store.Event(task, eventCIRepairCarried, carrier)
-			return save(fmt.Sprintf("No repair: %s above it in the batch is green and carries it to %s.", carrier, a.Cfg.Base))
-		}
-		s.Repairs = append(s.Repairs, CIRepairRecord{Task: task, Head: l.Head, State: ciRepairPending,
-			Note: "waiting for CI on " + carrier + " above it in the batch", Fails: fails})
-		return save(fmt.Sprintf("No repair yet: CI is still running on %s above it in the batch, which may carry it; saddle looks again when it finishes.", carrier))
-	}
 	if why := a.ciRepairScreen(task, l.PR, l.Head, fails); why != "" {
 		return save(why) // no commit would fix it (#338)
 	}
@@ -211,7 +198,7 @@ func (a *App) CIRedRepair(task string, fails []CIRedFailure) (string, error) {
 func (a *App) ciRepairAttempts(s CIRedState, task string) int {
 	n := 0
 	for _, r := range s.Repairs {
-		if r.Task != task || r.State == ciRepairPending || r.State == ciRepairCarried {
+		if r.Task != task || r.State == ciRepairPending {
 			continue
 		}
 		if r.State == ciRepairKilled && r.Repair != "" && a.internalKill(r.Repair) {

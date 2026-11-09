@@ -100,9 +100,6 @@ func noteHead(note string) string {
 // head of the change it repairs).
 func ShadowInput(s ShadowStores, forge prgraph.ForgeSnapshot, git prgraph.GitFacts) prgraph.Input {
 	p := s.Policy
-	if !slices.Contains(p.HostChecks, baseStatus) {
-		p.HostChecks = append(append([]string(nil), p.HostChecks...), baseStatus)
-	}
 	byID := make(map[string]store.Task, len(s.Tasks))
 	for _, t := range s.Tasks {
 		byID[t.ID] = t

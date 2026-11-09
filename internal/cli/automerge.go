@@ -192,9 +192,6 @@ func writeAutomerge(out io.Writer, st automerge.Status, base string) {
 	if !st.Next.IsZero() {
 		fmt.Fprintf(out, "next check: %s\n", st.Next.Local().Format("15:04:05"))
 	}
-	if st.Batch != "" {
-		fmt.Fprintf(out, "batch: %s\n", st.Batch)
-	}
 	if len(st.Stacks) == 0 {
 		fmt.Fprintln(out, "no open PR stacks")
 		return

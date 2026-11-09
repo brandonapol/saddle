@@ -815,11 +815,12 @@ type Train struct {
 	// from or after one another, or for the same issue) and puts the rest on
 	// base; "single" makes one
 	// linear stack in train order; "per-task" puts every task on base unless
-	// its work only applies on top of an earlier task's. "batch" is "single"
-	// merged once: auto-merge fast-forwards base to the highest layer whose
-	// CI is green, carrying every layer below it, and red CI on a layer holds
-	// nothing above it (#913, ADR 0011).
+	// its work only applies on top of an earlier task's. "batch" was removed
+	// by ADR 0012: it still loads, as the default, and Removed says so.
 	Output string `toml:"output"`
+	// Removed is a train.output value saddle no longer supports and ignored
+	// ("batch", ADR 0012); saddle doctor warns about it.
+	Removed string `toml:"-"`
 	// AutoMerge lets saddle merge the bottom PR of a ready stack itself, then
 	// restack, until the stack is empty. Off by default; `saddle automerge
 	// on|off` overrides it at runtime and holds keep single stacks out.
@@ -877,7 +878,11 @@ type Lint struct {
 func (l Lint) Disabled() bool { return l.Set && strings.TrimSpace(l.Cmd) == "" }
 
 // Outputs are the PR layouts prs supports.
-var Outputs = []string{"stack", "single", "per-task", "batch"}
+var Outputs = []string{"stack", "single", "per-task"}
+
+// removedOutputs are train.output values that still load, as the default,
+// so an old config keeps working (ADR 0012 removed batch mode).
+var removedOutputs = []string{"batch"}
 
 // Stack backends.
 const (
@@ -1138,6 +1143,9 @@ func Load(root string) (Config, error) {
 	if cfg.Train.MaxAttempts < 1 {
 		cfg.Train.MaxAttempts = Default().Train.MaxAttempts
 	}
+	if slices.Contains(removedOutputs, cfg.Train.Output) {
+		cfg.Train.Removed, cfg.Train.Output = cfg.Train.Output, ""
+	}
 	if cfg.Train.Output == "" {
 		cfg.Train.Output = Default().Train.Output
 	}
@@ -1259,9 +1267,6 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # no_auto_rebase = false
 # PR layout: "stack" stacks dependent tasks (spawned from or after one another,
 # or for the same issue) and puts the rest on base; "single" is one linear stack; "per-task" stacks only when it must.
-# "batch" is one linear stack merged once: auto-merge fast-forwards base to the
-# highest green layer, carrying everything below it (alt+b in the TUI toggles
-# batch and per-task).
 # output = "stack"
 # Merge the bottom PR of a ready stack (green, mergeable, not a draft, not
 # needs-human) and restack, until the stack is empty. Off by default;

@@ -172,7 +172,7 @@ func forgeSnapshot(prs []forge.PR) prgraph.ForgeSnapshot {
 				continue
 			}
 			snap.Checks = append(snap.Checks, prgraph.Check{Head: p.HeadSHA, Name: name, Status: checkStatus(c),
-				Required: true, HostOwned: name == baseStatus})
+				Required: true})
 		}
 	}
 	return snap

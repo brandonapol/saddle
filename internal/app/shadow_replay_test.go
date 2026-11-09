@@ -52,10 +52,10 @@ func writeReplayDB(t *testing.T, tasks []store.Task, evs []replayEv) string {
 }
 
 // The 2026-11-05 incident, in miniature. t396's PR went red only on
-// saddle/base, the status saddle posts itself, and legacy spawned t402 to
-// repair it; t397's PR (#814) went red on real checks and legacy spawned
-// no repair for it. The replay reports both, and prgraph never asks to fix
-// saddle/base.
+// host/order, a status the host posts itself (Policy.HostChecks), and
+// legacy spawned t402 to repair it; t397's PR (#814) went red on real
+// checks and legacy spawned no repair for it. The replay reports both, and
+// prgraph never asks to fix host/order.
 func TestReplayShadow1105(t *testing.T) {
 	t.Parallel()
 	w := func(id, branch, pr string) store.Task {
@@ -80,7 +80,7 @@ func TestReplayShadow1105(t *testing.T) {
 		{"18:09:51", "t395", "pr_layout", "71532e456f14 published as a2e65ad3b597 on main"},
 		{"18:09:55", "t396", "pr_layout", "8dcb9986174a published as b63678e8f55e on saddle/t395-labels (t396 runs after t395)"},
 		{"18:10:03", "t397", "pr_layout", "0c903329e058 published as dec6fd8fec79 on main"},
-		{"18:26:34", "t396", "ci_red", "67625df31f49 saddle/base"},
+		{"18:26:34", "t396", "ci_red", "67625df31f49 host/order"},
 		{"18:26:41", "t396", "ci_repair_spawned", "t402"},
 		{"18:26:46", "t397", "ci_red", "48e00fba8972 ci / lint, ci / test"},
 		{"18:31:56", "t396", "ci_repair_spawned", "t403"},
@@ -98,7 +98,7 @@ func TestReplayShadow1105(t *testing.T) {
 		{"21:27:44", "t409", "unstacked", "merged: main has a commit with Saddle-Task: t409"},
 	})
 	from := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
-	rep, err := ReplayShadow(context.Background(), path, ReplayOptions{From: from, Until: from.Add(24 * time.Hour)})
+	rep, err := ReplayShadow(context.Background(), path, ReplayOptions{From: from, Until: from.Add(24 * time.Hour), Policy: prgraph.Policy{HostChecks: []string{"host/order"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,13 +116,13 @@ func TestReplayShadow1105(t *testing.T) {
 	}
 	all := strings.Join(lines, "\n")
 	if !has(ShadowLegacyOnly, prgraph.ActNeedsFix, "t396") {
-		t.Errorf("want legacy_only needs_fix(t396) (t402/t403 repaired saddle/base); got\n%s", all)
+		t.Errorf("want legacy_only needs_fix(t396) (t402/t403 repaired host/order); got\n%s", all)
 	}
 	if !has(ShadowPrgraphOnly, prgraph.ActNeedsFix, "t397") {
 		t.Errorf("want prgraph_only needs_fix(t397) (#814 red on real checks); got\n%s", all)
 	}
-	if has(ShadowPrgraphOnly, prgraph.ActNeedsFix, "t396") || strings.Contains(all, "check:saddle/base") {
-		t.Errorf("prgraph asked to fix saddle/base:\n%s", all)
+	if has(ShadowPrgraphOnly, prgraph.ActNeedsFix, "t396") || strings.Contains(all, "check:host/order") {
+		t.Errorf("prgraph asked to fix host/order:\n%s", all)
 	}
 	for _, d := range rep.Divergences {
 		if d.Change == "t409" && d.Kind != prgraph.ActPublish {
@@ -130,7 +130,7 @@ func TestReplayShadow1105(t *testing.T) {
 		}
 	}
 	if rep.Outcomes.LegacyRepairs != 2 || rep.Outcomes.LegacyHostRepairs != 2 {
-		t.Errorf("outcomes = %+v; want 2 legacy repairs, both of saddle/base", rep.Outcomes)
+		t.Errorf("outcomes = %+v; want 2 legacy repairs, both of host/order", rep.Outcomes)
 	}
 	if rep.Outcomes.PrgraphFixes != 2 {
 		t.Errorf("outcomes = %+v; want prgraph to ask two fixes (t397's red, t409's gate)", rep.Outcomes)

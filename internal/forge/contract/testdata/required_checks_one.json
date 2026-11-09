@@ -1,5 +1,5 @@
 {
-  "scenario": "required_checks_with_saddle_base",
+  "scenario": "required_checks_one",
   "source": "hand-written from GitHub's documented behaviour (#823); #824's canary re-records it from a scratch repo",
   "params": {},
   "calls": [
@@ -29,7 +29,7 @@
         "api",
         "repos/{owner}/{repo}/branches/main/protection"
       ],
-      "stdout": "{\"required_status_checks\": {\"strict\": false, \"contexts\": [\"ci\", \"saddle/base\"], \"checks\": [{\"context\": \"ci\", \"app_id\": 15368}, {\"context\": \"saddle/base\", \"app_id\": null}]}, \"enforce_admins\": {\"enabled\": false}, \"required_signatures\": {\"enabled\": false}, \"allow_force_pushes\": {\"enabled\": false}}\n"
+      "stdout": "{\"required_status_checks\": {\"strict\": false, \"contexts\": [\"ci\"], \"checks\": [{\"context\": \"ci\", \"app_id\": 15368}]}, \"enforce_admins\": {\"enabled\": false}, \"required_signatures\": {\"enabled\": false}, \"allow_force_pushes\": {\"enabled\": false}}\n"
     }
   ]
 }

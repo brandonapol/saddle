@@ -60,7 +60,6 @@ the same as it does with pull requests on GitHub. The design is in
 | PR link stored on a task | `…/pull/12` | `…/-/merge_requests/12` |
 | draft | draft PR | title starting `Draft:` |
 | retarget a stacked PR | `gh pr edit --base` | the MR's target branch |
-| stack comment ([stack comments](stack-comments.md)) | PR comment | MR note; GitLab's system notes are ignored |
 | `Closes #N` in the description | closes the issue on merge | the same, as GitLab reads it |
 | CI checks | check runs and commit statuses | the jobs of the MR's head pipeline; a job's stage reads as its workflow |
 | failed log | `gh run view --log-failed` | the job's trace, without colors and section markers |

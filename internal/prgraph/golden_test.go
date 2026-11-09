@@ -26,7 +26,7 @@ func golden1105() *world {
 		required: []RequiredCheck{{Base: "main", Name: "ci"}},
 	}
 	w.st.Policy = DefaultPolicy()
-	w.st.Policy.HostChecks = []string{"saddle/base"}
+	w.st.Policy.HostChecks = []string{"host/order"}
 	pr := map[string]int{"t395": 811, "t396": 812, "t397": 814, "t398": 815, "t399": 816, "t400": 817}
 	base := map[string]string{"t395": "main", "t396": "b/t395", "t397": "main", "t398": "b/t397", "t399": "b/t398", "t400": "main"}
 	for i, id := range []string{"t395", "t396", "t397", "t398", "t399", "t400"} {
@@ -47,7 +47,7 @@ func golden1105() *world {
 			status = CheckFailure
 		}
 		w.checks = append(w.checks, Check{Head: c.Head, Name: "ci", Status: status, Required: true},
-			Check{Head: c.Head, Name: "saddle/base", Status: CheckFailure, Required: true, HostOwned: true})
+			Check{Head: c.Head, Name: "host/order", Status: CheckFailure, Required: true, HostOwned: true})
 	}
 	w.relink()
 	w.st.Edges = []Edge{

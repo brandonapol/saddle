@@ -262,7 +262,7 @@ func TestP5BaseRed(t *testing.T) {
 			if a.Kind == ActEscalate && strings.Contains(a.Key, "tip1") && a.Cause == CheckCause("ci") {
 				esc++
 			}
-			if a.Kind == ActNeedsFix && a.Change == "" && a.Cause == CheckCause("saddle/base") {
+			if a.Kind == ActNeedsFix && a.Change == "" && a.Cause == CheckCause("host/order") {
 				t.Errorf("%v repairs a host check", a)
 				return false
 			}
