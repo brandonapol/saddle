@@ -268,6 +268,7 @@ func (g *GitLab) PR(ctx context.Context, ref string, f PRFields) (PR, error) {
 		for _, j := range jobs {
 			pr.Checks = append(pr.Checks, j.checkRun())
 		}
+		pr.Checks = withoutLegacy(pr.Checks)
 	}
 	return pr, nil
 }

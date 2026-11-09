@@ -82,6 +82,7 @@ func (p prJSON) pr() PR {
 		pr.Checks = append(pr.Checks, CheckRun{Kind: kind, Name: r.Name, Workflow: r.Workflow, Context: r.Context,
 			Status: r.Status, Conclusion: r.Conclusion, State: r.State, StartedAt: r.StartedAt})
 	}
+	pr.Checks = withoutLegacy(pr.Checks)
 	return pr
 }
 
@@ -296,6 +297,7 @@ func parseOpenPRs(out string) ([]PR, string, error) {
 				}
 				pr.Checks = append(pr.Checks, c.check())
 			}
+			pr.Checks = withoutLegacy(pr.Checks)
 		}
 		prs = append(prs, pr)
 	}
