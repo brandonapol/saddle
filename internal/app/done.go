@@ -380,6 +380,8 @@ func (r publishResult) told() string {
 		return "this repo has no remote, so your branch is kept as it is."
 	case r.Pending:
 		return "pushing your branch or opening its PR failed (" + oneLine(r.Err.Error()) + "); saddle retries it."
+	case r.Noop && r.URL == "":
+		return "after the rebase onto " + r.Base + " nothing of your own was left, so the task finished with no change."
 	case r.Noop:
 		return "your branch is already published at this head: " + r.URL + "."
 	case r.Opened:

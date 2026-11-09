@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -246,7 +247,10 @@ func (s *Store) migrate() error {
 			return nil
 		}
 		for i := v; i < len(migrations); i++ {
-			if _, err := tx.Exec(migrations[i]); err != nil && !addedAlready(migrations[i], err) {
+			if hasAddedColumn(tx, migrations[i]) {
+				continue
+			}
+			if _, err := tx.Exec(migrations[i]); err != nil {
 				return fmt.Errorf("migration %d: %w", i+1, err)
 			}
 		}
@@ -255,13 +259,22 @@ func (s *Store) migrate() error {
 	})
 }
 
-// addedAlready reports whether migration m is a single ADD COLUMN whose
+// addColumnRe matches a migration that is one ALTER TABLE ... ADD COLUMN.
+var addColumnRe = regexp.MustCompile(`^ALTER TABLE (\w+) ADD COLUMN (\w+) [^;]*;?$`)
+
+// hasAddedColumn reports whether migration m is a single ADD COLUMN whose
 // column is already there, so rerunning it from a lowered user_version is
 // harmless.
-func addedAlready(m string, err error) bool {
-	m = strings.TrimSpace(m)
-	return strings.Count(m, ";") <= 1 && strings.HasPrefix(m, "ALTER TABLE") && strings.Contains(m, "ADD COLUMN") &&
-		strings.Contains(err.Error(), "duplicate column name")
+func hasAddedColumn(tx *sql.Tx, m string) bool {
+	g := addColumnRe.FindStringSubmatch(strings.TrimSpace(m))
+	if g == nil {
+		return false
+	}
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, g[1], g[2]).Scan(&n); err != nil {
+		return false
+	}
+	return n > 0
 }
 
 // tx runs fn in an immediate (write-locked) transaction.
