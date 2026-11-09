@@ -63,7 +63,7 @@ func (a *App) prLayout(stack []landedTask) ([]prLayer, error) {
 		}
 		parent[rj] = ri // the lower layer roots the group
 	}
-	linearWhy := "output = \"single\""
+	linearWhy := fmt.Sprintf("output = %q", a.Cfg.Train.Output)
 	linear := func() []prLayer {
 		out := make([]prLayer, n)
 		for i, l := range stack {
@@ -74,7 +74,7 @@ func (a *App) prLayout(stack []landedTask) ([]prLayer, error) {
 		}
 		return out
 	}
-	if a.Cfg.Train.Output == "single" || n < 2 {
+	if a.linearOutput() || n < 2 {
 		return linear(), nil
 	}
 	for _, l := range stack {

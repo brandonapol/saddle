@@ -195,7 +195,9 @@ type Status struct {
 	Holds     []string  `json:"holds,omitempty"`
 	Stacks    []Stack   `json:"stacks,omitempty"`
 	Merged    string    `json:"merged,omitempty"` // the PR this check merged
-	Checked   time.Time `json:"checked"`
+	// Batch says why the batch merge (#913) merged nothing this check.
+	Batch   string    `json:"batch,omitempty"`
+	Checked time.Time `json:"checked"`
 	// Next is when the watcher checks again; zero until a watcher has run.
 	Next time.Time `json:"next_check,omitzero"`
 }
@@ -300,8 +302,14 @@ type Watcher struct {
 	// restacks, returning the PR it merged; "" when the stack doesn't
 	// qualify. It takes the train lock itself. nil means never collapse.
 	Collapse func(stack string) (merged string, err error)
-	Event    func(task, kind, data string)
-	Notify   func(action bool, text string) // to the orchestrator
+	// BatchOn reports whether the repo's PRs form one batch (#913). While it
+	// does, Batch replaces the bottom-up merge: it fast-forwards base to the
+	// batch's highest green layer and returns the PR it merged, or "" and
+	// why nothing merged. It takes the train lock itself.
+	BatchOn func() bool
+	Batch   func() (merged, why string, err error)
+	Event   func(task, kind, data string)
+	Notify  func(action bool, text string) // to the orchestrator
 	// Tiers is the max_tier gate; nil gates nothing.
 	Tiers *TierPolicy
 	// Interval is how often Run checks.
@@ -879,6 +887,12 @@ func (w *Watcher) Check() (Status, error) {
 			st.Next = w.now().Add(w.wait(false))
 			return w.record(s, &st)
 		}
+		if w.BatchOn != nil && w.Batch != nil && w.BatchOn() {
+			release() // the batch merge takes the train lock itself
+			w.batch(&st)
+			st.Next = w.now().Add(w.wait(false))
+			return w.record(s, &st)
+		}
 		w.logDecisions(&s, st.Stacks)
 		w.noticeTiers(&s, st.Stacks)
 		if i := slices.IndexFunc(st.Stacks, func(x Stack) bool { return x.Ready }); i >= 0 {
@@ -1063,6 +1077,37 @@ func (w *Watcher) merge(s *State, st *Status, stack Stack) {
 	s.RestackPending = n.PR
 	if w.finishRestack(s) {
 		w.notify(false, fmt.Sprintf("Auto-merged %s (%s) into %s and restacked the rest of stack %s.", n.PR, n.Task, w.Base, stack.ID))
+	}
+}
+
+// batch runs one batch merge (#913): base fast-forwards to the highest
+// green layer, carrying every layer below it. A failure is backed off and
+// retried like a merge.
+func (w *Watcher) batch(st *Status) {
+	const key = "automerge:batch"
+	if why := w.backingOff(key, ""); why != "" {
+		st.Batch = why
+		return
+	}
+	if s, err := Load(w.Path); err != nil {
+		st.Batch = "couldn't read " + w.Path + ": " + err.Error()
+		return
+	} else if on, _ := w.enabled(s); !on {
+		st.Batch = "auto-merge was turned off during the check"
+		return
+	}
+	merged, why, err := w.Batch()
+	if err != nil {
+		w.failed(key, "", "", "merging the batch", err)
+		st.Batch = err.Error()
+		return
+	}
+	w.succeeded(key)
+	st.Batch = why
+	if merged != "" {
+		st.Merged, st.Batch = merged, ""
+		w.resetPolls()
+		w.event("", EventMerged, merged+": batch fast-forward of "+w.Base)
 	}
 }
 

@@ -51,6 +51,9 @@ const (
 	// ciRepairPending: its spawn failed (the cap, a claim overlap); every
 	// cycle retries it on the same head until it spawns (#768).
 	ciRepairPending = "pending"
+	// ciRepairCarried: no repair, a green layer above it in the batch
+	// carries it to base (#913).
+	ciRepairCarried = "carried"
 )
 
 // CIRepairRecord is one repair spawned for a red layer (see cired_repair.go).
@@ -394,6 +397,9 @@ func (a *App) ciRedHolds(stack []landedTask, red []CIRedLayer) error {
 	}
 	for i := range red {
 		red[i].Held = nil
+		if a.BatchMode() {
+			continue // a layer above a red one carries it (#913)
+		}
 		at := slices.IndexFunc(stack, func(l landedTask) bool { return l.ID == red[i].Task })
 		if at < 0 {
 			continue
@@ -470,6 +476,10 @@ func ciRedErr(held map[int]string, landed []landedTask) error {
 // one would stack above red CI, so land holds it. Repairs of a red layer are
 // never held: they are how it goes green.
 func (a *App) ciRedFrozen() (map[string]string, map[string]bool) {
+	if a.BatchMode() {
+		// The next layer of the batch is how a red one goes green (#913).
+		return nil, nil
+	}
 	s, err := a.CIRed()
 	if err != nil || len(s.holding()) == 0 {
 		return nil, nil
