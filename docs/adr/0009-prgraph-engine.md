@@ -4,6 +4,12 @@
 - Issue: #779 (step 1, the ADR). Implementation: #829, #830, #831, then
   #832, #833, #834, #835, #836. Related: ADR 0003, ADR 0004 (#820), ADR 0005,
   ADR 0007, ADR 0008, #804, #862, #863
+- Amended by ADR 0012 (#930, #934): edges are
+  only declared `after` edges, one unmerged per change. The `inferred` and
+  `verified` kinds and the `parent`, `issue`, `owner_stack`,
+  `hand_retarget` and `gate` sources are gone (prgraph schema v2), and a
+  change with two unmerged deps waits rather than stacking on the nearer.
+  The merge queue (#935) is `prgraph.Queue`.
 
 ## Context
 
@@ -54,9 +60,7 @@ prgraph_change(
   automerge INTEGER NOT NULL DEFAULT 1, hold_until INTEGER,
   gen INTEGER NOT NULL)            -- CAS version for every write to the row
 prgraph_edge(change TEXT, dep TEXT,
-  kind TEXT CHECK(kind IN ('declared','inferred','verified')),
-  source TEXT NOT NULL,            -- after | parent | issue | owner_stack | hand_retarget | gate
-  PRIMARY KEY(change, dep))
+  PRIMARY KEY(change, dep))        -- declared `after` edges only (ADR 0012, #934)
 prgraph_check(head TEXT, onto TEXT, name TEXT, status TEXT, required INTEGER,
   host_owned INTEGER, observed_at INTEGER,
   PRIMARY KEY(head, onto, name))   -- CI facts, a cache; onto = the PR base sha the run tested
@@ -90,7 +94,7 @@ What replaces the stack's files:
 |---|---|
 | `deps/<task>` | `prgraph_edge` |
 | `pr-bases.json`, `published.json` | `prgraph_change.pr` plus the snapshot; the desired base is computed from edges |
-| `stacks.json` (owner stacks) | `declared` edges with `source = owner_stack`; collapse is a view |
+| `stacks.json` (owner stacks) | nothing: an owner stack is not an edge (ADR 0012) |
 | `prgate.json` | `prgraph_gate` (also the pass stamp #800 wants) |
 | `ci-red.json`, `ci-seen.json` | `prgraph_check` plus state `red` |
 | `automerge.json` | `prgraph_change.automerge` and `hold_until`; the `Stopped` state is gone (#826) |

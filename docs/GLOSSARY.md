@@ -47,7 +47,10 @@ handoff picks it, and `adapter=` naming it is refused, force or not (#839).
 An edge saying a task builds on another task's work. While that task is
 unmerged, the new task's branch is cut from its branch and its PR targets it
 (ADR 0012, #932); spawn refuses two unmerged *after* tasks, since a branch
-has one base. Once it merges, the base is main again. The legacy prs stacks
+has one base. Once it merges, the base is main again, and the merge *queue*
+retargets its PR there. It is the only edge prgraph has: saddle never infers
+one from a spawn parent, an issue, task text, a hand retarget or the gate
+(#934). The legacy prs stacks
 its PR on that task's even when their files don't overlap. Set at spawn (`after`) or
 later with `saddle after <task> <dep>...` (MCP tool `after`); both write
 `.saddle/deps/<task>`. When a layer fails the pre-publish gate on something a
@@ -400,11 +403,15 @@ the agent that caused them. Driven by `saddle land`. Inspect with `saddle queue`
 See [ARCHITECTURE.md](ARCHITECTURE.md#merge-train).
 
 ### merged
-A train entry state: base has the task's work, either its PR merged or restack
-found it there. It leaves its stack and never comes back. This is the only
-state in which a task's work counts as done.
+Base has the task's work. As a task status (ADR 0012, #935): the merge
+*queue* merged its PR, or the forge reports it merged; the task is finished.
+As a train entry state (legacy train): its PR merged or restack found it
+there. It never comes back. This is the only state in which a task's work
+counts as done.
 *Avoid:* "landed" for this; "closed" (a closed PR is *superseded*, not merged).
-*Maps to:* `train.state = 'merged'` (`app.TrainMerged`), delivery `merged`.
+*Maps to:* `tasks.status = 'merged'` (`store.Merged`), events `queue_merged`,
+`queue_seen_merged`; `train.state = 'merged'` (`app.TrainMerged`), delivery
+`merged`.
 
 ### message
 `saddle message <task> <text>`: sends a `[saddle]` message to a task, waking it
@@ -510,8 +517,25 @@ leaves that PR alone. Refuses if the task needs unmerged work below it. See
 [ARCHITECTURE.md](ARCHITECTURE.md#stack-upkeep-when-people-use-github-119-123).
 
 ### queue
-`saddle queue [hold|move|release]`: lists branches waiting to land, next first,
-and reorders or holds entries. States: `queued`, `on_hold`.
+The merge queue (ADR 0012 rule 5, #935): merges *pr_open* tasks' PRs into
+main, one action per tick, while auto-merge is on (`saddle automerge on`).
+It takes open PRs on main that aren't drafts, labeled `needs-human`, held or
+waiting on their own fix, in owner order (`saddle queue move`) then oldest.
+Red CI skips a PR; a PR behind main or conflicting is rebased in the queue's
+own scratch worktree and force-pushed; a green, mergeable one is merged with
+the repo's merge method and its task becomes *merged*. A PR stacked on its
+*after* is rebased onto main and retargeted once that task merges. A
+conflicting rebase leaves the PR untouched and tells the owner once. Main
+red on its own checks pauses it, with one notice, until main is green.
+Failures are retry *attempts*. With `legacy_train` on, *automerge* merges
+instead.
+`saddle queue [hold|move|release]`: lists branches waiting to land, next
+first, and reorders or holds entries; for a *pr_open* task, `move` sets its
+place in the merge queue and `hold`/`release` hold its PR back from it.
+States: `queued`, `on_hold`.
+*Maps to:* `app.MergeQueue`, `prgraph.Queue`; `automerge.json` `order`,
+`holds` and `queue_paused`; events `queue_merged`, `queue_rebased`,
+`queue_retargeted`, `queue_fix_in_place`, `queue_paused`, `queue_resumed`.
 
 ### queued
 A train entry state: `done` and waiting for `land`.

@@ -45,7 +45,7 @@ func TestGlossaryCoversEveryState(t *testing.T) {
 	terms := glossaryTerms(t)
 	states := []string{
 		store.Running, store.Idle, store.NeedsYou, store.Done, store.Conflict,
-		store.Landed, store.Killed, store.PROpen, app.StatusFailed, app.StatusPaused, app.StatusOrphaned,
+		store.Landed, store.Killed, store.PROpen, store.Merged, app.StatusFailed, app.StatusPaused, app.StatusOrphaned,
 		store.Queued, store.TrainOK, store.TestFailed, store.OnHold,
 		app.TrainMerged, "superseded",
 	}

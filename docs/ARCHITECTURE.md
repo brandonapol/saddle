@@ -152,6 +152,42 @@ train, the integration branch, the pre-publish gate or commit statuses. The
 top-level `legacy_train = true` key restores the old train path; only the
 e2e and soak harnesses set it, and #938 deletes it with the train.
 
+### The merge queue (#935)
+
+`pr_open` PRs reach main through the merge queue, the `queue` watcher that
+`saddle up` and the plugin engine run instead of the auto-merge watcher
+while `legacy_train` is off. `prgraph.Queue` is the pure planner (ADR 0012
+rule 8: prgraph decides rebasing, retargeting and merging) and
+`app.MergeQueue` reads its input and applies one action per tick:
+
+- Input: every `pr_open` task's PR from one `OpenPRs` read (a PR no longer
+  open is read once to learn merged or closed), `origin/main`'s tip after a
+  fetch, main's own check runs (`forge.ReadBranchChecks`, filtered to the
+  branch protection's required checks when readable), and from
+  `automerge.json` the on/off switch, holds and the owner's order.
+- Candidates are open PRs on main, not drafts, not labeled `needs-human`,
+  not held and not marked for fix in place, in owner order then oldest.
+  Red CI skips a PR. `BEHIND` (the repo requires up-to-date branches) or
+  conflicting is a rebase onto `origin/main` in `.saddle/queue`, the
+  queue's own scratch worktree (never the task's), after aborting a rebase
+  a killed process left there; the push is
+  `--force-with-lease=<branch>:<the head it read>`. Green and mergeable is a
+  merge with the repo's method at that head; the task becomes `merged`.
+- A PR stacked on its declared `after` is rebased with `git rebase --onto
+  origin/main <old base tip>` once that task merges, force-pushed, and
+  retargeted to main with a plain base edit; `tasks.base` becomes main.
+- A conflicting rebase leaves the PR untouched: event
+  `queue_fix_in_place` marks that head, the owner hears once, and the queue
+  skips the task until its branch has a new head. Nothing is spawned; #936
+  reopens the task on its branch.
+- Main red on its own checks pauses the queue: one notice, the reason in
+  `automerge.json` `queue_paused`, and no rebases or merges until main is
+  green, when it resumes and says so.
+- Every failure (a forge read, push or merge) is a `retry_attempts` row
+  keyed `queue:<action>:<task>` with the head and main's tip as inputs, so
+  it backs off and resets when either moves; nothing latches. Saddle posts
+  no statuses.
+
 A worker's `done` must pass the repo's own gate (`[train] lint.cmd`, or the
 detected pre-commit gate such as `make check`) before it is queued. Run inside
 the MCP call, that gate could keep the call silent for over 30 minutes on a
