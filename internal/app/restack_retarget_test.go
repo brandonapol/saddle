@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-
 // #359: when GitHub can't say where t2's PR points, restack doesn't know
 // whether someone moved it, so it doesn't edit a base saddle already set to
 // what the layout wants: that edit could only undo a hand retarget, silently.

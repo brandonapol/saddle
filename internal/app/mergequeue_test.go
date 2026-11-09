@@ -33,7 +33,6 @@ type qPR struct {
 }
 
 type qForge struct {
-	t          *testing.T
 	origin     string
 	prs        []*qPR
 	strict     bool // a PR behind main is BEHIND (branch protection: up to date)
@@ -157,7 +156,7 @@ func queueSetup(t *testing.T) (*App, *qForge, *MergeQueue) {
 	git(t, a.Root, "remote", "add", "origin", origin)
 	git(t, a.Root, "push", "-q", "-u", "origin", a.Cfg.Base)
 	a.Cfg.Train.AutoMerge = true
-	f := &qForge{t: t, origin: origin}
+	f := &qForge{origin: origin}
 	q := a.NewMergeQueue(f)
 	return a, f, q
 }
@@ -435,7 +434,7 @@ func TestQueueMergeFailureBacksOff(t *testing.T) {
 	a, f, q := queueSetup(t)
 	prOpenTask(t, a, f, "t1", map[string]string{"t1.txt": "t1\n"})
 	prOpenTask(t, a, f, "t2", map[string]string{"t2.txt": "t2\n"})
-	bad :=&failMergeForge{qForge: f, fail: f.prs[0].url}
+	bad := &failMergeForge{qForge: f, fail: f.prs[0].url}
 	q.F = bad
 	if got := tick(t, q); got.Applied == nil || got.Applied.Change != "t1" || got.Result == "ok" {
 		t.Fatalf("tick applied %v (%s), want t1's merge to fail", got.Applied, got.Result)

@@ -64,8 +64,8 @@ type Action struct {
 	Change string     `json:"change,omitempty"`
 	PR     int        `json:"pr,omitempty"`
 	// Base: Publish/Move target; the base of a base-red NeedsFix.
-	Base   string `json:"base,omitempty"`
-	Onto *Onto `json:"onto,omitempty"`
+	Base string `json:"base,omitempty"`
+	Onto *Onto  `json:"onto,omitempty"`
 	// From: a queue Move replays only From..head onto Onto (`git rebase
 	// --onto <base> From`): From is the old base tip the change was cut on.
 	From   string `json:"from,omitempty"`

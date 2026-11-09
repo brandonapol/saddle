@@ -44,11 +44,11 @@ type State struct {
 	// BranchChecks are the check runs on a branch's tip outside any PR
 	// (commits/REF/check-runs), by branch name: main's own CI.
 	BranchChecks map[string][]Check `json:"branch_checks,omitempty"`
-	Next          int        `json:"next"`
-	PRs           []*PR      `json:"prs"`
-	Issues        []*Issue   `json:"issues"`
-	Labels        []string   `json:"labels"`
-	Calls         [][]string `json:"calls"`
+	Next         int                `json:"next"`
+	PRs          []*PR              `json:"prs"`
+	Issues       []*Issue           `json:"issues"`
+	Labels       []string           `json:"labels"`
+	Calls        [][]string         `json:"calls"`
 	// Fail makes the next calls whose args start with a key fail with its value.
 	Fail map[string]string `json:"fail,omitempty"`
 	// Hold makes calls whose args start with one of its prefixes ("" for
