@@ -609,6 +609,19 @@ func (c *call) api(args []string) error {
 			return fail("gh: Branch not protected (HTTP 404)")
 		}
 		return c.print(map[string]any{"required_status_checks": map[string]any{"contexts": c.s.requiredChecks(), "checks": []any{}}}, jq)
+	case len(rest) == 3 && rest[0] == "commits" && rest[2] == "check-runs" && method == "GET":
+		runs := []map[string]any{}
+		for _, ch := range c.s.BranchChecks[rest[1]] {
+			status, concl := "completed", "success"
+			switch ch.State {
+			case Fail:
+				concl = "failure"
+			case Pending:
+				status, concl = "in_progress", ""
+			}
+			runs = append(runs, map[string]any{"name": ch.Name, "status": status, "conclusion": concl})
+		}
+		return c.print(map[string]any{"total_count": len(runs), "check_runs": runs}, jq)
 	case len(rest) == 2 && rest[0] == "compare" && method == "GET":
 		return c.compare(rest[1], jq)
 	case len(rest) == 3 && rest[0] == "pulls" && rest[2] == "merge-async" && method == "PUT":

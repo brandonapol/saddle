@@ -100,7 +100,7 @@ func (e *autopilotEnv) Tasks() ([]autopilot.Task, error) {
 			Live:    liveStatus(t.Status) || t.Status == StatusPaused,
 			Queued:  t.Status == store.Done || t.Status == store.PROpen,
 			Paused:  t.Status == StatusPaused,
-			Landed:  t.Status == store.Landed,
+			Landed:  t.Status == store.Landed || t.Status == store.Merged,
 			Summary: t.Summary,
 			Created: t.CreatedAt,
 		}

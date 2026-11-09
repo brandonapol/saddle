@@ -128,7 +128,7 @@ func forecastLive(t store.Task) bool {
 		return false
 	}
 	switch t.Status {
-	case store.Landed, store.Killed, store.NoChange, StatusFailed:
+	case store.Landed, store.Merged, store.Killed, store.NoChange, StatusFailed:
 		return false
 	}
 	return true

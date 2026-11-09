@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/brandonapol/saddle/internal/automerge"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -41,6 +42,9 @@ func (a *App) queueEntry(task string) ([]store.TrainEntry, int, error) {
 // MoveInQueue moves a waiting entry to position pos (1 is next to land) among
 // the waiting entries; past the end means the back (#25).
 func (a *App) MoveInQueue(task string, pos int) error {
+	if a.inMergeQueue(task) {
+		return a.QueueOrder(task, pos)
+	}
 	q, i, err := a.queueEntry(task)
 	if err != nil {
 		return err
@@ -62,6 +66,9 @@ func (a *App) MoveInQueue(task string, pos int) error {
 // Hold keeps a queued entry from landing until Unhold, without losing its
 // place. Calling done again doesn't release it (#25).
 func (a *App) Hold(task, reason string) error {
+	if a.inMergeQueue(task) {
+		return a.holdPR(task, true, reason)
+	}
 	if _, _, err := a.queueEntry(task); err != nil {
 		return err
 	}
@@ -74,6 +81,9 @@ func (a *App) Hold(task, reason string) error {
 
 // Unhold puts a held entry back in line where it was.
 func (a *App) Unhold(task string) error {
+	if a.inMergeQueue(task) {
+		return a.holdPR(task, false, "")
+	}
 	q, i, err := a.queueEntry(task)
 	if err != nil {
 		return err
@@ -85,5 +95,41 @@ func (a *App) Unhold(task string) error {
 		return err
 	}
 	a.Store.Event(task, "train_unhold", "")
+	return nil
+}
+
+// inMergeQueue reports whether task is a published task waiting in the
+// merge queue (#935) rather than in the train.
+func (a *App) inMergeQueue(task string) bool {
+	if _, _, err := a.queueEntry(task); err == nil {
+		return false
+	}
+	t, err := a.Store.Task(task)
+	return err == nil && t.Status == store.PROpen
+}
+
+// holdPR holds a published task's PR back from the merge queue, or lets it
+// go: the same hold auto-merge keeps.
+func (a *App) holdPR(task string, hold bool, reason string) error {
+	_, err := automerge.Update(a.automergePath(), func(s *automerge.State) error {
+		has := slices.Contains(s.Holds, task)
+		switch {
+		case hold && !has:
+			s.Holds = append(s.Holds, task)
+		case !hold && !has:
+			return fmt.Errorf("%s isn't on hold", task)
+		case !hold:
+			s.Holds = slices.DeleteFunc(s.Holds, func(h string) bool { return h == task })
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if hold {
+		a.Store.Event(task, "queue_hold", reason)
+	} else {
+		a.Store.Event(task, "queue_unhold", "")
+	}
 	return nil
 }

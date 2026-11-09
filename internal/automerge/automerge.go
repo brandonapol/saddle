@@ -224,7 +224,17 @@ type State struct {
 	Approved    Approvals         `json:"approved,omitempty"`
 	TierNoticed map[string]string `json:"tier_noticed,omitempty"`
 	Last        Status            `json:"last"` // the last check, for readers without GitHub
+	// Order is the owner's merge queue order (#935): tasks listed here merge
+	// first, in this order; the rest follow oldest first.
+	Order []string `json:"order,omitempty"`
+	// QueuePaused says why the merge queue is paused (main red on its own
+	// checks) once the owner was told; "" when it runs.
+	QueuePaused string `json:"queue_paused,omitempty"`
 }
+
+// Update loads the state file at path, applies f and saves it under its
+// lock. The merge queue keeps its order and pause here.
+func Update(path string, f func(*State) error) (State, error) { return update(path, f) }
 
 // Load reads the state file; a missing one is the zero state.
 func Load(path string) (State, error) {

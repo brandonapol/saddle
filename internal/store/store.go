@@ -40,6 +40,9 @@ const (
 	// base. Its claims are released; it is not finished, so a fix in place
 	// can bring it back to running.
 	PROpen = "pr_open"
+	// Merged is a task whose PR merged into the base (ADR 0012, #935): the
+	// merge queue merged it, or the forge reports it merged. It is finished.
+	Merged = "merged"
 )
 
 // Train entry states.
@@ -356,7 +359,7 @@ var ErrFinished = errors.New("task is finished")
 // Finished reports whether status ends a task: it holds no claims, has no
 // agent and never comes back unless something revives it on purpose.
 func Finished(status string) bool {
-	return status == Landed || status == Killed || status == NoChange
+	return status == Landed || status == Killed || status == NoChange || status == Merged
 }
 
 // SetStatus sets a task's status. It refuses, with ErrFinished, to move a

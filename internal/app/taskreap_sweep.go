@@ -22,7 +22,7 @@ func (a *App) reapTask(id string) {
 // orphanStatus reports whether a task in this state can no longer own
 // processes. Done is not one: a failed landing sends it back to its agent.
 func orphanStatus(s string) bool {
-	return s == store.Landed || s == store.Killed || s == store.NoChange
+	return store.Finished(s)
 }
 
 // OrphanTaskProcs maps each ended task to the pids still tagged with it.
