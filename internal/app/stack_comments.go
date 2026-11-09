@@ -115,7 +115,11 @@ func (a *App) setBaseStatus(e stackEntry) {
 		return
 	}
 	state, desc := forge.StatusSuccess, "targets "+a.Cfg.Base
-	if e.Base != a.Cfg.Base {
+	switch {
+	case e.Base != a.Cfg.Base && a.BatchMode():
+		// It merges by the batch's fast-forward, never by its own button (#913).
+		desc = "batch layer: merges with the green layer above it into " + a.Cfg.Base
+	case e.Base != a.Cfg.Base:
 		state = forge.StatusFailure
 		desc = "targets " + e.Base + ", not " + a.Cfg.Base + ": merge the PRs below first"
 	}

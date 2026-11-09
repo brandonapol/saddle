@@ -428,7 +428,7 @@ func (a *App) stackLayout(stack []landedTask) ([]prLayer, []int, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(customs) == 0 || a.Cfg.Train.Output == "single" {
+	if len(customs) == 0 || a.linearOutput() {
 		l, err := a.prLayout(stack)
 		return l, identity, err
 	}

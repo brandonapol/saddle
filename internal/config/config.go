@@ -815,7 +815,10 @@ type Train struct {
 	// from or after one another, or for the same issue) and puts the rest on
 	// base; "single" makes one
 	// linear stack in train order; "per-task" puts every task on base unless
-	// its work only applies on top of an earlier task's.
+	// its work only applies on top of an earlier task's. "batch" is "single"
+	// merged once: auto-merge fast-forwards base to the highest layer whose
+	// CI is green, carrying every layer below it, and red CI on a layer holds
+	// nothing above it (#913, ADR 0011).
 	Output string `toml:"output"`
 	// AutoMerge lets saddle merge the bottom PR of a ready stack itself, then
 	// restack, until the stack is empty. Off by default; `saddle automerge
@@ -874,7 +877,7 @@ type Lint struct {
 func (l Lint) Disabled() bool { return l.Set && strings.TrimSpace(l.Cmd) == "" }
 
 // Outputs are the PR layouts prs supports.
-var Outputs = []string{"stack", "single", "per-task"}
+var Outputs = []string{"stack", "single", "per-task", "batch"}
 
 // Stack backends.
 const (
@@ -1256,6 +1259,9 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # no_auto_rebase = false
 # PR layout: "stack" stacks dependent tasks (spawned from or after one another,
 # or for the same issue) and puts the rest on base; "single" is one linear stack; "per-task" stacks only when it must.
+# "batch" is one linear stack merged once: auto-merge fast-forwards base to the
+# highest green layer, carrying everything below it (alt+b in the TUI toggles
+# batch and per-task).
 # output = "stack"
 # Merge the bottom PR of a ready stack (green, mergeable, not a draft, not
 # needs-human) and restack, until the stack is empty. Off by default;

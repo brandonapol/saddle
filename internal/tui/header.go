@@ -124,6 +124,15 @@ func (m *model) viewCounters() string {
 			line += " " + style.Render("∞")
 		}
 	}
+	if btLong, btShort := m.btHeader(); btLong != "" {
+		style := lipgloss.NewStyle().Foreground(cAccent)
+		switch {
+		case fits(btLong):
+			line += "  " + style.Render(btLong)
+		case fits(btShort):
+			line += "  " + style.Render(btShort)
+		}
+	}
 	if amFirst {
 		// Auto-merge that acts on its own outranks even the orchestrator's state.
 		reserve := short

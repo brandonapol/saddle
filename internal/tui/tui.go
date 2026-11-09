@@ -175,6 +175,8 @@ type model struct {
 	ap        *autopilot.State                             // autopilot as last saved; nil until read
 	aper      infiniter                                    // the infinite-mode key's action; nil means the app's
 	apBusy    bool                                         // an infinite-mode toggle is running
+	bter      batcher                                      // the batch key's action; nil means the app's
+	btBusy    bool                                         // a batch-mode toggle is running
 	apGen     int                                          // bumped by each autopilot change the TUI made
 	conc      *app.Concurrency                             // the bots limit as last read; nil until read
 	concSet   func(n int) (app.Concurrency, error)         // sets the bots limit; nil means the app's
@@ -803,6 +805,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case apDoneMsg:
 		cmds = append(cmds, m.infiniteDone(msg))
+
+	case batchDoneMsg:
+		cmds = append(cmds, m.batchDone(msg))
 
 	case amDoneMsg:
 		m.amBusy = ""

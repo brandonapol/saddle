@@ -21,6 +21,7 @@ defined in [GLOSSARY.md](../GLOSSARY.md).
 | [0008](0008-serial-merge-train.md) | One serial merge train lands all work | Accepted |
 | [0009](0009-prgraph-engine.md) | One pure PR-graph engine owns the stack: one schema, one state machine, one Reconcile | Proposed |
 | [0010](0010-headless-workers.md) | Unattended workers run headless, one invocation per attempt, with a typed result | Proposed |
+| [0011](0011-batch-stack-merged-once.md) | A batch is one linear stack, merged once by fast-forward | Proposed |
 
 ## When a change needs an ADR
 

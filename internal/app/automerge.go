@@ -33,6 +33,11 @@ func (a *App) NewAutomerge(gh automerge.GitHub) *automerge.Watcher {
 		Restack:  func() error { _, err := a.Restack(); return err },
 		Lock:     a.TryLockTrain,
 		Collapse: func(s string) (string, error) { return a.AutoCollapse(s, gh) },
+		BatchOn:  a.BatchMode,
+		Batch: func() (string, string, error) {
+			r, err := a.BatchMerge(gh)
+			return r.PR, r.Why, err
+		},
 		Event:    a.Store.Event,
 		Attempts: a.Store,
 		Notify: func(action bool, text string) {

@@ -58,6 +58,8 @@ func (m *model) routeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 		return m.loadHeavy(), true
 	case key.Matches(k, keys.Infinite):
 		return m.toggleInfinite(), true
+	case key.Matches(k, keys.Batch):
+		return m.toggleBatch(), true
 	}
 	// The replan note takes typing, help key included.
 	if m.view == viewPlan && m.pl.noting {
