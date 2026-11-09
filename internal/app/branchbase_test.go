@@ -387,3 +387,28 @@ func TestDonePublishRetriesForgeFailure(t *testing.T) {
 		t.Fatalf("after retry: status %s", got.Status)
 	}
 }
+
+// #932: an after task whose PR squash-merged (its branch unreachable from
+// main, its Saddle-Task trailer on main) is merged: the new task is cut
+// from main.
+func TestSpawnAfterSquashMergedCutsFromMain(t *testing.T) {
+	t.Parallel()
+	a, _ := setup(t)
+	origin, _ := doneGH(t, a)
+	x, err := a.Spawn(SpawnReq{ID: "t1", Title: "dep"})
+	must(t, err)
+	commitFiles(t, x.Worktree, "dep work", map[string]string{"dep.txt": "dep\n"})
+	must(t, a.Store.SetStatus(x.ID, store.PROpen))
+	other := filepath.Join(t.TempDir(), "other")
+	git(t, a.Root, "clone", "-q", origin, other)
+	commitFiles(t, other, "dep work (#1)\n\nSaddle-Task: t1", map[string]string{"dep.txt": "dep\n"})
+	git(t, other, "push", "-q", "origin", "main")
+	y, err := a.Spawn(SpawnReq{ID: "t2", Title: "child", After: []string{"t1"}})
+	must(t, err)
+	if got, _ := a.Store.Task(y.ID); got.Base != "main" {
+		t.Fatalf("stored base = %q, want main", got.Base)
+	}
+	if got, want := git(t, a.Root, "rev-parse", y.Branch), git(t, a.Root, "rev-parse", "origin/main"); got != want {
+		t.Fatalf("%s starts at %s, want origin/main %s", y.Branch, got, want)
+	}
+}

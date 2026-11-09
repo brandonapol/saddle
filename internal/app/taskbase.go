@@ -2,9 +2,11 @@ package app
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/brandonapol/saddle/internal/gitx"
+	"github.com/brandonapol/saddle/internal/refguard"
 	"github.com/brandonapol/saddle/internal/store"
 )
 
@@ -29,6 +31,10 @@ func (a *App) spawnBase(id string, after []string) (base, start string, err erro
 			continue
 		}
 		open = append(open, dep)
+	}
+	if a.Cfg.LegacyTrain && len(open) > 1 {
+		// The legacy train cuts from integration, which holds them all.
+		open = nil
 	}
 	switch len(open) {
 	case 0:
@@ -67,8 +73,22 @@ func (a *App) depMerged(dep store.Task, main string) bool {
 	case store.Running, store.Idle, store.NeedsYou, store.Conflict, store.Done:
 		return false
 	}
-	_, err := gitx.Run(a.Root, "merge-base", "--is-ancestor", dep.Branch, main)
-	return err == nil
+	if _, err := gitx.Run(a.Root, "merge-base", "--is-ancestor", dep.Branch, main); err == nil {
+		return true
+	}
+	// A squash merge leaves the branch unreachable from main, but its PR body
+	// carries the task's Saddle-Task trailer into main (#331), and the
+	// legacy train records the merge.
+	if es, err := a.Store.Train(); err == nil {
+		for _, e := range es {
+			if e.Task == dep.ID && e.State == TrainMerged {
+				return true
+			}
+		}
+	}
+	pat := "^" + refguard.TaskTrailer + ":[[:space:]]*" + regexp.QuoteMeta(dep.ID) + "[[:space:]]*$"
+	out, err := gitx.Run(a.Root, "log", "-1", "--format=%H", "-E", "--grep="+pat, main)
+	return err == nil && strings.TrimSpace(out) != ""
 }
 
 // taskBase is t's base branch: the stored one, or the repo's base for tasks
