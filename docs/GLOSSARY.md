@@ -271,6 +271,24 @@ red no fix starts. Never a new task, branch or PR.
 `tasks.fix_attempts`; events `fix_opened`, `fix_told`, `fix_started`,
 `fix_adopted_remote`, `fix_green`.
 
+### flatten
+`saddle flatten [--dry-run]` (#937): moves a repo's open PRs from the old
+merge train onto main, once (ADR 0012). Each open PR of a *landed* task gets
+only its task's own commits (its `Saddle-Task` trailer; else the commits in
+`<PR base>..<head>` that aren't on main, recorded by the train for another
+task, or in a PR below it), replayed onto main on its own branch,
+force-pushed, retargeted to main, its body the task's summary; the task is
+*pr_open*. A conflict leaves the PR as it was and makes the task *fixing*; a
+PR whose commits are all on main is closed and its task *merged*; a commit
+that can't be attributed to one task leaves its PR alone. A repair's PR
+drops `Repair tN ` from its title, and the original is *killed* with
+`killed_by = superseded_by_flatten`. A real run sets `legacy_train = false`.
+`--dry-run` prints, per PR, the kept and dropped commits (and whose), the new
+base and the plan, and changes nothing.
+*Avoid:* "restack", "unstack", "migrate" (that is the state-file move).
+*Maps to:* events `flattened`, `flatten_closed`, `flatten_conflict`,
+`flatten_left`, `flatten_folded`.
+
 ### folded
 A train entry state: a CI repair whose commits joined the red PR it repaired.
 It has no PR of its own and is out of the landed list; its work ships in that
@@ -386,7 +404,8 @@ worktree. Uncommitted work is snapshotted to `refs/saddle/wip/` first. Status
 ### killed
 A task status: see *kill*. A killed task leaves the PR stack. A task whose
 PR was closed without merging is killed too, with `killed_by = pr_closed`;
-its worktree and branch are left alone (#936).
+its worktree and branch are left alone (#936). An original whose repair's PR
+*flatten* kept is killed with `killed_by = superseded_by_flatten`.
 *Maps to:* `tasks.status = 'killed'`, `tasks.killed_by`, event `pr_closed`.
 
 ### land
