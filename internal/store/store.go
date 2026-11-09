@@ -369,7 +369,7 @@ func (s *Store) Tasks() ([]Task, error) {
 // SetField updates one column of a task. Only known column names are accepted.
 func (s *Store) SetField(id, field, value string) error {
 	switch field {
-	case "status", "window", "summary", "session_id", "pr", "worktree", "model", "adapter", "base", "fix_reason", "killed_by":
+	case "status", "title", "window", "summary", "session_id", "pr", "worktree", "model", "adapter", "base", "fix_reason", "killed_by":
 	default:
 		return fmt.Errorf("unknown task field %q", field)
 	}

@@ -220,6 +220,29 @@ rule 6). A problem on a PR is fixed by its own task on its own branch:
   check, landed publishing and stuck-stack alarm don't run, and no path
   spawns a repair (`SpawnReq.For`) or a CI fix task.
 
+### saddle flatten (#937)
+
+`saddle flatten [--dry-run]` (`internal/app/flatten.go`) is the one-time
+move of a repo whose open PRs came from the old train. Each open PR of a
+`landed` task, bottom of its base chain first, gets its task's own commits
+from `<PR base>..<head>`: a commit main holds is dropped; a `Saddle-Task`
+trailer decides; else a patch-id already on main is dropped; else the
+train's recorded integration ranges (`train.note`) name the earliest task
+that merged or has an open PR here (an original's work goes to the repair
+that re-landed it); else a PR below it in its base chain owns it, and one
+beside it makes the commit unattributable. The own commits are
+cherry-picked onto `origin/main` in `.saddle/flatten`, a scratch worktree,
+pushed `--force-with-lease` on the task's branch, the PR retargeted to main
+and its body set to the summary and trailer; the task is `pr_open` with
+base main and its train entry, saved base, published record and custom
+stacks are dropped. A conflict leaves the PR as it was and reopens the task
+(`fixing`, `conflict: <files>`); commits all on main close the PR with a
+comment (task `merged`); an unattributable commit leaves the PR alone. A
+repair's PR drops `Repair tN ` from its title and its original is killed
+with `killed_by = superseded_by_flatten`. A real run then sets
+`legacy_train = false`. `--dry-run` replays in the scratch worktree to find
+conflicts but moves no ref, PR or task.
+
 A worker's `done` must pass the repo's own gate (`[train] lint.cmd`, or the
 detected pre-commit gate such as `make check`) before it is queued. Run inside
 the MCP call, that gate could keep the call silent for over 30 minutes on a

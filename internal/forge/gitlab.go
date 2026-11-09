@@ -383,6 +383,11 @@ func (g *GitLab) SetPRBody(ctx context.Context, ref, body string) error {
 	return g.updateMR(ctx, ref, "-f", "description="+body)
 }
 
+// SetPRTitle retitles the MR (saddle flatten, #937).
+func (g *GitLab) SetPRTitle(ctx context.Context, ref, title string) error {
+	return g.updateMR(ctx, ref, "-f", "title="+title)
+}
+
 func (g *GitLab) ClosePR(ctx context.Context, ref string) error {
 	return g.updateMR(ctx, ref, "-f", "state_event=close")
 }

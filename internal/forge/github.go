@@ -318,6 +318,12 @@ func (g *GitHub) SetPRBody(ctx context.Context, ref, body string) error {
 	return err
 }
 
+// SetPRTitle retitles the PR (saddle flatten, #937).
+func (g *GitHub) SetPRTitle(ctx context.Context, ref, title string) error {
+	_, err := g.run(ctx, "pr", "edit", ref, "--title", title)
+	return err
+}
+
 func (g *GitHub) ClosePR(ctx context.Context, ref string) error {
 	_, err := g.run(ctx, "pr", "close", ref)
 	return err
