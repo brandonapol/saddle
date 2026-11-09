@@ -172,9 +172,8 @@ var scenarios = []scenario{
 		want: Outcome{Kind: "refused", Reason: "required_check_failing"},
 	},
 	{
-		// saddle/base is a required check only when branch protection
-		// lists it: here it doesn't (#838).
-		name: "required_checks_without_saddle_base",
+		// The required checks are exactly what branch protection lists.
+		name: "required_checks_one",
 		fake: func(f *Fake) Params {
 			f.Update(func(s *fakegh.State) { s.Protected, s.Required = true, []string{"ci"} })
 			return Params{}
@@ -186,17 +185,17 @@ var scenarios = []scenario{
 		want: Outcome{Kind: "ok", Value: "required=ci"},
 	},
 	{
-		// ...and here it does.
-		name: "required_checks_with_saddle_base",
+		// ...in its order.
+		name: "required_checks_two",
 		fake: func(f *Fake) Params {
-			f.Update(func(s *fakegh.State) { s.Protected, s.Required = true, []string{"ci", forge.BaseStatus} })
+			f.Update(func(s *fakegh.State) { s.Protected, s.Required = true, []string{"ci", "lint"} })
 			return Params{}
 		},
 		act: func(ctx context.Context, g *forge.GitHub, _ Params) (string, error) {
 			facts, err := g.Facts(ctx, "main")
 			return "required=" + strings.Join(facts.RequiredChecks, ","), err
 		},
-		want: Outcome{Kind: "ok", Value: "required=ci,saddle/base"},
+		want: Outcome{Kind: "ok", Value: "required=ci,lint"},
 	},
 	{
 		// gh pr checks exits 8 with checks pending, and still prints them.

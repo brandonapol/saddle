@@ -22,6 +22,7 @@ func reconcileCmd() *cobra.Command {
 		plan, asJSON           bool
 		replay, day, from, til string
 		lookback               time.Duration
+		hostChecks             []string
 	)
 	cmd := &cobra.Command{
 		Use:   "reconcile",
@@ -58,7 +59,8 @@ prgraph_only something prgraph would have done that saddle didn't.`,
 			if err != nil {
 				return err
 			}
-			rep, err := app.ReplayShadow(cmd.Context(), replay, app.ReplayOptions{From: f, Until: u, Lookback: lookback})
+			rep, err := app.ReplayShadow(cmd.Context(), replay, app.ReplayOptions{From: f, Until: u, Lookback: lookback,
+				Policy: prgraph.Policy{HostChecks: hostChecks}})
 			if err != nil {
 				return err
 			}
@@ -75,6 +77,7 @@ prgraph_only something prgraph would have done that saddle didn't.`,
 	cmd.Flags().StringVar(&from, "from", "", "with --replay: judge from this time (RFC 3339)")
 	cmd.Flags().StringVar(&til, "until", "", "with --replay: judge until this time (RFC 3339)")
 	cmd.Flags().DurationVar(&lookback, "lookback", 48*time.Hour, "with --replay: history before the window that builds the starting state")
+	cmd.Flags().StringSliceVar(&hostChecks, "host-check", nil, "with --replay: a check the host posts itself, never CI (repeatable)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	return cmd
 }
@@ -154,7 +157,7 @@ func writeReplay(w io.Writer, path string, r app.ReplayReport) {
 	fmt.Fprintf(w, "replay of %s, %s to %s: %d events, %d reconciles, %d divergences\n",
 		path, stamp(r.From), stamp(r.Until), r.Events, r.Reconciles, len(r.Divergences))
 	o := r.Outcomes
-	fmt.Fprintf(w, "outcomes: %d changes, %d merged; legacy repairs %d (%d of saddle/base); prgraph would ask %d fixes; at-risk spells %d\n",
+	fmt.Fprintf(w, "outcomes: %d changes, %d merged; legacy repairs %d (%d red only on host checks); prgraph would ask %d fixes; at-risk spells %d\n",
 		o.Changes, o.Merged, o.LegacyRepairs, o.LegacyHostRepairs, o.PrgraphFixes, o.AtRiskSpells)
 	if r.RecordedTicks > 0 {
 		fmt.Fprintf(w, "recorded prgraph ticks: %d, %d replay to another plan\n", r.RecordedTicks, r.RecordedDiffer)

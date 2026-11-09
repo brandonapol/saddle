@@ -157,12 +157,12 @@ func effectful(p prgraph.Plan, kind prgraph.ActionKind) []prgraph.Action {
 	return out
 }
 
-// 2026-11-05: t396 went red only on saddle/base, the check saddle posts
-// itself, and legacy spawned t402 and t403 to repair it. prgraph settles
+// 2026-11-05: t396 went red only on a check the host posts itself
+// (host/order here), and legacy spawned t402 and t403 to repair it. prgraph settles
 // the legacy state and asks for no fix; a real red check gets one.
 func TestShadowSettleHostCheckNeverNeedsFix(t *testing.T) {
 	t.Parallel()
-	host := prgraph.Check{Head: "h", Name: "saddle/base", Status: prgraph.CheckFailure, Required: true, HostOwned: true}
+	host := prgraph.Check{Head: "h", Name: "host/order", Status: prgraph.CheckFailure, Required: true, HostOwned: true}
 	s, f, g := shadowPublished("t396", 812, "main", "h", host,
 		prgraph.Check{Head: "h", Name: "ci / test", Status: prgraph.CheckSuccess, Required: true})
 	_, p := SettlePlan(ShadowInput(s, f, g))

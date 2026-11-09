@@ -59,43 +59,36 @@ func TestGCRetargetsDependentsBeforeDeletingBranch(t *testing.T) {
 	}
 }
 
-// #751: a PR stacked on another task's branch merges into that branch, not
-// main, and reviewers couldn't tell what a PR held or what to merge first.
-// Each PR now gets a saddle/base commit status, red unless it targets main,
-// and its stack comment says why it is stacked, what to merge first, and
-// how much of its diff against main is other tasks' work.
-func TestPRsGuardStackedLayers(t *testing.T) {
+// ADR 0012 rule 7 (#931): a check on a saddle PR is always the repo's own
+// CI. Saddle used to post a red status on every stacked PR and a pasted
+// stack comment that went stale; publishing and restacking a stack now post
+// neither, and leave the author's PR body alone. The forge interface has no
+// way to post a status, so this also guards a raw `gh api .../statuses`.
+func TestPRsAndRestackPostNoStatusOrComment(t *testing.T) {
 	t.Parallel()
 	a := trainSetup(t)
-	origin, calls := originWithGh(t, a)
-	t1 := landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
+	a.Cfg.Train.Output = "single"
+	_, calls := originWithGh(t, a)
+	landTask(t, a, "t1", "one", map[string]string{"one.txt": "one\n"})
 	t2 := landTask(t, a, "t2", "one more", map[string]string{"one.txt": "one\nmore\n"})
+	must(t, a.Store.SetField(t2.ID, "summary", "Author description\n- [ ] checklist"))
 	_, err := a.PRs()
 	must(t, err)
-	t1, t2 = mustTask(t, a, t1.ID), mustTask(t, a, t2.ID)
-	status := func(branch, state string) bool {
-		sha := remoteRev(t, origin, branch)
-		for _, c := range calls() {
-			if strings.Contains(c, "statuses/"+sha) && strings.Contains(c, "state="+state) && strings.Contains(c, "context=saddle/base") {
-				return true
-			}
+	if t2 = mustTask(t, a, t2.ID); t2.PR == "" {
+		t.Fatal("t2 has no PR")
+	}
+	_, err = a.Restack()
+	must(t, err)
+	_, err = a.PRs()
+	must(t, err)
+	for _, c := range calls() {
+		switch {
+		case strings.Contains(c, "statuses/"):
+			t.Errorf("posted a commit status: %s", c)
+		case strings.HasPrefix(c, "pr comment "), strings.Contains(c, "updateIssueComment"):
+			t.Errorf("posted or edited a PR comment: %s", c)
+		case strings.HasPrefix(c, "pr edit ") && strings.Contains(c, "--body"):
+			t.Errorf("overwrote the author's PR body: %s", c)
 		}
-		return false
-	}
-	if !status(t1.Branch, "success") {
-		t.Errorf("t1 (on main) has no green saddle/base status:\n%s", strings.Join(calls(), "\n"))
-	}
-	if !status(t2.Branch, "failure") {
-		t.Errorf("t2 (on t1's branch) has no red saddle/base status:\n%s", strings.Join(calls(), "\n"))
-	}
-	c2 := lastStackComment(t, t2.PR)
-	for _, want := range []string{"Merge first: " + t1.PR, "Stacked because", "against `main`: 2 commits", "1 from the layers below"} {
-		if !strings.Contains(c2, want) {
-			t.Errorf("t2's stack comment lacks %q:\n%s", want, c2)
-		}
-	}
-	c1 := lastStackComment(t, t1.PR)
-	if !strings.Contains(c1, "against `main`: 1 commit,") || strings.Contains(c1, "layers below") {
-		t.Errorf("t1's stack comment:\n%s", c1)
 	}
 }

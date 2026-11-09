@@ -161,8 +161,9 @@ type Policy struct {
 	Serial        []string            // globs only the merge train changes
 }
 
-// SaddleCheck reports whether check is a status saddle itself sets, such as
-// saddle/base.
+// SaddleCheck reports whether check is named as a status saddle itself
+// would set ("saddle/..."). Saddle posts none since ADR 0012, but old PRs
+// still carry them, and a repair of one is never right.
 func SaddleCheck(check string) bool { return strings.HasPrefix(check, "saddle/") }
 
 // Check returns every violation in s, sorted by key.

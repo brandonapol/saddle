@@ -51,9 +51,6 @@ const (
 	// ciRepairPending: its spawn failed (the cap, a claim overlap); every
 	// cycle retries it on the same head until it spawns (#768).
 	ciRepairPending = "pending"
-	// ciRepairCarried: no repair, a green layer above it in the batch
-	// carries it to base (#913).
-	ciRepairCarried = "carried"
 )
 
 // CIRepairRecord is one repair spawned for a red layer (see cired_repair.go).
@@ -237,7 +234,6 @@ func ciRunName(url, id string) string {
 // (forge.RunID). A check without a log stays red. Each decision is
 // logged once as ci_ignored or ci_rerun.
 func (a *App) ScreenCIPoll(p CIPoll, fails []CIRedFailure, rerun func(runID string) error) (CIPoll, error) {
-	p.Failed = withoutSaddleOwned(p.Failed)
 	if len(p.Failed) == 0 {
 		return p, nil
 	}
@@ -286,20 +282,6 @@ func (a *App) ScreenCIPoll(p CIPoll, fails []CIRedFailure, rerun func(runID stri
 	return p, a.SetCIRed(s)
 }
 
-// withoutSaddleOwned drops saddle's own statuses (saddle/base) from failed
-// check labels. They gate merge order and are never red CI (#838).
-func withoutSaddleOwned(failed []string) []string {
-	return slices.DeleteFunc(slices.Clone(failed), func(c string) bool {
-		return forge.SaddleOwned(forge.CheckRun{Context: c})
-	})
-}
-
-// onlySaddleOwned reports whether checks are all saddle's own statuses: a
-// layer red only on those was never red CI.
-func onlySaddleOwned(checks []string) bool {
-	return len(checks) > 0 && len(withoutSaddleOwned(checks)) == 0
-}
-
 // CIRedTarget is a stacked task with a PR, for the watcher to poll.
 type CIRedTarget struct {
 	Task, Branch, PR string
@@ -346,9 +328,7 @@ func (a *App) ApplyCIRed(polls []CIPoll) (CIRedChange, error) {
 		stacked[l.ID] = true
 	}
 	seen := map[string]CIPoll{}
-	for i, p := range polls {
-		p.Failed = withoutSaddleOwned(p.Failed)
-		polls[i] = p
+	for _, p := range polls {
 		seen[p.Task] = p
 	}
 	now := time.Now().UTC()
@@ -356,7 +336,7 @@ func (a *App) ApplyCIRed(polls []CIPoll) (CIRedChange, error) {
 	for _, l := range s.Red {
 		p, polled := seen[l.Task]
 		switch {
-		case !stacked[l.Task], polled && p.Green, onlySaddleOwned(l.Checks):
+		case !stacked[l.Task], polled && p.Green:
 			ch.Cleared = append(ch.Cleared, l)
 		case polled && len(p.Failed) > 0 && p.Head != l.Head:
 			l.Head, l.Checks, l.PR, l.Acked = p.Head, p.Failed, p.PR, false
@@ -397,9 +377,6 @@ func (a *App) ciRedHolds(stack []landedTask, red []CIRedLayer) error {
 	}
 	for i := range red {
 		red[i].Held = nil
-		if a.BatchMode() {
-			continue // a layer above a red one carries it (#913)
-		}
 		at := slices.IndexFunc(stack, func(l landedTask) bool { return l.ID == red[i].Task })
 		if at < 0 {
 			continue
@@ -476,10 +453,6 @@ func ciRedErr(held map[int]string, landed []landedTask) error {
 // one would stack above red CI, so land holds it. Repairs of a red layer are
 // never held: they are how it goes green.
 func (a *App) ciRedFrozen() (map[string]string, map[string]bool) {
-	if a.BatchMode() {
-		// The next layer of the batch is how a red one goes green (#913).
-		return nil, nil
-	}
 	s, err := a.CIRed()
 	if err != nil || len(s.holding()) == 0 {
 		return nil, nil

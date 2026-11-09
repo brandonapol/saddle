@@ -305,7 +305,7 @@ func (w *world) ciReport(head string) {
 		return
 	}
 	w.setCheck(Check{Head: head, Name: "ci", Status: CheckSuccess, Required: true})
-	w.setCheck(Check{Head: head, Name: "saddle/base", Status: CheckFailure, Required: true, HostOwned: true})
+	w.setCheck(Check{Head: head, Name: "host/order", Status: CheckFailure, Required: true, HostOwned: true})
 }
 
 func (w *world) setCheck(c Check) {
@@ -363,8 +363,8 @@ func genWorld(r *rand.Rand, o genOpts) *world {
 		inBase: map[string]bool{}, nextPR: 1, native: r.Intn(2) == 0,
 	}
 	w.st.Policy = DefaultPolicy()
-	w.required = []RequiredCheck{{Base: "main", Name: "ci"}, {Base: "main", Name: "saddle/base"}}
-	w.st.Policy.HostChecks = []string{"saddle/base"}
+	w.required = []RequiredCheck{{Base: "main", Name: "ci"}, {Base: "main", Name: "host/order"}}
+	w.st.Policy.HostChecks = []string{"host/order"}
 	states := []ChangeState{Queued, Landed, Published, Green, Red, Merged, Superseded}
 	if o.noFailing {
 		states = []ChangeState{Queued, Landed, Published, Green}
@@ -449,7 +449,7 @@ func genWorld(r *rand.Rand, o genOpts) *world {
 		if r.Intn(4) != 0 {
 			w.checks = append(w.checks, Check{Head: head, Name: "ci", Status: statuses[r.Intn(len(statuses))], Required: true})
 		}
-		w.checks = append(w.checks, Check{Head: head, Name: "saddle/base", Status: []CheckStatus{CheckSuccess, CheckFailure}[r.Intn(2)], Required: true, HostOwned: true})
+		w.checks = append(w.checks, Check{Head: head, Name: "host/order", Status: []CheckStatus{CheckSuccess, CheckFailure}[r.Intn(2)], Required: true, HostOwned: true})
 		w.checks = append(w.checks, Check{Head: head, Name: "lint", Status: statuses[r.Intn(len(statuses))]})
 		if r.Intn(2) == 0 {
 			gs := []GateStatus{GatePass, GatePass, GateFail, GateConflict}[r.Intn(4)]
@@ -467,7 +467,7 @@ func genWorld(r *rand.Rand, o genOpts) *world {
 		baseCI = CheckFailure
 	}
 	w.checks = append(w.checks, Check{Head: "tip1", Name: "ci", Status: baseCI, Required: true})
-	w.checks = append(w.checks, Check{Head: "tip1", Name: "saddle/base", Status: CheckFailure, Required: true, HostOwned: true})
+	w.checks = append(w.checks, Check{Head: "tip1", Name: "host/order", Status: CheckFailure, Required: true, HostOwned: true})
 	return w
 }
 

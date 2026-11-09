@@ -221,6 +221,8 @@ func TestRefusals(t *testing.T) {
 		{"conflicting", func(_ *rig, p *PR) { p.Mergeable, p.MergeState = "CONFLICTING", "DIRTY" }, EventRefused, "conflict"},
 		{"blocked by protection", func(_ *rig, p *PR) { p.MergeState = "BLOCKED" }, EventWaiting, "BLOCKED"},
 		{"unknown mergeability", func(_ *rig, p *PR) { p.Mergeable, p.MergeState = "UNKNOWN", "UNKNOWN" }, EventWaiting, "computing"},
+		// Green, mergeable and CLEAN, but not on base: merge order rests on
+		// this refusal alone, not on a commit status (ADR 0012, #931).
 		{"stale base", func(_ *rig, p *PR) { p.Base = "saddle/t0" }, EventWaiting, "restack"},
 		{"stack at risk", func(r *rig, _ *PR) { r.risk["t1"] = "t1's branch drifted" }, EventRefused, "at risk"},
 	} {

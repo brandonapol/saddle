@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -55,8 +56,8 @@ type ReplayOptions struct {
 // ReplayOutcomes are ADR 0009 §6.3's outcome counts for the window.
 type ReplayOutcomes struct {
 	// LegacyRepairs are repairs saddle spawned (ci_repair_spawned), and
-	// LegacyHostRepairs those whose layer was red only on a host-owned
-	// status (saddle/base).
+	// LegacyHostRepairs those whose layer was red only on host-owned
+	// checks (Policy.HostChecks).
 	LegacyRepairs     int `json:"legacy_repairs"`
 	LegacyHostRepairs int `json:"legacy_host_repairs"`
 	// PrgraphFixes are the changes prgraph would have asked to fix.
@@ -230,7 +231,7 @@ func loadReplayWorld(ctx context.Context, db *sql.DB, o ReplayOptions) (*replayW
 		w.events = append(w.events, e)
 		if e.Kind == EventCIRedKind || e.Kind == "ci_recovered" {
 			for _, n := range ciNames(e) {
-				if n != baseStatus {
+				if !w.host(n) {
 					w.required[n] = true
 				}
 			}
@@ -484,7 +485,7 @@ func (w *replayWorld) stores(now time.Time) (ShadowStores, prgraph.ForgeSnapshot
 		var failing, host []string
 		for _, n := range sortedKeys(c.checks) {
 			if c.checks[n] == prgraph.CheckFailure {
-				if n == baseStatus {
+				if w.host(n) {
 					host = append(host, n)
 				} else {
 					failing = append(failing, n)
@@ -513,8 +514,10 @@ func (w *replayWorld) stores(now time.Time) (ShadowStores, prgraph.ForgeSnapshot
 			}
 			snap.Checks = append(snap.Checks, prgraph.Check{Head: c.head, Name: n, Status: st, Required: true})
 		}
-		if st, ok := c.checks[baseStatus]; ok {
-			snap.Checks = append(snap.Checks, prgraph.Check{Head: c.head, Name: baseStatus, Status: st, Required: true, HostOwned: true})
+		for _, n := range sortedKeys(c.checks) {
+			if w.host(n) {
+				snap.Checks = append(snap.Checks, prgraph.Check{Head: c.head, Name: n, Status: c.checks[n], Required: true, HostOwned: true})
+			}
 		}
 	}
 	for _, k := range sortedKeys(w.edges) {
@@ -558,7 +561,7 @@ func (w *replayWorld) run(o ReplayOptions) ReplayReport {
 			switch ev.Kind {
 			case eventCIRepairSpawned:
 				rep.Outcomes.LegacyRepairs++
-				if c := w.change(ev.Task); c != nil && c.checks[baseStatus] == prgraph.CheckFailure && onlyHostRed(c) {
+				if c := w.change(ev.Task); c != nil && w.onlyHostRed(c) {
 					rep.Outcomes.LegacyHostRepairs++
 				}
 			case "stack_at_risk":
@@ -595,12 +598,21 @@ func (w *replayWorld) run(o ReplayOptions) ReplayReport {
 	return rep
 }
 
-// onlyHostRed reports whether c's only failing checks are host-owned.
-func onlyHostRed(c *rChange) bool {
+// host reports whether check n is one the host posts itself.
+func (w *replayWorld) host(n string) bool { return slices.Contains(w.policy.HostChecks, n) }
+
+// onlyHostRed reports whether c is red and its only failing checks are
+// host-owned.
+func (w *replayWorld) onlyHostRed(c *rChange) bool {
+	red := false
 	for n, s := range c.checks {
-		if s == prgraph.CheckFailure && n != baseStatus {
+		if s != prgraph.CheckFailure {
+			continue
+		}
+		if !w.host(n) {
 			return false
 		}
+		red = true
 	}
-	return true
+	return red
 }

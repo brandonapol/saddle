@@ -95,13 +95,13 @@ func TestInvariantMonitorAckedCIRedIsLatched(t *testing.T) {
 	reportsOnce(t, a, time.Now().UTC(), invariants.Latched, "ci-red t2")
 }
 
-// I7, #820: a repair spawned for saddle/base, which saddle sets itself.
-func TestInvariantMonitorRepairOfSaddleBase(t *testing.T) {
+// I7, #820: a repair spawned for a saddle-named status (saddle/legacy).
+func TestInvariantMonitorRepairOfSaddleCheck(t *testing.T) {
 	t.Parallel()
 	a, _ := setup(t)
 	must(t, a.Store.CreateTask(store.Task{ID: "t7", Title: "fix", Role: store.RoleWorker, Status: store.Running}))
 	must(t, a.SetCIRed(CIRedState{Repairs: []CIRepairRecord{{Task: "t2", Head: "abc", Repair: "t7", State: ciRepairSpawned,
-		Fails: []CIRedFailure{{Check: "saddle/base"}}}}}))
+		Fails: []CIRedFailure{{Check: "saddle/legacy"}}}}}))
 	reportsOnce(t, a, time.Now().UTC(), invariants.SelfRepair, "t7")
 }
 

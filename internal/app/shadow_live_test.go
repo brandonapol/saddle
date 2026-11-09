@@ -46,7 +46,7 @@ func stateFiles(t *testing.T, a *App) map[string]string {
 }
 
 // The shadow watcher logs reconcile_shadow events for each divergence:
-// t396's saddle/base red got a legacy repair prgraph wouldn't give, and
+// t396's host/order red got a legacy repair prgraph wouldn't give, and
 // t397's real red gets a fix legacy never asked for. It acts on nothing:
 // no state file changes, and its source is only read.
 func TestShadowReconcilerLogsDivergencesAndNeverActs(t *testing.T) {
@@ -67,7 +67,7 @@ func TestShadowReconcilerLogsDivergencesAndNeverActs(t *testing.T) {
 				{Number: 814, Branch: "saddle/t397-auto", Head: "h-t397", Base: "main", State: prgraph.PROpen, Mergeable: prgraph.MergeClean},
 			},
 			Checks: []prgraph.Check{
-				{Head: "h-t396", Name: "saddle/base", Status: prgraph.CheckFailure, Required: true, HostOwned: true},
+				{Head: "h-t396", Name: "host/order", Status: prgraph.CheckFailure, Required: true, HostOwned: true},
 				{Head: "h-t396", Name: "ci / test", Status: prgraph.CheckPending, Required: true},
 				{Head: "h-t397", Name: "ci / lint", Status: prgraph.CheckFailure, Required: true},
 			},
@@ -128,25 +128,25 @@ func TestShadowReconcilerLogsDivergencesAndNeverActs(t *testing.T) {
 	}
 }
 
-// The forge's check rollup maps onto prgraph's checks; saddle/base is
-// host-owned.
+// The forge's check rollup maps onto prgraph's checks, statuses included.
+// Saddle posts no statuses of its own (ADR 0012), so none is host-owned.
 func TestForgeSnapshotChecks(t *testing.T) {
 	t.Parallel()
 	snap := forgeSnapshot([]forge.PR{{Number: 5, Head: "b", HeadSHA: "h", Base: "main", State: forge.StateOpen, Mergeable: forge.Conflicting,
 		Checks: []forge.CheckRun{
 			{Kind: forge.KindJob, Workflow: "ci", Name: "lint", Status: "COMPLETED", Conclusion: "FAILURE"},
 			{Kind: forge.KindJob, Workflow: "ci", Name: "test", Status: "IN_PROGRESS"},
-			{Kind: forge.KindStatus, Context: "saddle/base", State: "SUCCESS"},
+			{Kind: forge.KindStatus, Context: "host/order", State: "SUCCESS"},
 		}}})
 	if len(snap.PRs) != 1 || snap.PRs[0].Mergeable != prgraph.MergeConflicting || snap.PRs[0].Branch != "b" {
 		t.Fatalf("prs = %+v", snap.PRs)
 	}
-	want := map[string]prgraph.CheckStatus{"ci / lint": prgraph.CheckFailure, "ci / test": prgraph.CheckPending, "saddle/base": prgraph.CheckSuccess}
+	want := map[string]prgraph.CheckStatus{"ci / lint": prgraph.CheckFailure, "ci / test": prgraph.CheckPending, "host/order": prgraph.CheckSuccess}
 	for _, c := range snap.Checks {
 		if want[c.Name] != c.Status {
 			t.Errorf("%s = %s, want %s", c.Name, c.Status, want[c.Name])
 		}
-		if c.HostOwned != (c.Name == "saddle/base") {
+		if c.HostOwned {
 			t.Errorf("%s host-owned = %v", c.Name, c.HostOwned)
 		}
 	}

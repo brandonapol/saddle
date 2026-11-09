@@ -19,8 +19,8 @@ type keyMap struct {
 	// Views and the help overlay.
 	ViewControl, ViewPlan, ViewMerge, ViewRuns, Help key.Binding
 
-	// Infinite mode (#285) and batch mode (#913), from any view.
-	Infinite, Batch key.Binding
+	// Infinite mode (#285), from any view.
+	Infinite key.Binding
 
 	// Terminal pane.
 	Terminal, TermBack, TermScrollUp, TermScrollDown key.Binding
@@ -69,7 +69,6 @@ func newKeyMap() keyMap {
 		ViewRuns:    pair("alt+4"),
 		Help:        b("?", "keys", "?", "f1"),
 		Infinite:    infiniteBinding(),
-		Batch:       batchBinding(),
 
 		// Terminals send alt+` as ESC ` and ctrl+` as NUL, which bubbletea
 		// names ctrl+@.
@@ -147,7 +146,7 @@ type keyGroup struct {
 // fails if a binding is added to keyMap but not here.
 func (k keyMap) groups() []keyGroup {
 	return []keyGroup{
-		{"Anywhere", []key.Binding{k.ViewControl, k.ViewPlan, k.ViewMerge, k.ViewRuns, k.Infinite, k.Batch, k.Help, k.NextAgent, k.PrevAgent, k.Focus, k.PageUp, k.PageDown, k.Restart, k.Quit}},
+		{"Anywhere", []key.Binding{k.ViewControl, k.ViewPlan, k.ViewMerge, k.ViewRuns, k.Infinite, k.Help, k.NextAgent, k.PrevAgent, k.Focus, k.PageUp, k.PageDown, k.Restart, k.Quit}},
 		{"Chat", []key.Binding{k.Send, k.Newline, k.Complete, k.Untarget, k.Interrupt, k.Ask, k.AskScreen, k.Details, k.CatchUp}},
 		{"Agents", []key.Binding{k.Down, k.Up, k.Open, k.Skill, k.Spawn, k.Pause, k.Brief, k.Kill, k.Land, k.Back}},
 		{"Plan view", []key.Binding{k.Approve, k.EditPlan, k.Replan, k.ModelUp, k.ModelDown, k.Go, k.PlanNext, k.PlanPrev, k.BotsUp, k.BotsDown}},

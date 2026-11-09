@@ -148,8 +148,8 @@ func TestJourneyParallelLandPRsAutomerge(t *testing.T) {
 	if low.Base != "main" || high.Base != low.Head {
 		t.Fatalf("stack bases: %s on %s, %s on %s; want t2 stacked on t1 on main", low.Head, low.Base, high.Head, high.Base)
 	}
-	if len(high.Comments) != 1 || !strings.Contains(high.Comments[0].Body, "<!-- saddle:stack -->") || !strings.Contains(high.Comments[0].Body, "Base: `"+low.Head+"`") {
-		t.Fatalf("top PR lacks its stack comment and actual base: %+v", high.Comments)
+	if len(high.Comments) != 0 {
+		t.Fatalf("saddle commented on the top PR (ADR 0012 rule 7): %+v", high.Comments)
 	}
 	const authorBody = "Reviewer notes.\n\nCloses #42"
 	if r := w.Exec(w.Repo, "gh", "pr", "edit", urls["t2"], "--body", authorBody); r.Code != 0 {
@@ -157,8 +157,8 @@ func TestJourneyParallelLandPRsAutomerge(t *testing.T) {
 	}
 	w.MustSaddle("prs")
 	high = prNumber(t, w.GHState(), urls["t2"])
-	if high.Body != authorBody || len(high.Comments) != 1 {
-		t.Fatalf("repeat prs changed the author body or duplicated comments: %+v", high)
+	if high.Body != authorBody || len(high.Comments) != 0 {
+		t.Fatalf("repeat prs changed the author body or commented: %+v", high)
 	}
 
 	// Off by default: a tick merges nothing.
@@ -180,8 +180,15 @@ func TestJourneyParallelLandPRsAutomerge(t *testing.T) {
 	if p := prNumber(t, s, urls["t2"]); p.Base != "main" {
 		t.Fatalf("after t1 merged, t2's PR targets %s, want main (restack retargets it)", p.Base)
 	}
-	if p := prNumber(t, s, urls["t2"]); p.Body != authorBody || len(p.Comments) != 1 || !strings.Contains(p.Comments[0].Body, "Base: `main`") {
-		t.Fatalf("restack changed the author body or missed the updated stack comment: %+v", p)
+	if p := prNumber(t, s, urls["t2"]); p.Body != authorBody || len(p.Comments) != 0 {
+		t.Fatalf("restack changed the author body or commented: %+v", p)
+	}
+	// Saddle posts no commit statuses: a check on its PR is the repo's own
+	// CI (ADR 0012 rule 7, #931). prs, the restack and the merge all ran.
+	for _, c := range s.Calls {
+		if strings.Contains(strings.Join(c, " "), "/statuses/") {
+			t.Fatalf("saddle posted a commit status: %q", c)
+		}
 	}
 	if p := prNumber(t, s, urls["t1"]); p.State != "MERGED" || p.MergedBy != "squash" {
 		t.Fatalf("t1's PR = %+v", p)

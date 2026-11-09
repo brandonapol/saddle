@@ -342,6 +342,21 @@ func TestTrainDefaultsAndParse(t *testing.T) {
 	}
 }
 
+// ADR 0012 removed batch mode; a config that still says output = "batch"
+// loads, with the default layout, and records the value for saddle doctor.
+func TestRemovedBatchOutputStillLoads(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	writeConfig(t, root, "[train]\noutput = \"batch\"\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("output = \"batch\": %v", err)
+	}
+	if cfg.Train.Output != Default().Train.Output || cfg.Train.Removed != "batch" {
+		t.Fatalf("train = %+v; want the default output and Removed = batch", cfg.Train)
+	}
+}
+
 // #142: adapter commands and spawn caps come from config.
 func TestAdaptersAndSpawnCaps(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())

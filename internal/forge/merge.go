@@ -9,29 +9,6 @@ import (
 	"time"
 )
 
-// BaseStatus is the commit status saddle sets on every PR it publishes:
-// green on base, red ("merge the PRs below first") on another PR. It only
-// gates merge order, so it is saddle's own and never CI (#838).
-const BaseStatus = "saddle/base"
-
-// SaddleOwned reports whether c is a status saddle itself sets. Reads leave
-// those out of a PR's checks, so ci-red, repairs, the CI watcher and
-// automerge never take one for red or pending CI.
-func SaddleOwned(c CheckRun) bool {
-	return c.Context == BaseStatus || (c.Context == "" && c.Name == BaseStatus)
-}
-
-// withoutSaddleOwned drops saddle's own statuses from cs.
-func withoutSaddleOwned(cs []CheckRun) []CheckRun {
-	out := cs[:0]
-	for _, c := range cs {
-		if !SaddleOwned(c) {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
 // ErrMergePending is what MergePR returns when GitHub accepted a merge but
 // hasn't finished it yet: the merge is in progress, not failed (the
 // "pending" outcome of #822). The caller checks the PR's state later.

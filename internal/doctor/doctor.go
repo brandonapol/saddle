@@ -316,6 +316,10 @@ func (r *run) config() Result {
 		return fail(CheckConfig, err.Error(), "fix .saddle/config.toml (or ~/.config/saddle/config.toml); the other checks used the defaults")
 	}
 	r.cfg = cfg
+	if cfg.Train.Removed != "" {
+		return warn(CheckConfig, fmt.Sprintf("train.output = %q was removed by ADR 0012 and is ignored; using %q", cfg.Train.Removed, cfg.Train.Output),
+			"delete `output` from [train] in .saddle/config.toml")
+	}
 	if dir := filepath.Join(r.env.Root(), ".saddle"); !r.env.Exists(filepath.Join(dir, "config.toml")) {
 		detail := fmt.Sprintf("defaults (no .saddle/config.toml): base %s, integration %s", cfg.Base, cfg.Integration)
 		if r.env.Exists(filepath.Join(dir, "state.db")) {

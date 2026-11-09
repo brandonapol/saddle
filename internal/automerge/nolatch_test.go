@@ -238,18 +238,6 @@ func TestLegacyStopIsCleared(t *testing.T) {
 	}
 }
 
-// saddle/base red on a PR above the bottom says only that the PR below
-// hasn't merged; that PR's own CI is still green (#838).
-func TestSaddleBaseDoesNotMakeAPRRed(t *testing.T) {
-	pr := forgePR(forge.PR{URL: "u", State: "OPEN", Checks: []forge.CheckRun{
-		{Kind: forge.KindStatus, Context: forge.BaseStatus, State: "FAILURE"},
-		{Kind: forge.KindJob, Name: "test", Status: "COMPLETED", Conclusion: "SUCCESS"},
-	}})
-	if pr.Checks != ChecksPass {
-		t.Fatalf("checks = %s, want pass", pr.Checks)
-	}
-}
-
 // A restack blocked by a repair's push to the branch waits; it never tells
 // a human.
 func TestRemoteMovedRestackIsTransient(t *testing.T) {

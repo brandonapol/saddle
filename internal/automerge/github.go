@@ -75,9 +75,6 @@ func forgePR(p forge.PR) PR {
 		Base: p.Base, Head: p.Head, HeadSHA: p.HeadSHA, Labels: p.Labels}
 	rollup := make([]Check, 0, len(p.Checks))
 	for _, c := range p.Checks {
-		if forge.SaddleOwned(c) {
-			continue // saddle/base gates merge order; it isn't CI (#838)
-		}
 		rollup = append(rollup, Check{Status: c.Status, Conclusion: c.Conclusion, State: c.State})
 	}
 	pr.Checks = summarize(rollup)
