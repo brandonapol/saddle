@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brandonapol/saddle/internal/app"
+	fa "github.com/brandonapol/saddle/internal/e2e/fakeagent"
 	"github.com/brandonapol/saddle/internal/e2e/fakegh"
 	"github.com/brandonapol/saddle/internal/mcpserver"
 	"github.com/brandonapol/saddle/internal/prgraph"
@@ -98,5 +100,70 @@ func TestJourneyQueueMergesPublishedPR(t *testing.T) {
 	}
 	if tk := w.QueueTick(); tk.Applied != nil {
 		t.Fatalf("a second tick applied %v", tk.Applied)
+	}
+}
+
+// TestJourneyRedCIFixedInPlace (ADR 0012 rule 6, #936): spawn → done → PR
+// → CI red → the same task is reopened and its own agent fixes it on its
+// branch → done force-pushes the same PR → green → the queue merges it. No
+// task, branch or PR is created for the fix.
+func TestJourneyRedCIFixedInPlace(t *testing.T) {
+	if Fork(t) {
+		return
+	}
+	w := world(t, Options{Publish: true, Tables: "[train]\nauto_merge = true\n"})
+	steps := append(finished("alpha", "alpha\n"),
+		fa.Wait("needs a fix"),
+		fa.Write("alpha/fix.txt", "fixed\n"), fa.Commit("fix alpha's CI"), fa.Done("Adds alpha/work.txt; CI fixed."))
+	w.Spawn("t1", "Alpha work", []string{"alpha/**"}, steps...)
+	url := w.WaitTask("t1", "its PR open", func(v mcpserver.TaskView) bool { return v.Status == "pr_open" && v.PR != "" }).PR
+	branch := prNumber(t, w.GHState(), url).Head
+	red := strings.TrimSpace(w.Git(w.Origin, "rev-parse", branch))
+	must(t, w.GH.Update(func(s *fakegh.State) error {
+		for _, p := range s.PRs {
+			p.Checks = []fakegh.Check{{Name: "test", Workflow: "CI", State: fakegh.Fail, Head: red}}
+		}
+		return nil
+	}))
+
+	// The queue's tick reopens t1 itself, and its live agent is told.
+	if tk := w.QueueTick(); tk.Applied != nil {
+		t.Fatalf("the queue applied %v to a red PR", tk.Applied)
+	}
+	w.WaitAgentLog("t1", "needs a fix")
+	v := w.WaitTask("t1", "its fix published", func(v mcpserver.TaskView) bool {
+		return v.Status == "pr_open" && strings.TrimSpace(w.Git(w.Origin, "rev-parse", branch)) != red
+	})
+	if v.PR != url {
+		t.Fatalf("t1's PR is %s after the fix, want the same %s", v.PR, url)
+	}
+	if s := w.GHState(); len(s.PRs) != 1 {
+		t.Fatalf("fake GitHub has %d PRs, want the one", len(s.PRs))
+	}
+	for _, x := range w.Status().Tasks {
+		if x.ID != "t1" && x.ID != app.OrchestratorID {
+			t.Fatalf("a task was created for the fix: %+v", x)
+		}
+	}
+	if files := w.Git(w.Origin, "diff", "--name-only", "main..."+branch); !strings.Contains(files, "alpha/fix.txt") {
+		t.Fatalf("the PR lacks the fix: %q", files)
+	}
+
+	// Green at the fixed head: the queue merges it.
+	must(t, w.GH.Update(func(s *fakegh.State) error {
+		for _, p := range s.PRs {
+			p.Checks = []fakegh.Check{{Name: "test", Workflow: "CI", State: fakegh.Pass}}
+		}
+		return nil
+	}))
+	tk := w.QueueTick()
+	if tk.Applied == nil || tk.Applied.Kind != prgraph.ActMerge || tk.Result != "ok" {
+		t.Fatalf("the queue applied %v (%s), want the merge", tk.Applied, tk.Result)
+	}
+	if out := w.Git(w.Origin, "show", "main:alpha/fix.txt"); strings.TrimSpace(out) != "fixed" {
+		t.Fatalf("main's alpha/fix.txt = %q", out)
+	}
+	if v := w.Task("t1"); v.Status != "merged" {
+		t.Fatalf("t1 is %s, want merged", v.Status)
 	}
 }

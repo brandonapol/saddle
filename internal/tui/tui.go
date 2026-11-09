@@ -622,9 +622,9 @@ func idNum(id string) (int, bool) {
 // rank orders the task list: what needs attention first, finished work last.
 func rank(status string) int {
 	switch status {
-	case store.NeedsYou:
+	case store.NeedsYou, store.GaveUp:
 		return 0
-	case store.Conflict:
+	case store.Conflict, store.Fixing:
 		return 1
 	case store.Idle:
 		return 2
@@ -1814,8 +1814,10 @@ func glyph(status string) (string, lipgloss.Color) {
 		return "▲", cAlert
 	case store.Done:
 		return "◆", cAccent
-	case store.Conflict:
+	case store.Conflict, store.GaveUp:
 		return "✗", cAlert
+	case store.Fixing:
+		return "◑", cAccent
 	case store.Landed, store.PROpen, store.Merged:
 		return "✓", cDone
 	}
@@ -1887,6 +1889,8 @@ func statusLabel(s string) string {
 		return "no change"
 	case store.PROpen:
 		return "PR open"
+	case store.GaveUp:
+		return "gave up"
 	}
 	return s
 }

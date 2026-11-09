@@ -117,6 +117,7 @@ func TestRepairDailyCap(t *testing.T) {
 func TestCIFixSkipsCanceledRun(t *testing.T) {
 	t.Parallel()
 	a, _ := setup(t)
+	a.Cfg.LegacyTrain = true // pins the legacy train's repairs and stack checks (#936)
 	ciTask(t, a, "t1", store.Landed, "https://github.com/o/r/pull/1")
 	gh := newCIGH()
 	gh.checks("https://github.com/o/r/pull/1", "fail", ciJob1)
@@ -137,6 +138,7 @@ func TestCIFixSkipsCanceledRun(t *testing.T) {
 func TestCIFixBodyCheckStripsFooterAndReruns(t *testing.T) {
 	t.Parallel()
 	a, _ := setup(t)
+	a.Cfg.LegacyTrain = true // pins the legacy train's repairs and stack checks (#936)
 	_, ghLog := originWithGh(t, a)
 	pr := "https://github.com/o/r/pull/1"
 	ciTask(t, a, "t1", store.Landed, pr)

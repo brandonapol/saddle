@@ -111,6 +111,7 @@ func TestCIFailureGoesToActiveOwnerAndOrchestrator(t *testing.T) {
 func TestCIFailureOnLandedTaskSpawnsOneFixTask(t *testing.T) {
 	t.Parallel()
 	a, _ := setup(t)
+	a.Cfg.LegacyTrain = true // pins the legacy train's repairs and stack checks (#936)
 	ciTask(t, a, "t1", store.Landed, "https://github.com/o/r/pull/1")
 	gh := newCIGH()
 	gh.checks("https://github.com/o/r/pull/1", "fail", ciJob1)
@@ -146,6 +147,7 @@ func TestCIFailureOnLandedTaskSpawnsOneFixTask(t *testing.T) {
 func TestCIFailureOffersFixWhenSpawnFails(t *testing.T) {
 	t.Parallel()
 	a, _ := setup(t)
+	a.Cfg.LegacyTrain = true // pins the legacy train's repairs and stack checks (#936)
 	a.Cfg.Concurrency = 0
 	ciTask(t, a, "t1", store.Landed, "https://github.com/o/r/pull/1")
 	gh := newCIGH()

@@ -43,7 +43,20 @@ const (
 	// Merged is a task whose PR merged into the base (ADR 0012, #935): the
 	// merge queue merged it, or the forge reports it merged. It is finished.
 	Merged = "merged"
+	// Fixing is a pr_open task reopened on its own branch (ADR 0012 rule 6,
+	// #936): its PR conflicts with its base or its CI is red. FixReason says
+	// which; its agent is told, or one is started as the task in its
+	// worktree. Its next done force-pushes the same PR and makes it pr_open.
+	Fixing = "fixing"
+	// GaveUp is a task whose fixes ran out ([merge] fix_attempts, #936): its
+	// PR is labeled needs-human and the owner was told once. It stays until
+	// the label is removed or `saddle retry` sends it back to pr_open.
+	GaveUp = "gave_up"
 )
+
+// KilledByPRClosed is a task killed because its PR was closed without
+// merging (#936). Its worktree and branch are left alone.
+const KilledByPRClosed = "pr_closed"
 
 // Train entry states.
 const (
@@ -89,7 +102,16 @@ type Task struct {
 	// Base is the branch the task's branch is cut from and its PR targets:
 	// the repo's base (main), or the branch of the one unmerged task it runs
 	// after (ADR 0012, #932). "" on rows from before it was recorded.
-	Base      string
+	Base string
+	// FixReason is why a fixing task was reopened: "conflict: <files>" or
+	// "ci: <failed checks> <link>" (#936). Kept after the fix, for the record.
+	FixReason string
+	// FixAttempts counts the fixes since the PR was last green or the owner
+	// last retried (#936).
+	FixAttempts int
+	// KilledBy says what killed a killed task, when saddle recorded it:
+	// KilledByPRClosed, or "" (#936).
+	KilledBy  string
 	CreatedAt time.Time
 }
 
@@ -211,6 +233,12 @@ CREATE TABLE IF NOT EXISTS retry_attempts(
 );
 `, `
 ALTER TABLE tasks ADD COLUMN base TEXT NOT NULL DEFAULT '';
+`, `
+ALTER TABLE tasks ADD COLUMN fix_reason TEXT NOT NULL DEFAULT '';
+`, `
+ALTER TABLE tasks ADD COLUMN fix_attempts INTEGER NOT NULL DEFAULT 0;
+`, `
+ALTER TABLE tasks ADD COLUMN killed_by TEXT NOT NULL DEFAULT '';
 `}
 
 // Open opens (creating if needed) the database at path and applies migrations,
@@ -295,21 +323,21 @@ func (s *Store) tx(fn func(*sql.Tx) error) error {
 
 func now() int64 { return time.Now().Unix() }
 
-const taskCols = `id, title, prompt, parent, role, model, branch, worktree, window, status, summary, session_id, pr, issue, created_at, adapter, base`
+const taskCols = `id, title, prompt, parent, role, model, branch, worktree, window, status, summary, session_id, pr, issue, created_at, adapter, base, fix_reason, fix_attempts, killed_by`
 
 func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	var created int64
 	err := row.Scan(&t.ID, &t.Title, &t.Prompt, &t.Parent, &t.Role, &t.Model, &t.Branch, &t.Worktree,
-		&t.Window, &t.Status, &t.Summary, &t.SessionID, &t.PR, &t.Issue, &created, &t.Adapter, &t.Base)
+		&t.Window, &t.Status, &t.Summary, &t.SessionID, &t.PR, &t.Issue, &created, &t.Adapter, &t.Base, &t.FixReason, &t.FixAttempts, &t.KilledBy)
 	t.CreatedAt = time.Unix(created, 0)
 	return t, err
 }
 
 func (s *Store) CreateTask(t Task) error {
-	_, err := s.db.Exec(`INSERT INTO tasks(`+taskCols+`, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err := s.db.Exec(`INSERT INTO tasks(`+taskCols+`, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Title, t.Prompt, t.Parent, t.Role, t.Model, t.Branch, t.Worktree, t.Window, t.Status,
-		t.Summary, t.SessionID, t.PR, t.Issue, now(), t.Adapter, t.Base, now())
+		t.Summary, t.SessionID, t.PR, t.Issue, now(), t.Adapter, t.Base, t.FixReason, t.FixAttempts, t.KilledBy, now())
 	return err
 }
 
@@ -341,7 +369,7 @@ func (s *Store) Tasks() ([]Task, error) {
 // SetField updates one column of a task. Only known column names are accepted.
 func (s *Store) SetField(id, field, value string) error {
 	switch field {
-	case "status", "window", "summary", "session_id", "pr", "worktree", "model", "adapter", "base":
+	case "status", "window", "summary", "session_id", "pr", "worktree", "model", "adapter", "base", "fix_reason", "killed_by":
 	default:
 		return fmt.Errorf("unknown task field %q", field)
 	}
@@ -414,6 +442,37 @@ func (s *Store) FinishDone(id string) error {
 		}
 		return enqueue(tx, id)
 	})
+}
+
+// Reopen sets a live task fixing with reason and its fix count, in one
+// transaction (#936). A finished task is refused with ErrFinished.
+func (s *Store) Reopen(id, reason string, attempts int) error {
+	return s.tx(func(tx *sql.Tx) error {
+		if err := setLiveStatus(tx, id, Fixing); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE tasks SET fix_reason = ?, fix_attempts = ? WHERE id = ?`, reason, attempts, id)
+		return err
+	})
+}
+
+// SetFixAttempts sets a task's fix count (#936).
+func (s *Store) SetFixAttempts(id string, n int) error {
+	_, err := s.db.Exec(`UPDATE tasks SET fix_attempts = ?, updated_at = ? WHERE id = ?`, n, now(), id)
+	return err
+}
+
+// KillBy marks a task killed and records what killed it, in one write
+// (#936).
+func (s *Store) KillBy(id, by string) error {
+	res, err := s.db.Exec(`UPDATE tasks SET status = ?, killed_by = ?, updated_at = ? WHERE id = ?`, Killed, by, now(), id)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("task %s: %w", id, ErrNotFound)
+	}
+	return nil
 }
 
 // NextID returns the next free id of the form t<N>.

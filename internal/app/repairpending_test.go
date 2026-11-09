@@ -146,6 +146,7 @@ func TestAutopilotYieldsSlotToPendingRepair(t *testing.T) {
 func TestEnsureRepairKeepsClaimsUntilSpawned(t *testing.T) {
 	t.Parallel()
 	a, ft := setup(t)
+	a.Cfg.LegacyTrain = true // pins the legacy train's repairs and stack checks (#936)
 	a.Cfg.Test.Cmd = "none"
 	t1, _ := a.Spawn(SpawnReq{Title: "one"})
 	t2, _ := a.Spawn(SpawnReq{Title: "two", Claims: []string{"two/**"}})

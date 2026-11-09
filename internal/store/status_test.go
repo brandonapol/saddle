@@ -87,3 +87,32 @@ func TestFailedTaskIsNotActive(t *testing.T) {
 		}
 	}
 }
+
+// #936: Reopen sets fixing, its reason and its fix count in one write and
+// refuses a finished task; KillBy records what killed a task.
+func TestReopenAndKillBy(t *testing.T) {
+	s := openTest(t)
+	for id, st := range map[string]string{"t1": PROpen, "t2": Merged} {
+		if err := s.CreateTask(Task{ID: id, Role: RoleWorker, Status: st}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Reopen("t1", "ci: test failed", 1); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Task("t1"); got.Status != Fixing || got.FixReason != "ci: test failed" || got.FixAttempts != 1 {
+		t.Fatalf("t1 = %s %q %d, want fixing with the reason and 1", got.Status, got.FixReason, got.FixAttempts)
+	}
+	if err := s.Reopen("t2", "ci: x", 1); !errors.Is(err, ErrFinished) {
+		t.Fatalf("Reopen(merged) = %v, want ErrFinished", err)
+	}
+	if err := s.KillBy("t1", KilledByPRClosed); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Task("t1"); got.Status != Killed || got.KilledBy != KilledByPRClosed {
+		t.Fatalf("t1 = %s killed_by %q", got.Status, got.KilledBy)
+	}
+	if !(Task{Status: Fixing}).Active() || !(Task{Status: GaveUp}).Active() {
+		t.Fatal("fixing and gave_up tasks keep their worktrees: they must stay active")
+	}
+}

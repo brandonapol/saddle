@@ -44,6 +44,8 @@ type Config struct {
 
 	Test  Test  `toml:"test"`
 	Train Train `toml:"train"`
+	// Merge is [merge]: what happens to a published task's PR (ADR 0012).
+	Merge Merge `toml:"merge"`
 	// Harness is which coding CLI workers and the orchestrator run.
 	// "claude" (default), "grok" or "codex". $SADDLE_HARNESS overrides it.
 	Harness string `toml:"harness"`
@@ -807,6 +809,15 @@ type Triage struct {
 	NoAutoApprove bool `toml:"no_auto_approve"`
 }
 
+// Merge is [merge]: fixing a published task's PR in place (ADR 0012 rule 6).
+type Merge struct {
+	// FixAttempts is how many times a task is reopened on its own branch for
+	// a conflict or red CI on its PR before the PR is labeled needs-human
+	// and the owner is told (#936). Removing the label, or saddle retry,
+	// starts the count again.
+	FixAttempts int `toml:"fix_attempts"`
+}
+
 // Train configures the merge train.
 type Train struct {
 	// MaxAttempts is how many failed lands (conflicts, red tests) a branch
@@ -973,6 +984,7 @@ func Default() Config {
 			ReviewLabel: "requires review",
 		},
 		CI:           CI{Interval: 10 * time.Minute, RedInterval: 2 * time.Minute, RedMaxInterval: 16 * time.Minute, RepairAttempts: 2},
+		Merge:        Merge{FixAttempts: 2},
 		Spawn:        Spawn{MaxDepth: 3, MaxChildren: 8},
 		Orchestrator: Orchestrator{CompactAt: 0.7},
 		Notices:      Notices{WakeAfter: 3 * time.Minute, DigestEvery: 15 * time.Minute},
@@ -1201,6 +1213,9 @@ func Load(root string) (Config, error) {
 	}
 	if cfg.CI.RepairAttempts <= 0 {
 		cfg.CI.RepairAttempts = Default().CI.RepairAttempts
+	}
+	if cfg.Merge.FixAttempts <= 0 {
+		cfg.Merge.FixAttempts = Default().Merge.FixAttempts
 	}
 	if cfg.Sweeper.Method == "" {
 		cfg.Sweeper.Method = Default().Sweeper.Method
@@ -1493,6 +1508,15 @@ const Template = `# saddle per-repo config. See docs/ARCHITECTURE.md.
 # rerun once before it counts as red. Canceled, skipped and superseded runs
 # never count; infra failures (runner lost, 5xx) are rerun once.
 # flaky = []
+
+[merge]
+# A conflict or red CI on a published task's PR reopens that same task on its
+# own branch (status fixing): its agent is told, or one is started in its
+# worktree, and its done force-pushes the same PR. After fix_attempts fixes
+# that didn't go green, the PR is labeled needs-human and the owner is told
+# once (status gave_up). Removing the label, or saddle retry <task>, starts
+# the count again.
+# fix_attempts = 2
 
 [usage]
 # Plan-limit bars are estimates: set cap to your plan's token budget for each

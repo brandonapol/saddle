@@ -227,6 +227,7 @@ func TestRepairOfRepairRefused(t *testing.T) {
 func TestCIFailureOnFixTaskEscalates(t *testing.T) {
 	t.Parallel()
 	a, _ := setup(t)
+	a.Cfg.LegacyTrain = true // pins the legacy train's repairs and stack checks (#936)
 	must(t, a.Store.CreateTask(store.Task{ID: "t1", Title: "Fix CI for t0 something", Role: store.RoleWorker,
 		Branch: "saddle/t1-fix", Status: store.Landed, PR: "https://github.com/o/r/pull/1"}))
 	gh := newCIGH()

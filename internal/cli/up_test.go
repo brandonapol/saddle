@@ -122,6 +122,7 @@ esac
 // and the loop stops when its context ends.
 func TestStartWatchersRunsSentinel(t *testing.T) {
 	a, log := landedPR(t)
+	a.Cfg.LegacyTrain = true // pins the legacy train's repairs and stack checks (#936)
 
 	stop := startWatchers(context.Background(), a)
 	deadline := time.Now().Add(10 * time.Second)

@@ -62,6 +62,9 @@ func (a *App) retryRepair(p PendingRepair) (string, error) {
 
 // PendingRepairs lists every repair saddle owes and hasn't spawned.
 func (a *App) PendingRepairs() []PendingRepair {
+	if !a.Cfg.LegacyTrain {
+		return nil // fix in place: no repairs, so none pending or reserving (#936)
+	}
 	var out []PendingRepair
 	for _, l := range pendingLists() {
 		out = append(out, l(a)...)

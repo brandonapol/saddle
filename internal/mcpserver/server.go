@@ -914,6 +914,15 @@ func New(a *app.App, task string) *mcp.Server {
 			return nil, OK{Message: "kept " + task + ": saddle nudges it if it hangs, never kills it"}, a.KeepWorker(task, "the orchestrator asked")
 		})
 
+	mcp.AddTool(s, &mcp.Tool{Name: "retry", Description: "Let saddle fix a task's PR in place again (#936): removes the needs-human label saddle put on it after its fixes ran out, resets its fix count and puts a gave_up task back in the merge queue as pr_open. Use it when the owner says to try again."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in TaskIn) (*mcp.CallToolResult, OK, error) {
+			task := strings.TrimSpace(in.Task)
+			if err := a.Retry(task); err != nil {
+				return nil, OK{}, err
+			}
+			return nil, OK{Message: task + "'s fix count is reset and its PR is back in the merge queue"}, nil
+		})
+
 	return s
 }
 

@@ -66,7 +66,7 @@ func (a *App) HandOff(task string, now time.Time) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if t.Role != store.RoleWorker || !t.Active() || t.Status == store.Done || t.Status == store.PROpen {
+	if t.Role != store.RoleWorker || !t.Active() || t.Status == store.Done || t.Status == store.PROpen || t.Status == store.GaveUp {
 		return "", nil
 	}
 	// Only a worker in a window saddle runs can be stopped before its

@@ -241,6 +241,30 @@ func (s *Sentinel) Run(ctx context.Context) error {
 // invariant monitor (#825). It
 // reports whether the train was busy, so the check was skipped.
 func (s *Sentinel) cycle(ctx context.Context) (busy bool) {
+	if s.App.Cfg.LegacyTrain {
+		busy = s.legacyCycle()
+	} else if _, err := s.App.StallTick(time.Now().UTC()); err != nil && !deferred(err) {
+		// The stall budget, hung workers and publish retries; the legacy
+		// cycle runs it from the stuck-stack alarm.
+		s.App.Store.Event("", EventError, "stall budget: "+err.Error())
+	}
+	if s.Blockers != nil {
+		if _, err := s.Blockers.FileBlockers(ctx); err != nil && !deferred(err) {
+			s.App.Store.Event("", EventError, "blocker issues: "+err.Error())
+		}
+	}
+	// Every ADR 0004 invariant violation is an event and one notice (#825).
+	if _, err := s.App.CheckInvariants(time.Now().UTC()); err != nil && !deferred(err) {
+		s.App.Store.Event("", EventError, "invariant monitor: "+err.Error())
+	}
+	return busy
+}
+
+// legacyCycle is the legacy train's part of a cycle: the stack check (which
+// flags, labels and repairs), opening landed tasks' PRs and the stuck-stack
+// alarm. With legacy_train off none of it runs: a PR's problems are fixed in
+// place by its own task (#936).
+func (s *Sentinel) legacyCycle() (busy bool) {
 	if rep, err := s.Check(); deferred(err) {
 		// GitHub's quota is spent: skip the cycle quietly (#764).
 	} else if err != nil {
@@ -261,15 +285,6 @@ func (s *Sentinel) cycle(ctx context.Context) (busy bool) {
 	// orchestrator once (#223).
 	if _, err := s.App.CheckStuck(time.Now().UTC()); err != nil && !deferred(err) {
 		s.App.Store.Event("", EventError, "stuck-stack alarm: "+err.Error())
-	}
-	if s.Blockers != nil {
-		if _, err := s.Blockers.FileBlockers(ctx); err != nil && !deferred(err) {
-			s.App.Store.Event("", EventError, "blocker issues: "+err.Error())
-		}
-	}
-	// Every ADR 0004 invariant violation is an event and one notice (#825).
-	if _, err := s.App.CheckInvariants(time.Now().UTC()); err != nil && !deferred(err) {
-		s.App.Store.Event("", EventError, "invariant monitor: "+err.Error())
 	}
 	return busy
 }

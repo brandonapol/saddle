@@ -204,6 +204,11 @@ func (a *App) ciFailed(f ciwatch.Failed) error {
 		}
 		return a.Notify(OrchestratorID, store.NoticeAction, about+"\n"+owner.ID+" was told to fix it.")
 	}
+	if !a.Cfg.LegacyTrain {
+		// Red CI on a published task's PR reopens that task (fix in place,
+		// #936); nothing is spawned for it.
+		return a.Notify(OrchestratorID, store.NoticeInfo, about)
+	}
 	if fix, ok := a.ciFixTask(owner); ok {
 		if err := a.Notify(fix.ID, store.NoticeAction, f.Report()+"\nFix it on your branch, commit, and call the saddle done tool again."); err != nil {
 			return err

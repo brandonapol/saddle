@@ -123,6 +123,9 @@ func (a *App) seedOf(task string) (repairSeed, bool) {
 // spawnRepairs makes sure every repairing task has a repair task, and
 // returns the ids it spawned.
 func (a *App) spawnRepairs() []string {
+	if !a.Cfg.LegacyTrain {
+		return nil
+	}
 	all, err := a.landedAll()
 	if err != nil {
 		return nil
@@ -155,6 +158,9 @@ func (a *App) spawnRepairs() []string {
 // fails leaves them with the original, as a reservation fresh spawns
 // respect, and the repair is pending until RetryRepairs spawns it (#795).
 func (a *App) ensureRepair(orig store.Task, seed repairSeed, force bool) (store.Task, bool, error) {
+	if !a.Cfg.LegacyTrain {
+		return store.Task{}, false, errNoRepairs(orig.ID)
+	}
 	r, created, err := a.spawnRepairOnce(orig, seed, force)
 	if err == nil && !created {
 		return r, false, nil
