@@ -1,0 +1,8 @@
+# Check out every text file with LF line endings, whatever core.autocrlf says.
+# A Windows checkout used from WSL otherwise gets CRLF, and every shell script
+# fails with "env: 'bash\r': No such file or directory" (make install, make
+# check, the git hooks). Git still detects binary files and leaves them alone.
+* text=auto eol=lf
+
+# Binary files, named so Git never guesses.
+*.png binary
