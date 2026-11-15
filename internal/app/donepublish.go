@@ -256,7 +256,8 @@ func (a *App) ensurePR(t store.Task, base string) (url string, opened bool, err 
 		}
 		return prs[0].URL, false, nil
 	}
-	out, err := f.CreatePR(ctx, forge.NewPR{Base: base, Head: t.Branch, Title: t.Title, Body: a.donePRBody(t)})
+	title, body := a.donePR(t, base)
+	out, err := f.CreatePR(ctx, forge.NewPR{Base: base, Head: t.Branch, Title: title, Body: body})
 	if err != nil {
 		u := prURLRe.FindString(err.Error())
 		if why, _ := forge.RefusalOf(err); u == "" || why != forge.PRExists {
@@ -265,19 +266,6 @@ func (a *App) ensurePR(t store.Task, base string) (url string, opened bool, err 
 		return u, false, nil
 	}
 	return lastLine(out), true, nil
-}
-
-// donePRBody is t's PR body: its summary (or title), the issue it closes,
-// and its Saddle-Task trailer, which a squash merge carries into base.
-func (a *App) donePRBody(t store.Task) string {
-	desc := strings.TrimSpace(t.Summary)
-	if desc == "" {
-		desc = t.Title
-	}
-	if t.Issue > 0 && !closesIssue(desc, t.Issue) {
-		desc = withCloses(desc, []int{t.Issue})
-	}
-	return withTaskTrailer(desc, t.ID)
 }
 
 // publishedPR records t as published: pr_open, claims released, its agent's

@@ -653,7 +653,8 @@ func (a *App) flattenReplay(ctx context.Context, f FlattenForge, r string, fp *f
 		}
 		t.Title = pl.NewTitle
 	}
-	if err := f.SetPRBody(ctx, pl.PR, a.donePRBody(t)); err != nil {
+	_, body := a.donePR(t, a.Cfg.Base)
+	if err := f.SetPRBody(ctx, pl.PR, body); err != nil {
 		return fmt.Errorf("rewrite the body of %s: %w", pl.PR, err)
 	}
 	// The local branch follows when no worktree has it checked out.

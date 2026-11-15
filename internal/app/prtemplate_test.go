@@ -52,14 +52,17 @@ One paragraph. What changed and why.
 <!-- Optional. Tradeoffs, follow-ups, things reviewers should know. -->
 `
 
+var taskCommentRe = regexp.MustCompile(`<!--\nSaddle-Task: \S+\n-->\n?`)
+
 var checkboxRe = regexp.MustCompile(`(?m)^\s*[-*] \[[ xX]\] (.*)$`)
 
 // checkQuarkBody fails t unless body follows quarkTemplate strictly: every
 // heading in order, every checkbox, a ticked box under PR Type and Surface,
-// placeholders and prompts gone.
+// placeholders and prompts gone. The Saddle-Task comment is saddle's
+// metadata, not a template prompt (#951).
 func checkQuarkBody(t *testing.T, body string, issue string) {
 	t.Helper()
-	body += "\n"
+	body = taskCommentRe.ReplaceAllString(body, "") + "\n"
 	at := 0
 	for _, h := range []string{"## What", "## Changes", "## PR Type", "## Surface", "## Testing", "## Bot Review Guidance", "## Notes"} {
 		i := strings.Index(body[at:], "\n"+h+"\n")
@@ -147,10 +150,12 @@ func TestFillPRTemplateNoPlaceholderClosesUnderDescription(t *testing.T) {
 	}
 }
 
-func TestFillPRTemplateKeepsAttributionLast(t *testing.T) {
+// #951: an AI attribution footer on the summary never reaches the body;
+// repos like quark reject it in CI.
+func TestFillPRTemplateDropsAttribution(t *testing.T) {
 	t.Parallel()
 	footer := "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
-	desc := "Adds two.\n\n" + footer
+	desc := "Adds two.\n\n" + footer + "\n\nCo-Authored-By: Claude <noreply@anthropic.com>"
 	for name, tmpl := range map[string]string{
 		"none":      "",
 		"headless":  "Thanks for the PR!\n",
@@ -158,8 +163,8 @@ func TestFillPRTemplateKeepsAttributionLast(t *testing.T) {
 		"no prompt": "## Summary\n\n## Testing\n- [ ] make check\n",
 	} {
 		body := fillPRTemplate(tmpl, prText{Desc: desc, Issues: []int{7}, Note: "Published by `saddle publish`."})
-		if !strings.HasSuffix(strings.TrimSpace(body), footer) || strings.Count(body, footer) != 1 {
-			t.Fatalf("%s: attribution not last:\n%s", name, body)
+		if strings.Contains(body, "Generated with") || strings.Contains(body, "Co-Authored-By") {
+			t.Fatalf("%s: attribution kept:\n%s", name, body)
 		}
 		if !strings.Contains(body, "Adds two.") || !strings.Contains(body, "Closes #7") || !strings.Contains(body, "Published by") {
 			t.Fatalf("%s: body lost content:\n%s", name, body)
@@ -267,7 +272,7 @@ func TestPRsWithoutTemplateSendSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := onlyCall(prCreate(ghLog(), tk.Branch))
-	if !strings.HasSuffix(strings.TrimSpace(call), "--body one summary\n\nSaddle-Task: t1") {
+	if !strings.HasSuffix(strings.TrimSpace(call), "--body one summary\n\n<!--\nSaddle-Task: t1\n-->") {
 		t.Fatalf("body isn't the summary and the task's trailer: %q", call)
 	}
 }

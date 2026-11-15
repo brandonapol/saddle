@@ -12,7 +12,7 @@ import (
 // prText is what saddle knows about a PR when it writes the body.
 type prText struct {
 	Title   string
-	Desc    string   // the description; a trailing attribution footer stays last
+	Desc    string   // the description; a trailing AI attribution footer is dropped (#951)
 	Issues  []int    // issues the PR closes that Desc doesn't already close
 	Commits []string // commit subjects, oldest first
 	Files   []string // paths the PR changes
@@ -56,9 +56,6 @@ func (a *App) stackPRBody(l landedTask) string {
 	}
 	tmpl := a.prTemplate(l.To)
 	if strings.TrimSpace(tmpl) == "" {
-		if len(p.Issues) == 0 {
-			return l.Summary
-		}
 		return fillPRTemplate("", p)
 	}
 	if l.From != "" && l.To != "" {
@@ -95,10 +92,13 @@ var (
 // placeholders filled (or their line dropped when nothing closes), prompt
 // comments and placeholder text replaced by content or left empty. Without a
 // template the body is the description and its closing lines; a template
-// with no headings goes below them, as before. p.Note and then any
-// attribution footer on the description come last.
+// with no headings goes below them, as before. p.Note comes last. An AI
+// attribution footer on the description is dropped: repos reject it in CI
+// (autobutler-org/quark's check/attribution) and saddle's own rules forbid
+// it, and saddle can't tell a repo that wants it from one that doesn't
+// (#951).
 func fillPRTemplate(tmpl string, p prText) string {
-	desc, footer := splitAttribution(p.Desc)
+	desc, _ := splitAttribution(p.Desc)
 	var body string
 	switch {
 	case strings.TrimSpace(tmpl) == "":
@@ -110,9 +110,6 @@ func fillPRTemplate(tmpl string, p prText) string {
 	}
 	if p.Note != "" {
 		body += "\n\n---\n" + p.Note + "\n"
-	}
-	if footer != "" {
-		body = strings.TrimRight(body, "\n") + "\n\n" + footer + "\n"
 	}
 	return body
 }
