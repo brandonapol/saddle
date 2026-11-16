@@ -41,6 +41,8 @@ func (a *App) taskTrailerOn(task, ref, since string) bool {
 
 // withTaskTrailer ends a PR body with task's Saddle-Task line, unless it
 // already has one, so the squash commit GitHub makes from it names the task.
+// The line sits alone inside an HTML comment: metadata, not text a reviewer
+// reads (#951), and still a whole line for taskTrailerOn's grep.
 func withTaskTrailer(body, task string) string {
 	line := refguard.TaskTrailer + ": " + task
 	for _, l := range strings.Split(body, "\n") {
@@ -52,5 +54,5 @@ func withTaskTrailer(body, task string) string {
 	if body != "" {
 		body += "\n\n"
 	}
-	return body + line + "\n"
+	return body + "<!--\n" + line + "\n-->\n"
 }

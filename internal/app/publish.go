@@ -402,6 +402,8 @@ func (a *App) publishText(t store.Task, isTask bool, base, head string) (string,
 	p := prText{Title: title, Desc: strings.TrimSpace(desc), Issues: ns,
 		Note: "Published by `saddle publish`, on its own and outside saddle's PR stack."}
 	p.Commits, p.Files = a.prRange(base, head)
+	title = a.prTitle(title, base, p) // #951
+	p.Title = title
 	return title, fillPRTemplate(a.prTemplate(base), p), nil
 }
 
