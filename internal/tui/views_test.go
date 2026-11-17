@@ -209,3 +209,68 @@ func TestHelpGroupsCoverKeyMap(t *testing.T) {
 		}
 	}
 }
+
+func clickAt(x, y int) tea.MouseMsg {
+	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}
+}
+
+// tabAt finds a tab's label on the drawn screen: its row and first column.
+func tabAt(t *testing.T, m *model, label string) (x, y int) {
+	t.Helper()
+	for y, l := range strings.Split(m.View(), "\n") {
+		if i := strings.Index(stripCodes(l), label); i >= 0 {
+			return lipgloss.Width(stripCodes(l)[:i]), y
+		}
+	}
+	t.Fatalf("no %q on screen", label)
+	return 0, 0
+}
+
+// A left click on a view's name in the header switches to it, the same as
+// its alt+number key: tmux and some terminals keep alt+number for themselves.
+func TestClickSwitchesViews(t *testing.T) {
+	m := newViewModel(120, 40)
+	for _, c := range []struct {
+		label string
+		want  int
+	}{{"2 plan", viewPlan}, {"3 merge", viewMerge}, {"4 runs", viewRuns}, {"1 control", viewControl}} {
+		x, y := tabAt(t, m, c.label)
+		m.Update(clickAt(x+len(c.label)-1, y))
+		if m.view != c.want {
+			t.Errorf("click on %q: view = %d, want %d", c.label, m.view, c.want)
+		}
+	}
+	// A click on a tab closes the help overlay, as the key does.
+	m.helpOpen = true
+	x, y := tabAt(t, m, "3 merge")
+	m.Update(clickAt(x, y))
+	if m.view != viewMerge || m.helpOpen {
+		t.Errorf("click with help open: view = %d, help = %v", m.view, m.helpOpen)
+	}
+	// Elsewhere on the header line, and on other rows, a click changes nothing.
+	m.Update(clickAt(119, y))
+	m.Update(clickAt(x, y-1))
+	if m.view != viewMerge {
+		t.Errorf("a click off the tabs switched to view %d", m.view)
+	}
+	// A question waiting on y is not skipped by a click.
+	m.confirm = &confirmAsk{prompt: "sure?"}
+	x, y = tabAt(t, m, "2 plan")
+	m.Update(clickAt(x, y))
+	if m.view != viewMerge {
+		t.Errorf("a click during a confirm switched to view %d", m.view)
+	}
+}
+
+// Too narrow for every tab, the header names only the current view; a click
+// on it steps to the next one, so every view stays one click away.
+func TestClickCyclesViewsWhenNarrow(t *testing.T) {
+	m := newViewModel(30, 30)
+	for _, want := range []int{viewPlan, viewMerge, viewRuns, viewControl} {
+		x, y := tabAt(t, m, viewNames[m.view])
+		m.Update(clickAt(x, y))
+		if m.view != want {
+			t.Fatalf("click: view = %d, want %d", m.view, want)
+		}
+	}
+}
