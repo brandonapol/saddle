@@ -203,6 +203,7 @@ type model struct {
 	bodyTop int          // the screen row the body starts on
 	clip    *clipboard   // where copies go; nil means the system's
 	panes   []screenPane // panes as last drawn, for mouse selection
+	tabs    []viewTab    // the header's view names as last drawn, for clicks
 	drag    *mouseDrag   // a mouse selection in progress
 
 	term      *termpane.Term // the shell in the bottom pane; nil until opened or after it exits
@@ -815,6 +816,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.press(keys, nil))
 		}
 		m.scrub.state = scrubIdle
+		if c, ok := m.tabClick(msg); ok {
+			m.drag = nil
+			return m, c
+		}
 		if c, ok := m.mouseSelect(msg); ok {
 			return m, c
 		}

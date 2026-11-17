@@ -45,17 +45,13 @@ func (m *model) routeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 	}
 	switch {
 	case key.Matches(k, keys.ViewControl):
-		m.setView(viewControl)
-		return nil, true
+		return m.switchView(viewControl), true
 	case key.Matches(k, keys.ViewPlan):
-		m.setView(viewPlan)
-		return m.loadPlan(), true
+		return m.switchView(viewPlan), true
 	case key.Matches(k, keys.ViewMerge):
-		m.setView(viewMerge)
-		return m.loadTrain(), true
+		return m.switchView(viewMerge), true
 	case key.Matches(k, keys.ViewRuns):
-		m.setView(viewRuns)
-		return m.loadHeavy(), true
+		return m.switchView(viewRuns), true
 	case key.Matches(k, keys.Infinite):
 		return m.toggleInfinite(), true
 	}
@@ -95,6 +91,47 @@ func (m *model) routeKey(k tea.KeyMsg) (tea.Cmd, bool) {
 
 func (m *model) setView(v int) {
 	m.view, m.helpOpen = v, false
+}
+
+// switchView shows view v and loads what it lists.
+func (m *model) switchView(v int) tea.Cmd {
+	m.setView(v)
+	switch v {
+	case viewPlan:
+		return m.loadPlan()
+	case viewMerge:
+		return m.loadTrain()
+	case viewRuns:
+		return m.loadHeavy()
+	}
+	return nil
+}
+
+// viewTab is a view's name as last drawn in the header: the columns a click
+// on it covers and the view the click opens.
+type viewTab struct {
+	x0, x1 int // first column, and the one past the last
+	view   int
+}
+
+// tabClick switches views on a left press over a view's name in the header
+// (alt+number often never arrives: tmux and terminals bind it themselves).
+// It reports whether the press was on a tab. A question waiting on y keeps
+// the view, as it does for the keys.
+func (m *model) tabClick(msg tea.MouseMsg) (tea.Cmd, bool) {
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft || msg.Y != m.bodyTop-1 {
+		return nil, false
+	}
+	for _, t := range m.tabs {
+		if msg.X < t.x0 || msg.X >= t.x1 {
+			continue
+		}
+		if m.hv.confirm != "" || m.confirm != nil {
+			return nil, true
+		}
+		return m.switchView(t.view), true
+	}
+	return nil, false
 }
 
 // viewBody renders the screen between the header and the terminal pane.

@@ -63,7 +63,7 @@ func newKeyMap() keyMap {
 		NextAgent: b("alt+n/p", "next/prev agent", "alt+n"),
 		PrevAgent: pair("alt+p"),
 
-		ViewControl: b("alt+1/2/3/4", "views", "alt+1"),
+		ViewControl: b("alt+1/2/3/4/click", "views", "alt+1"),
 		ViewPlan:    pair("alt+2"),
 		ViewMerge:   pair("alt+3"),
 		ViewRuns:    pair("alt+4"),

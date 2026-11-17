@@ -42,13 +42,20 @@ func (m *model) viewCounters() string {
 	color := func(c lipgloss.Color, s string, a ...any) string {
 		return lipgloss.NewStyle().Foreground(c).Render(fmt.Sprintf(s, a...))
 	}
+	// The view names are tabs: a click on one opens it (see tabClick).
 	var tabs []string
+	zones := make([]viewTab, 0, len(viewNames))
+	x := 1
 	for i, n := range viewNames {
+		label := fmt.Sprintf("%d %s", i+1, n)
 		if i == m.view {
-			tabs = append(tabs, lipgloss.NewStyle().Foreground(cAccent).Bold(true).Render(fmt.Sprintf("%d %s", i+1, n)))
+			tabs = append(tabs, lipgloss.NewStyle().Foreground(cAccent).Bold(true).Render(label))
 		} else {
-			tabs = append(tabs, sDim.Render(fmt.Sprintf("%d %s", i+1, n)))
+			tabs = append(tabs, sDim.Render(label))
 		}
+		// Each tab also takes the space on either side of its name.
+		zones = append(zones, viewTab{x0: x - 1, x1: x + lipgloss.Width(label) + 1, view: i})
+		x += lipgloss.Width(label) + 2
 	}
 	current := lipgloss.NewStyle().Foreground(cAccent).Bold(true).Render(viewNames[m.view])
 
@@ -98,9 +105,12 @@ func (m *model) viewCounters() string {
 	right := sDim.Render(fmt.Sprintf("orchestrator %s · %s%s · $%.2f ", m.orchLabel(), state, extra, m.cost))
 	short := sDim.Render("orch " + state + " ")
 
+	// Too narrow for every tab, the current view's name stands alone and a
+	// click on it steps to the next view.
 	line := " " + current
+	m.tabs = []viewTab{{x0: 0, x1: lipgloss.Width(line) + 1, view: (m.view + 1) % len(viewNames)}}
 	if full := " " + strings.Join(tabs, "  "); lipgloss.Width(full)+lipgloss.Width(short) < m.width {
-		line = full
+		line, m.tabs = full, zones
 	}
 	// The short state is always kept room for.
 	fits := func(s string) bool { return lipgloss.Width(line+"  "+s)+lipgloss.Width(short) < m.width }
