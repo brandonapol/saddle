@@ -257,7 +257,11 @@ test/cover: ## Run tests and write coverage.html
 ##@ Code quality
 
 .PHONY: check
-check: check/format check/tidy check/vet $(CHECK_TESTS) test/contract test/soak test/scripts check/lint ## Run CI's checks, testing only what changed (CHECK_FULL=1 for all; plugin tests: make test/plugin)
+check: check/format check/tidy check/vet $(CHECK_TESTS) test/contract test/soak test/scripts check/lint check/v2 ## Run CI's checks, testing only what changed (CHECK_FULL=1 for all; plugin tests: make test/plugin)
+
+.PHONY: check/v2
+check/v2: ## Run Saddle v2's own checks (the v2/ module, ADR 0013)
+	$(MAKE) -C v2 check
 
 .PHONY: check/format
 check/format: ## Fail if any Go file needs gofmt

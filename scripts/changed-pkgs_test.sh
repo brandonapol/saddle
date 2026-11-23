@@ -48,12 +48,15 @@ expect "Makefile change selects all" "./..." "$(sel Makefile)"
 expect "CI config change selects all" "./..." "$(sel .github/workflows/ci.yml)"
 expect "unknown non-doc file selects all" "./..." "$(sel some/config.toml)"
 expect "Go file in a deleted package selects all" "./..." "$(sel gone/gone.go)"
+expect "v2-only change selects none" "" "$(sel v2/internal/store/store.go v2/go.mod v2/Makefile)"
+expect "v2 files are left out of a mixed change" "m/leaf" "$(sel v2/internal/store/store.go leaf/leaf.go)"
 expect "empty diff falls back to all" "./..." "$(printf '' | "$script" --stdin 2>/dev/null)"
 CHECK_FULL=1 expect "CHECK_FULL forces all" "./..." "$(printf 'leaf/leaf.go\n' | CHECK_FULL=1 "$script" --stdin 2>/dev/null)"
 
 expect "e2e skipped for a leaf change" "no" "$(e2e leaf/leaf.go)"
 expect "e2e runs for a tui change" "yes" "$(e2e internal/tui/tui.go)"
 expect "e2e runs on the full suite" "yes" "$(e2e go.mod)"
+expect "e2e skipped for a v2-only change" "no" "$(e2e v2/internal/tui/tui.go)"
 expect "e2e skipped for docs" "no" "$(e2e docs/NOTES.md)"
 
 # git mode: the diff against the merge base with CHECK_BASE.
