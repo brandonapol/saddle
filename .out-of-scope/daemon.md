@@ -18,3 +18,12 @@ safely.
 Every process opens `.saddle/state.db` directly. `saddle up` or `saddle
 plugin engine` hosts the long-lived loops, one per repo (`.saddle/up.lock`).
 See [ADR 0005](../docs/adr/0005-no-daemon.md).
+
+## The v2 engine is not this
+
+Saddle v2 ([ADR 0013](../docs/adr/0013-saddle-v2.md)) has one long-lived
+`saddle engine` per repo. It answers the reason above: there is no RPC and
+no socket. Commands, the MCP server and the TUI read and write SQLite and
+never talk to the engine, so every command still works when it is down, and
+the next one restarts it. Running turns are not its children. A daemon that
+commands must reach is still out of scope.
