@@ -62,9 +62,20 @@ else
         git ls-files --others --exclude-standard
     } | sort -u)
 fi
+# v2/ is its own Go module (ADR 0013), checked by `make -C v2 check`. Its
+# files affect none of this module's packages, so they are left out here.
 clean=()
-for f in "${files[@]}"; do [ -n "$f" ] && clean+=("$f"); done
+v2=0
+for f in "${files[@]}"; do
+    [ -n "$f" ] || continue
+    if [[ "$f" == v2/* ]]; then v2=1; continue; fi
+    clean+=("$f")
+done
 files=("${clean[@]+"${clean[@]}"}")
+if ((${#files[@]} == 0 && v2)); then
+    if ((e2e)); then echo no; fi
+    exit 0
+fi
 ((${#files[@]} > 0)) || full "empty diff"
 
 for f in "${files[@]}"; do

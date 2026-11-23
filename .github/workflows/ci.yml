@@ -24,6 +24,18 @@ jobs:
           go-version-file: go.mod
       - run: make setup/golangci-lint
       - run: make check/format check/tidy check/vet check/lint
+  # Saddle v2 is its own module under v2/ (ADR 0013): format, tidy, vet, race
+  # tests with the size and one-store guards, and lint.
+  v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: v2/go.mod
+      - run: make setup/golangci-lint
+      - run: make -C v2 check
   # internal/app, the slowest package, gets shard 1 to itself; the other
   # packages are dealt across the remaining shards (scripts/ci-race-shard.sh).
   test:
