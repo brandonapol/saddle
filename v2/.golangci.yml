@@ -3,7 +3,14 @@ linters:
   settings:
     errcheck:
       exclude-functions:
+        # Writes to the command's stdout/stderr.
         - fmt.Fprint
         - fmt.Fprintf
         - fmt.Fprintln
+        # Cleanup where the primary error is already returned.
         - (*os.File).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Conn).Close
+        - (*database/sql.Tx).Rollback
+        - (*database/sql.DB).Close
+        - (*github.com/brandonapol/saddle/v2/internal/store.Store).Close
