@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/brandonapol/saddle/v2/internal/core"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -158,7 +159,7 @@ func TestTaskStateAndEventChangeTogether(t *testing.T) {
 	s.Now = func() time.Time { return clock }
 	var id int64
 	tx(t, s, func(x *Tx) error {
-		task, err := x.CreateTask(Task{Title: "store", State: "ready", Reason: "slot", Touches: []string{"v2/internal/store/**"}, After: []int64{3}})
+		task, err := x.CreateTask(Task{Title: "store", State: "merged", FixAttempts: 9, Touches: []string{"v2/internal/store/**"}, After: []int64{3}})
 		id = task.ID
 		return err
 	})
@@ -167,12 +168,7 @@ func TestTaskStateAndEventChangeTogether(t *testing.T) {
 	// A transaction that fails leaves neither the state nor the event.
 	boom := errors.New("boom")
 	err := s.Tx(context.Background(), func(x *Tx) error {
-		task, err := x.Task(id)
-		if err != nil {
-			return err
-		}
-		task.State, task.Reason = "working", "new"
-		if err := x.PutTask(task, "slot_granted", ""); err != nil {
+		if _, _, err := x.Transition(id, core.Event{Kind: core.SlotGranted}); err != nil {
 			return err
 		}
 		return boom
@@ -190,12 +186,11 @@ func TestTaskStateAndEventChangeTogether(t *testing.T) {
 	cursor := snap.Cursor
 
 	tx(t, s, func(x *Tx) error {
-		task, err := x.Task(id)
-		if err != nil {
-			return err
+		task, effects, err := x.Transition(id, core.Event{Kind: core.SlotGranted})
+		if task.State != "working" || len(effects) != 1 || effects[0] != core.StartTurn {
+			t.Errorf("Transition returned %+v %v, want working and start_turn", task, effects)
 		}
-		task.State, task.Reason = "working", "new"
-		return x.PutTask(task, "slot_granted", "")
+		return err
 	})
 	snap, err = s.Snapshot(context.Background(), cursor)
 	if err != nil {
@@ -215,17 +210,35 @@ func TestTaskStateAndEventChangeTogether(t *testing.T) {
 		t.Errorf("events after the cursor = %+v (gap %v), want exactly the slot_granted event", snap.Events, snap.Gap)
 	}
 
-	// Since stays put when only another field changes.
+	// Since stays put when only another field changes, and PutTask can't
+	// change the state: only Transition can.
 	clock = clock.Add(time.Minute)
 	tx(t, s, func(x *Tx) error {
 		task, _ := x.Task(id)
-		task.Session = "abc"
-		return x.PutTask(task, "session", "abc")
+		task.Session, task.State, task.Reason, task.FixAttempts, task.Held, task.PR = "abc", "merged", "", 5, true, 77
+		if err := x.PutTask(task, "session", "abc"); err != nil {
+			return err
+		}
+		if _, _, err := x.Transition(id, core.Event{Kind: core.Message}); err != nil {
+			return err
+		}
+		// An event the state doesn't allow changes nothing and says why.
+		var illegal *core.IllegalError
+		if _, _, err := x.Transition(id, core.Event{Kind: core.Retry}); !errors.As(err, &illegal) {
+			t.Errorf("retry on a working task = %v, want an IllegalError", err)
+		}
+		if err := x.PutTask(Task{ID: 999, Title: "x"}, "session", ""); !errors.Is(err, ErrNotFound) {
+			t.Errorf("PutTask on a missing task = %v, want ErrNotFound", err)
+		}
+		return nil
 	})
 	tx(t, s, func(x *Tx) error {
 		task, _ := x.Task(id)
 		if task.Since != got.Since || task.Session != "abc" {
 			t.Errorf("since %d session %q; want since unchanged at %d", task.Since, task.Session, got.Since)
+		}
+		if task.State != "working" || task.FixAttempts != 0 || task.Held || task.PR != 0 {
+			t.Errorf("PutTask changed the state machine's fields: %+v", task)
 		}
 		_, err := x.Task(999)
 		if !errors.Is(err, ErrNotFound) {
@@ -238,7 +251,7 @@ func TestTaskStateAndEventChangeTogether(t *testing.T) {
 func TestInboxDeliversOnceAndDedups(t *testing.T) {
 	s := open(t)
 	tx(t, s, func(x *Tx) error {
-		task, err := x.CreateTask(Task{Title: "a", State: "working"})
+		task, err := x.CreateTask(Task{Title: "a"})
 		if err != nil {
 			return err
 		}
@@ -292,7 +305,7 @@ func TestQuestionsAnswerOnce(t *testing.T) {
 	s := open(t)
 	var q int64
 	tx(t, s, func(x *Tx) error {
-		task, err := x.CreateTask(Task{Title: "a", State: "blocked", Reason: "question"})
+		task, err := x.CreateTask(Task{Title: "a"})
 		if err != nil {
 			return err
 		}
