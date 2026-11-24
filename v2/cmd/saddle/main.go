@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+
+	"github.com/brandonapol/saddle/v2/internal/core"
 )
 
 // version is set at build time with -ldflags "-X main.version=...". Without
@@ -22,7 +24,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "saddle2", buildID())
 		return 0
 	}
-	fmt.Fprintln(stderr, "usage: saddle2 version")
+	if len(args) == 1 && args[0] == "states" {
+		fmt.Fprint(stdout, core.Markdown())
+		return 0
+	}
+	fmt.Fprintln(stderr, "usage: saddle2 version | states")
 	fmt.Fprintln(stderr, "Saddle v2 is under construction: see docs/v2/ARCHITECTURE.md.")
 	return 2
 }

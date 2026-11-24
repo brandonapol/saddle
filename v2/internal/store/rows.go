@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/brandonapol/saddle/v2/internal/core"
 )
 
 // ErrNotFound is returned when a row asked for by id does not exist.
 var ErrNotFound = errors.New("not found")
 
-// Task is one row of tasks. State and Reason are written only with the
-// output of core.Transition.
+// Task is one row of tasks. State, Reason, FixAttempts, Held and PR are
+// written only by Tx.Transition, with the output of core.Transition.
 type Task struct {
 	ID          int64
 	Ticket      string
@@ -173,12 +174,12 @@ func (t *Tx) AddEvent(task int64, kind, data string) error {
 // CreateTask inserts a task and its created event, and returns it with its
 // id, Since and Created set.
 func (t *Tx) CreateTask(task Task) (Task, error) {
-	if task.Title == "" || task.State == "" {
-		return task, errors.New("a task needs a title and a state")
+	if task.Title == "" {
+		return task, errors.New("a task needs a title")
 	}
-	if task.Role == "" {
-		task.Role = "worker"
-	}
+	first := core.New(task.Role)
+	task.Role, task.State, task.Reason = first.Role, string(first.State), first.Reason
+	task.FixAttempts, task.Held, task.PR = 0, false, 0
 	task.Since, task.Created = t.now, t.now
 	res, err := t.tx.Exec(`INSERT INTO tasks(ticket, title, prompt, role, state, reason, since, provider, model,
 		session, branch, worktree, pr, touches, after, fix_attempts, held, created)
@@ -204,27 +205,46 @@ func (t *Tx) Task(id int64) (Task, error) {
 	return task, err
 }
 
-// PutTask writes every changeable field of a task and appends the event
-// that explains the change, together. Since moves only when the state or
-// reason changed.
+// PutTask writes the fields of a task that aren't the state machine's, and
+// appends the event that explains the change. To change State, Reason,
+// FixAttempts, Held or PR use Transition: PutTask ignores them.
 func (t *Tx) PutTask(task Task, kind, data string) error {
-	old, err := t.Task(task.ID)
+	res, err := t.tx.Exec(`UPDATE tasks SET title=?, prompt=?, provider=?, model=?, session=?, branch=?,
+		worktree=?, touches=?, after=? WHERE id=?`,
+		task.Title, task.Prompt, task.Provider, task.Model, task.Session, task.Branch, task.Worktree,
+		toJSON(task.Touches), toJSON(task.After), task.ID)
 	if err != nil {
 		return err
 	}
-	since := old.Since
-	if old.State != task.State || old.Reason != task.Reason {
-		since = t.now
-	}
-	_, err = t.tx.Exec(`UPDATE tasks SET title=?, prompt=?, state=?, reason=?, since=?, provider=?, model=?,
-		session=?, branch=?, worktree=?, pr=?, touches=?, after=?, fix_attempts=?, held=? WHERE id=?`,
-		task.Title, task.Prompt, task.State, task.Reason, since, task.Provider, task.Model, task.Session,
-		task.Branch, task.Worktree, task.PR, toJSON(task.Touches), toJSON(task.After), task.FixAttempts,
-		task.Held, task.ID)
-	if err != nil {
-		return err
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("task t%d: %w", task.ID, ErrNotFound)
 	}
 	return t.AddEvent(task.ID, kind, data)
+}
+
+// Transition applies an event to a task through core.Transition and writes
+// the result with the event, together. It is the only writer of a task's
+// state. An event that isn't legal changes nothing and returns core's error.
+// Since moves only when the state or the reason changes.
+func (t *Tx) Transition(id int64, e core.Event) (Task, []core.Effect, error) {
+	task, err := t.Task(id)
+	if err != nil {
+		return task, nil, err
+	}
+	out, effects, err := core.Transition(core.Task{Role: task.Role, State: core.State(task.State), Reason: task.Reason,
+		FixAttempts: task.FixAttempts, Held: task.Held, PR: task.PR}, e)
+	if err != nil {
+		return task, nil, fmt.Errorf("task t%d: %w", id, err)
+	}
+	if string(out.State) != task.State || out.Reason != task.Reason {
+		task.Since = t.now
+	}
+	task.State, task.Reason, task.FixAttempts, task.Held, task.PR = string(out.State), out.Reason, out.FixAttempts, out.Held, out.PR
+	if _, err := t.tx.Exec("UPDATE tasks SET state=?, reason=?, since=?, fix_attempts=?, held=?, pr=? WHERE id=?",
+		task.State, task.Reason, task.Since, task.FixAttempts, task.Held, task.PR, id); err != nil {
+		return task, nil, err
+	}
+	return task, effects, t.AddEvent(id, string(e.Kind), e.Arg)
 }
 
 // StartAttempt records a turn about to run and returns its id.

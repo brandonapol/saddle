@@ -26,3 +26,15 @@ func TestUnknownCommandSaysWhatToRun(t *testing.T) {
 		t.Fatalf("stderr %q does not say what to run", errb.String())
 	}
 }
+
+func TestStatesPrintsTheTransitionTable(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"states"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errb.String())
+	}
+	for _, want := range []string{"| State | Meaning | Reasons |", "| `pr_open` |", "| From | Event | To | Also |"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("states output lacks %q", want)
+		}
+	}
+}
