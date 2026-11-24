@@ -23,6 +23,7 @@ defined in [GLOSSARY.md](../GLOSSARY.md).
 | [0010](0010-headless-workers.md) | Unattended workers run headless, one invocation per attempt, with a typed result | Proposed |
 | [0011](0011-batch-stack-merged-once.md) | A batch is one linear stack, merged once by fast-forward | Superseded by 0012 |
 | [0012](0012-branches-are-the-truth.md) | One task, one branch, one PR: cut from main, fixed in place, merged by a plain queue | Accepted |
+| [0013](0013-saddle-v2.md) | Saddle v2: one engine over SQLite, headless turns, the forge as the merger | Proposed |
 
 ## When a change needs an ADR
 
