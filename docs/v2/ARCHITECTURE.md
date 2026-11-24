@@ -152,8 +152,8 @@ and nothing else about the task.
 
 | State | Meaning | Reasons | Exits |
 |---|---|---|---|
-| `ready` | waiting to start | `slot`, `after:<task>`, `overlap:<task>`, `no_provider`, `held` | a slot frees, the other task merges, a provider returns, `release`, `kill` |
-| `working` | a turn is running or about to | `new`, `message`, `conflict`, `ci`, `check`, `rules` | the turn ends, `kill` |
+| `ready` | waiting to start | `slot`, `after:<task>`, `overlap:<task>`, `no_provider`, `held`, `wake` (the orchestrator between turns) | a slot frees, the other task merges, a provider returns, `release`, `kill` |
+| `working` | a turn is running or about to, or saddle is publishing its result | `new`, `message`, `unfinished`, `publishing`, `conflict`, `ci`, `check`, `rules` | the turn ends, `kill` |
 | `blocked` | waiting on an answer | `question`, `gave_up`, `turn_failed` | `answer`, `retry`, `kill` |
 | `pr_open` | published | `checks`, `review`, `queue`, `held` | merged, red or conflicting (to `working`), PR closed, `kill` |
 | `merged` | on main (terminal) | | |

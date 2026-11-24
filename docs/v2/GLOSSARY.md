@@ -95,8 +95,8 @@ A task is in exactly one state, with a reason.
 
 | State | Meaning | Reasons |
 |---|---|---|
-| `ready` | waiting to start | `slot`, `after:<task>`, `overlap:<task>`, `no_provider`, `held` |
-| `working` | a turn is running or about to | `new`, `message`, `conflict`, `ci`, `check`, `rules` |
+| `ready` | waiting to start | `slot`, `after:<task>`, `overlap:<task>`, `no_provider`, `held`, `wake` (the orchestrator between turns) |
+| `working` | a turn is running or about to, or saddle is publishing its result | `new`, `message`, `unfinished`, `publishing`, `conflict`, `ci`, `check`, `rules` |
 | `blocked` | waiting on an answer | `question`, `gave_up`, `turn_failed` |
 | `pr_open` | published, not merged | `checks`, `review`, `queue`, `held` |
 | `merged` | on base; terminal | |
